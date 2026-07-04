@@ -1,0 +1,21 @@
+# ML / GPU tiers — semantic, audio, and trained-classifier.
+# REQUIRES a torch-compatible Python (3.12 or 3.11). PyTorch has NO 3.14 wheels.
+#
+# Install torch FIRST from the CUDA index (for the RTX 4060 Ti), then the rest:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+#   pip install -r requirements-ml.txt
+#
+# (setup_ml.ps1 does this for you.)
+
+numpy>=2.0
+rapidfuzz>=3.0
+sentence-transformers>=3.0
+transformers>=4.44
+datasets>=2.20
+fastapi>=0.115
+uvicorn>=0.30
+pydantic>=2.7
+
+# Optional, for ONNX export / runtime:
+onnx>=1.16
+onnxruntime-gpu>=1.18

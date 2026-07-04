@@ -1,0 +1,81 @@
+{
+  "name": "easecutpro",
+  "version": "0.1.0",
+  "description": "EaseCutPro - offline, native Windows transcript-based video editor (Descript-like)",
+  "main": "./out/main/index.js",
+  "author": "EaseCutPro",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "server": "tsx src/server/index.ts",
+    "server:dev": "tsx watch src/server/index.ts",
+    "mcp": "tsx src/mcp/index.ts",
+    "setup-parakeet": "node scripts/setup-parakeet.mjs",
+    "web": "electron-vite build && tsx src/server/index.ts",
+    "remote": "node scripts/remote.mjs",
+    "remote:named": "node scripts/remote.mjs lt",
+    "selfhost": "node scripts/selfhost.mjs",
+    "dist": "electron-vite build && electron-builder --win",
+    "package": "electron-vite build && electron-packager . EaseCutPro --platform=win32 --arch=x64 --out=release --overwrite --prune=true --icon=icons/icon.ico --extra-resource=resources/bin --extra-resource=resources/models --ignore=\"^/(src|release|resources|\\.fr|\\.frames|.*\\.log)\""
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "openai": "^6.45.0",
+    "sherpa-onnx-node": "^1.13.3",
+    "ws": "^8.18.0",
+    "zod": "^4.4.3",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.0.1",
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.11",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.5.10",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^31.3.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "localtunnel": "^2.0.2",
+    "png-to-ico": "^3.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.3",
+    "vite": "^5.3.4"
+  },
+  "build": {
+    "appId": "com.easecutpro.app",
+    "productName": "EaseCutPro",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "resources/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin"
+      }
+    ],
+    "win": {
+      "icon": "icons/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}

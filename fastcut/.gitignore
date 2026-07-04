@@ -1,0 +1,8 @@
+# engine virtualenvs (core on 3.14, ML on 3.12)
+.venv/
+.venv-ml/
+# python caches & trained models
+__pycache__/
+*.pyc
+models/
+*.onnx

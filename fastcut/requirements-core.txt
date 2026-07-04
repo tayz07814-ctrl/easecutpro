@@ -1,0 +1,4 @@
+# Core tier — runs the Fast Cut heuristic engine. Has wheels for Python 3.14.
+# This is all the Fast Cut button needs to work.
+numpy>=2.0
+rapidfuzz>=3.0

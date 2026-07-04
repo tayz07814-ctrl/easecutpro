@@ -1,0 +1,332 @@
+[
+{
+"word": "Well",
+"start": 0.0,
+"end": 0.26,
+"conf": 1.0
+},
+{
+"word": "we're",
+"start": 0.31,
+"end": 0.57,
+"conf": 1.0
+},
+{
+"word": "not",
+"start": 0.62,
+"end": 0.88,
+"conf": 1.0
+},
+{
+"word": "gonna",
+"start": 0.93,
+"end": 1.19,
+"conf": 1.0
+},
+{
+"word": "need",
+"start": 1.24,
+"end": 1.5,
+"conf": 1.0
+},
+{
+"word": "foundation",
+"start": 1.55,
+"end": 1.81,
+"conf": 1.0
+},
+{
+"word": "anymore.",
+"start": 1.86,
+"end": 2.12,
+"conf": 1.0
+},
+{
+"word": "Definitely",
+"start": 2.62,
+"end": 2.88,
+"conf": 1.0
+},
+{
+"word": "won't",
+"start": 2.93,
+"end": 3.19,
+"conf": 1.0
+},
+{
+"word": "be",
+"start": 3.24,
+"end": 3.5,
+"conf": 1.0
+},
+{
+"word": "concealing",
+"start": 3.55,
+"end": 3.81,
+"conf": 1.0
+},
+{
+"word": "our",
+"start": 3.86,
+"end": 4.12,
+"conf": 1.0
+},
+{
+"word": "racco",
+"start": 4.17,
+"end": 4.43,
+"conf": 1.0
+},
+{
+"word": "nice",
+"start": 4.48,
+"end": 4.74,
+"conf": 1.0
+},
+{
+"word": "anymore.",
+"start": 4.79,
+"end": 5.05,
+"conf": 1.0
+},
+{
+"word": "Definitely",
+"start": 5.55,
+"end": 5.81,
+"conf": 1.0
+},
+{
+"word": "won't",
+"start": 5.86,
+"end": 6.12,
+"conf": 1.0
+},
+{
+"word": "be",
+"start": 6.17,
+"end": 6.43,
+"conf": 1.0
+},
+{
+"word": "concealing",
+"start": 6.48,
+"end": 6.74,
+"conf": 1.0
+},
+{
+"word": "our",
+"start": 6.79,
+"end": 7.05,
+"conf": 1.0
+},
+{
+"word": "raccoon",
+"start": 7.1,
+"end": 7.36,
+"conf": 1.0
+},
+{
+"word": "eyes",
+"start": 7.41,
+"end": 7.67,
+"conf": 1.0
+},
+{
+"word": "this",
+"start": 7.72,
+"end": 7.98,
+"conf": 1.0
+},
+{
+"word": "year",
+"start": 8.03,
+"end": 8.29,
+"conf": 1.0
+},
+{
+"word": "Definitely",
+"start": 8.79,
+"end": 9.05,
+"conf": 1.0
+},
+{
+"word": "won't",
+"start": 9.1,
+"end": 9.36,
+"conf": 1.0
+},
+{
+"word": "be",
+"start": 9.41,
+"end": 9.67,
+"conf": 1.0
+},
+{
+"word": "concealing",
+"start": 9.72,
+"end": 9.98,
+"conf": 1.0
+},
+{
+"word": "our",
+"start": 10.03,
+"end": 10.29,
+"conf": 1.0
+},
+{
+"word": "racuna",
+"start": 10.34,
+"end": 10.6,
+"conf": 1.0
+},
+{
+"word": "Definitely",
+"start": 11.1,
+"end": 11.36,
+"conf": 1.0
+},
+{
+"word": "won't",
+"start": 11.41,
+"end": 11.67,
+"conf": 1.0
+},
+{
+"word": "be",
+"start": 11.72,
+"end": 11.98,
+"conf": 1.0
+},
+{
+"word": "concealing",
+"start": 12.03,
+"end": 12.29,
+"conf": 1.0
+},
+{
+"word": "our",
+"start": 12.34,
+"end": 12.6,
+"conf": 1.0
+},
+{
+"word": "raccoon",
+"start": 12.65,
+"end": 12.91,
+"conf": 1.0
+},
+{
+"word": "eyes",
+"start": 12.96,
+"end": 13.22,
+"conf": 1.0
+},
+{
+"word": "this",
+"start": 13.27,
+"end": 13.53,
+"conf": 1.0
+},
+{
+"word": "summer",
+"start": 13.58,
+"end": 13.84,
+"conf": 1.0
+},
+{
+"word": "Definitely",
+"start": 14.34,
+"end": 14.6,
+"conf": 1.0
+},
+{
+"word": "won't",
+"start": 14.65,
+"end": 14.91,
+"conf": 1.0
+},
+{
+"word": "be",
+"start": 14.96,
+"end": 15.22,
+"conf": 1.0
+},
+{
+"word": "conceal",
+"start": 15.27,
+"end": 15.53,
+"conf": 1.0
+},
+{
+"word": "Definitely",
+"start": 16.03,
+"end": 16.29,
+"conf": 1.0
+},
+{
+"word": "won't",
+"start": 16.34,
+"end": 16.6,
+"conf": 1.0
+},
+{
+"word": "be",
+"start": 16.65,
+"end": 16.91,
+"conf": 1.0
+},
+{
+"word": "concealing",
+"start": 16.96,
+"end": 17.22,
+"conf": 1.0
+},
+{
+"word": "our",
+"start": 17.27,
+"end": 17.53,
+"conf": 1.0
+},
+{
+"word": "raccoon",
+"start": 17.58,
+"end": 17.84,
+"conf": 1.0
+},
+{
+"word": "eyes",
+"start": 17.89,
+"end": 18.15,
+"conf": 1.0
+},
+{
+"word": "this",
+"start": 18.2,
+"end": 18.46,
+"conf": 1.0
+},
+{
+"word": "summer",
+"start": 18.51,
+"end": 18.77,
+"conf": 1.0
+},
+{
+"word": "You",
+"start": 19.27,
+"end": 19.53,
+"conf": 1.0
+},
+{
+"word": "don't",
+"start": 19.58,
+"end": 19.84,
+"conf": 1.0
+},
+{
+"word": "need",
+"start": 19.89,
+"end": 20.15,
+"conf": 1.0
+}
+]

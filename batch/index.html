@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Batch Transcoder</title>
+<style>
+  :root {
+    --bg: #1e1e22; --panel: #2a2a30; --panel2: #33333b; --line: #3d3d46;
+    --text: #e6e6ea; --muted: #9a9aa6; --accent: #4f8cff; --accent2: #3a6fd6;
+    --ok: #38c172; --err: #ef4d4d; --warn: #e0a800;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  header {
+    padding: 14px 18px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 12px;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .body { flex: 1; display: flex; min-height: 0; }
+  .left { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 14px; }
+  .right { width: 300px; border-left: 1px solid var(--line); padding: 16px; overflow-y: auto; }
+
+  .drop {
+    border: 2px dashed var(--line); border-radius: 10px; flex: 1;
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .drop.empty { align-items: center; justify-content: center; color: var(--muted); cursor: pointer; }
+  .drop.dragover { border-color: var(--accent); background: rgba(79,140,255,0.06); }
+  .drop .hint { text-align: center; }
+  .drop .hint b { color: var(--text); display: block; margin-bottom: 6px; font-size: 15px; }
+
+  .list { flex: 1; overflow-y: auto; padding: 8px; }
+  .row {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px;
+  }
+  .row .top { display: flex; align-items: center; gap: 10px; }
+  .row .name { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .row .x { color: var(--muted); cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+  .row .x:hover { background: var(--panel2); color: var(--err); }
+  .bar { height: 6px; background: var(--panel2); border-radius: 4px; margin-top: 8px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .status { font-size: 12px; margin-top: 6px; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+  .status.work { color: var(--accent); } .status.wait { color: var(--muted); }
+
+  label.fld { display: block; margin-bottom: 16px; }
+  label.fld span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  select, input[type=text], input[type=number] {
+    width: 100%; background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 14px;
+  }
+  input[type=range] { width: 100%; }
+  .brval { float: right; color: var(--accent); font-weight: 600; }
+  .out { display: flex; gap: 6px; }
+  .out input { flex: 1; }
+
+  button {
+    border: none; border-radius: 6px; padding: 9px 14px; font-size: 14px;
+    cursor: pointer; font-weight: 500;
+  }
+  button.sec { background: var(--panel2); color: var(--text); }
+  button.sec:hover { background: #3f3f49; }
+  button.pri { background: var(--accent); color: #fff; width: 100%; padding: 12px; font-size: 15px; }
+  button.pri:hover { background: var(--accent2); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.danger { background: var(--err); color: #fff; width: 100%; padding: 12px; }
+
+  .footer { padding: 12px 16px; border-top: 1px solid var(--line); }
+  .overall { color: var(--muted); font-size: 12px; margin-bottom: 8px; text-align: center; }
+  .toprow { display: flex; gap: 8px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🎬 Batch Transcoder</h1>
+    <span class="sub">Import multiple videos · export at custom resolution & bitrate</span>
+  </header>
+
+  <div class="body">
+    <div class="left">
+      <div class="toprow">
+        <button class="sec" id="addBtn">+ Add videos</button>
+        <button class="sec" id="clearBtn">Clear all</button>
+      </div>
+      <div class="drop empty" id="drop">
+        <div class="hint">
+          <b>Drop video files here</b>
+          or click to browse
+        </div>
+        <div class="list" id="list" style="display:none"></div>
+      </div>
+    </div>
+
+    <div class="right">
+      <label class="fld">
+        <span>Resolution</span>
+        <select id="res">
+          <option value="0">Keep original</option>
+          <option value="2160">4K (2160p)</option>
+          <option value="1440">2K (1440p)</option>
+          <option value="1080" selected>Full HD (1080p)</option>
+          <option value="720">HD (720p)</option>
+        </select>
+      </label>
+
+      <label class="fld">
+        <span>Video bitrate <span class="brval"><b id="brOut">15000</b> kbps</span></span>
+        <input type="range" id="brRange" min="10000" max="30000" step="500" value="15000" />
+        <input type="number" id="brNum" min="1000" max="80000" step="500" value="15000" style="margin-top:8px" />
+      </label>
+
+      <label class="fld">
+        <span>Codec</span>
+        <select id="codec">
+          <option value="h264" selected>H.264 (x264)</option>
+          <option value="h265">H.265 / HEVC (x265)</option>
+        </select>
+      </label>
+
+      <label class="fld">
+        <span>Encoding speed</span>
+        <select id="preset">
+          <option value="ultrafast">Ultrafast</option>
+          <option value="veryfast">Very fast</option>
+          <option value="fast">Fast</option>
+          <option value="medium" selected>Medium</option>
+          <option value="slow">Slow (best quality)</option>
+        </select>
+      </label>
+
+      <label class="fld">
+        <span>Output folder</span>
+        <div class="out">
+          <input type="text" id="outDir" placeholder="Same as source" readonly />
+          <button class="sec" id="outBtn">…</button>
+        </div>
+      </label>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div class="overall" id="overall">No files added</div>
+    <button class="pri" id="startBtn" disabled>Start export</button>
+    <button class="danger" id="cancelBtn" style="display:none">Cancel</button>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id)
+let files = []      // { id, path, name, dir, duration, w, h, status, percent }
+let nextId = 1
+let outDir = ''
+let cancelling = false
+let activeJob = null
+
+const drop = $('drop'), list = $('list')
+
+function fmtTime(s) {
+  if (!s) return '?'
+  s = Math.round(s); const m = Math.floor(s / 60), ss = s % 60
+  return m + ':' + String(ss).padStart(2, '0')
+}
+function baseName(p) { return p.split(/[\\/]/).pop() }
+function dirName(p) { return p.replace(/[\\/][^\\/]+$/, '') }
+
+async function addPaths(paths) {
+  for (const p of paths) {
+    if (files.some(f => f.path === p)) continue
+    const f = { id: nextId++, path: p, name: baseName(p), dir: dirName(p),
+                duration: 0, w: 0, h: 0, status: 'wait', percent: 0 }
+    files.push(f)
+    render()
+    const info = await window.api.probe(p)
+    if (info.ok) { f.duration = info.duration; f.w = info.width; f.h = info.height }
+    render()
+  }
+}
+
+function render() {
+  drop.classList.toggle('empty', files.length === 0)
+  list.style.display = files.length ? 'block' : 'none'
+  $('startBtn').disabled = files.length === 0 || activeJob !== null
+  if (files.length === 0) { $('overall').textContent = 'No files added'; list.innerHTML = ''; return }
+
+  const done = files.filter(f => f.status === 'done').length
+  $('overall').textContent = `${files.length} file(s) · ${done} done`
+
+  list.innerHTML = files.map(f => {
+    const srcRes = f.w ? `${f.w}×${f.h}` : '…'
+    let st = '', cls = ''
+    if (f.status === 'wait') { st = 'Waiting'; cls = 'wait' }
+    else if (f.status === 'work') { st = `Encoding… ${f.percent}%`; cls = 'work' }
+    else if (f.status === 'done') { st = '✓ Done'; cls = 'ok' }
+    else if (f.status === 'error') { st = '✗ ' + (f.error || 'Failed'); cls = 'err' }
+    const showBar = f.status === 'work' || f.status === 'done'
+    return `
+      <div class="row" data-id="${f.id}">
+        <div class="top">
+          <div class="name" title="${f.path}">${f.name}</div>
+          <div class="x" data-x="${f.id}">✕</div>
+        </div>
+        <div class="meta">${srcRes} · ${fmtTime(f.duration)}</div>
+        ${showBar ? `<div class="bar"><div style="width:${f.percent}%"></div></div>` : ''}
+        <div class="status ${cls}">${st}</div>
+      </div>`
+  }).join('')
+
+  list.querySelectorAll('[data-x]').forEach(el => {
+    el.onclick = () => {
+      if (activeJob !== null) return
+      files = files.filter(f => f.id != el.dataset.x)
+      render()
+    }
+  })
+}
+
+// --- drag & drop ---
+drop.addEventListener('click', () => { if (files.length === 0) $('addBtn').click() })
+;['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('dragover') }))
+;['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('dragover') }))
+drop.addEventListener('drop', e => {
+  const paths = [...e.dataTransfer.files].map(f => f.path).filter(Boolean)
+  if (paths.length) addPaths(paths)
+})
+
+$('addBtn').onclick = async () => { const p = await window.api.pickFiles(); if (p.length) addPaths(p) }
+$('clearBtn').onclick = () => { if (activeJob === null) { files = []; render() } }
+$('outBtn').onclick = async () => { const d = await window.api.pickOutput(); if (d) { outDir = d; $('outDir').value = d } }
+
+// bitrate sync
+$('brRange').oninput = () => { $('brNum').value = $('brRange').value; $('brOut').textContent = $('brRange').value }
+$('brNum').oninput = () => {
+  $('brOut').textContent = $('brNum').value
+  const v = Math.min(30000, Math.max(10000, +$('brNum').value || 10000))
+  $('brRange').value = v
+}
+
+window.api.onProgress(({ jobId, percent }) => {
+  const f = files.find(f => f.id === jobId)
+  if (f && f.status === 'work') { f.percent = percent; render() }
+})
+
+function outName(f, height, codec) {
+  const tag = height > 0 ? height + 'p' : 'orig'
+  const ext = codec === 'h265' ? 'mp4' : 'mp4'
+  const stem = f.name.replace(/\.[^.]+$/, '')
+  return `${stem}_${tag}.${ext}`
+}
+
+$('startBtn').onclick = async () => {
+  const height = +$('res').value
+  const bitrate = +$('brNum').value
+  const codec = $('codec').value
+  const preset = $('preset').value
+
+  cancelling = false
+  $('startBtn').style.display = 'none'
+  $('cancelBtn').style.display = 'block'
+
+  for (const f of files) {
+    if (cancelling) break
+    if (f.status === 'done') continue
+    const targetDir = outDir || f.dir
+    const sep = f.path.includes('\\') ? '\\' : '/'
+    let output = targetDir + sep + outName(f, height, codec)
+    if (output.toLowerCase() === f.path.toLowerCase()) {
+      output = targetDir + sep + outName(f, height, codec).replace(/\.mp4$/, '_out.mp4')
+    }
+
+    f.status = 'work'; f.percent = 0; activeJob = f.id; render()
+
+    const res = await window.api.transcode({
+      jobId: f.id, input: f.path, output,
+      height, bitrate, preset, codec, duration: f.duration
+    })
+
+    if (res.ok) { f.status = 'done'; f.percent = 100; f.output = output }
+    else { f.status = 'error'; f.error = (res.error || '').split('\n').pop().slice(0, 80) }
+    activeJob = null; render()
+  }
+
+  $('startBtn').style.display = 'block'
+  $('cancelBtn').style.display = 'none'
+  render()
+
+  const ok = files.filter(f => f.status === 'done')
+  if (ok.length && !cancelling) window.api.openFolder(ok[ok.length - 1].output)
+}
+
+$('cancelBtn').onclick = () => {
+  cancelling = true
+  if (activeJob !== null) window.api.cancel(activeJob)
+}
+
+render()
+</script>
+</body>
+</html>

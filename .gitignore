@@ -1,0 +1,24 @@
+node_modules/
+out/
+release/
+dist/
+.env
+.env.*
+*.env
+*.key
+*.log
+.eltest/
+.ectoken
+resources/bin/
+resources/bin-cpu-backup/
+resources/models/
+resources/**/*.exe
+resources/**/*.dll
+resources/**/*.bin
+resources/**/*.onnx
+icons/*.ico
+test videos/
+.frames/
+.fr/
+.ecweb/
+tools/

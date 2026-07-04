@@ -1,0 +1,7 @@
+{
+  "name": "batch-transcoder",
+  "version": "1.0.0",
+  "description": "Simple HandBrake-style batch video transcoder",
+  "main": "main.js",
+  "author": "EaseCutPro"
+}
