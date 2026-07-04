@@ -3,11 +3,12 @@
  *
  *   Phase 1  timestamp map      (this file: buildTimestampMap — words + exact
  *                                pauses + fillers + stutters + incomplete
- *                                sentences; whisper/Parakeet/VAD run in main)
- *   Phase 2  Claude semantic    (main/cutcutpro.ts calls Claude; this file
+ *                                sentences; whisper-1/VAD run in main)
+ *   Phase 2  GPT first pass     (main sends the audio copy to gpt-audio, which
+ *                                proposes cuts keeping the LAST take; this file
  *                                builds the payload + validates the EDL)
- *   Phase 3  OpenAI listening   (main sends the audio copy to gpt-4o-audio;
- *                                this file validates/merges the final EDL)
+ *   Phase 3  Claude verify      (main/cutcutpro.ts calls claude-opus-4-8 to
+ *                                finalize zero-repeats; this file validates it)
  *   Phase 4  execution          (edlToEdits maps the EDL onto the EXISTING
  *                                model: deleted words + silence regions ->
  *                                computeKeepRanges -> preview/export)

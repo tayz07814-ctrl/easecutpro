@@ -1,19 +1,24 @@
 /**
- * CutCutPro — orchestrator for the 4-phase premium cutting pipeline.
+ * ProCut (CutCutPro) — GPT-first / Claude-verify cutting pipeline.
  *
- *   Phase 1: whisper.cpp (Silero VAD build) + Parakeet -> precise timestamp map
- *            (pauses, fillers, stutters, incomplete sentences).
- *   Phase 2: Claude (claude-opus-4-8) semantic first pass -> proposed EDL
- *            (CUT/KEEP as word indices + pause ids — no free timestamps).
- *   Phase 3: OpenAI second pass LISTENS to a compressed copy of the audio
- *            (gpt-4o-audio-preview) to check tone/pacing, resolves conflicts,
- *            finalizes the EDL. Text-only GPT fallback, then Claude-EDL
- *            fallback — the job never crashes on a missing provider.
- *   Phase 4: the EDL is resolved onto the EXISTING edit model (deleted words +
- *            silence regions -> computeKeepRanges), so preview/export/undo and
- *            every other engine stay untouched.
+ *   Phase 1  TRANSCRIBE with OpenAI whisper-1 (VERBATIM, word-timestamped) so
+ *            every repeated take / stutter is present to be located. Falls back
+ *            to local whisper.cpp when there's no OpenAI key, and reuses an
+ *            existing transcript when the project already has one. + Silero VAD
+ *            for pauses -> index-anchored TimestampMap.
+ *   Phase 2  GPT FIRST PASS listens to the audio (gpt-audio) and proposes the
+ *            cuts: remove repeated takes (KEEP ONLY THE LAST clean take),
+ *            stutters, double-spoken words, and dead-air pauses. gpt-5 text
+ *            fallback when audio can't be attached.
+ *   Phase 3  Claude (claude-opus-4-8) SECOND PASS verifies + finalizes: re-scans
+ *            the whole transcript for ANY surviving repeat, guarantees only the
+ *            LAST take of each duplicate remains, and that the kept words still
+ *            read as one coherent script.
+ *   Phase 4  The final EDL resolves onto the EXISTING edit model (deleted words +
+ *            silence regions -> computeKeepRanges); staged for REVIEW and applied
+ *            when the user presses Execute cuts. Nothing else changes.
  *
- * Additive: separate module + separate button; standard engines unchanged.
+ * Additive: separate module + button; the standard engines are untouched.
  */
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -23,7 +28,7 @@ import { tmpdir, homedir } from 'os'
 import { randomUUID } from 'crypto'
 import { FFMPEG } from './binaries'
 import { transcribe } from './whisper'
-import { transcribeParakeet } from './parakeet'
+import { transcribeOpenAI } from './openai-transcribe'
 import { detectSilence } from './ffmpeg'
 import { claudeAvailable, getAnthropic } from './claude'
 import { openaiAvailable, getOpenAI } from './openai'
@@ -42,34 +47,37 @@ import type { Transcript } from '../shared/types'
 
 const execFileP = promisify(execFile)
 
+// Claude verifies/finalizes (second pass). gpt-4o-audio-preview is retired
+// (404s); try the current audio models in order, first the account has wins.
 const CLAUDE_MODEL = 'claude-opus-4-8'
-// gpt-4o-audio-preview is retired (404s). Try the current audio models in
-// order; the first one the account has wins.
 const OPENAI_AUDIO_MODELS = ['gpt-audio', 'gpt-audio-1.5', 'gpt-audio-mini', 'gpt-4o-audio-preview']
 const OPENAI_TEXT_MODEL = 'gpt-5'
 const MAX_AUDIO_BYTES = 18 * 1024 * 1024 // keep the base64 payload well under API limits
 
 const EDL_SHAPE = `Reply with VALID JSON ONLY (no prose, no markdown fences), exactly:
-{"word_cuts":[{"from":12,"to":18,"reason":"failed take restarted at 19"}],
+{"word_cuts":[{"from":12,"to":18,"reason":"earlier take of this line; kept the later one"}],
  "pause_cuts":[{"pause_id":"p3","keep_ms":150,"reason":"dead air; keep a beat"}]}
 word_cuts use INCLUSIVE word indices from the list. pause_cuts reference pause ids; keep_ms=0 removes the pause entirely, otherwise that many ms remain.`
 
-const CLAUDE_SYSTEM = `You are the FIRST PASS of a two-pass professional video cutting pipeline. You receive an index-anchored transcript with exact pause markers, vocal fillers, stutters and incomplete sentences flagged.
+const GPT_FIRST_SYSTEM = `You are the FIRST PASS of a two-pass professional video cutting pipeline. The pipeline's GOAL is a clean video with ZERO repeated content, where the words that remain still read as one coherent script. You are given an index-anchored VERBATIM transcript (word indices, exact pause markers, fillers and stutters flagged) and you can HEAR the attached audio.
 
-Perform a SEMANTIC analysis:
-- distinguish deliberate repetition (emphasis, rhetoric) from accidental retakes/restarts — cut the abandoned earlier takes, keep the final clean take VERBATIM;
-- map incomplete thoughts (sentences left hanging) — cut them when the speaker restarts the idea, keep them if they flow into the next line;
-- cut vocal fillers and stutters UNLESS removing them would break the sentence;
-- decide every listed pause: dead air => remove or trim hard; natural sentence rhythm or dramatic/emotional beats => keep or trim gently.
-Be decisive but never cut content that is the only copy of an idea.
+Propose the cuts:
+- REPEATED TAKES / RESTARTS: whenever the speaker says the same sentence or line more than once (retakes, false starts, "let me say that again"), CUT EVERY EARLIER ATTEMPT AND KEEP ONLY THE LAST clean take — opening words of the earlier takes included. Never leave two copies of the same line. Use the audio to tell which take is the clean/final one.
+- STUTTERS & DOUBLE-SPOKEN WORDS: cut the stuttered or duplicated words, leaving one clean instance.
+- DEAD-AIR PAUSES: remove or hard-trim silent pauses; keep only natural sentence rhythm and deliberate dramatic beats.
+Do NOT cut deliberate rhetorical repetition (emphasis). Never remove the ONLY copy of an idea, and never leave a broken half-sentence.
 
 ${EDL_SHAPE}`
 
-const OPENAI_SYSTEM = `You are the SECOND PASS (verification) of a professional video cutting pipeline. You receive: the index-anchored transcript map, and the first pass's proposed EDL. ${'' /* audio attached when available */}Listen to the attached audio: evaluate the speaker's emotional tone, breathing and natural pacing. Cross-check every proposed cut against how it will SOUND:
-- veto or adjust cuts that would feel jarring, clip a breath mid-flow, or kill an intentional emotional pause;
-- tighten pauses the first pass was too shy about when the audio confirms dead air;
-- keep deliberate pacing; the final result must feel fluent and natural, stripped of dead silences, fillers, retakes and broken sentences.
-Return the DEFINITIVE final EDL (same ids/indices; your reply fully replaces the proposal).
+const CLAUDE_VERIFY_SYSTEM = `You are the SECOND PASS (verification + finalization) of a professional video cutting pipeline. GOAL: after your cuts the kept transcript must contain ZERO repeated sentences/lines and read as one coherent script. You receive the index-anchored VERBATIM transcript map and the FIRST PASS's proposed EDL.
+
+Finalize it:
+- Re-scan the WHOLE transcript for any repeated take or line the first pass missed or only partially cut. For every group of duplicate takes, make sure ONLY THE LAST clean take survives — add or extend word_cuts to delete the earlier copies ENTIRELY (their opening words included).
+- Remove any leftover stutters or double-spoken words.
+- Never leave a broken or dangling half-sentence: the words that remain must flow as a script.
+- Keep the first pass's correct cuts; only add/adjust what's needed to reach zero repeats.
+- If the proposed EDL is empty, perform the full analysis yourself.
+Return the DEFINITIVE final EDL (same ids/indices; your reply FULLY REPLACES the proposal).
 
 ${EDL_SHAPE}`
 
@@ -79,66 +87,31 @@ async function extractMp3(path: string): Promise<string> {
   return out
 }
 
-/** Refine whisper word timestamps with Parakeet's (second recognizer): where the
- *  two agree on a word (monotonic match, <300ms apart), average the boundaries. */
-function refineWithParakeet(base: Transcript, alt: Transcript): number {
-  const normTok = (s: string): string => s.toLowerCase().replace(/[^a-z0-9']/g, '')
-  let j = 0
-  let refined = 0
-  for (const w of base.words) {
-    const n = normTok(w.text)
-    if (!n) continue
-    for (let k = j; k < Math.min(alt.words.length, j + 6); k++) {
-      const a = alt.words[k]
-      if (normTok(a.text) === n && Math.abs(a.start - w.start) < 0.3) {
-        w.start = Number(((w.start + a.start) / 2).toFixed(3))
-        w.end = Number(((w.end + a.end) / 2).toFixed(3))
-        j = k + 1
-        refined++
-        break
-      }
-    }
-  }
-  return refined
-}
+type Choices = { choices: { message: { content: string | null } }[] }
 
-async function claudePass(payload: string, onProgress?: (p: number, m?: string) => void): Promise<string> {
-  onProgress?.(45, 'Cut Lord is thinking (2/4)…')
-  const client = getAnthropic()
-  // NOTE: no `temperature` — claude-opus-4-8 rejects it with a 400 ("deprecated
-  // for this model"), which silently killed this whole pass. Determinism comes
-  // from the structured, index-anchored contract instead.
-  const res = await client.messages.create({
-    model: CLAUDE_MODEL,
-    max_tokens: 8192,
-    system: CLAUDE_SYSTEM,
-    messages: [{ role: 'user', content: payload }]
-  })
-  const block = res.content.find((b) => b.type === 'text')
-  return block && block.type === 'text' ? block.text : ''
-}
-
-async function openaiListenPass(
+/**
+ * GPT FIRST pass: LISTEN to a compressed copy of the audio + read the indexed
+ * transcript, and propose the EDL. Text-only gpt-5 fallback when the audio can't
+ * be attached, so the pass never silently vanishes on a picky/absent audio model.
+ */
+async function gptFirstPass(
   payload: string,
-  claudeEdl: Edl,
   audioPath: string,
   warnings: string[],
   phases: string[],
   onProgress?: (p: number, m?: string) => void
 ): Promise<string> {
   const openai = getOpenAI()
-  const userText =
-    `${payload}\nPROPOSED EDL (first pass):\n${JSON.stringify(claudeEdl)}\n\nVerify against the attached audio and return the final EDL.`
-  // Listening pass: compressed mono copy of the audio, base64-attached.
+  const userText = `${payload}\nListen to the attached audio and return the first-pass EDL (remove repeated takes keeping the LAST, stutters, double words, dead-air pauses).`
   try {
-    onProgress?.(65, 'Cut Lord is double-checking (3/4) — listening…')
+    onProgress?.(45, 'Cut Lord is listening & cutting (2/4)…')
     const mp3 = await extractMp3(audioPath)
     try {
       const size = (await stat(mp3)).size
       if (size > MAX_AUDIO_BYTES) throw new Error(`audio too large for the listening pass (${Math.round(size / 1e6)}MB)`)
       const b64 = (await readFile(mp3)).toString('base64')
       const messages = [
-        { role: 'system', content: OPENAI_SYSTEM },
+        { role: 'system', content: GPT_FIRST_SYSTEM },
         {
           role: 'user',
           content: [
@@ -159,8 +132,8 @@ async function openaiListenPass(
               req.seed = 7
             }
             const res = await openai.chat.completions.create(req as never)
-            phases.push(`listen(${model}${withParams ? '' : ', bare'})`)
-            return (res as { choices: { message: { content: string | null } }[] }).choices[0]?.message?.content ?? ''
+            phases.push(`gpt-listen(${model}${withParams ? '' : ', bare'})`)
+            return (res as Choices).choices[0]?.message?.content ?? ''
           } catch (e) {
             lastErr = e as Error
             const msg = lastErr.message || ''
@@ -177,18 +150,45 @@ async function openaiListenPass(
       await unlink(mp3).catch(() => undefined)
     }
   } catch (e) {
-    warnings.push(`Listening pass unavailable (${(e as Error).message}) — text-only verification instead.`)
-    onProgress?.(70, 'Cut Lord is double-checking (3/4)…')
+    warnings.push(`GPT listening pass unavailable (${(e as Error).message}) — text-only first pass instead.`)
+    onProgress?.(52, 'Cut Lord is cutting (2/4)…')
     const res = await openai.chat.completions.create({
       model: OPENAI_TEXT_MODEL,
       reasoning_effort: 'low',
       messages: [
-        { role: 'system', content: OPENAI_SYSTEM.replace('Listen to the attached audio: e', 'E') },
+        { role: 'system', content: GPT_FIRST_SYSTEM.replace('you can HEAR the attached audio', 'work from the transcript') },
         { role: 'user', content: userText }
       ]
     } as never)
-    return (res as { choices: { message: { content: string | null } }[] }).choices[0]?.message?.content ?? ''
+    phases.push('gpt-text')
+    return (res as Choices).choices[0]?.message?.content ?? ''
   }
+}
+
+/**
+ * Claude SECOND pass: verify + finalize the first pass's EDL — re-scan for any
+ * surviving repeat, guarantee only the LAST take of each duplicate remains, keep
+ * the script coherent. No `temperature` (claude-opus-4-8 rejects it with a 400,
+ * which silently killed the pass); determinism comes from the index-anchored
+ * contract instead.
+ */
+async function claudeVerifyPass(
+  payload: string,
+  proposal: Edl,
+  onProgress?: (p: number, m?: string) => void
+): Promise<string> {
+  onProgress?.(72, 'Cut Lord is finalizing (3/4)…')
+  const client = getAnthropic()
+  const userText =
+    `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
+  const res = await client.messages.create({
+    model: CLAUDE_MODEL,
+    max_tokens: 8192,
+    system: CLAUDE_VERIFY_SYSTEM,
+    messages: [{ role: 'user', content: userText }]
+  })
+  const block = res.content.find((b) => b.type === 'text')
+  return block && block.type === 'text' ? block.text : ''
 }
 
 export async function cutCutPro(
@@ -200,28 +200,28 @@ export async function cutCutPro(
   const warnings: string[] = []
   const phases: string[] = []
 
-  // ---- Phase 1: pre-processing & audio mapping -------------------------------
-  onProgress?.(2, 'Cut Lord is listening (1/4)…')
+  // ---- Phase 1: transcription (whisper-1, verbatim) + pause mapping -----------
+  onProgress?.(2, 'Cut Lord is transcribing (1/4)…')
   let transcript = existing
-  if (!transcript) {
-    transcript = await transcribe(audioPath, (p, m) => onProgress?.(2 + p * 0.2, 'Cut Lord is listening (1/4)…'), modelName)
+  if (transcript) {
+    phases.push('transcript(reused)')
+  } else if (openaiAvailable()) {
+    try {
+      transcript = await transcribeOpenAI(audioPath, (p) => onProgress?.(2 + p * 0.28, 'Cut Lord is transcribing (1/4)…'))
+      phases.push('whisper-1')
+    } catch (e) {
+      warnings.push(`OpenAI transcription failed (${(e as Error).message.split('\n')[0]}) — using local whisper.`)
+    }
   }
-  phases.push('whisper')
-
-  // Parakeet second recognizer (optional): tightens word boundaries.
-  try {
-    onProgress?.(24, 'Cut Lord is listening (1/4) — refining timing…')
-    const alt = await transcribeParakeet(audioPath, () => undefined)
-    const refined = refineWithParakeet(transcript, alt)
-    phases.push(`parakeet(${refined} words refined)`)
-  } catch (e) {
-    warnings.push(`Parakeet unavailable (${(e as Error).message.split('\n')[0]}) — whisper timestamps used as-is.`)
+  if (!transcript) {
+    transcript = await transcribe(audioPath, (p) => onProgress?.(2 + p * 0.28, 'Cut Lord is transcribing (1/4)…'), modelName)
+    phases.push('whisper.cpp')
   }
 
   // Silero VAD: corroborates pauses / catches non-speech noise floors.
   let vad: { start: number; end: number }[] = []
   try {
-    onProgress?.(32, 'Cut Lord is listening (1/4) — mapping pauses…')
+    onProgress?.(32, 'Cut Lord is mapping pauses (1/4)…')
     vad = (await detectSilence(audioPath, { mode: 'vad', noiseDb: -35, minDuration: 0.25 })).map((r) => ({ start: r.start, end: r.end }))
     phases.push(`vad(${vad.length} regions)`)
   } catch (e) {
@@ -231,47 +231,48 @@ export async function cutCutPro(
   const map: TimestampMap = buildTimestampMap(transcript.words, vad)
   const payload = buildAiPayload(map)
 
-  // ---- Phase 2: Claude semantic first pass -----------------------------------
+  // ---- Phase 2: GPT first pass (listens, proposes cuts) ----------------------
+  let gptEdl: Edl | null = null
+  if (openaiAvailable()) {
+    try {
+      const raw = await gptFirstPass(payload, audioPath, warnings, phases, onProgress)
+      const v = validateEdl(raw, map)
+      if (v.ok) {
+        gptEdl = v.edl
+        phases.push('gpt')
+      } else warnings.push('GPT first pass returned an unusable EDL — Claude runs solo.')
+    } catch (e) {
+      warnings.push(`GPT first pass failed (${(e as Error).message}).`)
+    }
+  } else {
+    warnings.push('No OPENAI_API_KEY — skipping the GPT first pass.')
+  }
+
+  // ---- Phase 3: Claude verification / finalization ---------------------------
   let claudeEdl: Edl | null = null
   if (claudeAvailable()) {
     try {
-      const raw = await claudePass(payload, onProgress)
+      const raw = await claudeVerifyPass(payload, gptEdl ?? { word_cuts: [], pause_cuts: [] }, onProgress)
       const v = validateEdl(raw, map)
       if (v.ok) {
         claudeEdl = v.edl
         phases.push('claude')
-      } else warnings.push('Claude returned an unusable EDL — verification pass runs solo.')
+      } else warnings.push('Claude verification returned an unusable EDL — using the first-pass EDL.')
     } catch (e) {
-      warnings.push(`Claude pass failed (${(e as Error).message}).`)
+      warnings.push(`Claude verification failed (${(e as Error).message}).`)
     }
   } else {
-    warnings.push('No ANTHROPIC_API_KEY — skipping the Claude first pass.')
+    warnings.push('No ANTHROPIC_API_KEY — skipping the Claude verification pass.')
   }
 
-  // ---- Phase 3: OpenAI listening verification --------------------------------
-  let openaiEdl: Edl | null = null
-  if (openaiAvailable()) {
-    try {
-      const raw = await openaiListenPass(payload, claudeEdl ?? { word_cuts: [], pause_cuts: [] }, audioPath, warnings, phases, onProgress)
-      const v = validateEdl(raw, map)
-      if (v.ok) {
-        openaiEdl = v.edl
-        phases.push('openai')
-      } else warnings.push('OpenAI returned an unusable EDL — using the first-pass EDL.')
-    } catch (e) {
-      warnings.push(`OpenAI pass failed (${(e as Error).message}).`)
-    }
-  } else {
-    warnings.push('No OPENAI_API_KEY — skipping the listening verification pass.')
-  }
-
-  let finalEdl: Edl = openaiEdl ?? claudeEdl ?? { word_cuts: [], pause_cuts: [] }
-  if (!openaiEdl && !claudeEdl) warnings.push('No AI provider produced an EDL — nothing was cut. Configure ANTHROPIC_API_KEY / OPENAI_API_KEY.')
+  // Claude's verified EDL wins; fall back to the GPT proposal, then nothing.
+  let finalEdl: Edl = claudeEdl ?? gptEdl ?? { word_cuts: [], pause_cuts: [] }
+  if (!claudeEdl && !gptEdl) warnings.push('No AI provider produced an EDL — nothing was cut. Configure OPENAI_API_KEY / ANTHROPIC_API_KEY.')
 
   // ---- Phase 4: deterministic guards + resolve + debug ------------------------
   onProgress?.(88, 'Cut Lord is cutting (4/4)…')
-  // Guard pass over the AI's judgment: extend cuts back over duplicated
-  // openings and sweep dangling incomplete clauses (screenshot bugs).
+  // Guard pass over the AI's judgment: extend cuts back over duplicated openings
+  // and sweep dangling incomplete clauses.
   const refined = refineEdl(finalEdl, map)
   finalEdl = refined.edl
   const edits = edlToEdits(finalEdl, map, transcript.words)
@@ -280,8 +281,9 @@ export async function cutCutPro(
     mode: 'cutcutpro',
     phases_run: phases,
     timestamp_map: map,
+    // claude_edl = the finalized second pass; openai_edl = the GPT first-pass proposal.
     claude_edl: claudeEdl,
-    openai_edl: openaiEdl,
+    openai_edl: gptEdl,
     final_edl: finalEdl,
     refine_notes: refined.notes,
     deleted_words: edits.deleteWordIds.length,
@@ -305,6 +307,6 @@ export async function cutCutPro(
     silenceAdds: edits.silenceAdds,
     debugPath,
     warnings,
-    summary: `CutCutPro: ${edits.deleteWordIds.length} word(s) cut, ${edits.silenceAdds.length} pause edit(s) [${phases.join(' → ')}]`
+    summary: `ProCut: ${edits.deleteWordIds.length} word(s) cut, ${edits.silenceAdds.length} pause edit(s) [${phases.join(' → ')}]`
   }
 }
