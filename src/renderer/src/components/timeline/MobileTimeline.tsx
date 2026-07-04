@@ -183,9 +183,16 @@ export default function MobileTimeline(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewW])
 
+  const setStoreZoom = useStore((s) => s.setZoom)
+  const px = useStore((s) => s.project.pxPerSec)
+
   return (
     <div className="ec-mtl">
       <div className="ec-mtl-tc">{formatTimecode(session.playhead, tb)}</div>
+      <div className="ec-mtl-zoom">
+        <button onClick={() => setStoreZoom(px - 24)} title="Zoom out">−</button>
+        <button onClick={() => setStoreZoom(px + 24)} title="Zoom in">+</button>
+      </div>
       <div className="ec-mtl-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="ec-mtl-content" style={{ width: contentWidth }}>
           {activeDoc.tracks.map((t) => (

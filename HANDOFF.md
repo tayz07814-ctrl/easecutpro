@@ -4,34 +4,53 @@
 > memory: `~/.claude/projects/C--easecutpro/memory/easecutpro-doc-timeline.md`
 > (auto-loaded). Approved plan: `~/.claude/plans/moonlit-swinging-waffle.md`.
 
-## 0. Latest session — overnight fix batch (all typecheck+build+pure-suites green)
-Done this session (each needs a LIVE smoke test — agent can't drive the Electron GUI):
-- **Basic tab shows main-lane clip settings** — `findDocMainClip` + a base-clip editor (info /
-  split / delete / detach audio) in `BasicPanel.tsx`. (Transform/zoom deferred to doc-native motion.)
-- **Transcript word highlighter aligned** — single-source doc timelines run the playhead in EDITED
-  time but words are SOURCE time; `docEditedToSource`/`docSourceToEdited` in `TranscriptPanel.tsx`
-  map both ways through the main lane (guarded to single-source; montage/legacy untouched). Fixes the
-  highlight AND double-click-to-seek. Verified with a headless domain harness.
-- **Magnet-off gaps play as BLACK** — `SequencePreview` now runs the transport in real timeline time
-  in doc mode (editedStart==start, editedTotal==total incl. gaps) and the rAF loop TRAVERSES dead
-  space on the wall clock (video paused, `inGap` shows black), resuming at the next clip. Slider maps
-  straight to real time so scrubbing parks in the gap.
-- **Reopen-black fixed** — cached media fires `loadedmetadata` before the remounted <video>'s handler
-  attaches, so the initial seek never ran → black. Added a `readyState>=HAVE_METADATA` catch effect in
-  `SequencePreview` (guarded against double-seek).
-- **Drag-resizable panels** — the dividers already existed; the real bug was CSS `min/max-width` on
-  `.col-left/.col-right` fighting the inline drag width. Removed them (JS clamps govern), widened
-  dividers to 8px + centre grip, and locked cursor/selection during the drag (`App.tsx`, `styles.css`).
-- **Cut-engine seam quality in doc mode** — the cut routing now passes the media waveform to
-  `computeKeepRanges`, so Fast/Pro/word/silence seams valley-snap + edge-blip-absorb like legacy
-  (`TimelinePanel.tsx`). Cleaned a dead ternary in `smartsmooth.ts` finalizer.
-- **Mobile UI** — bigger touch targets (transport, zoom, sheet close), safe-area floor, export-chip
-  grid, and short/narrow/landscape media queries (`styles.css`).
+## 0. Current state (all typecheck + build + 12 timeline verify-suites GREEN)
+Everything below is verified headlessly (typecheck/build/pure tests) but NOT run — the agent can't
+drive the Electron/mobile GUI, so **each feature needs a live smoke test**. Recent commits:
+`ed6cb5b` (Stage 4 #1-3 + Ken Burns rip-out + preview/UX) · `822e481` (earlier) · `206b428` (black-frame
+hardening, waveform bars, mobile split/trim/scroll) · then the **mobile CapCut UI** (this commit).
 
-NOTE: detection-heuristic tuning for Fast/Pro cut was deliberately NOT changed blind — those engines
-are tuned + tested; recall/precision changes need real-media A/B validation (do interactively).
-Deferred (unchanged): the doc-native rip-out chain (§6b: timeline-always-authoritative → remove dead
-legacy → remove overlay/text creation). Not tackled tonight — runtime-risky, needs live testing.
+### Done & working (doc mode is authoritative once a project has `project.timeline`)
+- **Cuts → document** (`removedRangesToMainFrames` in bridge.ts + a cut-signature effect in
+  TimelinePanel.tsx; waveform passed so seams valley-snap). **Detached/extra audio in export**
+  (`project.extraAudio` + generalized ffmpeg amix, gated so legacy exports are byte-identical).
+  **Drop-at-point insert** (`insertClipIntoMainInDoc`).
+- **Ken Burns base-zoom RIPPED OUT** end-to-end (types, motion.ts, ffmpeg base-zoom block, BasicPanel,
+  store, MCP). Overlay-clip zoom kept.
+- **Basic tab base-clip controls**: Size/Zoom/Pan/Speed/Volume for main-lane clips, rendered on the
+  base `<video>` in SequencePreview (transform + `v.volume` + `v.playbackRate`; speed math is identity
+  for un-sped clips). Commands: `setClipGain`, `setClipMetadata`, `setClipText`, `setClipSpeed`.
+- **Text overlays doc-native** (TextPanel add/edit/style/position/delete via engine). **Overlay clips
+  play their own audio** + Ken Burns rides the shared play clock (over gaps too). **Transcript word
+  highlighter** maps edited↔source through the main lane (single-source guard).
+- **Preview black-frame fixes** (the big recurring bug): remount seek via onLoadedData/onCanPlay +
+  reset loadedSrcRef on unmount + re-key on segsKey + idempotent onLoaded + a fresh-mount NUDGE (writing
+  currentTime 0 to a 0 element is a no-op → black); `displayIdx` shows the last frame past-the-end
+  instead of black (interior magnet-off gaps still black). Removed the stale "Montage · N clips" badge.
+- **Timeline**: lanes fill the measured viewport (no blank strip when zoomed out); waveform = teal
+  vertical bars (mountains/valleys); always-visible desktop trim handles + touch trim on mobile;
+  drag-resizable panel widths + per-track height (engine.applyLive).
+- **Mobile CapCut UI** (NEW — `src/renderer/src/components/mobile/`): monochrome line-icon set
+  (`Icon.tsx`); context dock (`MobileTools.tsx`) — nothing selected → Import media + Cut Lord; video/
+  overlay clip → tool row (split/speed/zoom/crop/adjust/volume/animation/extract/remove-bg) each opening
+  a CHILD PANEL; text + audio clips get their own toolbars; quick-action bar (replace/lock/duplicate/
+  delete/more). Transport redesigned (undo/redo · play · keyframes · magnet/snap/delete, monochrome).
+  `+` adds an overlay track; compact zoom on the timeline. MobileApp/MobileTimeline are doc-aware.
+
+### Known GAPS / next work
+- **EXPORT parity for base-clip transforms/speed/volume** (user asked about this). Preview applies them
+  per-clip on the DOM `<video>`, but export DROPS them: `documentToProject` folds the main lane into
+  `baseSequence` (`SequenceClip` has NO transform/speed/gain fields), and `exportProject` (ffmpeg.ts)
+  PRE-CONCATENATES the montage into one flat file before compositing — no per-clip hook survives. Fix:
+  add per-clip transform/speed/gain to the export path (extend SequenceClip or pass doc clips through)
+  and build the base as per-clip filter chains (trim → zoompan → setpts/atempo → volume) concatenated,
+  instead of concat-then-effect. The OVERLAY path already does per-clip `zoompanStage` — copy that pattern.
+- **Mobile honest-STUBS** (toast "coming soon", no backing feature): Remove BG, live animation preview
+  (choice is saved on clip.metadata.overlayAnimation), keyframes (◆ buttons), replace, lock, more, fade.
+- **Detection-heuristic tuning** for Fast/Pro cut deliberately NOT changed blind — tuned + tested; needs
+  real-media A/B validation.
+- **Deferred doc-native rip-out chain** (§6b): timeline-always-authoritative → remove dead legacy
+  preview/export → remove legacy overlay/text CREATION. Runtime-risky, needs live testing; not started.
 
 ## 1. Goal (user's directive)
 Make the from-scratch multi-track timeline the **real, persistent source of truth** —

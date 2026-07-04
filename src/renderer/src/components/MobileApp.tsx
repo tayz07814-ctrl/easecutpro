@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useStore } from '../store'
 import { useSmoothProgress } from '../useSmoothProgress'
-import { editedDuration } from '@shared/edit'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
-import { findClip, mainTrackId } from '@shared/timeline/model'
+import * as C from '@shared/timeline/commands'
+import { Icon } from './mobile/Icon'
+import { MobileTools } from './mobile/MobileTools'
 import ProjectTitle from './ProjectTitle'
 import VideoPreview from './VideoPreview'
 import TimelinePanel from './timeline/TimelinePanel'
@@ -27,6 +28,13 @@ export default function MobileApp(): JSX.Element {
   const hasBase = hasMedia || ((project.baseSequence?.length ?? 0) > 0)
   const [sheet, setSheet] = useState<Sheet>(null)
   const [pendingTranscript, setPendingTranscript] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 1800)
+    return () => clearTimeout(t)
+  }, [toast])
+  const soon = (what: string): void => setToast(`${what} — coming soon`)
 
   const selClip = s.selectedClipId
   const selSeg = s.selectedSeg
@@ -34,32 +42,15 @@ export default function MobileApp(): JSX.Element {
   const selSeqClip = s.selectedSeqClipId
 
   // DOCUMENT mode: selection + edits live on the shared engine, not the legacy
-  // store — so the context bar / split / delete must read and drive the engine.
+  // store — so delete/split must read and drive the engine.
   const snap = useSharedEngineSnapshot()
   const docMode = !!project.timeline && !!snap?.doc
   const docSelId = docMode ? snap!.interaction.selection[0] ?? null : null
-  const docSelClip = docSelId ? findClip(snap!.doc, docSelId)?.clip ?? null : null
-  const docKind: 'clip' | 'text' | 'seg' = docSelClip
-    ? docSelClip.kind === 'text' || docSelClip.kind === 'title'
-      ? 'text'
-      : docSelClip.trackId === mainTrackId(snap!.doc)
-        ? 'seg'
-        : 'clip'
-    : 'seg'
-
   const hasSelection = docMode ? !!docSelId : !!(selClip || selSeg || selText || selSeqClip)
-  const engineSplit = (): void => {
-    if (docMode) getSharedEngine()?.splitAtPlayhead()
-    else s.hotkeySplit()
-  }
   const engineDelete = (): void => {
     if (docMode) getSharedEngine()?.deleteSelection(true)
     else s.hotkeyDelete()
   }
-  // Delete acts on the selected base segment (kept or already-cut). "Delete all"
-  // appears whenever there is removed footage (greyed cuts) to ripple away.
-  const delSeg = selSeg
-  const hasCuts = !!project.media && editedDuration(project) < project.media.duration - 0.1
 
   // When a transcription that we kicked off finishes, pop open the panel.
   useEffect(() => {
@@ -111,110 +102,51 @@ export default function MobileApp(): JSX.Element {
         <VideoPreview />
       </div>
 
-      {/* Compact transport: zoom + magnet (left) · play (centre) · undo/redo +
-          delete (right). Magnet and Undo/Redo now sit on OPPOSITE sides so they
-          can never overlap, and Play is alone in the centre cell = truly centred. */}
+      {/* Transport: undo/redo · play · keyframes + magnet/snap/delete (monochrome) */}
       <div className="m-transport">
-        <div className="m-zoom">
-          <button className="m-zoom-b" onClick={() => s.setZoom(project.pxPerSec - 20)} disabled={!hasBase}>−</button>
-          <input
-            className="m-zoom-slider"
-            type="range" min={10} max={400} step={5}
-            value={project.pxPerSec}
-            onChange={(e) => s.setZoom(Number(e.target.value))}
-            disabled={!hasBase}
-            title="Zoom timeline"
-          />
-          <button className="m-zoom-b" onClick={() => s.setZoom(project.pxPerSec + 20)} disabled={!hasBase}>+</button>
+        <div className="m-tp-side">
+          <button className="m-ic" onClick={s.undo} disabled={!s.canUndo} title="Undo"><Icon name="undo" /></button>
+          <button className="m-ic" onClick={s.redo} disabled={!s.canRedo} title="Redo"><Icon name="redo" /></button>
+        </div>
+        <button className="m-ic m-play" onClick={() => hasBase && s.setPlaying(!s.playing)} disabled={!hasBase} title={s.playing ? 'Pause' : 'Play'}>
+          <Icon name={s.playing ? 'pause' : 'play'} size={20} />
+        </button>
+        <div className="m-tp-side end">
+          <button className="m-ic" onClick={() => soon('Keyframes')} disabled={!hasSelection} title="Previous keyframe"><Icon name="kfPrev" /></button>
+          <button className="m-ic" onClick={() => soon('Keyframes')} disabled={!hasSelection} title="Add keyframe"><Icon name="kfNext" /></button>
+          <button className={'m-ic' + (project.magnet ? ' on' : '')} onClick={s.toggleMagnet} title={`Magnet ${project.magnet ? 'on' : 'off'}`}><Icon name="magnet" /></button>
           <button
-            className={'m-zoom-b m-magnet' + (project.magnet ? ' on' : '')}
-            onClick={s.toggleMagnet}
-            title={`Magnet ${project.magnet ? 'on' : 'off'}`}
-          >
-            🧲
-          </button>
-          <button
-            className={'m-zoom-b m-magnet' + (snap?.session.settings.snapping ? ' on' : '')}
-            onClick={() => {
-              const e = getSharedEngine()
-              if (e) e.updateSettings({ snapping: !e.sessionState.settings.snapping })
-            }}
+            className={'m-ic' + (snap?.session.settings.snapping ? ' on' : '')}
+            onClick={() => { const e = getSharedEngine(); if (e) e.updateSettings({ snapping: !e.sessionState.settings.snapping }) }}
             title={`Snap ${snap?.session.settings.snapping ? 'on' : 'off'}`}
-          >
-            ⊟
-          </button>
-          <button className="m-zoom-b" onClick={() => s.setPlayhead(0)} disabled={!hasBase} title="Jump to start">⏮</button>
-        </div>
-
-        <div className="m-transport-mid">
-          <button
-            className="m-tp m-play"
-            onClick={() => hasBase && s.setPlaying(!s.playing)}
-            disabled={!hasBase}
-          >
-            {s.playing ? '❚❚' : '▶'}
-          </button>
-        </div>
-
-        <div className="m-del-group">
-          <button className="m-tp" onClick={engineSplit} disabled={!hasBase} title="Split at playhead">✂</button>
-          <button className="m-tp" onClick={s.undo} disabled={!s.canUndo} title="Undo">↶</button>
-          <button className="m-tp" onClick={s.redo} disabled={!s.canRedo} title="Redo">↷</button>
-          {delSeg ? (
-            <button
-              className="m-del"
-              onClick={() => {
-                s.deleteBaseRange(delSeg.start, delSeg.end, true)
-                s.selectSeg(null)
-              }}
-              title="Delete this clip"
-            >
-              🗑
-            </button>
-          ) : (
-            hasCuts && (
-              <button className="m-del all" onClick={() => s.deleteAllCuts()} title="Delete every greyed cut at once">🗑</button>
-            )
-          )}
+          ><Icon name="snap" /></button>
+          <button className="m-ic danger" onClick={() => { if (hasSelection) { engineDelete(); clearSelection() } }} disabled={!hasSelection} title="Delete"><Icon name="trash" /></button>
         </div>
       </div>
 
-      {/* Timeline */}
+      {/* Timeline with a + to add an overlay track */}
       <div className="m-tl">
+        <button
+          className="m-add-track"
+          title="Add an overlay track"
+          disabled={!hasBase}
+          onClick={() => {
+            const e = getSharedEngine()
+            if (e) e.dispatch(C.addTrack('video', { name: `Overlay ${e.document.tracks.filter((t) => t.kind === 'video' && !t.isMain).length + 1}`, order: Math.min(0, ...e.document.tracks.map((t) => t.order)) - 1 }))
+          }}
+        >
+          <Icon name="plus" size={20} />
+        </button>
         <TimelinePanel mobile />
       </div>
 
-      {/* Bottom dock: contextual toolbar when something is selected, else main actions */}
+      {/* Bottom dock: contextual tools when a clip is selected, else Import + Cut Lord */}
       <div className="m-dock">
-        {hasSelection ? (
-          <ContextBar
-            kind={docMode ? docKind : selClip ? 'clip' : selText ? 'text' : selSeqClip ? 'seg' : selSeg?.kind === 'cut' ? 'cut' : 'seg'}
-            onSplit={engineSplit}
-            onDelete={() => {
-              engineDelete()
-              clearSelection()
-            }}
-            onRestore={() => {
-              s.hotkeyUndelete()
-              clearSelection()
-            }}
-            onAdjust={() => setSheet('adjust')}
-            onEditText={() => setSheet('text')}
-            onClose={clearSelection}
-          />
-        ) : (
-          <MainBar
-            onMedia={() => setSheet('media')}
-            onScript={onScript}
-            onMusic={() => setSheet('music')}
-            onText={() => {
-              s.addText()
-              setSheet('text')
-            }}
-            onSilence={() => setSheet('silence')}
-            hasMedia={hasBase}
-          />
-        )}
+        <MobileTools
+          onImport={() => setSheet('media')}
+          onCutlord={onScript}
+          onEditText={() => setSheet('text')}
+        />
       </div>
 
       {/* Sheets */}
@@ -252,123 +184,10 @@ export default function MobileApp(): JSX.Element {
 
       {/* Centered progress widget for long jobs (transcribe / silence / export) */}
       <ProgressWidget />
+      {toast && <div className="m-toast">{toast}</div>}
 
       {s.showSettings && <SettingsModal />}
     </div>
-  )
-}
-
-// ---- Main action dock (horizontally scrollable) ----
-function MainBar({
-  onMedia,
-  onScript,
-  onMusic,
-  onText,
-  onSilence,
-  hasMedia
-}: {
-  onMedia: () => void
-  onScript: () => void
-  onMusic: () => void
-  onText: () => void
-  onSilence: () => void
-  hasMedia: boolean
-}): JSX.Element {
-  return (
-    <div className="m-dock-scroll">
-      <Tool icon="🎬" label="Media" onClick={onMedia} />
-      <Tool icon={<ScribeCutIcon />} label="ScribeCut" onClick={onScript} disabled={!hasMedia} accent />
-      <Tool icon="🎵" label="Music" onClick={onMusic} disabled={!hasMedia} />
-      <Tool icon="🅣" label="Text" onClick={onText} disabled={!hasMedia} />
-      <Tool icon="🔇" label="Silence" onClick={onSilence} disabled={!hasMedia} />
-    </div>
-  )
-}
-
-// ---- Contextual toolbar for a selected clip / text / segment ----
-function ContextBar({
-  kind,
-  onSplit,
-  onDelete,
-  onRestore,
-  onAdjust,
-  onEditText,
-  onClose
-}: {
-  kind: 'clip' | 'text' | 'seg' | 'cut'
-  onSplit: () => void
-  onDelete: () => void
-  onRestore: () => void
-  onAdjust: () => void
-  onEditText: () => void
-  onClose: () => void
-}): JSX.Element {
-  return (
-    <div className="m-ctx">
-      <button className="m-ctx-close" onClick={onClose} title="Done">⌄</button>
-      <div className="m-dock-scroll">
-        {kind === 'cut' ? (
-          <>
-            <Tool icon="↩" label="Restore" onClick={onRestore} />
-            <Tool icon="✂" label="Split" onClick={onSplit} />
-          </>
-        ) : kind === 'text' ? (
-          <>
-            <Tool icon="✎" label="Edit" onClick={onEditText} />
-            <Tool icon="✂" label="Split" onClick={onSplit} />
-            <Tool icon="🗑" label="Delete" onClick={onDelete} danger />
-          </>
-        ) : (
-          <>
-            <Tool icon="✂" label="Split" onClick={onSplit} />
-            <Tool icon="🔍" label="Zoom" onClick={onAdjust} />
-            {kind === 'clip' && <Tool icon="⤢" label="Scale" onClick={onAdjust} />}
-            {kind === 'clip' && <Tool icon="⛶" label="Crop" onClick={onAdjust} />}
-            <Tool icon="🗑" label="Delete" onClick={onDelete} danger />
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/** Scissors-cutting-text glyph for the ScribeCut action (transcript editing). */
-function ScribeCutIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
-      strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M4 5.5h15M4 9h9" />
-      <circle cx="6" cy="15.6" r="1.8" />
-      <circle cx="6" cy="19.2" r="1.8" />
-      <path d="M7.6 14.7 19 20M7.6 20.1 19 14.6" />
-    </svg>
-  )
-}
-
-function Tool({
-  icon,
-  label,
-  onClick,
-  disabled,
-  danger,
-  accent
-}: {
-  icon: ReactNode
-  label: string
-  onClick: () => void
-  disabled?: boolean
-  danger?: boolean
-  accent?: boolean
-}): JSX.Element {
-  return (
-    <button
-      className={'m-tool' + (danger ? ' danger' : '') + (accent ? ' accent' : '')}
-      onClick={onClick}
-      disabled={disabled}
-    >
-      <span className="m-tool-ic">{icon}</span>
-      <span className="m-tool-lb">{label}</span>
-    </button>
   )
 }
 

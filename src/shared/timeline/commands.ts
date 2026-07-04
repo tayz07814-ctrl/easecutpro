@@ -235,6 +235,11 @@ export function setClipGain(clipId: string, gain: number): Command {
   return cmd('Set volume', (doc) => setClipGainInDoc(doc, clipId, gain))
 }
 
+/** Merge arbitrary keys into a clip's metadata (e.g. animation choice). */
+export function setClipMetadata(clipId: string, patch: Record<string, string | number | boolean>): Command {
+  return cmd('Set clip option', (doc) => setClipMetadataInDoc(doc, clipId, patch))
+}
+
 // --- markers ---
 
 export function addMarker(frame: number, name = '', color = '#ff5252'): Command {
