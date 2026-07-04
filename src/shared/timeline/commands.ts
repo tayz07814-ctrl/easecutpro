@@ -26,6 +26,7 @@ import {
   detachAudioInDoc,
   moveClipSmartInDoc,
   addClipToMainInDoc,
+  insertClipIntoMainInDoc,
   rollEditInDoc,
   slipClipInDoc,
   slideClipInDoc,
@@ -81,6 +82,11 @@ export function addTrack(
 /** Import a clip onto the main lane (appended gaplessly at its end). */
 export function importToMain(clip: Clip): Command {
   return cmd('Import to main', (doc) => addClipToMainInDoc(doc, clip))
+}
+
+/** Insert a clip into the main lane at `atFrame`, rippling later clips right. */
+export function insertToMain(clip: Clip, atFrame: number): Command {
+  return cmd('Insert to main', (doc) => insertClipIntoMainInDoc(doc, clip, atFrame))
 }
 
 // --- professional trims ---

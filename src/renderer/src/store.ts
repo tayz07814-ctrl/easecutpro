@@ -14,7 +14,6 @@ import type {
   TextClip,
   LibraryItem,
   MusicClip,
-  ZoomKeyframe,
   SequenceClip,
   SilenceDetectOptions,
   TranscribeBackend,
@@ -28,7 +27,6 @@ import { documentToProject } from '@shared/timeline/bridge'
 import { renderTextPng } from './textRender'
 import { TIMELINE_TRACK_COUNT } from '@shared/types'
 import { detectFillerIds, detectRepeatIds, DEFAULT_FILLERS } from '@shared/fillers'
-import { sampleZoomKeyframes, legacyZoomAt } from '@shared/motion'
 import { computeKeepRanges, subtractRanges, collapseTime, isMultiBase, stitchMontageWaveform, virtualToClip, baseTimelineDuration } from '@shared/edit'
 import { runSmartSmoothCut, DEFAULT_SMART_CUT_PRESET, SMART_CUT_PRESETS, type SmartCutPresetName } from '@shared/smartsmooth'
 import {
@@ -69,8 +67,6 @@ function editChanged(a: Project, b: Project): boolean {
     a.baseSplits !== b.baseSplits ||
     a.manualCuts !== b.manualCuts ||
     a.keepOverrides !== b.keepOverrides ||
-    a.baseZooms !== b.baseZooms ||
-    a.baseKeyframes !== b.baseKeyframes ||
     a.baseSequence !== b.baseSequence ||
     a.texts !== b.texts ||
     a.music !== b.music ||
@@ -212,7 +208,6 @@ function newProject(): Project {
     baseSplits: [],
     manualCuts: [],
     keepOverrides: [],
-    baseZooms: [],
     silencePadding: 0.08,
     showThumbnails: true,
     texts: [],
@@ -477,14 +472,6 @@ interface AppState {
   setBaseManualCut: (regionStart: number, regionEnd: number, cut: { start: number; end: number } | null) => void
   /** reversible cut trim: set (or clear) a force-kept override within a region. */
   setBaseKeepOverride: (regionStart: number, regionEnd: number, ov: { start: number; end: number } | null) => void
-  /** set (or clear, when both = 1) a Ken Burns zoom for a base range. */
-  setBaseZoom: (start: number, end: number, zoomStart: number, zoomEnd: number) => void
-  /** add a CapCut-style zoom/pan keyframe on the base track at the playhead. */
-  addBaseKeyframe: () => void
-  /** update a base keyframe (by index in time-sorted order). */
-  updateBaseKeyframe: (index: number, patch: Partial<ZoomKeyframe>) => void
-  /** remove a base keyframe (by index). */
-  removeBaseKeyframe: (index: number) => void
   /** clear manual base splits + deletions. */
   clearBaseEdits: () => void
 
@@ -709,8 +696,6 @@ export const useStore = create<AppState>((set, get) => ({
           manualCuts: [],
           keepOverrides: [],
           baseSplits: [],
-          baseZooms: [],
-          baseKeyframes: undefined,
           playhead: 0
         },
         mediaUrl: null,
@@ -822,8 +807,6 @@ export const useStore = create<AppState>((set, get) => ({
           manualCuts: [],
           keepOverrides: [],
           baseSplits: [],
-          baseZooms: [],
-          baseKeyframes: undefined,
           playhead: 0
         },
         mediaUrl: mediaUrl(info.path),
@@ -873,8 +856,6 @@ export const useStore = create<AppState>((set, get) => ({
         keepOverrides: clip.keepOverrides ?? [],
         silencePadding: clip.silencePadding ?? 0.08,
         baseSplits: [],
-        baseZooms: [],
-        baseKeyframes: undefined,
         playhead: 0
       },
       mediaUrl: mediaUrl(clip.sourcePath),
@@ -923,8 +904,6 @@ export const useStore = create<AppState>((set, get) => ({
         manualCuts: [],
         keepOverrides: [],
         baseSplits: [],
-        baseZooms: [],
-        baseKeyframes: undefined,
         playhead: 0
       },
       mediaUrl: null,
@@ -1116,8 +1095,6 @@ export const useStore = create<AppState>((set, get) => ({
           manualCuts: [],
           keepOverrides: [],
           baseSplits: [],
-          baseZooms: [],
-          baseKeyframes: undefined
         },
         mediaUrl: null,
         waveform: null,
@@ -2088,48 +2065,9 @@ export const useStore = create<AppState>((set, get) => ({
       return { project: { ...s.project, keepOverrides: next } }
     }),
 
-  setBaseZoom: (start, end, zoomStart, zoomEnd) =>
-    set((s) => {
-      const eps = 0.03
-      const rest = (s.project.baseZooms ?? []).filter(
-        (z) => Math.abs(z.start - start) > eps || Math.abs(z.end - end) > eps
-      )
-      const isZoom = Math.abs(zoomStart - 1) > 0.001 || Math.abs(zoomEnd - 1) > 0.001
-      const next = isZoom ? [...rest, { start, end, zoomStart, zoomEnd }] : rest
-      return { project: { ...s.project, baseZooms: next } }
-    }),
-
-  addBaseKeyframe: () =>
-    set((s) => {
-      const t = s.project.playhead
-      const kfs = s.project.baseKeyframes ?? []
-      const cur =
-        sampleZoomKeyframes(kfs, t) ?? { zoom: legacyZoomAt(s.project.baseZooms, t), x: 0.5, y: 0.5 }
-      const kf: ZoomKeyframe = { t, zoom: cur.zoom, x: cur.x, y: cur.y, ease: 'inout' }
-      const next = [...kfs.filter((k) => Math.abs(k.t - t) > 0.03), kf].sort((a, b) => a.t - b.t)
-      return { project: { ...s.project, baseKeyframes: next } }
-    }),
-
-  updateBaseKeyframe: (index, patch) =>
-    set((s) => {
-      const kfs = (s.project.baseKeyframes ?? []).slice()
-      if (!kfs[index]) return {}
-      kfs[index] = { ...kfs[index], ...patch }
-      kfs.sort((a, b) => a.t - b.t)
-      return { project: { ...s.project, baseKeyframes: kfs } }
-    }),
-
-  removeBaseKeyframe: (index) =>
-    set((s) => ({
-      project: {
-        ...s.project,
-        baseKeyframes: (s.project.baseKeyframes ?? []).filter((_, i) => i !== index)
-      }
-    })),
-
   clearBaseEdits: () =>
     set((s) => ({
-      project: { ...s.project, baseSplits: [], manualCuts: [], keepOverrides: [], baseZooms: [], baseKeyframes: [] }
+      project: { ...s.project, baseSplits: [], manualCuts: [], keepOverrides: [] }
     })),
 
   selectClip: (id) =>

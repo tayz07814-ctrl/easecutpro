@@ -5,7 +5,7 @@
 // STRUCTURE (tracks + clips with correct source refs + timing) so the media
 // managers can pull real waveforms/thumbnails by sourcePath. Pure & headless.
 
-import type { Project, TextClip, SequenceClip, Clip as LegacyClip, Track as LegacyTrack } from '../types'
+import type { Project, TextClip, SequenceClip, ExtraAudioClip, Clip as LegacyClip, Track as LegacyTrack } from '../types'
 import type { Clip, TextContent, TimelineDocument } from './types'
 import {
   createTimeline,
@@ -17,7 +17,7 @@ import {
   mainTrackId
 } from './model'
 import { timebaseFromFps, secondsToFrames, framesToSeconds, fps } from './time'
-import { computeKeepRanges, virtualKeepsToClipSegments } from '../edit'
+import { computeKeepRanges, virtualKeepsToClipSegments, isMultiBase, baseClipSpans } from '../edit'
 
 /** Overlay placement carried on the doc clip's metadata (legacy overlay semantics:
  *  x/y = top-left fraction, scale = width fraction, zoomStart/End = Ken Burns). The
@@ -282,7 +282,10 @@ export function documentToProject(doc: TimelineDocument, base: Project): Project
       sourceIn: c.sourceIn,
       sourceOut: c.sourceOut,
       sourceDuration: c.sourceDuration ?? c.sourceOut,
-      hasAudio: c.hasAudio,
+      // A detached/muted base clip contributes NO audio (its sound now lives on an
+      // audio lane, folded into extraAudio below) — matches the muted <video> in
+      // the doc preview, so preview and export mix identically.
+      hasAudio: c.hasAudio && !c.muted && !c.audioDetached,
       srcW: c.srcW ?? 1920,
       srcH: c.srcH ?? 1080,
       fps: c.srcFps ?? fps(tb),
@@ -303,6 +306,24 @@ export function documentToProject(doc: TimelineDocument, base: Project): Project
     .filter((t) => t.kind === 'text')
     .flatMap((t) => t.clips.filter((c) => !!c.text).map((c) => legacyTextFrom(c, f2s)))
 
+  // Audio lanes (music / detached audio / dropped audio) become export-only
+  // extraAudio, positioned in EDITED seconds. The document is authoritative for
+  // audio (the doc preview mixes these same lanes via <DocAudio>), so the legacy
+  // single `music` slot is cleared to avoid mixing it twice.
+  const extraAudio: ExtraAudioClip[] = doc.tracks
+    .filter((t) => t.kind === 'audio' && !t.muted && !t.hidden)
+    .flatMap((t) => t.clips)
+    .filter((c) => !!c.sourcePath)
+    .slice()
+    .sort((a, b) => a.start - b.start)
+    .map((c) => ({
+      path: c.sourcePath as string,
+      in: c.sourceIn,
+      out: c.sourceOut,
+      startAt: f2s(c.start),
+      gain: c.gain ?? 1
+    }))
+
   return {
     ...base,
     media: undefined,
@@ -314,8 +335,74 @@ export function documentToProject(doc: TimelineDocument, base: Project): Project
     baseSplits: [],
     tracks,
     texts,
+    music: undefined,
+    extraAudio,
     timeline: doc
   }
+}
+
+/**
+ * Convert cut-engine removed ranges (base/virtual SECONDS — the domain the
+ * transcript, silences and manual cuts live in) into edited-FRAME ranges on the
+ * document's MAIN lane, by intersecting each removed source segment with the
+ * main-lane clips that still carry that source. Footage already cut from the lane
+ * is no longer present, so mapping the FULL removed set only yields the newly-cut
+ * footage — which is what lets Fast/Pro/word/silence cuts flow into the document
+ * WITHOUT wiping manual splits/drops (a split keeps a clip's source coverage
+ * contiguous; a dropped clip of another source simply never matches). The frame
+ * ranges are fed to `applyDeletionsToDocument` (split + ripple).
+ *
+ * Each intersecting clip contributes its OWN sub-range, so a removed span that
+ * straddles a manual split boundary produces two adjacent per-clip ranges — the
+ * shape `applyDeletionsToDocument` needs (it cuts one clip per range).
+ */
+export function removedRangesToMainFrames(
+  doc: TimelineDocument,
+  project: Project,
+  removed: { start: number; end: number }[]
+): { start: number; end: number }[] {
+  const mainId = mainTrackId(doc)
+  const main = mainId ? findTrack(doc, mainId) : undefined
+  if (!main || removed.length === 0) return []
+
+  // removed base/virtual-second ranges -> concrete source segments {path,in,out}
+  const segs: { sourcePath: string; in: number; out: number }[] = []
+  if (isMultiBase(project)) {
+    const spans = baseClipSpans(project)
+    for (const r of removed) {
+      for (const s of spans) {
+        const a = Math.max(r.start, s.vStart)
+        const b = Math.min(r.end, s.vEnd)
+        if (b - a > 0.001) {
+          segs.push({
+            sourcePath: s.clip.sourcePath,
+            in: a - s.vStart + s.clip.sourceIn,
+            out: b - s.vStart + s.clip.sourceIn
+          })
+        }
+      }
+    }
+  } else if (project.media) {
+    for (const r of removed) segs.push({ sourcePath: project.media.path, in: r.start, out: r.end })
+  }
+
+  // source segments -> main-lane edited-frame ranges (linear within each clip;
+  // clip.duration already folds in speed, so the ratio maps through it correctly).
+  const frames: { start: number; end: number }[] = []
+  for (const seg of segs) {
+    for (const c of main.clips) {
+      if (c.sourcePath !== seg.sourcePath || c.reversed) continue
+      const span = c.sourceOut - c.sourceIn
+      if (span <= 1e-6) continue
+      const a = Math.max(seg.in, c.sourceIn)
+      const b = Math.min(seg.out, c.sourceOut)
+      if (b - a <= 1e-4) continue
+      const fA = c.start + ((a - c.sourceIn) / span) * c.duration
+      const fB = c.start + ((b - c.sourceIn) / span) * c.duration
+      if (fB - fA >= 1) frames.push({ start: fA, end: fB })
+    }
+  }
+  return frames
 }
 
 /** A compact key of the project's STRUCTURE, so the timeline only rebuilds on

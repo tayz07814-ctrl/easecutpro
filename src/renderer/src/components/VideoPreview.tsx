@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { computeKeepRanges, editedDuration, isMultiBase } from '@shared/edit'
-import { baseMotionAt } from '@shared/motion'
 import OverlayLayer from './OverlayLayer'
 import TextLayer from './TextLayer'
 import SequencePreview from './SequencePreview'
@@ -141,11 +140,10 @@ export default function VideoPreview(): JSX.Element {
   const aspect = project.aspectW && project.aspectH ? project.aspectW / project.aspectH : srcAspect
   const frame = containRect(stageSize.w, stageSize.h, aspect)
 
-  // Base Ken Burns zoom. While playing we interpolate a CONTINUOUS time from the
-  // wall clock (performance.now) between the video's currentTime samples — the
-  // source is often only 24–30 fps, so reading currentTime alone makes the zoom
-  // step once per video frame. This re-anchors whenever currentTime advances, so
-  // it tracks the real playback (and seeks) but moves smoothly every frame.
+  // Playback clock + precise cut-skip. While playing we interpolate a CONTINUOUS
+  // time from the wall clock (performance.now) between the video's currentTime
+  // samples and drive the shared playClock, re-anchoring whenever currentTime
+  // advances so it tracks real playback (and seeks) smoothly every frame.
   // Deps deliberately exclude project.playhead so the rAF loop isn't torn down
   // ~4x/sec by the timeupdate-driven playhead updates.
   useEffect(() => {
@@ -212,24 +210,17 @@ export default function VideoPreview(): JSX.Element {
       // Don't let the smooth interpolation slide into a cut before the skip fires.
       if (typeof inKeep === 'object' && t > inKeep.end) t = inKeep.end
       playClock.t = t
-      const m = baseMotionAt(project, t)
-      v.style.transformOrigin = `${m.x * 100}% ${m.y * 100}%`
-      v.style.transform = `scale(${m.zoom})`
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
-  }, [playing, project.baseZooms, project.baseKeyframes])
+  }, [playing])
 
-  // Paused / scrubbing: set the zoom + pan exactly from the playhead.
+  // Paused / scrubbing: keep the shared play clock aligned to the playhead.
   useEffect(() => {
-    const v = ref.current
-    if (!v || playing) return
+    if (playing) return
     playClock.t = project.playhead
-    const m = baseMotionAt(project, project.playhead)
-    v.style.transformOrigin = `${m.x * 100}% ${m.y * 100}%`
-    v.style.transform = `scale(${m.zoom})`
-  }, [playing, project.playhead, project.baseZooms, project.baseKeyframes])
+  }, [playing, project.playhead])
 
   // Document mode (authoritative timeline) or montage mode: use the multi-clip
   // player, which renders the document's main lane + overlays + text + audio.

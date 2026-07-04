@@ -16,42 +16,10 @@ import type {
   Thumb,
   ExportSettings,
   TextOverlayImage,
-  ZoomKeyframe,
   SequenceClip
 } from '../shared/types'
 
 const execFileP = promisify(execFile)
-
-// ---- Keyframe -> zoompan expression helpers ----
-function fnum(n: number): string {
-  return Number.isFinite(n) ? Number(n).toFixed(4) : '0'
-}
-function easeExpr(p: string, ease: string): string {
-  switch (ease) {
-    case 'in':
-      return `(${p})*(${p})`
-    case 'out':
-      return `(${p})*(2-(${p}))`
-    case 'inout':
-      return `(${p})*(${p})*(3-2*(${p}))`
-    default:
-      return `(${p})`
-  }
-}
-/** Build a piecewise, eased ffmpeg expression for a keyframed property over time `tvar`. */
-function kfExpr(kfs: ZoomKeyframe[], val: (k: ZoomKeyframe) => number, tvar: string): string {
-  if (kfs.length === 1) return fnum(val(kfs[0]))
-  let expr = fnum(val(kfs[kfs.length - 1]))
-  for (let i = kfs.length - 2; i >= 0; i--) {
-    const a = kfs[i]
-    const b = kfs[i + 1]
-    const d = Math.max(0.05, b.t - a.t)
-    const p = `clip((${tvar}-${fnum(a.t)})/${fnum(d)},0,1)`
-    const seg = `${fnum(val(a))}+(${fnum(val(b))}-${fnum(val(a))})*${easeExpr(p, b.ease)}`
-    expr = `if(lt(${tvar},${fnum(b.t)}),${seg},${expr})`
-  }
-  return expr
-}
 
 /** Probe a media file for duration / resolution / fps / streams. */
 export async function probe(path: string): Promise<MediaInfo> {
@@ -688,9 +656,7 @@ export async function exportProject(
       silences: [],
       baseSplits: [],
       manualCuts: [],
-      keepOverrides: [],
-      baseZooms: [],
-      baseKeyframes: undefined
+      keepOverrides: []
     }
     const orig = onProgress
     onProgress = orig ? (p: number) => orig(45 + Math.round(p * 0.55)) : undefined
@@ -760,56 +726,31 @@ export async function exportProject(
     musicIdx = 1 + overlays.length + texts.length
   }
 
+  // Document-mode audio lanes (detached / dropped audio, folded-out music) — each
+  // an extra input mixed under the base voice at its edited position. Skip any
+  // missing/degenerate file so a broken lane can never abort the render.
+  const extraAudio = (project.extraAudio ?? []).filter(
+    (a) => a.path && existsSync(a.path) && a.out - a.in > 0.02
+  )
+  const extraAudioIdx: number[] = []
+  {
+    let idx = 1 + overlays.length + texts.length + (music ? 1 : 0)
+    for (const a of extraAudio) {
+      inputs.push('-i', a.path)
+      extraAudioIdx.push(idx++)
+    }
+  }
+
   try {
     return await new Promise<string>((resolve, reject) => {
       const parts: string[] = []
 
-    // 0) Base zoom/pan over the full base (one zoompan). CapCut-style keyframes
-    //    (zoom + pan focal point + easing) win; otherwise the legacy start/end
-    //    Ken Burns zoom (centred). Built as piecewise expressions in time.
-    const baseKfs = (project.baseKeyframes ?? []).slice().sort((a, b) => a.t - b.t)
-    const baseZooms = (project.baseZooms ?? []).filter((z) => z.zoomStart > 1.001 || z.zoomEnd > 1.001)
-    const useKf = baseKfs.length >= 2 // a single stray keyframe is ignored
+    // Base video passes through unzoomed — global base Ken Burns is gone; per-clip
+    // motion (zoom/pan) now lives on the document clips' transforms. `vcur` tracks
+    // the current base video label ([0:v] -> overlay/text composite outs).
     let vcur = '[0:v]'
-    if (base.hasVideo && (useKf || baseZooms.length > 0)) {
-      const fps = Math.max(1, Math.round(base.fps || 30))
-      const tvar = `(on/${fps})`
-      // Legacy centred start/end zoom — also the fallback OUTSIDE the keyframed span.
-      let legacyZ = '1'
-      for (const r of baseZooms) {
-        const d = Math.max(0.05, r.end - r.start)
-        const zs = Math.max(1, r.zoomStart)
-        const ze = Math.max(1, r.zoomEnd)
-        const ramp = `${zs}+(${ze}-${zs})*clip((${tvar}-${r.start})/${d},0,1)`
-        legacyZ = `if(between(${tvar},${r.start},${r.end}),${ramp},${legacyZ})`
-      }
-      let zexpr: string
-      let xexpr: string
-      let yexpr: string
-      if (useKf) {
-        const F = fnum(baseKfs[0].t)
-        const L = fnum(baseKfs[baseKfs.length - 1].t)
-        const inSpan = `between(${tvar},${F},${L})`
-        const zKf = kfExpr(baseKfs, (k) => Math.max(1, k.zoom), tvar)
-        const fxKf = kfExpr(baseKfs, (k) => Math.max(0, Math.min(1, k.x)), tvar)
-        const fyKf = kfExpr(baseKfs, (k) => Math.max(0, Math.min(1, k.y)), tvar)
-        // Keyframe motion within span; legacy centred zoom outside it.
-        zexpr = `if(${inSpan},${zKf},${legacyZ})`
-        xexpr = `if(${inSpan},(${fxKf})*(iw-iw/zoom),iw/2-(iw/zoom/2))`
-        yexpr = `if(${inSpan},(${fyKf})*(ih-ih/zoom),ih/2-(ih/zoom/2))`
-      } else {
-        zexpr = legacyZ
-        xexpr = 'iw/2-(iw/zoom/2)'
-        yexpr = 'ih/2-(ih/zoom/2)'
-      }
-      // Supersampled so a slow zoom moves sub-pixel instead of snapping whole
-      // pixels (see zoompanStage / superFactor). Expressions are unchanged — they
-      // are resolution-independent (iw/ih become the supersampled dimensions).
-      parts.push(zoompanStage('[0:v]', zexpr, xexpr, yexpr, even(baseW), even(baseH), fps, '[bz]'))
-      vcur = '[bz]'
-    }
 
-    // 1) Composite overlays onto the (possibly zoomed) base video timeline.
+    // 1) Composite overlays onto the base video timeline.
     if (base.hasVideo) {
       overlays.forEach((c, idx) => {
         const inIdx = idx + 1
@@ -953,26 +894,62 @@ export async function exportProject(
       }
       maps.push('-map', '[vout]')
     }
-    // Audio: base voice (kept ranges) mixed with optional background music.
-    if (base.hasAudio || music) {
-      const buildMusic = (): void => {
-        const gain = Math.max(0, music!.gain)
-        const startAt = Math.max(0, music!.startAt)
-        const stopAt = Math.min(music!.endAt ?? totalKept, totalKept)
-        const need = Math.max(0.05, stopAt - startAt)
-        let m = `[${musicIdx}:a]atrim=0:${need.toFixed(3)},asetpts=PTS-STARTPTS,volume=${gain.toFixed(3)}`
-        if (startAt > 0.01) m += `,adelay=${Math.round(startAt * 1000)}:all=1`
-        parts.push(`${m}[mus]`)
+    const buildMusic = (): void => {
+      const gain = Math.max(0, music!.gain)
+      const startAt = Math.max(0, music!.startAt)
+      const stopAt = Math.min(music!.endAt ?? totalKept, totalKept)
+      const need = Math.max(0.05, stopAt - startAt)
+      let m = `[${musicIdx}:a]atrim=0:${need.toFixed(3)},asetpts=PTS-STARTPTS,volume=${gain.toFixed(3)}`
+      if (startAt > 0.01) m += `,adelay=${Math.round(startAt * 1000)}:all=1`
+      parts.push(`${m}[mus]`)
+    }
+    if (extraAudio.length === 0) {
+      // Legacy path (unchanged): base voice (kept ranges) mixed with optional music.
+      if (base.hasAudio || music) {
+        if (base.hasAudio && music) {
+          parts.push(`${aLabels.join('')}concat=n=${aLabels.length}:v=0:a=1[abase]`)
+          buildMusic()
+          parts.push('[abase][mus]amix=inputs=2:duration=first:normalize=0[aout]')
+        } else if (music) {
+          buildMusic()
+          parts.push(`[mus]atrim=0:${totalKept.toFixed(3)},asetpts=PTS-STARTPTS[aout]`)
+        } else {
+          parts.push(`${aLabels.join('')}concat=n=${aLabels.length}:v=0:a=1[aout]`)
+        }
+        maps.push('-map', '[aout]')
       }
-      if (base.hasAudio && music) {
+    } else {
+      // Document mode: base voice + music + N audio lanes, amix'd. The FIRST mix
+      // input is always edit-length (base voice, or a silent bed when the base is
+      // fully muted) so `duration=first` can't let a short lane truncate the mix.
+      const mixLabels: string[] = []
+      if (base.hasAudio) {
         parts.push(`${aLabels.join('')}concat=n=${aLabels.length}:v=0:a=1[abase]`)
-        buildMusic()
-        parts.push('[abase][mus]amix=inputs=2:duration=first:normalize=0[aout]')
-      } else if (music) {
-        buildMusic()
-        parts.push(`[mus]atrim=0:${totalKept.toFixed(3)},asetpts=PTS-STARTPTS[aout]`)
+        mixLabels.push('[abase]')
       } else {
-        parts.push(`${aLabels.join('')}concat=n=${aLabels.length}:v=0:a=1[aout]`)
+        parts.push(
+          `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=0:${totalKept.toFixed(3)},asetpts=PTS-STARTPTS[abed]`
+        )
+        mixLabels.push('[abed]')
+      }
+      if (music) {
+        buildMusic()
+        mixLabels.push('[mus]')
+      }
+      extraAudio.forEach((a, i) => {
+        const inS = Math.max(0, a.in)
+        const outS = Math.max(inS + 0.02, a.out)
+        const gain = Math.max(0, a.gain ?? 1)
+        const startAt = Math.max(0, a.startAt)
+        let s = `[${extraAudioIdx[i]}:a]atrim=${inS.toFixed(3)}:${outS.toFixed(3)},asetpts=PTS-STARTPTS,volume=${gain.toFixed(3)}`
+        if (startAt > 0.01) s += `,adelay=${Math.round(startAt * 1000)}:all=1`
+        parts.push(`${s}[ex${i}]`)
+        mixLabels.push(`[ex${i}]`)
+      })
+      if (mixLabels.length === 1) {
+        parts.push(`${mixLabels[0]}atrim=0:${totalKept.toFixed(3)},asetpts=PTS-STARTPTS[aout]`)
+      } else {
+        parts.push(`${mixLabels.join('')}amix=inputs=${mixLabels.length}:duration=first:normalize=0[aout]`)
       }
       maps.push('-map', '[aout]')
     }

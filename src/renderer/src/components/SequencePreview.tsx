@@ -161,7 +161,11 @@ export default function SequencePreview(): JSX.Element {
         sourceStart: c.sourceIn,
         sourceEnd: c.sourceOut,
         start: framesToSeconds(c.start, doc.timebase),
-        editedStart: acc,
+        // Doc mode: the transport lives in REAL timeline time (playhead == real
+        // seconds), so editedStart == start and magnet-off GAPS count toward the
+        // duration — the slider moves through the dead space (shown black) instead
+        // of collapsing it. (Montage packs cuts out via `acc` below.)
+        editedStart: framesToSeconds(c.start, doc.timebase),
         len,
         srcW: c.srcW,
         srcH: c.srcH,
@@ -176,9 +180,10 @@ export default function SequencePreview(): JSX.Element {
       acc += len
     }
   }
-  const editedTotal = acc
-  // virtual end of the last kept segment = the playhead's clamp ceiling
+  // virtual/real end of the last segment = the playhead's clamp ceiling
   const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0
+  // Doc mode counts gaps (real timeline); montage packs cuts out (sum of lens).
+  const editedTotal = docMode ? total : acc
   // A fingerprint of the segment structure — changes only on a real edit, not
   // during playback, so the reseat effect below fires exactly when segs change.
   const segsKey = segs.map((s) => `${s.src}@${s.sourceStart.toFixed(2)}>${s.sourceEnd.toFixed(2)}`).join('|')
@@ -301,8 +306,58 @@ export default function SequencePreview(): JSX.Element {
     if (!v || !playing) return
     let raf = 0
     let holdSince = -1 // wall-clock when the current settle hold began (watchdog)
+    // Gap traversal (magnet-off dead space between main-lane clips): while active,
+    // the <video> is paused and the playhead advances through the gap on the wall
+    // clock so it plays as BLACK for the gap's real duration, then resumes at `next`.
+    let gapMode = false
+    let gapWall = 0
+    let gapPh = 0
+    let gapNextIdx = -1
     const loop = (): void => {
       const ss = segsRef.current
+      if (gapMode) {
+        const next = ss[gapNextIdx]
+        const nph = gapPh + (performance.now() - gapWall) / 1000
+        if (!next || nph >= next.start) {
+          gapMode = false
+          if (!next) {
+            v.pause()
+            setPlaying(false)
+            selfSetPlayhead(totalRef.current)
+            playClock.t = totalRef.current
+            return
+          }
+          idxRef.current = gapNextIdx
+          selfSetPlayhead(next.start + 0.0005)
+          playClock.t = next.start
+          gotoSource(next.src, next.sourceStart, false)
+          v.play().catch(() => undefined)
+        } else {
+          selfSetPlayhead(nph)
+          playClock.t = nph
+        }
+        raf = requestAnimationFrame(loop)
+        return
+      }
+      // Playback started (or scrubbed) INSIDE a gap: traverse the dead space to the
+      // next clip as black rather than snapping to a neighbouring segment.
+      if (ss.length && coveringIdx(playheadRef.current) < 0) {
+        const ni = ss.findIndex((s) => s.start > playheadRef.current)
+        if (ni < 0) {
+          v.pause()
+          setPlaying(false)
+          selfSetPlayhead(totalRef.current)
+          playClock.t = totalRef.current
+          return
+        }
+        if (!v.paused) v.pause()
+        gapMode = true
+        gapWall = performance.now()
+        gapPh = playheadRef.current
+        gapNextIdx = ni
+        raf = requestAnimationFrame(loop)
+        return
+      }
       // Defensive: if idxRef fell out of range (edit shrank segs), re-derive it.
       if (idxRef.current >= ss.length || idxRef.current < 0) idxRef.current = segAt(playheadRef.current)
       const active = ss[idxRef.current]
@@ -351,6 +406,21 @@ export default function SequencePreview(): JSX.Element {
           setPlaying(false)
           selfSetPlayhead(totalRef.current)
           playClock.t = totalRef.current
+          return
+        }
+        // Magnet-off dead space before the next clip → traverse it as BLACK in real
+        // time (video paused, playhead advances on the wall clock), then resume at
+        // `next`. Only a real gap on the timeline; contiguous clips fall through.
+        const gapStart = active.start + active.len
+        if (next.start - gapStart > 0.08) {
+          if (!v.paused) v.pause()
+          gapMode = true
+          gapWall = performance.now()
+          gapPh = Math.max(gapStart, playheadRef.current)
+          gapNextIdx = nextIdx
+          selfSetPlayhead(gapPh)
+          playClock.t = gapPh
+          raf = requestAnimationFrame(loop)
           return
         }
         idxRef.current = nextIdx
@@ -415,6 +485,21 @@ export default function SequencePreview(): JSX.Element {
     v.muted = docMode && i >= 0 ? segsRef.current[i]?.muted === true : false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, playhead, segsKey, docMode])
+
+  // Cached media (e.g. after CLOSING a project and REOPENING it) can already have
+  // its metadata decoded, so 'loadedmetadata' fired before this fresh <video>'s
+  // handler was attached and the initial seek never ran — leaving a BLACK first
+  // frame until the user scrubs. If metadata is already available for a src we
+  // haven't seeked yet, run the seek now. Guarded so it never double-seeks a src
+  // that onLoadedMetadata already handled.
+  useEffect(() => {
+    const v = ref.current
+    if (!v) return
+    if (v.readyState >= 1 /* HAVE_METADATA */ && loadedSrcRef.current !== mountedSrcRef.current) {
+      onLoaded()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mountedSrc])
 
   // Coarse (~4Hz) slider update while inside a kept segment; ignored while a seek
   // settles, and never allowed to write BACKWARD during playback.
@@ -540,8 +625,14 @@ export default function SequencePreview(): JSX.Element {
           value={Math.min(editedT, editedTotal)}
           onChange={(e) => {
             setPlaying(false)
-            // slider is EDITED time -> map back to the virtual playhead domain
             const v = Number(e.target.value)
+            // Doc mode: the slider IS real timeline time (gaps included), so it maps
+            // straight to the playhead — dragging into dead space parks on black.
+            if (docMode) {
+              setPlayhead(v)
+              return
+            }
+            // Montage: slider is packed EDITED time -> map back to the virtual domain.
             let seg = segs[segs.length - 1]
             for (const s of segs) {
               if (v < s.editedStart + s.len) {

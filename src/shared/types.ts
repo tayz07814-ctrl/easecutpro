@@ -138,6 +138,21 @@ export interface MusicClip {
   loop: boolean
 }
 
+/** Export-only: an audio-lane clip folded out of the timeline document (detached
+ *  audio, dropped audio, or the music lane) so the render mixes it under the edit
+ *  at its EDITED-timeline position. Produced by documentToProject; not persisted
+ *  for legacy projects (which use `music` instead). */
+export interface ExtraAudioClip {
+  path: string
+  /** source in/out (seconds). */
+  in: number
+  out: number
+  /** start on the EDITED timeline (seconds). */
+  startAt: number
+  /** playback gain (1 = original). */
+  gain: number
+}
+
 /** One clip in a multi-clip base sequence (montage mode). Plays back-to-back with audio. */
 export interface SequenceClip {
   id: string
@@ -171,23 +186,6 @@ export interface BaseSegment {
   kind: 'keep' | 'cut'
   /** a `cut` that was FINAL-deleted: render empty (no hatch), still reclaimable. */
   final?: boolean
-}
-
-/** Easing applied between two keyframes. */
-export type Ease = 'linear' | 'in' | 'out' | 'inout'
-
-/** A CapCut-style zoom+pan keyframe on the base (A-roll) track, in SOURCE time. */
-export interface ZoomKeyframe {
-  /** source time (seconds). */
-  t: number
-  /** scale; 1 = 100% (no zoom). */
-  zoom: number
-  /** focal point as a fraction of the frame WIDTH (0..1; 0.5 = centre). */
-  x: number
-  /** focal point as a fraction of the frame HEIGHT (0..1; 0.5 = centre). */
-  y: number
-  /** easing from the previous keyframe into this one. */
-  ease: Ease
 }
 
 /** An on-screen text overlay. Sizes are fractions for resolution independence. */
@@ -261,10 +259,6 @@ export interface Project {
   manualCuts: { start: number; end: number; final?: boolean }[]
   /** ranges force-KEPT even if a cut covers them (manual restore of a cut). */
   keepOverrides: { start: number; end: number }[]
-  /** Ken Burns zoom on base ranges (source seconds). 1 = 100%. Used when no keyframes. */
-  baseZooms: { start: number; end: number; zoomStart: number; zoomEnd: number }[]
-  /** CapCut-style zoom+pan keyframes on the base track (source seconds). Override baseZooms where present. */
-  baseKeyframes?: ZoomKeyframe[]
   /** seconds of silence kept on each side of a removed gap (avoid clipping speech). */
   silencePadding: number
   /** show filmstrip thumbnails on the base track. */
@@ -273,6 +267,10 @@ export interface Project {
   texts: TextClip[]
   /** background music / OST mixed under the edit. */
   music?: MusicClip
+  /** EXPORT-ONLY audio lanes folded out of the timeline document (detached audio,
+   *  dropped audio, music). Present only on the project handed to the exporter in
+   *  document mode; mixed under the base voice at each clip's edited position. */
+  extraAudio?: ExtraAudioClip[]
   /** preview/output aspect ratio; 0 = use source aspect. */
   aspectW: number
   aspectH: number

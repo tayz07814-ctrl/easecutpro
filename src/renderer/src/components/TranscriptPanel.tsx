@@ -2,7 +2,48 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { buildSilenceChips, CUTLORD_PRESETS, type CutLordMode } from '@shared/cutlord'
 import type { Word } from '@shared/types'
+import { useSharedEngineSnapshot } from '../timelineEngine'
+import { mainTrackId } from '@shared/timeline/model'
+import { secondsToFrames, framesToSeconds } from '@shared/timeline/time'
+import type { TimelineDocument } from '@shared/timeline/types'
 import OverlayPanel from './OverlayPanel'
+
+/**
+ * A single-source doc timeline runs the store playhead in EDITED time, but the
+ * transcript words stay in SOURCE time — so `playhead >= w.start` drifts by the
+ * cut amount and the highlighted word lags the audio. These map between the two
+ * through the main lane. Montage (multiple source files) keeps the words' own
+ * domain, so both return the value unchanged there (and in legacy mode).
+ */
+function docMainSingleSource(doc: TimelineDocument): TimelineDocument['tracks'][number] | null {
+  const mainId = mainTrackId(doc)
+  const main = mainId ? doc.tracks.find((t) => t.id === mainId) : undefined
+  if (!main || !main.clips.length) return null
+  return new Set(main.clips.map((c) => c.sourcePath)).size === 1 ? main : null
+}
+function docEditedToSource(doc: TimelineDocument | undefined, editedSec: number): number {
+  const main = doc ? docMainSingleSource(doc) : null
+  if (!doc || !main) return editedSec
+  const f = secondsToFrames(editedSec, doc.timebase)
+  const clips = [...main.clips].sort((a, b) => a.start - b.start)
+  const clip = clips.find((c) => f >= c.start && f < c.end) ?? clips[clips.length - 1]
+  const span = clip.sourceOut - clip.sourceIn
+  return clip.duration > 0 ? clip.sourceIn + ((f - clip.start) / clip.duration) * span : editedSec
+}
+function docSourceToEdited(doc: TimelineDocument | undefined, srcSec: number): number {
+  const main = doc ? docMainSingleSource(doc) : null
+  if (!doc || !main) return srcSec
+  const clips = [...main.clips].sort((a, b) => a.start - b.start)
+  const clip = clips.find((c) => srcSec >= c.sourceIn && srcSec < c.sourceOut)
+  if (!clip) {
+    // the word was cut out: seek to the first kept clip that starts after it.
+    const after = clips.find((c) => c.sourceIn >= srcSec) ?? clips[clips.length - 1]
+    return framesToSeconds(after.start, doc.timebase)
+  }
+  const span = clip.sourceOut - clip.sourceIn
+  const frac = span > 0 ? (srcSec - clip.sourceIn) / span : 0
+  return framesToSeconds(clip.start + frac * clip.duration, doc.timebase)
+}
 
 /**
  * Cut Lord — the all-in-one cleanup panel (formerly "Transcript").
@@ -64,6 +105,11 @@ function ClutterCleaner(): JSX.Element {
   const [showSettings, setShowSettings] = useState(false)
   const [showMore, setShowMore] = useState(false)
   const playhead = project.playhead
+  const snap = useSharedEngineSnapshot()
+  const doc = project.timeline ? snap?.doc : undefined
+  // Highlight the word under the audio: map the EDITED playhead to SOURCE time in a
+  // single-source doc timeline (no-op in montage / legacy, where they share a domain).
+  const srcPlayhead = docEditedToSource(doc, playhead)
 
   // Drag-to-select state (refs to avoid re-renders mid-drag).
   const dragging = useRef(false)
@@ -116,7 +162,8 @@ function ClutterCleaner(): JSX.Element {
   }
 
   function handleDouble(w: Word): void {
-    setPlayhead(w.start)
+    // SOURCE-time word start -> EDITED playhead so the preview seeks to the word.
+    setPlayhead(docSourceToEdited(doc, w.start))
     setPlaying(true)
   }
 
@@ -216,7 +263,7 @@ function ClutterCleaner(): JSX.Element {
           <p className="segment" key={seg.id}>
             {seg.words.map((w) => {
               const isSel = selected.has(w.id)
-              const active = playhead >= w.start && playhead < w.end && !w.deleted
+              const active = srcPlayhead >= w.start && srcPlayhead < w.end && !w.deleted
               const chip = chipAfter.get(w.id)
               return (
                 <span key={w.id}>
@@ -394,19 +441,9 @@ function Slider({
 // ---------------------------------------------------------------------------
 
 function ZoomBroll(): JSX.Element {
-  const addBaseKeyframe = useStore((s) => s.addBaseKeyframe)
-  const hasBase = useStore((s) => !!s.project.media || ((s.project.baseSequence?.length ?? 0) > 0))
   return (
     <div className="cl-zoom-tab">
-      <div className="cl-set-title">Auto Zoom</div>
-      <p className="muted small">
-        Add CapCut-style zoom/pan keyframes on the base at the playhead, then fine-tune them in the
-        <b> Basic</b> tab.
-      </p>
-      <button className="primary" onClick={addBaseKeyframe} disabled={!hasBase}>
-        ➕ Add zoom keyframe at playhead
-      </button>
-      <div className="cl-set-title" style={{ marginTop: 12 }}>AI B-roll / Overlays</div>
+      <div className="cl-set-title">AI B-roll / Overlays</div>
       <OverlayPanel />
     </div>
   )

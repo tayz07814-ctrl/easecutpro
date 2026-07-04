@@ -1,8 +1,9 @@
 import { useStore } from '../store'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
 import { mainTrackId } from '@shared/timeline/model'
+import { framesToSeconds } from '@shared/timeline/time'
 import * as C from '@shared/timeline/commands'
-import type { Clip, Ease } from '@shared/types'
+import type { Clip } from '@shared/types'
 import type { Clip as DocClip, TimelineDocument } from '@shared/timeline/types'
 
 function cropOf(c: Clip): { l: number; t: number; r: number; b: number } {
@@ -25,6 +26,14 @@ function findDocOverlay(doc: TimelineDocument, id: string | null): DocClip | nul
   return null
 }
 
+/** The selected clip on the MAIN (base) lane, if the selection is one. */
+function findDocMainClip(doc: TimelineDocument, id: string | null): DocClip | null {
+  if (!id) return null
+  const mainId = mainTrackId(doc)
+  const main = mainId ? doc.tracks.find((t) => t.id === mainId) : undefined
+  return main?.clips.find((c) => c.id === id) ?? null
+}
+
 /** Basic tab: transform controls for the selected overlay clip / base segment. */
 export default function BasicPanel(): JSX.Element {
   const project = useStore((s) => s.project)
@@ -38,11 +47,6 @@ export default function BasicPanel(): JSX.Element {
   const setBaseKeepOverride = useStore((s) => s.setBaseKeepOverride)
   const splitBaseAtPlayhead = useStore((s) => s.splitBaseAtPlayhead)
   const splitAtPlayhead = useStore((s) => s.splitAtPlayhead)
-  const setBaseZoom = useStore((s) => s.setBaseZoom)
-  const addBaseKeyframe = useStore((s) => s.addBaseKeyframe)
-  const updateBaseKeyframe = useStore((s) => s.updateBaseKeyframe)
-  const removeBaseKeyframe = useStore((s) => s.removeBaseKeyframe)
-  const setPlayhead = useStore((s) => s.setPlayhead)
 
   // DOCUMENT MODE: the selected overlay lives on the timeline document; edit it via
   // undoable engine commands (position/size/crop/zoom), split/delete via the engine.
@@ -50,6 +54,7 @@ export default function BasicPanel(): JSX.Element {
   const docMode = !!project.timeline && !!snap?.doc
   const docSel = docMode ? snap!.interaction.selection[0] ?? null : null
   const docClip = docMode ? findDocOverlay(snap!.doc, docSel) : null
+  const docMain = docMode && !docClip ? findDocMainClip(snap!.doc, docSel) : null
   if (docClip) {
     const engine = getSharedEngine()
     const m = docClip.metadata ?? {}
@@ -91,6 +96,32 @@ export default function BasicPanel(): JSX.Element {
           <button onClick={() => engine?.splitAtPlayhead()}>✂ Split (S)</button>
           <button className="danger" onClick={() => engine?.deleteSelection(false)}>🗑 Delete</button>
         </div>
+      </div>
+    )
+  }
+
+  if (docMain) {
+    const engine = getSharedEngine()
+    const tb = snap!.doc.timebase
+    const dur = framesToSeconds(docMain.duration, tb)
+    const canDetach = docMain.hasAudio && !docMain.audioDetached
+    return (
+      <div className="tool-content">
+        <h4>Base clip</h4>
+        <p className="muted small">
+          Source {docMain.sourceIn.toFixed(2)}s – {docMain.sourceOut.toFixed(2)}s · {dur.toFixed(2)}s on the timeline
+        </p>
+        <div className="row" style={{ marginTop: 6 }}>
+          <button onClick={() => engine?.splitAtPlayhead()}>✂ Split (S)</button>
+          <button className="danger" onClick={() => engine?.deleteSelection(true)}>🗑 Delete</button>
+        </div>
+        {canDetach && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <button onClick={() => void engine?.dispatch(C.detachAudio(docMain.id))}>🔉 Detach audio to its own lane</button>
+          </div>
+        )}
+        {docMain.audioDetached && <p className="muted small">Audio is on its own lane.</p>}
+        <p className="muted small">Trim by dragging the clip edges on the timeline. Zoom/pan for base clips are coming as clip transforms.</p>
       </div>
     )
   }
@@ -152,12 +183,6 @@ export default function BasicPanel(): JSX.Element {
 
   if (selectedSeg) {
     const seg = selectedSeg
-    const bz = (project.baseZooms ?? []).find(
-      (z) => Math.abs(z.start - seg.start) < 0.03 && Math.abs(z.end - seg.end) < 0.03
-    )
-    const zStart = bz?.zoomStart ?? 1
-    const zEnd = bz?.zoomEnd ?? 1
-    const kfs = project.baseKeyframes ?? []
     return (
       <div className="tool-content">
         <h4>Base segment</h4>
@@ -165,54 +190,6 @@ export default function BasicPanel(): JSX.Element {
         {seg.kind === 'cut' && (
           <p className="muted small">This part is removed from the edit — <b>Restore</b> brings the footage back.</p>
         )}
-
-        <h4>Zoom (Ken Burns)</h4>
-        <div className="field-grid">
-          <label>Start<input type="number" min={100} max={400} step={5} value={Math.round(zStart * 100)}
-            onChange={(e) => setBaseZoom(seg.start, seg.end, Math.max(1, Math.min(4, Number(e.target.value) / 100)), zEnd)} />%</label>
-          <label>End<input type="number" min={100} max={400} step={5} value={Math.round(zEnd * 100)}
-            onChange={(e) => setBaseZoom(seg.start, seg.end, zStart, Math.max(1, Math.min(4, Number(e.target.value) / 100)))} />%</label>
-        </div>
-        <p className="muted small">Punch-in on the main video for this segment. 150 → 100 zooms out.</p>
-
-        <h4>Keyframes (CapCut-style zoom + pan)</h4>
-        <p className="muted small">
-          Add <b>2+</b> keyframes for a zoom/pan move (a single one is ignored, so it won't disable your
-          start/end zoom). Keyframes drive motion only between the first and last; elsewhere the start/end
-          zoom applies. Set each keyframe&apos;s zoom &amp; focal point (50% = centre).
-        </p>
-        <div className="row">
-          <button onClick={addBaseKeyframe}>◆ Add keyframe at playhead</button>
-          {kfs.length > 0 && (
-            <span className="muted small">{kfs.length} keyframe{kfs.length > 1 ? 's' : ''}</span>
-          )}
-        </div>
-        {kfs.map((k, i) => (
-          <div
-            key={i}
-            style={{ display: 'grid', gridTemplateColumns: '48px 1fr 1fr 1fr auto auto', gap: 6, alignItems: 'center', marginTop: 6 }}
-          >
-            <button onClick={() => setPlayhead(k.t)} title="Jump to this keyframe" style={{ padding: '2px 4px' }}>
-              {k.t.toFixed(1)}s
-            </button>
-            <label className="muted small">Z<input type="number" min={100} max={400} step={5}
-              value={Math.round(k.zoom * 100)}
-              onChange={(e) => updateBaseKeyframe(i, { zoom: Math.max(1, Math.min(4, Number(e.target.value) / 100)) })} />%</label>
-            <label className="muted small">X<input type="number" min={0} max={100} step={1}
-              value={Math.round(k.x * 100)}
-              onChange={(e) => updateBaseKeyframe(i, { x: pctIn01(e.target.value) })} />%</label>
-            <label className="muted small">Y<input type="number" min={0} max={100} step={1}
-              value={Math.round(k.y * 100)}
-              onChange={(e) => updateBaseKeyframe(i, { y: pctIn01(e.target.value) })} />%</label>
-            <select value={k.ease} onChange={(e) => updateBaseKeyframe(i, { ease: e.target.value as Ease })}>
-              <option value="linear">Linear</option>
-              <option value="in">Ease in</option>
-              <option value="out">Ease out</option>
-              <option value="inout">Ease in-out</option>
-            </select>
-            <button className="danger" title="Delete keyframe" onClick={() => removeBaseKeyframe(i)} style={{ padding: '2px 6px' }}>✕</button>
-          </div>
-        ))}
 
         <div className="row" style={{ marginTop: 10 }}>
           <button onClick={() => splitBaseAtPlayhead()}>✂ Split (S)</button>
@@ -235,7 +212,7 @@ export default function BasicPanel(): JSX.Element {
 
   return (
     <div className="tool-content">
-      <p className="muted">Select an overlay clip or base segment on the timeline to edit its size, crop, position, and zoom here.</p>
+      <p className="muted">Select a clip on the timeline — a base clip (split / delete / detach audio) or an overlay (size, crop, position, zoom) — to edit it here.</p>
     </div>
   )
 }

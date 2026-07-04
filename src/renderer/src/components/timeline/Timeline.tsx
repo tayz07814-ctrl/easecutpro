@@ -442,8 +442,9 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
         name: item.name,
         hasAudio: item.hasAudio
       })
-      // Main lane stays gapless (append at its end); free lanes take the drop point.
-      cmds.push(trackId === mainId ? C.importToMain(clip) : C.addClip(clip))
+      // Main lane: insert at the drop point and ripple later clips right; free
+      // lanes take the drop point directly.
+      cmds.push(trackId === mainId ? C.insertToMain(clip, dropFrame) : C.addClip(clip))
       engine.batch('Add clip', cmds)
       engine.select([clip.id])
     },

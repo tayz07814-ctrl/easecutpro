@@ -1066,6 +1066,31 @@ export function addClipToMainInDoc(doc: TimelineDocument, clip: Clip): TimelineD
   return addClipToDoc(doc, { ...clip, trackId: track.id, start: at, end: at + clip.duration })
 }
 
+/**
+ * Insert a clip into the main lane at the drop frame, rippling the clips after
+ * the insertion point to the right by the clip's duration so nothing is
+ * overwritten (CapCut-style insert). The insertion lands on the clip BOUNDARY
+ * nearest the drop (midpoint rule — same as a magnet move), so it slots between
+ * clips rather than slicing one; a drop past the content end just appends. Gaps
+ * before the insertion point are preserved (magnet-off lanes keep their layout).
+ */
+export function insertClipIntoMainInDoc(
+  doc: TimelineDocument,
+  clip: Clip,
+  atFrame: number
+): TimelineDocument {
+  const mainId = mainTrackId(doc)
+  const track = (mainId && findTrack(doc, mainId)) || doc.tracks.find((t) => t.kind === 'video')
+  if (!track) return doc
+  const sorted = [...track.clips].sort((a, b) => a.start - b.start)
+  const at = Math.max(0, Math.round(atFrame))
+  const idx = insertionIndexByMidpoint(sorted, at)
+  const boundary = idx < sorted.length ? sorted[idx].start : trackContentEnd(track)
+  const placed: Clip = { ...clip, trackId: track.id, start: boundary, end: boundary + clip.duration }
+  const rippled = sorted.map((c) => (c.start >= boundary ? shiftClip(c, clip.duration) : c))
+  return normalizeDoc(mapTrack(doc, track.id, (t) => ({ ...t, clips: [...rippled, placed] })))
+}
+
 // ---------------------------------------------------------------------------
 // Professional trims: roll (move a shared cut between two adjacent clips),
 // slip (shift a clip's source content without moving it), slide (move a clip

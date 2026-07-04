@@ -80,37 +80,40 @@ export default function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  function beginDrag(cursor: string, onMove: (ev: MouseEvent) => void): void {
+    // Lock the cursor + kill text selection for the whole gesture so the drag reads
+    // smoothly and doesn't highlight the UI while resizing.
+    const prevCursor = document.body.style.cursor
+    const prevSelect = document.body.style.userSelect
+    document.body.style.cursor = cursor
+    document.body.style.userSelect = 'none'
+    function onUp(): void {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevSelect
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   function startColDrag(e: React.MouseEvent, which: 'left' | 'right'): void {
     e.preventDefault()
     const startX = e.clientX
     const l0 = leftW
     const r0 = rightW
-    function onMove(ev: MouseEvent): void {
+    beginDrag('col-resize', (ev) => {
       const dx = ev.clientX - startX
       if (which === 'left') setLeftW(clamp(l0 + dx, 240, 620))
       else setRightW(clamp(r0 - dx, 220, 580))
-    }
-    function onUp(): void {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    })
   }
 
   function startTimelineDrag(e: React.MouseEvent): void {
     e.preventDefault()
     const startY = e.clientY
     const h0 = timelineH
-    function onMove(ev: MouseEvent): void {
-      setTimelineH(clamp(h0 - (ev.clientY - startY), 200, 760))
-    }
-    function onUp(): void {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    beginDrag('row-resize', (ev) => setTimelineH(clamp(h0 - (ev.clientY - startY), 200, 760)))
   }
 
   if (isMobile) return <MobileApp />

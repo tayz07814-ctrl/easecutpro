@@ -17,9 +17,11 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useStore } from '../../store'
 import { setSharedEngine } from '../../timelineEngine'
 import { TimelineEngine } from '@shared/timeline/engine'
-import { projectToDocument, projectStructureKey } from '@shared/timeline/bridge'
-import { computeKeepRanges, collapseTime, expandTime, baseTimelineDuration } from '@shared/edit'
+import { projectToDocument, projectStructureKey, removedRangesToMainFrames } from '@shared/timeline/bridge'
+import { computeKeepRanges, collapseTime, expandTime, baseTimelineDuration, subtractRanges } from '@shared/edit'
 import { secondsToFrames, framesToSeconds } from '@shared/timeline/time'
+import { mainTrackId } from '@shared/timeline/model'
+import * as Commands from '@shared/timeline/commands'
 import type { Project } from '@shared/types'
 import { TimelineProvider } from './TimelineContext'
 import { MediaDataProvider } from './MediaData'
@@ -117,6 +119,38 @@ export default function TimelinePanel({ mobile = false }: { mobile?: boolean }):
     engine.replaceDocument(projectToDocument(projectRef.current))
     lastDoc.current = engine.document
     applying.current = false
+  }, [engine, sig])
+
+  // DOCUMENT mode: route cut-engine output into the main lane. Once the document
+  // is authoritative the legacy rebuild above is disabled (it wiped manual
+  // splits/drops), so Fast/Pro/word/filler/silence cuts — which still write the
+  // legacy transcript/silences — no longer show. Here, whenever the CUT signature
+  // changes (those fields are part of `sig`; structural doc edits are NOT, they
+  // live in project.timeline), we translate the newly-removed footage into main-
+  // lane frame ranges and ripple-delete it as ONE undoable command. Source already
+  // cut from the lane maps to nothing, so this only ever removes the NEW cuts and
+  // manual splits/drops are preserved. (Restoring a cut word can't re-add footage
+  // to the edited lane and is a known no-op here — the transcript still records it.)
+  const lastCutSig = useRef(sig)
+  useEffect(() => {
+    if (!projectRef.current.timeline) {
+      lastCutSig.current = sig
+      return
+    }
+    if (sig === lastCutSig.current) return
+    lastCutSig.current = sig
+    const p = projectRef.current
+    const dur = p.media?.duration ?? baseTimelineDuration(p)
+    if (dur <= 0) return
+    const mainId = mainTrackId(engine.document)
+    if (!mainId) return
+    // Pass the media waveform so cut edges snap to energy VALLEYS + swallow edge
+    // blips — the same smoothing legacy preview/export get, so doc-mode Fast/Pro/
+    // word/silence seams land on real air gaps instead of raw whisper timestamps.
+    const waveform = useStore.getState().waveform
+    const removed = subtractRanges([{ start: 0, end: dur }], computeKeepRanges(p, waveform))
+    const frames = removedRangesToMainFrames(engine.document, p, removed)
+    if (frames.length) engine.dispatch(Commands.applyDeletions(mainId, frames))
   }, [engine, sig])
 
   // store playhead -> engine (edited frames). In document mode the store playhead

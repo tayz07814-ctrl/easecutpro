@@ -318,21 +318,6 @@ server.tool(
   }
 )
 
-server.tool(
-  'set_base_zoom',
-  'Add a Ken Burns zoom on the base video for a time range (1 = 100%, 1.3 = 130%).',
-  { start: z.number(), end: z.number(), zoomStart: z.number(), zoomEnd: z.number() },
-  async ({ start, end, zoomStart, zoomEnd }) => {
-    const project = requireActive()
-    const rest = (project.baseZooms ?? []).filter(
-      (z) => Math.abs(z.start - start) > 0.03 || Math.abs(z.end - end) > 0.03
-    )
-    project.baseZooms = [...rest, { start, end, zoomStart: Math.max(1, zoomStart), zoomEnd: Math.max(1, zoomEnd) }]
-    await persist()
-    return ok(`Zoom ${Math.round(zoomStart * 100)}%→${Math.round(zoomEnd * 100)}% from ${start}s to ${end}s.`)
-  }
-)
-
 server.tool('get_summary', 'Summary of the active project (durations, cuts, edits).', {}, async () => {
   return ok(summary(requireActive()))
 })

@@ -469,7 +469,7 @@ export function finalizeDecisions(
       }
       silenceAdds.push({ id: `ss-${++idx}-${d.pause_id}`, start: s, end: e, action: 'remove' })
     } else {
-      const keepSec = Math.max((d.keep_ms ?? preset.keep_after_shortening_ms) / 1000, padS + padE ? 0.08 : 0.08)
+      const keepSec = Math.max((d.keep_ms ?? preset.keep_after_shortening_ms) / 1000, 0.08)
       if (c.end - c.start <= keepSec + 0.05) {
         rejected.push({ pause_id: d.pause_id, reason: 'Shorten target ≈ pause length — nothing to trim.' })
         continue

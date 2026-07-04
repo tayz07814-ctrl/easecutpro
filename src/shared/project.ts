@@ -30,7 +30,6 @@ export function createEmptyProject(name = 'Untitled'): Project {
     baseSplits: [],
     manualCuts: [],
     keepOverrides: [],
-    baseZooms: [],
     silencePadding: 0.08,
     showThumbnails: true,
     texts: [],
