@@ -96,6 +96,15 @@ interface Seg {
   srcH?: number
   /** mute the base <video>'s own audio (its audio was detached to its own lane, or it's muted). */
   muted?: boolean
+  /** base-clip transform: size (1 = fill), Ken Burns zoom, pan focal offset, volume. */
+  ovScale?: number
+  ovZoomStart?: number
+  ovZoomEnd?: number
+  ovX?: number
+  ovY?: number
+  gain?: number
+  /** playback speed (1 = normal); source time advances `speed`× edited time. */
+  speed?: number
 }
 
 /**
@@ -152,7 +161,10 @@ export default function SequencePreview(): JSX.Element {
     const main = mainId ? doc.tracks.find((t) => t.id === mainId) : undefined
     for (const c of [...(main?.clips ?? [])].sort((a, b) => a.start - b.start)) {
       if (!c.sourcePath) continue
-      const len = Math.max(0.02, c.sourceOut - c.sourceIn)
+      const speed = typeof c.speed === 'number' && c.speed > 0 ? c.speed : 1
+      // EDITED length = the clip's timeline duration (source span / speed), so a
+      // re-sped clip occupies its real timeline slot (== source span when speed 1).
+      const len = Math.max(0.02, framesToSeconds(c.duration, doc.timebase))
       // Anchor at the clip's REAL timeline position (not packed) so magnet-off GAPS
       // between pieces are honoured — the preview shows black in the dead space
       // instead of playing the previous clip's footage.
@@ -169,7 +181,14 @@ export default function SequencePreview(): JSX.Element {
         len,
         srcW: c.srcW,
         srcH: c.srcH,
-        muted: c.audioDetached === true || c.muted === true
+        muted: c.audioDetached === true || c.muted === true,
+        ovScale: typeof c.metadata?.ovScale === 'number' ? c.metadata.ovScale : 1,
+        ovZoomStart: typeof c.metadata?.ovZoomStart === 'number' ? c.metadata.ovZoomStart : 1,
+        ovZoomEnd: typeof c.metadata?.ovZoomEnd === 'number' ? c.metadata.ovZoomEnd : 1,
+        ovX: typeof c.metadata?.ovX === 'number' ? c.metadata.ovX : 0,
+        ovY: typeof c.metadata?.ovY === 'number' ? c.metadata.ovY : 0,
+        gain: typeof c.gain === 'number' ? c.gain : 1,
+        speed
       })
       acc += len
     }
@@ -255,7 +274,7 @@ export default function SequencePreview(): JSX.Element {
     idxRef.current = i
     const seg = segsRef.current[i]
     if (seg && seg.src !== mountedSrcRef.current) {
-      pendingSeekRef.current = seg.sourceStart + Math.max(0, ph - seg.start)
+      pendingSeekRef.current = seg.sourceStart + Math.max(0, ph - seg.start) * (seg.speed ?? 1)
       seekingRef.current = pendingSeekRef.current
       seekBackRef.current = false
       setMountedSrc(seg.src)
@@ -274,7 +293,7 @@ export default function SequencePreview(): JSX.Element {
     idxRef.current = i
     const seg = segsRef.current[i]
     if (!seg) return
-    const srcT = seg.sourceStart + Math.max(0, playhead - seg.start)
+    const srcT = seg.sourceStart + Math.max(0, playhead - seg.start) * (seg.speed ?? 1)
     const v = ref.current
     gotoSource(seg.src, srcT, v ? srcT < v.currentTime : false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -397,7 +416,7 @@ export default function SequencePreview(): JSX.Element {
       // Drive the shared clock in EDITED time every frame so the Timeline playhead
       // line + overlay progress glide (they read playClock at 60fps) instead of
       // freezing while the store playhead only ticks ~4Hz via onTimeUpdate.
-      playClock.t = active.start + Math.min(active.len, Math.max(0, ct - active.sourceStart))
+      playClock.t = active.start + Math.min(active.len, Math.max(0, (ct - active.sourceStart) / (active.speed ?? 1)))
       if (ct >= active.sourceEnd - 0.04) {
         const nextIdx = idxRef.current + 1
         const next = ss[nextIdx]
@@ -465,7 +484,7 @@ export default function SequencePreview(): JSX.Element {
     const i = coveringIdx(playhead)
     if (i < 0) return // gap (magnet-off dead space): the video is hidden, nothing to seek
     const seg = segsRef.current[i]
-    const target = seg.sourceStart + Math.max(0, Math.min(seg.len, playhead - seg.start))
+    const target = seg.sourceStart + Math.max(0, Math.min(seg.len, playhead - seg.start)) * (seg.speed ?? 1)
     if (seg.src !== mountedSrcRef.current) {
       pendingSeekRef.current = target
       setMountedSrc(seg.src)
@@ -482,9 +501,48 @@ export default function SequencePreview(): JSX.Element {
     const v = ref.current
     if (!v) return
     const i = coveringIdx(playhead)
-    v.muted = docMode && i >= 0 ? segsRef.current[i]?.muted === true : false
+    const seg = i >= 0 ? segsRef.current[i] : undefined
+    v.muted = docMode && seg ? seg.muted === true : false
+    // per-clip volume (gain) + speed — the Basic-tab Volume/Speed controls.
+    v.volume = Math.min(1, Math.max(0, seg?.gain ?? 1))
+    v.playbackRate = Math.min(4, Math.max(0.25, seg?.speed ?? 1))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, playhead, segsKey, docMode])
+
+  // Base-clip transform: size (ovScale, 1 = fill) × Ken Burns zoom (ovZoomStart..End)
+  // with a pan focal point (ovX/ovY), applied to the base <video>. Doc-native base
+  // motion driven off the active main clip's metadata; ramps on the shared clock.
+  useEffect(() => {
+    const v = ref.current
+    if (!v) return
+    const applyAt = (): void => {
+      const i = coveringIdx(playheadRef.current)
+      const seg = segsRef.current[i >= 0 ? i : idxRef.current]
+      if (!seg) {
+        v.style.transform = ''
+        return
+      }
+      const size = seg.ovScale ?? 1
+      const zs = seg.ovZoomStart ?? 1
+      const ze = seg.ovZoomEnd ?? 1
+      const prog = seg.len > 0 ? Math.min(1, Math.max(0, (playClock.t - seg.start) / seg.len)) : 0
+      const scale = size * (zs + (ze - zs) * prog)
+      v.style.transformOrigin = `${50 + (seg.ovX ?? 0) * 100}% ${50 + (seg.ovY ?? 0) * 100}%`
+      v.style.transform = Math.abs(scale - 1) > 0.001 ? `scale(${scale})` : ''
+    }
+    if (playing) {
+      let raf = 0
+      const loop = (): void => {
+        applyAt()
+        raf = requestAnimationFrame(loop)
+      }
+      raf = requestAnimationFrame(loop)
+      return () => cancelAnimationFrame(raf)
+    }
+    applyAt()
+    return undefined
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, playhead, segsKey])
 
   // Cached media (e.g. after CLOSING a project and REOPENING it) can already have
   // its metadata decoded, so 'loadedmetadata' fired before this fresh <video>'s
@@ -511,7 +569,7 @@ export default function SequencePreview(): JSX.Element {
     if (!active) return
     const ct = v.currentTime
     if (ct < active.sourceStart - 0.05 || ct > active.sourceEnd + 0.05) return
-    const ph = active.start + Math.max(0, ct - active.sourceStart)
+    const ph = active.start + Math.max(0, ct - active.sourceStart) / (active.speed ?? 1)
     if (ph + 0.0005 < playheadRef.current) return // monotonic: never step back
     selfSetPlayhead(ph)
   }
@@ -529,13 +587,18 @@ export default function SequencePreview(): JSX.Element {
       const ph = playheadRef.current
       const ci = coveringIdx(ph)
       const seg = segsRef.current[ci >= 0 ? ci : idxRef.current]
-      want = seg ? seg.sourceStart + Math.max(0, Math.min(seg.len, ph - seg.start)) : 0
+      want = seg ? seg.sourceStart + Math.max(0, Math.min(seg.len, ph - seg.start)) * (seg.speed ?? 1) : 0
     }
     // The decoded file can be slightly SHORTER than the trim metadata's nominal
     // duration; the browser clamps currentTime to the real duration, so an
     // unclamped target could sit past it and the forward settle release would
     // never fire. Clamp so the hold always becomes satisfiable.
     if (isFinite(v.duration) && v.duration > 0) want = Math.min(want, v.duration - 0.05)
+    // A freshly-mounted <video> sits at currentTime 0 showing NO decoded frame, and
+    // writing 0 again is a no-op (no 'seeked' fires → the preview stays BLACK until
+    // you scrub — the classic "black on open"). Nudge a hair past 0 so a seek always
+    // fires and the first frame decodes. Imperceptible (~1 frame).
+    if (want <= 0.001) want = Math.min(0.033, Math.max(0.001, (v.duration || 1) - 0.05))
     v.currentTime = want
     seekingRef.current = want
     seekBackRef.current = false // freshly-loaded start is a forward target

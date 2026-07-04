@@ -37,6 +37,8 @@ interface OverlayView {
   sourceIn: number
   sourceOut: number
   start: number // seconds on the (edited) timeline
+  gain: number
+  muted: boolean
 }
 
 function num(v: unknown, d: number): number {
@@ -69,7 +71,11 @@ function docOverlays(doc: TimelineDocument, playheadSec: number): OverlayView[] 
         srcH: c.srcH,
         sourceIn: c.sourceIn,
         sourceOut: c.sourceOut,
-        start: framesToSeconds(c.start, tb)
+        start: framesToSeconds(c.start, tb),
+        // Overlay video clips play their OWN audio (a clip moved off the main lane
+        // keeps its sound); detached/muted clips stay silent (audio on their lane).
+        gain: num(c.gain, 1),
+        muted: c.muted === true || c.audioDetached === true
       })
     }
   }
@@ -96,7 +102,9 @@ function legacyOverlays(clips: Clip[], playhead: number): OverlayView[] {
       srcH: c.srcH,
       sourceIn: c.sourceIn,
       sourceOut: c.sourceOut,
-      start: c.start
+      start: c.start,
+      gain: 1,
+      muted: true // legacy overlays are silent B-roll (kept as-is)
     })
   }
   return out
@@ -182,10 +190,12 @@ function OverlayBox({
   const zs = view.zoomStart ?? 1
   const ze = view.zoomEnd ?? 1
 
-  // Sync overlay video time to the timeline (videos only).
+  // Sync overlay video time to the timeline (videos only) + its own audio.
   useEffect(() => {
     const v = ref.current
     if (!v || isImage) return
+    v.muted = view.muted
+    v.volume = Math.min(1, Math.max(0, view.gain))
     const target = view.sourceIn + (playhead - view.start)
     if (playing) {
       if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = target
@@ -194,18 +204,17 @@ function OverlayBox({
       v.pause()
       if (Math.abs(v.currentTime - target) > 0.05) v.currentTime = target
     }
-  }, [playing, playhead, view.sourceIn, view.start, isImage])
+  }, [playing, playhead, view.sourceIn, view.start, view.muted, view.gain, isImage])
 
   // Smooth Ken Burns zoom across the clip.
   useEffect(() => {
     const el: HTMLElement | null = isImage ? imgRef.current : ref.current
     if (!el) return
     const zoomFromProg = (prog: number): number => zs + (ze - zs) * Math.min(1, Math.max(0, prog))
-    const progAt = (): number => {
-      if (isImage) return len > 0 ? (playClock.t - view.start) / len : 0
-      const v = ref.current
-      return v && len > 0 ? (v.currentTime - view.sourceIn) / len : 0
-    }
+    // Drive progress off the shared play clock (edited time) for BOTH images and
+    // videos: it advances even while the base <video> is paused traversing a
+    // magnet-off gap, so the Ken Burns zoom keeps ramping over dead space too.
+    const progAt = (): number => (len > 0 ? (playClock.t - view.start) / len : 0)
     if (playing) {
       let raf = 0
       const loop = (): void => {
@@ -280,7 +289,6 @@ function OverlayBox({
         <video
           ref={ref}
           src={ecurl(view.sourcePath)}
-          muted
           style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center' }}
         />
       )}

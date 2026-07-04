@@ -113,6 +113,16 @@ export class TimelineEngine {
     this.commit()
   }
 
+  /** Apply a command's effect immediately WITHOUT recording history — for live
+   *  gestures (e.g. dragging a track's height). The UI updates every frame; commit
+   *  the FINAL value once with dispatch() so a single undo covers the whole gesture. */
+  applyLive(command: Command): void {
+    const next = command.apply(this.doc)
+    if (next === this.doc) return
+    this.doc = next
+    this.commit()
+  }
+
   /** Apply several commands as ONE undo step (e.g. moving a group of clips). */
   batch(label: string, commands: Command[]): void {
     let next = this.doc

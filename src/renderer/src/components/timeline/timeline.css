@@ -166,6 +166,30 @@
   background: var(--bg2, #11131c);
   border-right: 1px solid var(--border, #262a37);
 }
+/* Bottom-edge grip to drag a track's height. */
+.ec-tl-hresize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 7px;
+  cursor: ns-resize;
+  z-index: 22;
+}
+.ec-tl-hresize::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  transform: translateX(-50%);
+  width: 26px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--muted, #7c8598);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.ec-tl-hresize:hover::after { opacity: 0.8; }
 .ec-tl-kind {
   display: inline-flex;
   align-items: center;

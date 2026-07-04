@@ -767,6 +767,25 @@ export function setClipMetadataInDoc(
   return mapTrack(doc, loc.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? next : c)) }))
 }
 
+/** Merge a patch into a text clip's TextContent (nested background/shadow merge too). */
+export function setClipTextInDoc(
+  doc: TimelineDocument,
+  clipId: string,
+  patch: Partial<TextContent>
+): TimelineDocument {
+  const loc = findClip(doc, clipId)
+  if (!loc || !loc.clip.text) return doc
+  const cur = loc.clip.text
+  const next: TextContent = {
+    ...cur,
+    ...patch,
+    background: patch.background ? { ...cur.background, ...patch.background } : cur.background,
+    shadow: patch.shadow ? { ...cur.shadow, ...patch.shadow } : cur.shadow
+  }
+  const clip: Clip = { ...loc.clip, text: next, name: next.text || loc.clip.name }
+  return mapTrack(doc, loc.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? clip : c)) }))
+}
+
 /** Merge into a clip's crop rectangle (fractions removed from each edge). */
 export function setClipCropInDoc(
   doc: TimelineDocument,
@@ -776,6 +795,16 @@ export function setClipCropInDoc(
   const loc = findClip(doc, clipId)
   if (!loc) return doc
   const next: Clip = { ...loc.clip, crop: { ...loc.clip.crop, ...patch } }
+  return mapTrack(doc, loc.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? next : c)) }))
+}
+
+/** Set a clip's audio gain (0 = silent, 1 = original; export may boost). */
+export function setClipGainInDoc(doc: TimelineDocument, clipId: string, gain: number): TimelineDocument {
+  const loc = findClip(doc, clipId)
+  if (!loc) return doc
+  const g = Math.max(0, Math.min(4, gain))
+  if (g === loc.clip.gain) return doc
+  const next: Clip = { ...loc.clip, gain: g }
   return mapTrack(doc, loc.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? next : c)) }))
 }
 

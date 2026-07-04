@@ -29,6 +29,33 @@ export function TrackHeader({
   const engine = useEngine()
   const setFlags = (patch: Flags): void => engine.dispatch(C.setTrackFlags(track.id, patch))
 
+  // Drag the bottom edge to change the track's top-down height. Live-applied every
+  // frame (no history spam); one undo entry is committed on release.
+  function startHeightDrag(e: ReactMouseEvent): void {
+    e.preventDefault()
+    e.stopPropagation()
+    const startY = e.clientY
+    const h0 = track.height
+    const prevCursor = document.body.style.cursor
+    const prevSelect = document.body.style.userSelect
+    document.body.style.cursor = 'ns-resize'
+    document.body.style.userSelect = 'none'
+    let h = h0
+    const onMove = (ev: MouseEvent): void => {
+      h = Math.max(28, Math.min(360, h0 + (ev.clientY - startY)))
+      engine.applyLive(C.setTrackHeight(track.id, h))
+    }
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevSelect
+      engine.dispatch(C.setTrackHeight(track.id, h))
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   return (
     <div
       className="ec-tl-header"
@@ -72,6 +99,7 @@ export function TrackHeader({
           </button>
         )}
       </span>
+      <div className="ec-tl-hresize" title="Drag to resize track height" onMouseDown={startHeightDrag} />
     </div>
   )
 }

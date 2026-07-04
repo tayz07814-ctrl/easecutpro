@@ -34,8 +34,11 @@ import {
   compactTrackInDoc,
   setClipMetadataInDoc,
   setClipTransformStaticInDoc,
-  setClipCropInDoc
+  setClipCropInDoc,
+  setClipTextInDoc,
+  setClipGainInDoc
 } from './model'
+import type { TextContent } from './types'
 import { uid } from './ids'
 
 export interface Command {
@@ -220,6 +223,16 @@ export function setOverlayCrop(
 /** Move a text (or transform-positioned) clip: static offset-from-centre x / y. */
 export function setClipTransform(clipId: string, patch: { x?: number; y?: number; scale?: number }): Command {
   return cmd('Position', (doc) => setClipTransformStaticInDoc(doc, clipId, patch))
+}
+
+/** Edit a text clip's content (text, font, colour, background…). */
+export function setClipText(clipId: string, patch: Partial<TextContent>): Command {
+  return cmd('Edit text', (doc) => setClipTextInDoc(doc, clipId, patch))
+}
+
+/** Set a clip's audio gain / volume (0 = silent, 1 = original). */
+export function setClipGain(clipId: string, gain: number): Command {
+  return cmd('Set volume', (doc) => setClipGainInDoc(doc, clipId, gain))
 }
 
 // --- markers ---

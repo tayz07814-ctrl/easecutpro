@@ -105,13 +105,46 @@ export default function BasicPanel(): JSX.Element {
     const tb = snap!.doc.timebase
     const dur = framesToSeconds(docMain.duration, tb)
     const canDetach = docMain.hasAudio && !docMain.audioDetached
+    const m = docMain.metadata ?? {}
+    const place = (patch: { ovX?: number; ovY?: number; ovScale?: number; ovZoomStart?: number; ovZoomEnd?: number }): void =>
+      void engine?.dispatch(C.setOverlayPlacement(docMain.id, patch))
     return (
       <div className="tool-content">
         <h4>Base clip</h4>
         <p className="muted small">
           Source {docMain.sourceIn.toFixed(2)}s – {docMain.sourceOut.toFixed(2)}s · {dur.toFixed(2)}s on the timeline
         </p>
-        <div className="row" style={{ marginTop: 6 }}>
+
+        <h4>Size &amp; Zoom</h4>
+        <div className="field-grid">
+          <label>Size<input type="number" min={10} max={300} step={5}
+            value={Math.round(mnum(m.ovScale, 1) * 100)}
+            onChange={(e) => place({ ovScale: clampN(Number(e.target.value) / 100, 0.1, 3) })} />%</label>
+          <label>Zoom start<input type="number" min={100} max={400} step={5}
+            value={Math.round(mnum(m.ovZoomStart, 1) * 100)}
+            onChange={(e) => place({ ovZoomStart: clampN(Number(e.target.value) / 100, 1, 4) })} />%</label>
+          <label>Zoom end<input type="number" min={100} max={400} step={5}
+            value={Math.round(mnum(m.ovZoomEnd, 1) * 100)}
+            onChange={(e) => place({ ovZoomEnd: clampN(Number(e.target.value) / 100, 1, 4) })} />%</label>
+          <label>Pan X<input type="number" min={-50} max={50} step={1}
+            value={Math.round(mnum(m.ovX, 0) * 100)}
+            onChange={(e) => place({ ovX: clampN(Number(e.target.value) / 100, -0.5, 0.5) })} />%</label>
+          <label>Pan Y<input type="number" min={-50} max={50} step={1}
+            value={Math.round(mnum(m.ovY, 0) * 100)}
+            onChange={(e) => place({ ovY: clampN(Number(e.target.value) / 100, -0.5, 0.5) })} />%</label>
+        </div>
+
+        <h4>Playback</h4>
+        <div className="field-grid">
+          <label>Speed<input type="number" min={0.25} max={4} step={0.05}
+            value={Number((docMain.speed ?? 1).toFixed(2))}
+            onChange={(e) => void engine?.dispatch(C.setClipSpeed(docMain.id, clampN(Number(e.target.value), 0.25, 4)))} />×</label>
+          <label>Volume<input type="number" min={0} max={200} step={5}
+            value={Math.round((docMain.gain ?? 1) * 100)}
+            onChange={(e) => void engine?.dispatch(C.setClipGain(docMain.id, clampN(Number(e.target.value) / 100, 0, 2)))} />%</label>
+        </div>
+
+        <div className="row" style={{ marginTop: 10 }}>
           <button onClick={() => engine?.splitAtPlayhead()}>✂ Split (S)</button>
           <button className="danger" onClick={() => engine?.deleteSelection(true)}>🗑 Delete</button>
         </div>
@@ -121,7 +154,7 @@ export default function BasicPanel(): JSX.Element {
           </div>
         )}
         {docMain.audioDetached && <p className="muted small">Audio is on its own lane.</p>}
-        <p className="muted small">Trim by dragging the clip edges on the timeline. Zoom/pan for base clips are coming as clip transforms.</p>
+        <p className="muted small">Trim by dragging the clip edges on the timeline.</p>
       </div>
     )
   }

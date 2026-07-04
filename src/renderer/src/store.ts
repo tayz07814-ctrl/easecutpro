@@ -184,6 +184,51 @@ async function buildLibraryItem(path: string): Promise<LibraryItem> {
   }
 }
 
+/** Rebuild the media-library list from a project's OWN sources so opening a project
+ *  shows its media and a fresh project shows none — no cross-project bleed from the
+ *  global import pool. Deduped by path; built from stored metadata (no re-probing). */
+function libraryFromProject(p: Project): LibraryItem[] {
+  const seen = new Set<string>()
+  const out: LibraryItem[] = []
+  const add = (
+    path: string | undefined,
+    name: string | undefined,
+    kind: LibraryItem['kind'],
+    w?: number,
+    h?: number,
+    dur?: number,
+    hasAudio?: boolean,
+    fps?: number
+  ): void => {
+    if (!path || seen.has(path)) return
+    seen.add(path)
+    out.push({
+      id: uid(),
+      path,
+      name: name || path.split(/[\\/]/).pop() || 'clip',
+      kind,
+      duration: dur ?? 0,
+      width: w ?? 0,
+      height: h ?? 0,
+      fps: fps ?? 30,
+      hasAudio: hasAudio ?? kind !== 'image',
+      hasVideo: kind === 'video',
+      thumb: kind === 'image' ? mediaUrl(path) : undefined
+    })
+  }
+  if (p.media) add(p.media.path, p.name, p.media.hasVideo ? 'video' : 'audio', p.media.width, p.media.height, p.media.duration, p.media.hasAudio, p.media.fps)
+  for (const c of p.baseSequence ?? []) add(c.sourcePath, c.name, c.isImage ? 'image' : 'video', c.srcW, c.srcH, c.sourceDuration ?? c.sourceOut, c.hasAudio, c.fps)
+  for (const t of p.tracks ?? []) for (const c of t.clips) add(c.sourcePath, c.name, c.isImage ? 'image' : 'video', c.srcW, c.srcH, c.sourceDuration, !c.isImage)
+  for (const t of p.timeline?.tracks ?? []) {
+    for (const c of t.clips) {
+      if (!c.sourcePath) continue
+      const kind: LibraryItem['kind'] = c.kind === 'image' ? 'image' : c.kind === 'audio' ? 'audio' : 'video'
+      add(c.sourcePath, c.name, kind, c.srcW, c.srcH, c.sourceDuration ?? c.sourceOut, c.hasAudio, c.srcFps)
+    }
+  }
+  return out
+}
+
 function emptyTracks(): Track[] {
   return Array.from({ length: TIMELINE_TRACK_COUNT }, (_, i) => ({
     id: uid(),
@@ -2343,6 +2388,9 @@ export const useStore = create<AppState>((set, get) => ({
       waveform: null,
       musicWaveform: null,
       thumbnails: [],
+      // Media library reflects THIS project's own sources (a fresh project shows
+      // none) — no leftovers from the previously-open project.
+      library: libraryFromProject(project),
       selectedWordIds: new Set(),
       selectedClipId: null,
       selectedSeg: null,
