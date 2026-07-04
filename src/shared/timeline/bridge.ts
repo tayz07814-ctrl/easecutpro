@@ -206,6 +206,31 @@ export function projectToDocument(project: Project): TimelineDocument {
   return doc
 }
 
+/**
+ * Guarantee the standard lane stack so every project shows a place to work: at
+ * least one overlay (video) lane + one text lane ABOVE the main lane, and one
+ * audio/BGM lane BELOW it. Empty lanes fold to nothing in export. Returns the doc
+ * UNCHANGED (same identity) when it's already complete, so hydration never churns.
+ *
+ * Applied to freshly-built docs AND to already-migrated `project.timeline`s — those
+ * never re-run projectToDocument, so without this an existing project (migrated
+ * before the audio lane was added) would never gain one. That's exactly the "no
+ * empty audio track below main" case.
+ */
+export function normalizeDefaultLanes(doc: TimelineDocument): TimelineDocument {
+  const hasOverlay = doc.tracks.some((t) => t.kind === 'video' && !t.isMain)
+  const hasText = doc.tracks.some((t) => t.kind === 'text')
+  const hasAudio = doc.tracks.some((t) => t.kind === 'audio')
+  if (hasOverlay && hasText && hasAudio) return doc
+  let out = doc
+  const minOrder = Math.min(0, ...doc.tracks.map((t) => t.order))
+  const maxOrder = Math.max(0, ...doc.tracks.map((t) => t.order))
+  if (!hasText) out = addTrackToDoc(out, createTrack({ kind: 'text', order: minOrder - 2, name: 'Text' }))
+  if (!hasOverlay) out = addTrackToDoc(out, createTrack({ kind: 'video', order: minOrder - 1, name: 'Overlay 1' }))
+  if (!hasAudio) out = addTrackToDoc(out, createTrack({ kind: 'audio', order: maxOrder + 1, name: 'Audio' }))
+  return out
+}
+
 function legacyClipFrom(c: Clip, f2s: (f: number) => number): LegacyClip {
   const m = c.metadata ?? {}
   const num = (v: unknown, d: number): number => (typeof v === 'number' ? v : d)

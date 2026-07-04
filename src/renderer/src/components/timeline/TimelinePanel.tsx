@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useStore } from '../../store'
 import { setSharedEngine } from '../../timelineEngine'
 import { TimelineEngine } from '@shared/timeline/engine'
-import { projectToDocument, projectStructureKey, removedRangesToMainFrames } from '@shared/timeline/bridge'
+import { projectToDocument, projectStructureKey, removedRangesToMainFrames, normalizeDefaultLanes } from '@shared/timeline/bridge'
 import { computeKeepRanges, collapseTime, expandTime, baseTimelineDuration, subtractRanges } from '@shared/edit'
 import { secondsToFrames, framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -52,7 +52,7 @@ export default function TimelinePanel({ mobile = false }: { mobile?: boolean }):
   // has one; otherwise it is built (once) from the legacy fields, and that build
   // becomes authoritative the moment the user makes an edit (lazy migration).
   const engine = useMemo(
-    () => new TimelineEngine(project.timeline ?? projectToDocument(project)),
+    () => new TimelineEngine(normalizeDefaultLanes(project.timeline ?? projectToDocument(project))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   )
@@ -88,7 +88,7 @@ export default function TimelinePanel({ mobile = false }: { mobile?: boolean }):
     const doc = projectRef.current.timeline
     if (!doc || doc === lastDoc.current) return
     applying.current = true
-    engine.replaceDocument(doc)
+    engine.replaceDocument(normalizeDefaultLanes(doc))
     lastDoc.current = engine.document
     applying.current = false
   }, [engine, project.timeline])
