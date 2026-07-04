@@ -434,6 +434,86 @@ function zoompanStage(
   return `${src}scale=${SW}:${SH}:flags=lanczos+accurate_rnd,${zp(SW, SH)},scale=${W}:${H}:flags=lanczos+accurate_rnd${out}`
 }
 
+/** Chain `atempo` filters to reach `speed` (each stage handles 0.5..2.0), for
+ *  per-clip speed on the audio side. Returns '' at 1× so the graph is unchanged.
+ *  Exported for the export-transform verify harness. */
+export function atempoChain(speed: number): string {
+  if (!(speed > 0) || Math.abs(speed - 1) < 1e-3) return ''
+  let s = speed
+  const factors: number[] = []
+  while (s > 2 + 1e-6) {
+    factors.push(2)
+    s /= 2
+  }
+  while (s < 0.5 - 1e-6) {
+    factors.push(0.5)
+    s *= 2
+  }
+  factors.push(s)
+  return factors.map((f) => `,atempo=${f.toFixed(6)}`).join('')
+}
+
+/**
+ * Base-clip Size/Zoom/Pan as a filter fragment applied AFTER the WxH contain-fit,
+ * matching SequencePreview's CSS `scale(size*(zoomStart..zoomEnd))` about the focal
+ * origin `(0.5+panX, 0.5+panY)`. Returns '' for an untransformed clip so exports
+ * without transforms stay byte-identical.
+ *
+ * Geometry from the CSS transform: output pixel q shows source pixel
+ * `origin + (q-origin)/S`, so a zoom-in (S>=1) is a crop of a W/S × H/S window at
+ * the focal point, scaled back to WxH; a shrink (S<1) scales down and pads black at
+ * the focal position. An animated zoom uses the jitter-free `zoompanStage` with the
+ * focal point encoded in its x/y expressions.
+ *
+ * Returns `{ chain, zoompan }`: `chain` is the filter fragment ('' for identity),
+ * and `zoompan` flags the animated path so the caller can rebuild PTS afterwards —
+ * zoompan emits a timebase that a downstream `fps` filter misreads (frame-count
+ * explosion), so its output needs a frame-index setpts before conforming.
+ * Exported for the export-transform verify harness.
+ */
+export function baseTransformFilter(
+  size: number,
+  zoomStart: number,
+  zoomEnd: number,
+  panX: number,
+  panY: number,
+  W: number,
+  H: number,
+  fps: number,
+  spanSec: number
+): { chain: string; zoompan: boolean } {
+  const fx = 0.5 + panX
+  const fy = 0.5 + panY
+  const s0 = size * Math.max(1, zoomStart)
+  const s1 = size * Math.max(1, zoomEnd)
+  const eps = 1e-3
+  const F = (n: number): string => n.toFixed(6)
+  const animated = Math.abs(zoomEnd - zoomStart) > eps
+  // Static scale S -> crop (zoom-in) or scale+pad (shrink). Identity near 1.
+  const staticX = (S: number): string => {
+    if (Math.abs(S - 1) < eps) return ''
+    if (S > 1) {
+      return (
+        `,crop=iw/${F(S)}:ih/${F(S)}:iw*${F(fx)}*(1-1/${F(S)}):ih*${F(fy)}*(1-1/${F(S)}),` +
+        `scale=${W}:${H}`
+      )
+    }
+    return `,scale=iw*${F(S)}:ih*${F(S)},pad=${W}:${H}:(ow-iw)*${F(fx)}:(oh-ih)*${F(fy)}:color=black`
+  }
+  if (!animated) return { chain: staticX(s0), zoompan: false }
+  // Animated Ken Burns. zoompan needs zoom>=1 throughout; guaranteed when size>=1
+  // (zoomStart/End are >=1). The exotic size<1 + Ken Burns case can't zoom out, so
+  // fall back to a static render at the start scale.
+  if (Math.min(s0, s1) >= 1 - eps) {
+    const frames = Math.max(1, Math.round(spanSec * fps))
+    const z = `${F(s0)}+(${F(s1)}-${F(s0)})*on/${frames}`
+    const x = `iw*${F(fx)}*(1-1/zoom)`
+    const y = `ih*${F(fy)}*(1-1/zoom)`
+    return { chain: ',' + zoompanStage('', z, x, y, W, H, fps, ''), zoompan: true }
+  }
+  return { chain: staticX(s0), zoompan: false }
+}
+
 /** Run ffmpeg with time= progress parsing; resolves on exit 0. */
 function runFfmpegProgress(args: string[], totalDur: number, onProgress?: (pct: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -453,15 +533,32 @@ function runFfmpegProgress(args: string[], totalDur: number, onProgress?: (pct: 
   })
 }
 
-/** Concatenate trimmed segments (scale/pad to a common canvas, with audio) into one temp file. */
+/** Concatenate trimmed segments (scale/pad to a common canvas, with audio) into one
+ *  temp file. The optional per-seg `speed`/`gain`/`size`/`zoom*`/`pan*` fields carry
+ *  doc-mode base-clip transforms into the render; when all are absent (legacy montage
+ *  / flatten) the produced filter graph is byte-identical to before. */
 async function concatSegmentsToFile(
-  segs: { sourcePath: string; in: number; out: number; hasAudio: boolean; isImage?: boolean }[],
+  segs: {
+    sourcePath: string
+    in: number
+    out: number
+    hasAudio: boolean
+    isImage?: boolean
+    speed?: number
+    gain?: number
+    size?: number
+    zoomStart?: number
+    zoomEnd?: number
+    panX?: number
+    panY?: number
+  }[],
   target: { w: number; h: number },
   onProgress?: (pct: number) => void,
   outPath?: string
 ): Promise<string> {
   const W = even(target.w || 1920)
   const H = even(target.h || 1080)
+  const FPS = 30
   const inArgs: string[] = []
   const seg: string[] = []
   const order: string[] = []
@@ -475,21 +572,56 @@ async function concatSegmentsToFile(
     idx++
     const inS = s.isImage ? 0 : Math.max(0, s.in)
     const outS = s.isImage ? Math.max(0.1, s.out - s.in) : Math.max(inS + 0.05, s.out)
-    totalDur += outS - inS
+    const spanSec = outS - inS
+    const speed = typeof s.speed === 'number' && s.speed > 0 ? s.speed : 1
+    const gain = typeof s.gain === 'number' ? s.gain : 1
+    // Output length folds speed (edited length = source span / speed).
+    totalDur += spanSec / speed
+    // Per-clip Size/Zoom/Pan on the WxH fitted frame ('' when identity).
+    const { chain: xform, zoompan } = baseTransformFilter(
+      s.size ?? 1,
+      s.zoomStart ?? 1,
+      s.zoomEnd ?? 1,
+      s.panX ?? 0,
+      s.panY ?? 0,
+      W,
+      H,
+      FPS,
+      spanSec
+    )
+    // Speed + framerate conform. Two shapes:
+    //  - zoompan already resamples to FPS but emits a timebase that a plain `fps`
+    //    filter misreads (frame-count explosion), so rebuild PTS from the frame
+    //    index (safe: zoompan output IS FPS) folding speed in, then conform.
+    //  - static/identity frames keep their source fps + clean PTS, so scale PTS by
+    //    speed (no-op at 1×) and let `fps` conform the source rate, preserving the
+    //    real duration for non-30fps sources.
+    const tail = zoompan
+      ? `,setpts=N/${(FPS * speed).toFixed(6)}/TB,fps=${FPS}`
+      : `${Math.abs(speed - 1) > 1e-3 ? `,setpts=PTS/${speed.toFixed(6)}` : ''},fps=${FPS}`
+    // A spatial transform (crop/scale/zoompan/pad) re-derives the pixel aspect, so
+    // re-assert square pixels — the concat filter rejects segments with mixed SAR.
+    // Only for transformed segs, so the untransformed graph stays byte-identical.
+    const sar = xform !== '' ? ',setsar=1' : ''
     seg.push(
       `[${ci}:v]trim=start=${inS.toFixed(3)}:end=${outS.toFixed(3)},setpts=PTS-STARTPTS,` +
-        `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v${ci}]`
+        `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1` +
+        `${xform}${tail}${sar}[v${ci}]`
     )
     if (s.hasAudio) {
       // Align the audio to the VIDEO timeline FIRST (pad a delayed-audio stream's
       // leading offset) and only THEN trim — otherwise the trim strips the offset
       // and the audio runs ~0.7s ahead of the video (lip-sync drift on phone .mov).
+      // Then per-clip speed (atempo) and volume (gain), both no-ops at their defaults.
+      const vol = Math.abs(gain - 1) > 1e-3 ? `,volume=${Math.max(0, gain).toFixed(6)}` : ''
       seg.push(
-        `[${ci}:a]aresample=async=1:first_pts=0,atrim=start=${inS.toFixed(3)}:end=${outS.toFixed(3)},asetpts=PTS-STARTPTS[a${ci}]`
+        `[${ci}:a]aresample=async=1:first_pts=0,atrim=start=${inS.toFixed(3)}:end=${outS.toFixed(3)},` +
+          `asetpts=PTS-STARTPTS${atempoChain(speed)}${vol}[a${ci}]`
       )
       order.push(`[v${ci}][a${ci}]`)
     } else {
-      inArgs.push('-f', 'lavfi', '-t', (outS - inS).toFixed(3), '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000')
+      // Silent bed matches the (sped) video length so concat stays A/V-aligned.
+      inArgs.push('-f', 'lavfi', '-t', (spanSec / speed).toFixed(3), '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000')
       const ai = idx
       idx++
       order.push(`[v${ci}][${ai}:a]`)
@@ -631,12 +763,27 @@ export async function exportProject(
       seqWave = null // no waveform -> classic edge placement
     }
     const keeps = computeKeepRanges(project, seqWave)
-    const segs = virtualKeepsToClipSegments(project, keeps).map((s) => ({
-      sourcePath: s.sourcePath,
-      in: s.in,
-      out: s.out,
-      hasAudio: s.hasAudio
-    }))
+    // Map each kept segment back to its base clip so per-clip transform/speed/gain
+    // ride into the concat. Undefined for legacy montage clips (no doc transform)
+    // -> identity, so those exports are unchanged.
+    const byId = new Map<string, SequenceClip>(seq.map((c) => [c.id, c]))
+    const segs = virtualKeepsToClipSegments(project, keeps).map((s) => {
+      const c = byId.get(s.clipId)
+      return {
+        sourcePath: s.sourcePath,
+        in: s.in,
+        out: s.out,
+        hasAudio: s.hasAudio,
+        isImage: s.isImage,
+        speed: c?.speed,
+        gain: c?.gain,
+        size: c?.size,
+        zoomStart: c?.zoomStart,
+        zoomEnd: c?.zoomEnd,
+        panX: c?.panX,
+        panY: c?.panY
+      }
+    })
     if (!segs.length) throw new Error('Nothing to export (all montage clips cut)')
     const seqTemp = await concatSegmentsToFile(segs, target, (p) => onProgress?.(Math.round(p * 0.45)))
     const info = await probe(seqTemp)

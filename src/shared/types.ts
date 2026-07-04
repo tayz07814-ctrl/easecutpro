@@ -177,6 +177,22 @@ export interface SequenceClip {
   /** free horizontal position on the timeline (seconds) when magnet is OFF.
    *  Absent = magnet-glued contiguous (laid out back-to-back). */
   laneStart?: number
+  // ---- per-clip transform / speed / volume (doc-mode base clips; Basic tab) ----
+  // Mirror the values SequencePreview applies to the base <video> so export
+  // matches the preview. All optional; absent = identity (untransformed export
+  // stays byte-identical). Populated by documentToProject from the doc clip.
+  /** playback speed (1 = normal); edited length = (sourceOut-sourceIn)/speed. */
+  speed?: number
+  /** linear audio gain (1 = original volume). */
+  gain?: number
+  /** "Size" (ovScale): 1 = fill the frame; <1 shrinks (letterbox), >1 zooms in. */
+  size?: number
+  /** Ken Burns zoom start/end (>=1); animates across the clip. */
+  zoomStart?: number
+  zoomEnd?: number
+  /** pan focal offset from centre, as a fraction (-0.5..0.5). */
+  panX?: number
+  panY?: number
 }
 
 /** A visual segment of the base (A-roll) track. */

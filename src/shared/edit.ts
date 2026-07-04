@@ -407,15 +407,19 @@ export function virtualToClip(project: Project, vt: number): { clip: SequenceCli
 export function virtualKeepsToClipSegments(
   project: Project,
   keeps: { start: number; end: number }[]
-): { sourcePath: string; in: number; out: number; hasAudio: boolean; isImage?: boolean; srcW?: number; srcH?: number; vStart: number }[] {
+): { clipId: string; sourcePath: string; in: number; out: number; hasAudio: boolean; isImage?: boolean; srcW?: number; srcH?: number; vStart: number }[] {
   const spans = baseClipSpans(project)
-  const segs: { sourcePath: string; in: number; out: number; hasAudio: boolean; isImage?: boolean; srcW?: number; srcH?: number; vStart: number }[] = []
+  const segs: { clipId: string; sourcePath: string; in: number; out: number; hasAudio: boolean; isImage?: boolean; srcW?: number; srcH?: number; vStart: number }[] = []
   for (const k of keeps) {
     for (const s of spans) {
       const a = Math.max(k.start, s.vStart)
       const b = Math.min(k.end, s.vEnd)
       if (b - a > 0.02) {
         segs.push({
+          // owning base clip id — lets the exporter map a kept segment back to its
+          // SequenceClip for per-clip transform/speed/gain (a clip split by a cut
+          // yields several segments that all share this id).
+          clipId: s.clip.id,
           sourcePath: s.clip.sourcePath,
           in: a - s.vStart + s.clip.sourceIn,
           out: b - s.vStart + s.clip.sourceIn,

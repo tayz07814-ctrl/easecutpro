@@ -20,6 +20,7 @@ hardening, waveform bars, mobile split/trim/scroll) · then the **mobile CapCut 
 - **Basic tab base-clip controls**: Size/Zoom/Pan/Speed/Volume for main-lane clips, rendered on the
   base `<video>` in SequencePreview (transform + `v.volume` + `v.playbackRate`; speed math is identity
   for un-sped clips). Commands: `setClipGain`, `setClipMetadata`, `setClipText`, `setClipSpeed`.
+  **These now render IDENTICALLY in export** (was the #1 gap — see Known GAPS → DONE).
 - **Text overlays doc-native** (TextPanel add/edit/style/position/delete via engine). **Overlay clips
   play their own audio** + Ken Burns rides the shared play clock (over gaps too). **Transcript word
   highlighter** maps edited↔source through the main lane (single-source guard).
@@ -38,13 +39,20 @@ hardening, waveform bars, mobile split/trim/scroll) · then the **mobile CapCut 
   `+` adds an overlay track; compact zoom on the timeline. MobileApp/MobileTimeline are doc-aware.
 
 ### Known GAPS / next work
-- **EXPORT parity for base-clip transforms/speed/volume** (user asked about this). Preview applies them
-  per-clip on the DOM `<video>`, but export DROPS them: `documentToProject` folds the main lane into
-  `baseSequence` (`SequenceClip` has NO transform/speed/gain fields), and `exportProject` (ffmpeg.ts)
-  PRE-CONCATENATES the montage into one flat file before compositing — no per-clip hook survives. Fix:
-  add per-clip transform/speed/gain to the export path (extend SequenceClip or pass doc clips through)
-  and build the base as per-clip filter chains (trim → zoompan → setpts/atempo → volume) concatenated,
-  instead of concat-then-effect. The OVERLAY path already does per-clip `zoompanStage` — copy that pattern.
+- **EXPORT parity for base-clip transforms/speed/volume** ✅ DONE. `SequenceClip` now carries optional
+  `speed/gain/size/zoomStart/zoomEnd/panX/panY`; `documentToProject` fills them from each main-lane doc
+  clip (metadata `ov*` + `clip.gain/speed`) EXACTLY as SequencePreview reads them; `virtualKeepsToClipSegments`
+  threads the owning `clipId` so the exporter maps each kept segment back to its clip. `concatSegmentsToFile`
+  (the montage pre-concat) now applies per-clip Size/Zoom/Pan + speed + volume as filter chains — the no-effect
+  graph is byte-identical (so legacy montage / flatten / combine are unchanged). Helpers in ffmpeg.ts:
+  `baseTransformFilter` (CSS scale-about-focal-origin → crop for zoom-in / scale+pad for shrink / `zoompanStage`
+  for animated Ken Burns) + `atempoChain`. GOTCHA baked in: a plain `fps` filter AFTER zoompan explodes the
+  frame count (zoompan emits a tiny timebase) — the zoompan path rebuilds PTS from the frame index
+  (`setpts=N/(fps*speed)/TB`) before conforming, and every transformed seg re-asserts `setsar=1` (concat rejects
+  mixed SAR). Verified end-to-end with real ffmpeg (crop+pan, animated KB, shrink+pad, 1.5×/0.5× speed, gain) +
+  `scripts/verify-timeline-exporttransform.ts`. Covers Electron + web export (both fold the doc client-side).
+  Note: main-lane GAPS (magnet-off) are still collapsed by the concat, and an explicit `project.aspectW/H`
+  override isn't applied to the montage canvas — both pre-existing, unchanged.
 - **Mobile honest-STUBS** (toast "coming soon", no backing feature): Remove BG, live animation preview
   (choice is saved on clip.metadata.overlayAnimation), keyframes (◆ buttons), replace, lock, more, fade.
 - **Detection-heuristic tuning** for Fast/Pro cut deliberately NOT changed blind — tuned + tested; needs

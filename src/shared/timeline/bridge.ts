@@ -270,26 +270,41 @@ export function documentToProject(doc: TimelineDocument, base: Project): Project
   const mainId = mainTrackId(doc)
   const mainTrack = mainId ? findTrack(doc, mainId) : undefined
 
+  const mnum = (v: unknown, d: number): number => (typeof v === 'number' ? v : d)
   const baseSequence: SequenceClip[] = (mainTrack?.clips ?? [])
     .filter((c) => !!c.sourcePath)
     .slice()
     .sort((a, b) => a.start - b.start)
-    .map((c) => ({
-      id: c.id,
-      sourcePath: c.sourcePath as string,
-      name: c.name || 'clip',
-      sourceIn: c.sourceIn,
-      sourceOut: c.sourceOut,
-      sourceDuration: c.sourceDuration ?? c.sourceOut,
-      // A detached/muted base clip contributes NO audio (its sound now lives on an
-      // audio lane, folded into extraAudio below) — matches the muted <video> in
-      // the doc preview, so preview and export mix identically.
-      hasAudio: c.hasAudio && !c.muted && !c.audioDetached,
-      srcW: c.srcW ?? 1920,
-      srcH: c.srcH ?? 1080,
-      fps: c.srcFps ?? fps(tb),
-      isImage: c.kind === 'image'
-    }))
+    .map((c) => {
+      const m = c.metadata ?? {}
+      return {
+        id: c.id,
+        sourcePath: c.sourcePath as string,
+        name: c.name || 'clip',
+        sourceIn: c.sourceIn,
+        sourceOut: c.sourceOut,
+        sourceDuration: c.sourceDuration ?? c.sourceOut,
+        // A detached/muted base clip contributes NO audio (its sound now lives on an
+        // audio lane, folded into extraAudio below) — matches the muted <video> in
+        // the doc preview, so preview and export mix identically.
+        hasAudio: c.hasAudio && !c.muted && !c.audioDetached,
+        srcW: c.srcW ?? 1920,
+        srcH: c.srcH ?? 1080,
+        fps: c.srcFps ?? fps(tb),
+        isImage: c.kind === 'image',
+        // Per-clip transform / speed / volume — read EXACTLY the fields
+        // SequencePreview applies to the base <video> (metadata ov*, clip.gain,
+        // clip.speed) so the ffmpeg export renders the same Size/Zoom/Pan/Speed/
+        // Volume the user sees in the preview.
+        speed: typeof c.speed === 'number' && c.speed > 0 ? c.speed : 1,
+        gain: typeof c.gain === 'number' ? c.gain : 1,
+        size: mnum(m.ovScale, 1),
+        zoomStart: mnum(m.ovZoomStart, 1),
+        zoomEnd: mnum(m.ovZoomEnd, 1),
+        panX: mnum(m.ovX, 0),
+        panY: mnum(m.ovY, 0)
+      }
+    })
 
   const overlayTracks = doc.tracks.filter((t) => t.kind === 'video' && !t.isMain && t.clips.length > 0)
   const tracks: LegacyTrack[] = overlayTracks.map((t, i) => ({
