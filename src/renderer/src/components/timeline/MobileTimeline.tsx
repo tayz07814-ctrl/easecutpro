@@ -49,20 +49,27 @@ function MobileClip({
     <div
       className={`ec-mtl-clip kind-${clip.kind} ${selected ? 'sel' : ''}`}
       style={{ left, width, backgroundColor: color }}
-      onClick={() => onSelect(clip.id)}
+      onClick={(e) => {
+        e.stopPropagation() // don't let it bubble to the background (which deselects)
+        onSelect(clip.id)
+      }}
     >
       {isText ? (
         <span className="ec-mtl-clip-label">{clip.name || 'Text'}</span>
       ) : (
         <>
           {(isVideo || isImage) && (
-            <div className={`ec-mtl-film ${frames && frames.length ? '' : 'tex'}`}>
+            // With a waveform below, the filmstrip takes the TOP half (`split`);
+            // without audio it fills the clip.
+            <div className={`ec-mtl-film ${showWave ? 'split' : ''} ${frames && frames.length ? '' : 'tex'}`}>
               {frames && frames.length > 0 && (
                 <Filmstrip frames={frames} srcIn={clip.sourceIn} srcOut={clip.sourceOut} aspect={clip.srcW && clip.srcH ? clip.srcW / clip.srcH : 16 / 9} />
               )}
             </div>
           )}
           {showWave && (
+            // Audio clips: waveform fills. Video clips: waveform in the BOTTOM half,
+            // under the filmstrip (no overlap).
             <div className={`ec-mtl-wave ${isAudio ? 'full' : ''}`}>
               {wf && <WaveformCanvas peaks={clipPeaks(wf, clip.sourceIn, clip.sourceOut)} />}
             </div>
@@ -193,7 +200,14 @@ export default function MobileTimeline(): JSX.Element {
         <button onClick={() => setStoreZoom(px - 24)} title="Zoom out">−</button>
         <button onClick={() => setStoreZoom(px + 24)} title="Zoom in">+</button>
       </div>
-      <div className="ec-mtl-scroll" ref={scrollRef} onScroll={onScroll}>
+      <div
+        className="ec-mtl-scroll"
+        ref={scrollRef}
+        onScroll={onScroll}
+        // Tapping empty space (a click that didn't hit a clip — clips stopPropagation)
+        // drops the selection, so the dock falls back to Import + Cut Lord.
+        onClick={() => engine.clearSelection()}
+      >
         <div className="ec-mtl-content" style={{ width: contentWidth }}>
           {activeDoc.tracks.map((t) => (
             <div className="ec-mtl-lane" key={t.id} style={{ height: t.height, marginLeft: pad, width: laneWidth }}>

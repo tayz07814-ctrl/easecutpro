@@ -29,6 +29,7 @@ export default function MobileApp(): JSX.Element {
   const [sheet, setSheet] = useState<Sheet>(null)
   const [pendingTranscript, setPendingTranscript] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [addMenu, setAddMenu] = useState(false)
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 1800)
@@ -78,6 +79,23 @@ export default function MobileApp(): JSX.Element {
     setPendingTranscript(true)
   }
 
+  // The green + adds an empty lane: overlay/text go ABOVE the main lane (order below
+  // the current minimum), audio goes BELOW it (order above the current maximum).
+  function addLane(kind: 'video' | 'text' | 'audio'): void {
+    const e = getSharedEngine()
+    setAddMenu(false)
+    if (!e || !e.document.tracks.length) return
+    const orders = e.document.tracks.map((t) => t.order)
+    if (kind === 'audio') {
+      e.dispatch(C.addTrack('audio', { name: 'Audio', order: Math.max(...orders) + 1 }))
+    } else if (kind === 'text') {
+      e.dispatch(C.addTrack('text', { name: 'Text', order: Math.min(...orders) - 1 }))
+    } else {
+      const n = e.document.tracks.filter((t) => t.kind === 'video' && !t.isMain).length + 1
+      e.dispatch(C.addTrack('video', { name: `Overlay ${n}`, order: Math.min(...orders) - 1 }))
+    }
+  }
+
   return (
     <div className="m-app">
       {/* Top bar */}
@@ -124,19 +142,28 @@ export default function MobileApp(): JSX.Element {
         </div>
       </div>
 
-      {/* Timeline with a + to add an overlay track */}
+      {/* Timeline with a + dropdown to add an overlay / text / audio track */}
       <div className="m-tl">
-        <button
-          className="m-add-track"
-          title="Add an overlay track"
-          disabled={!hasBase}
-          onClick={() => {
-            const e = getSharedEngine()
-            if (e) e.dispatch(C.addTrack('video', { name: `Overlay ${e.document.tracks.filter((t) => t.kind === 'video' && !t.isMain).length + 1}`, order: Math.min(0, ...e.document.tracks.map((t) => t.order)) - 1 }))
-          }}
-        >
-          <Icon name="plus" size={20} />
-        </button>
+        <div className="m-add-track-wrap">
+          <button
+            className={'m-add-track' + (addMenu ? ' on' : '')}
+            title="Add a track"
+            disabled={!hasBase}
+            onClick={() => setAddMenu((v) => !v)}
+          >
+            <Icon name="plus" size={20} />
+          </button>
+          {addMenu && (
+            <>
+              <div className="m-add-backdrop" onPointerDown={() => setAddMenu(false)} />
+              <div className="m-add-menu" role="menu">
+                <button onClick={() => addLane('video')}><Icon name="video" size={16} /> Overlay track</button>
+                <button onClick={() => addLane('text')}><Icon name="text" size={16} /> Text track</button>
+                <button onClick={() => addLane('audio')}><Icon name="music" size={16} /> Audio track</button>
+              </div>
+            </>
+          )}
+        </div>
         <TimelinePanel mobile />
       </div>
 

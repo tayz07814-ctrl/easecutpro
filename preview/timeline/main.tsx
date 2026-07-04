@@ -78,6 +78,28 @@ function synthPeaks(seed: number, n: number): number[] {
   return out
 }
 const waveCache = new Map<string, number[]>()
+// Synthetic filmstrip frames (coloured SVG tiles) so the preview shows the REAL
+// filmstrip renderer without ffmpeg — used to verify the top-thumbnails /
+// bottom-waveform split on video clips.
+const frameCache = new Map<string, { time: number; url: string }[]>()
+function synthFrames(clip: { kind: string; sourcePath?: string; id: string; sourceIn: number; sourceOut: number }): { time: number; url: string }[] | null {
+  if (clip.kind !== 'video' && clip.kind !== 'image' && clip.kind !== 'gif') return null
+  const key = clip.sourcePath || clip.id
+  let frames = frameCache.get(key)
+  if (!frames) {
+    const seed = hashSeed(key)
+    const n = 12
+    const span = Math.max(0.1, clip.sourceOut - clip.sourceIn)
+    frames = []
+    for (let i = 0; i < n; i++) {
+      const hue = (seed + i * 41) % 360
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='32'><rect width='48' height='32' fill='hsl(${hue},52%,42%)'/><rect x='2' y='2' width='44' height='28' fill='none' stroke='hsl(${hue},60%,72%)'/><text x='24' y='21' font-family='sans-serif' font-size='13' fill='white' text-anchor='middle'>${i + 1}</text></svg>`
+      frames.push({ time: clip.sourceIn + ((i + 0.5) / n) * span, url: 'data:image/svg+xml;base64,' + btoa(svg) })
+    }
+    frameCache.set(key, frames)
+  }
+  return frames
+}
 const demoMedia: MediaData = {
   getWaveform(clip) {
     if (!clip.hasAudio || clip.audioDetached) return null
@@ -89,8 +111,8 @@ const demoMedia: MediaData = {
     }
     return { peaksPerSec: 30, peaks }
   },
-  getFrames() {
-    return null
+  getFrames(clip) {
+    return synthFrames(clip)
   }
 }
 

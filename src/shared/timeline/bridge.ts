@@ -176,11 +176,14 @@ export function projectToDocument(project: Project): TimelineDocument {
     }
   }
 
-  // 4. music lane (below)
+  // 4. music / BGM lane (below the main lane) — ALWAYS present (even empty), like the
+  //    text + overlay lanes above, so every project shows a place to drop background
+  //    music / voiceover. When `music` exists it fills this lane; otherwise it stays
+  //    empty (an empty audio lane folds to nothing in export, so it's harmless).
+  const aId = 'br-music'
+  doc = addTrackToDoc(doc, createTrack({ kind: 'audio', order: order++, id: aId, name: project.music?.name || 'Audio' }))
   if (project.music) {
     const mu = project.music
-    const aId = 'br-music'
-    doc = addTrackToDoc(doc, createTrack({ kind: 'audio', order: order++, id: aId, name: mu.name || 'Music' }))
     const durSec = (mu.endAt ?? mu.startAt + mu.duration) - mu.startAt
     doc = addClipToDoc(
       doc,

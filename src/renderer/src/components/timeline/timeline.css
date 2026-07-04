@@ -594,6 +594,12 @@
 .ec-mtl-film {
   position: absolute;
   inset: 0;
+  overflow: hidden;
+}
+/* When a waveform sits below, the filmstrip takes the TOP ~half (no overlap). */
+.ec-mtl-film.split {
+  bottom: auto;
+  height: 55%;
 }
 .ec-mtl-film.tex {
   background-image: repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.18) 0 1px, transparent 1px 26px);
@@ -603,10 +609,11 @@
   left: 0;
   right: 0;
   bottom: 0;
-  height: 42%;
+  height: 45%;
   background: rgba(0, 0, 0, 0.32);
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
+/* Audio clips are waveform-only, so it fills the whole clip. */
 .ec-mtl-wave.full {
   top: 0;
   height: auto;
