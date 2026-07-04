@@ -733,22 +733,30 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 
 /* ============ Mobile CapCut UI (monochrome, minimalist) ============ */
 /* Transport — monochrome icons: undo/redo · play · keyframes/magnet/snap/delete */
+/* 3-column grid (side | play | side): the play sits in its own centre column so
+   it's PERFECTLY centred AND the side buttons live in separate columns — they can
+   never overlap the play. Buttons scale with viewport width (clamp) so on a narrow
+   phone they shrink instead of overflowing the screen edge. */
 .m-transport {
-  display: flex; align-items: center; gap: 8px; padding: 7px 12px; flex-shrink: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center; gap: clamp(2px, 1.5vw, 8px); padding: 7px clamp(6px, 3vw, 12px); flex-shrink: 0;
   background: linear-gradient(180deg, var(--bg2), var(--bg)); border-top: 1px solid var(--border);
 }
-.m-tp-side { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; }
+.m-tp-side { display: flex; align-items: center; gap: clamp(0px, 0.6vw, 3px); min-width: 0; }
 .m-tp-side.end { justify-content: flex-end; }
 .m-ic {
-  width: 40px; height: 40px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
-  background: none; border: none; color: var(--text); border-radius: 11px; padding: 0;
+  width: clamp(22px, 7.2vw, 38px); height: clamp(22px, 7.2vw, 38px);
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--text); border-radius: 10px; padding: 0;
 }
+.m-ic svg { width: 58%; height: 58%; } /* keep the glyph proportional as the button shrinks */
 .m-ic:disabled { opacity: 0.3; }
 .m-ic:active:not(:disabled) { background: var(--bg3); }
 .m-ic.on { color: var(--accent, #6c8cff); background: rgba(108, 140, 255, 0.14); }
 .m-ic.danger { color: #ff8a9a; }
 .m-play {
-  width: 46px; height: 46px; color: #fff; border-radius: 50%;
+  width: clamp(36px, 10.5vw, 46px); height: clamp(36px, 10.5vw, 46px); min-width: clamp(36px, 10.5vw, 46px);
+  color: #fff; border-radius: 50%;
   background: var(--grad, linear-gradient(135deg, #8b6cff, #5b8cff)); box-shadow: 0 5px 16px rgba(108, 92, 255, 0.42);
 }
 .m-play:active:not(:disabled) { filter: brightness(1.06); background: var(--grad, linear-gradient(135deg, #8b6cff, #5b8cff)); }
