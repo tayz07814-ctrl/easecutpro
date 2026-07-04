@@ -44,6 +44,11 @@ export interface CutLordSettings {
   /** filler detection: when ON, FastCut & ProCut also flag filler words
    *  (like/actually/literally/… — user-editable list) for review. */
   fillers: boolean
+  /** TESTING switch. true (default) = FastCut/ProCut run the Silero VAD silence
+   *  pass during analysis and stage silence chips for review (previous behavior).
+   *  false = decouple: no Silero VAD in the FastCut/ProCut pipeline (incl. ProCut's
+   *  internal pause map); the VAD silence pass runs + applies only at Execute cuts. */
+  vadDuringAnalysis: boolean
 }
 
 export const CUTLORD_PRESETS: Record<CutLordMode, { vad: VadSettings; db: DbSettings; useDb: boolean }> = {
@@ -65,7 +70,8 @@ export const DEFAULT_CUTLORD_SETTINGS: CutLordSettings = {
   vad: { ...CUTLORD_PRESETS.smooth.vad },
   db: { ...CUTLORD_PRESETS.smooth.db },
   useDb: false,
-  fillers: true
+  fillers: true,
+  vadDuringAnalysis: true
 }
 
 /** The values actually in force (preset, or the user's manual overrides).

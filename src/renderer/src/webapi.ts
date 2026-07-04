@@ -191,12 +191,12 @@ const webApi: Window['api'] = {
   },
   suggestCuts: (transcript) => runJob(() => call('/api/suggest-cuts', { transcript })),
   fastCut: (transcript) => runJob(() => call('/api/fast-cut', { transcript })),
-  cutCutPro: async (path, transcript, modelName) => {
+  cutCutPro: async (path, transcript, modelName, runVad) => {
     // Only audio is needed on the PC — upload the small extracted track.
     const sp = isWebMediaId(path)
       ? await ensureAudioUploaded(path, (p) => emitProgress(p, 'Cut Lord is working…', 'transcribe'))
       : path
-    return runJob(() => call('/api/cutcutpro', { path: sp, transcript, modelName }))
+    return runJob(() => call('/api/cutcutpro', { path: sp, transcript, modelName, runVad }))
   },
   cutJudge: async (payload) => {
     const r = (await call('/api/cut-judge', { payload })) as { raw: string }

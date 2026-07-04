@@ -283,9 +283,9 @@ app.whenReady().then(() => {
   })
 
   // ---- CutCutPro: 4-phase premium pipeline (whisper+Parakeet+VAD -> Claude -> OpenAI listen -> EDL) ----
-  ipcMain.handle(IPC.cutCutPro, async (_e, path: string, transcript: Transcript | null, modelName?: string) => {
+  ipcMain.handle(IPC.cutCutPro, async (_e, path: string, transcript: Transcript | null, modelName?: string, runVad?: boolean) => {
     const jobId = randomUUID()
-    return cutCutPro(path, transcript, modelName, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
+    return cutCutPro(path, transcript, modelName, runVad ?? true, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
   })
 
   // ---- Smart Smooth Cut (beta): AI pause judge + debug dump ----

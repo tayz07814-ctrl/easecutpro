@@ -457,8 +457,12 @@ interface AppState {
   runFastCutLord: () => Promise<void>
   /** ProCut: the CutCutPro 4-phase pipeline + VAD silence staging. Review-only. */
   runProCut: () => Promise<void>
-  /** apply everything the user reviewed: delete selected words + cut enabled staged silences. */
-  executeCuts: () => void
+  /** apply everything the user reviewed: delete selected words + cut enabled staged
+   *  silences. Async because the VAD-off switch defers the silence pass to here. */
+  executeCuts: () => Promise<void>
+  /** internal: transcribe with our inbuilt Parakeet (local-whisper fallback) and
+   *  store the transcript — FastCut's auto-transcribe step. */
+  _parakeetTranscribe: () => Promise<boolean>
   /** internal: run the ⚙-profile VAD (+dB) passes and stage the regions. */
   _stageVadSilences: (label: string, extra?: SilenceRegion[]) => Promise<void>
   // ---- AI overlay placement ----
@@ -1432,20 +1436,18 @@ export const useStore = create<AppState>((set, get) => ({
     }),
 
   runFastCutLord: async () => {
-    const s = get()
-    if (!s.project.transcript) {
-      set({ job: { active: false, percent: 0, message: 'Transcribe first — FastCut works on the transcript' } })
-      return
-    }
-    await s.selectFastCuts() // word engine: flags repeats/retakes (review-only)
+    // FastCut auto-transcribes with our inbuilt Parakeet — no manual transcribe step.
+    if (!get().project.transcript && !(await get()._parakeetTranscribe())) return
+    await get().selectFastCuts() // word engine: flags repeats/retakes (review-only)
     // ⚙ filler switch: also flag filler words (user-editable list) for review.
     if (get().cutLordSettings.fillers) {
-      const fillerIds = detectFillerIds(s.project.transcript!, get().fillerWords)
+      const fillerIds = detectFillerIds(get().project.transcript!, get().fillerWords)
       if (fillerIds.length) {
         set((st) => ({ selectedWordIds: new Set([...st.selectedWordIds, ...fillerIds]) }))
       }
     }
-    await get()._stageVadSilences('FastCut')
+    // VAD switch ON: stage silence chips for review. OFF: silence runs at Execute.
+    if (get().cutLordSettings.vadDuringAnalysis) await get()._stageVadSilences('FastCut')
   },
 
   runProCut: async () => {
@@ -1465,7 +1467,10 @@ export const useStore = create<AppState>((set, get) => ({
       } else {
         path = p0.media!.path
       }
-      const res = await window.api.cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined)
+      // ProCut transcribes with its own OpenAI whisper-1 (inside cutCutPro) and pulls
+      // it into the word selector below. VAD switch OFF => runVad=false (word cuts only).
+      const vadOn = get().cutLordSettings.vadDuringAnalysis
+      const res = await window.api.cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, vadOn)
       // REVIEW-ONLY: adopt the transcript if the pipeline made one (ids must
       // match), HIGHLIGHT the words + stage the pause cuts — nothing is applied
       // until the user presses Execute cuts. ⚙ filler switch adds filler words.
@@ -1483,9 +1488,42 @@ export const useStore = create<AppState>((set, get) => ({
             (res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '')
         }
       }))
-      await get()._stageVadSilences('ProCut', res.silenceAdds)
+      // VAD switch ON: stage the AI's pause cuts + the ⚙ VAD silences for review.
+      // OFF: word cuts only here — silence is applied at Execute cuts instead.
+      if (vadOn) await get()._stageVadSilences('ProCut', res.silenceAdds)
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `ProCut failed: ${(e as Error).message}` } })
+    }
+  },
+
+  _parakeetTranscribe: async () => {
+    const p = get().project
+    const hasBase = !!p.media || ((p.baseSequence?.length ?? 0) > 0)
+    if (!hasBase) {
+      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
+      return false
+    }
+    set({ job: { active: true, kind: 'transcribe', percent: 5, message: 'FastCut is transcribing (Parakeet)…' } })
+    try {
+      let path: string
+      if ((p.baseSequence?.length ?? 0) > 0 && !p.media) {
+        const combined = await window.api.combineClips(p.baseSequence!, true)
+        path = combined.path
+      } else {
+        path = p.media!.path
+      }
+      let transcript: Transcript
+      try {
+        transcript = await window.api.transcribe(path, 'local', 'parakeet')
+      } catch {
+        set((s) => ({ job: { ...s.job, message: 'Parakeet model missing — using local whisper…' } }))
+        transcript = await window.api.transcribe(path, 'local', undefined)
+      }
+      set((s) => ({ project: { ...s.project, transcript } }))
+      return true
+    } catch (e) {
+      set({ job: { active: false, percent: 0, message: `Transcription failed: ${(e as Error).message}` } })
+      return false
     }
   },
 
@@ -1530,7 +1568,12 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  executeCuts: () => {
+  executeCuts: async () => {
+    // VAD switch OFF: the Silero VAD silence pass was decoupled from FastCut/ProCut —
+    // run + stage it now, at Execute, so silence is applied here (auto-selected).
+    if (!get().cutLordSettings.vadDuringAnalysis && (!!get().project.media || (get().project.baseSequence?.length ?? 0) > 0)) {
+      await get()._stageVadSilences('Execute')
+    }
     const s = get()
     const enabled = s.stagedSilences.filter((r) => s.stagedSilenceSel.has(r.id))
     const hadWords = s.selectedWordIds.size

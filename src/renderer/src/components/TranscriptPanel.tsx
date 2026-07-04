@@ -170,8 +170,8 @@ function ClutterCleaner(): JSX.Element {
   if (!transcript) {
     return (
       <div className="transcript empty muted">
-        No transcript yet. Click <b>📝 Transcribe</b> in the toolbar, then FastCut / ProCut will
-        highlight fillers, repeats and silences here for you to review.
+        No transcript yet. Click <b>⚡ FastCut</b> or <b>✂ ProCut</b> — they transcribe automatically
+        (FastCut with Parakeet, ProCut with OpenAI) and highlight fillers, repeats and silences here for review.
       </div>
     )
   }
@@ -332,6 +332,17 @@ function CutLordSettingsDrop(): JSX.Element {
 
   return (
     <div className="cl-set-drop">
+      <label className="cl-switch">
+        <input
+          type="checkbox"
+          checked={cfg.vadDuringAnalysis}
+          onChange={(e) => setCfg({ vadDuringAnalysis: e.target.checked })}
+        />
+        <span>
+          Silero VAD during analysis <b>(test)</b> — ON: FastCut/ProCut stage silence chips for review ·
+          OFF: silence is skipped in the engines and runs only when you Execute cuts
+        </span>
+      </label>
       <div className="cl-set-row">
         <button className={'cl-mode' + (cfg.mode === 'smooth' && !cfg.manual ? ' on' : '')} onClick={() => mode('smooth')} disabled={cfg.manual}
           title={`VAD ${p.smooth.vad.threshold * 100}% · trim ${p.smooth.vad.trimCuts}s · pad ${p.smooth.vad.padding}s · min gap ${p.smooth.vad.minGap}s`}>

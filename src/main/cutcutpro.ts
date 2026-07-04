@@ -195,6 +195,9 @@ export async function cutCutPro(
   audioPath: string,
   existing: Transcript | null,
   modelName?: string,
+  /** run the Silero VAD pass for the pause map. false = the VAD testing switch is
+   *  off (silence is handled at Execute instead), so ProCut does word cuts only. */
+  runVad = true,
   onProgress?: (pct: number, msg?: string) => void
 ): Promise<CutCutProResult> {
   const warnings: string[] = []
@@ -218,14 +221,19 @@ export async function cutCutPro(
     phases.push('whisper.cpp')
   }
 
-  // Silero VAD: corroborates pauses / catches non-speech noise floors.
+  // Silero VAD: corroborates pauses / catches non-speech noise floors. Skipped when
+  // the VAD testing switch is off (runVad=false) — silence is handled at Execute.
   let vad: { start: number; end: number }[] = []
-  try {
-    onProgress?.(32, 'Cut Lord is mapping pauses (1/4)…')
-    vad = (await detectSilence(audioPath, { mode: 'vad', noiseDb: -35, minDuration: 0.25 })).map((r) => ({ start: r.start, end: r.end }))
-    phases.push(`vad(${vad.length} regions)`)
-  } catch (e) {
-    warnings.push(`VAD unavailable (${(e as Error).message.split('\n')[0]}) — pauses from word gaps only.`)
+  if (runVad) {
+    try {
+      onProgress?.(32, 'Cut Lord is mapping pauses (1/4)…')
+      vad = (await detectSilence(audioPath, { mode: 'vad', noiseDb: -35, minDuration: 0.25 })).map((r) => ({ start: r.start, end: r.end }))
+      phases.push(`vad(${vad.length} regions)`)
+    } catch (e) {
+      warnings.push(`VAD unavailable (${(e as Error).message.split('\n')[0]}) — pauses from word gaps only.`)
+    }
+  } else {
+    phases.push('vad(skipped: decoupled)')
   }
 
   const map: TimestampMap = buildTimestampMap(transcript.words, vad)

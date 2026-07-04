@@ -411,7 +411,8 @@ app.post('/api/cutcutpro', (req, res) => {
     assertAllowed(userId, p)
     const transcript = (req.body?.transcript ?? null) as Transcript | null
     const modelName = req.body?.modelName as string | undefined
-    const jobId = runJob('transcribe', userId, (op) => cutCutPro(p, transcript, modelName, (pct, msg) => op(pct, msg)))
+    const runVad = req.body?.runVad as boolean | undefined
+    const jobId = runJob('transcribe', userId, (op) => cutCutPro(p, transcript, modelName, runVad ?? true, (pct, msg) => op(pct, msg)))
     res.json({ jobId })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })

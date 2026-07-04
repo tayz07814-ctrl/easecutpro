@@ -1,4 +1,5 @@
 import { useStore } from '../store'
+import { IS_WEB } from '../platform'
 import ProjectTitle from './ProjectTitle'
 
 export default function Toolbar(): JSX.Element {
@@ -30,6 +31,9 @@ export default function Toolbar(): JSX.Element {
 
       <div className="sep" />
 
+      {/* Manual transcribe + model selector: Electron desktop app only. On the web
+          version FastCut / ProCut transcribe automatically (Parakeet / whisper-1). */}
+      {!IS_WEB && (
       <div className="group">
         <button
           className="primary"
@@ -69,6 +73,7 @@ export default function Toolbar(): JSX.Element {
           </select>
         )}
       </div>
+      )}
 
       <div className="sep" />
 

@@ -70,13 +70,9 @@ export default function MobileApp(): JSX.Element {
   }
 
   function onScript(): void {
-    if (project.transcript) {
-      setSheet('transcript')
-      return
-    }
-    if (!hasBase || s.job.active) return
-    s.transcribe()
-    setPendingTranscript(true)
+    // Open the Cut Lord panel; FastCut / ProCut transcribe on demand there
+    // (FastCut with Parakeet, ProCut with OpenAI) — no separate transcribe step.
+    setSheet('transcript')
   }
 
   // The green + adds an empty lane: overlay/text go ABOVE the main lane (order below
