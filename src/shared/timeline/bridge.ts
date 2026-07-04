@@ -68,24 +68,23 @@ export function projectToDocument(project: Project): TimelineDocument {
   let doc = createTimeline(tb)
   let order = 0
 
-  // 1. text lane (top)
+  // 1. text lane (top) — ALWAYS present (even empty) so every project has a place
+  //    to drop captions on both the desktop and mobile timelines.
   const texts = project.texts ?? []
-  if (texts.length) {
-    const tId = 'br-text'
-    doc = addTrackToDoc(doc, createTrack({ kind: 'text', order: order++, id: tId, name: 'Text' }))
-    for (const t of texts) {
-      const clip = createClip({
-        kind: 'text',
-        trackId: tId,
-        start: s2f(t.start),
-        duration: Math.max(1, s2f(t.end - t.start)),
-        name: t.text || 'Text',
-        text: textContentFrom(t)
-      })
-      // legacy text x/y are CENTER fractions; the doc transform stores offset-from-centre.
-      clip.transform = { ...clip.transform, x: { static: t.x - 0.5 }, y: { static: t.y - 0.5 } }
-      doc = addClipToDoc(doc, clip)
-    }
+  const tId = 'br-text'
+  doc = addTrackToDoc(doc, createTrack({ kind: 'text', order: order++, id: tId, name: 'Text' }))
+  for (const t of texts) {
+    const clip = createClip({
+      kind: 'text',
+      trackId: tId,
+      start: s2f(t.start),
+      duration: Math.max(1, s2f(t.end - t.start)),
+      name: t.text || 'Text',
+      text: textContentFrom(t)
+    })
+    // legacy text x/y are CENTER fractions; the doc transform stores offset-from-centre.
+    clip.transform = { ...clip.transform, x: { static: t.x - 0.5 }, y: { static: t.y - 0.5 } }
+    doc = addClipToDoc(doc, clip)
   }
 
   // 2. overlay lanes = project.tracks with index >= 1. Rendered EVEN WHEN EMPTY,

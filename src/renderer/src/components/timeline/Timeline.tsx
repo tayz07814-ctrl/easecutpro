@@ -58,9 +58,21 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [dropActive, setDropActive] = useState(false)
+  const [viewW, setViewW] = useState(1400)
+
+  // Measure the scroll viewport so the lanes always fill it — otherwise zooming out
+  // shrinks the content narrower than the panel and leaves a blank strip on the right.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setViewW(el.clientWidth))
+    ro.observe(el)
+    setViewW(el.clientWidth)
+    return () => ro.disconnect()
+  }, [])
 
   const padFrames = secondsToFrames(30, tb)
-  const laneWidth = Math.max(frameToPx(activeDoc.duration + padFrames, zoom, tb), 1400)
+  const laneWidth = Math.max(frameToPx(activeDoc.duration + padFrames, zoom, tb), viewW - HEADER_W)
   const lanesHeight = activeDoc.tracks.reduce((h, t) => h + t.height, 0)
   const gridHeight = RULER_H + lanesHeight
 

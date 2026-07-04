@@ -13,6 +13,8 @@ import { Filmstrip } from './Filmstrip'
 import { frameToPx, pxToFrame, TRACK_COLOR } from './geometry'
 import { formatTimecode, secondsToFrames, type Timebase } from '@shared/timeline/time'
 import type { Clip } from '@shared/timeline/types'
+import { useStore } from '../../store'
+import { playClock } from '../../clock'
 
 function MobileClip({
   clip,
@@ -21,6 +23,7 @@ function MobileClip({
   color,
   selected,
   onSelect,
+  onTrim,
   media
 }: {
   clip: Clip
@@ -29,6 +32,7 @@ function MobileClip({
   color: string
   selected: boolean
   onSelect: (id: string) => void
+  onTrim: (id: string, edge: 'in' | 'out', e: React.PointerEvent) => void
   media: MediaData | null
 }): JSX.Element {
   const left = frameToPx(clip.start, zoom, tb)
@@ -65,6 +69,8 @@ function MobileClip({
           )}
         </>
       )}
+      <div className="ec-mtl-handle l" onPointerDown={(e) => onTrim(clip.id, 'in', e)} />
+      <div className="ec-mtl-handle r" onPointerDown={(e) => onTrim(clip.id, 'out', e)} />
     </div>
   )
 }
@@ -92,19 +98,67 @@ export default function MobileTimeline(): JSX.Element {
   }, [])
 
   const pad = viewW / 2
+  // While trimming, render the engine's live preview so the edge follows the finger.
+  const activeDoc = interaction.drag?.preview ?? doc
   const laneWidth = Math.max(frameToPx(doc.duration + secondsToFrames(2, tb), zoom, tb), 200)
   const contentWidth = pad * 2 + laneWidth
 
-  // scroll -> playhead. No scrollLeft write-back here (avoids the vibration loop).
+  // Touch-drag a clip edge to trim it (drives the engine's trim; commits on release).
+  const beginTrim = useCallback(
+    (clipId: string, edge: 'in' | 'out', e: React.PointerEvent): void => {
+      e.stopPropagation()
+      e.preventDefault()
+      const el = scrollRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const frameAt = (clientX: number): number =>
+        pxToFrame(clientX - rect.left + el.scrollLeft - pad, engine.sessionState.zoom, engine.document.timebase)
+      engine.beginDrag(edge === 'in' ? 'trimIn' : 'trimOut', clipId, frameAt(e.clientX))
+      const onMove = (ev: PointerEvent): void => engine.updateDrag(frameAt(ev.clientX))
+      const onUp = (): void => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        engine.endDrag()
+      }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+    },
+    [engine, pad]
+  )
+
+  // scroll -> playhead. No scrollLeft write-back here (avoids the vibration loop);
+  // during PLAYBACK the auto-scroll below drives the scroll, so a scroll event then
+  // must NOT feed back into the playhead.
   const onScroll = useCallback((): void => {
     if (programmatic.current) {
       programmatic.current = false
       return
     }
+    if (useStore.getState().playing) return
     const el = scrollRef.current
     if (!el) return
     engine.setPlayhead(Math.max(0, pxToFrame(el.scrollLeft, engine.sessionState.zoom, engine.document.timebase)))
   }, [engine])
+
+  // During PLAYBACK, scroll the timeline so the centre line tracks the playing
+  // frame (CapCut-style). Driven off the shared 60fps play clock for smoothness.
+  const playing = useStore((s) => s.playing)
+  useEffect(() => {
+    if (!playing) return
+    const el = scrollRef.current
+    if (!el) return
+    let raf = 0
+    const loop = (): void => {
+      const target = frameToPx(secondsToFrames(playClock.t, tb), zoom, tb)
+      if (Math.abs(el.scrollLeft - target) > 0.5) {
+        programmatic.current = true
+        el.scrollLeft = target
+      }
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [playing, zoom, tb])
 
   // Re-anchor scroll to the playhead ONLY when zoom changes (keeps the centred
   // frame put across a pinch). Never fires from a plain scroll.
@@ -134,7 +188,7 @@ export default function MobileTimeline(): JSX.Element {
       <div className="ec-mtl-tc">{formatTimecode(session.playhead, tb)}</div>
       <div className="ec-mtl-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="ec-mtl-content" style={{ width: contentWidth }}>
-          {doc.tracks.map((t) => (
+          {activeDoc.tracks.map((t) => (
             <div className="ec-mtl-lane" key={t.id} style={{ height: t.height, marginLeft: pad, width: laneWidth }}>
               {t.clips.map((c) => (
                 <MobileClip
@@ -145,6 +199,7 @@ export default function MobileTimeline(): JSX.Element {
                   color={TRACK_COLOR[t.kind]}
                   selected={interaction.selection.includes(c.id)}
                   onSelect={(id) => engine.select([id])}
+                  onTrim={beginTrim}
                   media={media}
                 />
               ))}

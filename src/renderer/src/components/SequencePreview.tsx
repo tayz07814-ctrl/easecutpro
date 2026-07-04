@@ -237,6 +237,17 @@ export default function SequencePreview(): JSX.Element {
   function coveringIdx(ph: number): number {
     return segsRef.current.findIndex((s) => ph >= s.start && ph < s.start + s.len)
   }
+  // Which segment to DISPLAY when paused: the covering one, or — when the playhead
+  // sits at/past the very end — the LAST clip (show its final frame, not black).
+  // Interior gaps still return -1 (magnet-off dead space stays black).
+  function displayIdx(ph: number): number {
+    const cov = coveringIdx(ph)
+    if (cov >= 0) return cov
+    const ss = segsRef.current
+    if (!ss.length) return -1
+    const last = ss[ss.length - 1]
+    return ph >= last.start + last.len - 1e-4 ? ss.length - 1 : -1
+  }
   // Advance the store playhead from playback; flagged so the external-scrub effect
   // ignores it. Callers only ever pass forward-moving values. Skips no-op writes
   // so the flag can't get stuck set (which would swallow a later real scrub).
@@ -481,18 +492,26 @@ export default function SequencePreview(): JSX.Element {
     if (playing) return
     const v = ref.current
     if (!v) return
-    const i = coveringIdx(playhead)
-    if (i < 0) return // gap (magnet-off dead space): the video is hidden, nothing to seek
+    const i = displayIdx(playhead)
+    if (i < 0) return // interior gap: the video is hidden, nothing to seek
     const seg = segsRef.current[i]
-    const target = seg.sourceStart + Math.max(0, Math.min(seg.len, playhead - seg.start)) * (seg.speed ?? 1)
+    // clamp the edited offset to the clip so a past-the-end playhead lands on the
+    // clip's LAST frame instead of leaving the element black.
+    const editedOff = Math.max(0, Math.min(seg.len, playhead - seg.start))
+    let target = seg.sourceStart + editedOff * (seg.speed ?? 1)
     if (seg.src !== mountedSrcRef.current) {
       pendingSeekRef.current = target
       setMountedSrc(seg.src)
-    } else if (loadedSrcRef.current === seg.src && Math.abs(v.currentTime - target) > 0.05) {
-      v.currentTime = target
+      return
     }
+    if (loadedSrcRef.current !== seg.src) return // not loaded yet — onLoaded seeks it
+    if (isFinite(v.duration) && v.duration > 0) target = Math.min(target, v.duration - 0.05)
+    // Writing the SAME currentTime is a no-op (no 'seeked' → a fresh element stays
+    // BLACK), so nudge a hair when we're already there to force a decode.
+    if (Math.abs(v.currentTime - target) < 0.02) v.currentTime = target > 0.05 ? target - 0.03 : target + 0.03
+    else v.currentTime = target
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, playhead, segsKey])
+  }, [playing, playhead, segsKey, mountedSrc])
 
   // Mute the base <video>'s OWN audio when the active clip's audio was detached (it
   // now plays on its own audio lane via <DocAudio>) or the clip is muted — otherwise
@@ -544,20 +563,26 @@ export default function SequencePreview(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, playhead, segsKey])
 
-  // Cached media (e.g. after CLOSING a project and REOPENING it) can already have
-  // its metadata decoded, so 'loadedmetadata' fired before this fresh <video>'s
-  // handler was attached and the initial seek never ran — leaving a BLACK first
-  // frame until the user scrubs. If metadata is already available for a src we
-  // haven't seeked yet, run the seek now. Guarded so it never double-seeks a src
-  // that onLoadedMetadata already handled.
+  // Guarantee the first frame decodes after a (re)mount — the classic "black
+  // preview" on reopen or after moving the base clip off→onto the main lane. Two
+  // traps: (1) cached media fires 'loadedmetadata' before this handler attaches, so
+  // the seek never runs; (2) the element can REMOUNT with the SAME src (segs went
+  // empty then repopulated), where nothing changes mountedSrc. We reset loadedSrcRef
+  // when the video unmounts (segs empty) so a same-src remount is detected, re-run on
+  // segsKey, and — with onLoadedData/onCanPlay below — seek from whichever load event
+  // fires after the handler is live.
   useEffect(() => {
+    if (segsRef.current.length === 0) {
+      loadedSrcRef.current = '' // video unmounted → force a fresh seek on remount
+      return
+    }
     const v = ref.current
     if (!v) return
     if (v.readyState >= 1 /* HAVE_METADATA */ && loadedSrcRef.current !== mountedSrcRef.current) {
       onLoaded()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mountedSrc])
+  }, [mountedSrc, segsKey])
 
   // Coarse (~4Hz) slider update while inside a kept segment; ignored while a seek
   // settles, and never allowed to write BACKWARD during playback.
@@ -578,6 +603,9 @@ export default function SequencePreview(): JSX.Element {
   function onLoaded(): void {
     const v = ref.current
     if (!v) return
+    // Called from loadedmetadata / loadeddata / canplay + the readyState effect —
+    // idempotent per mount: once we've seeked THIS element, later events skip.
+    if (loadedSrcRef.current === mountedSrcRef.current && pendingSeekRef.current < 0) return
     loadedSrcRef.current = mountedSrcRef.current
     // Seek a freshly-(re)mounted element to the frame under the CURRENT playhead
     // (not just the segment start), so re-dropping / reselecting a source shows the
@@ -638,7 +666,7 @@ export default function SequencePreview(): JSX.Element {
   const aspect = project.aspectW && project.aspectH ? project.aspectW / project.aspectH : srcAspect
   const frame = containRect(stageSize.w, stageSize.h, aspect)
   const shownSrc = mountedSrc || first?.src || ''
-  const inGap = docMode && coveringIdx(t) < 0 // playhead in magnet-off dead space → show black
+  const inGap = docMode && displayIdx(t) < 0 // interior magnet-off dead space → show black (past-end shows last frame)
 
   if (!segs.length) {
     return (
@@ -661,6 +689,8 @@ export default function SequencePreview(): JSX.Element {
               ref={ref}
               src={mediaSrc(shownSrc)}
               onLoadedMetadata={onLoaded}
+              onLoadedData={onLoaded}
+              onCanPlay={onLoaded}
               onTimeUpdate={onTimeUpdate}
               onError={onMediaError}
               onClick={() => setPlaying(!playing)}
@@ -668,11 +698,6 @@ export default function SequencePreview(): JSX.Element {
             />
             {frame.width > 0 && <OverlayLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}
             {frame.width > 0 && <TextLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}
-          </div>
-          <div
-            style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 12, padding: '2px 8px', borderRadius: 6 }}
-          >
-            Montage · {project.baseSequence?.length ?? 0} clips
           </div>
         </div>
       </div>

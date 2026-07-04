@@ -2,6 +2,8 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useStore } from '../store'
 import { useSmoothProgress } from '../useSmoothProgress'
 import { editedDuration } from '@shared/edit'
+import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
+import { findClip, mainTrackId } from '@shared/timeline/model'
 import ProjectTitle from './ProjectTitle'
 import VideoPreview from './VideoPreview'
 import TimelinePanel from './timeline/TimelinePanel'
@@ -30,7 +32,30 @@ export default function MobileApp(): JSX.Element {
   const selSeg = s.selectedSeg
   const selText = s.selectedTextId
   const selSeqClip = s.selectedSeqClipId
-  const hasSelection = !!(selClip || selSeg || selText || selSeqClip)
+
+  // DOCUMENT mode: selection + edits live on the shared engine, not the legacy
+  // store — so the context bar / split / delete must read and drive the engine.
+  const snap = useSharedEngineSnapshot()
+  const docMode = !!project.timeline && !!snap?.doc
+  const docSelId = docMode ? snap!.interaction.selection[0] ?? null : null
+  const docSelClip = docSelId ? findClip(snap!.doc, docSelId)?.clip ?? null : null
+  const docKind: 'clip' | 'text' | 'seg' = docSelClip
+    ? docSelClip.kind === 'text' || docSelClip.kind === 'title'
+      ? 'text'
+      : docSelClip.trackId === mainTrackId(snap!.doc)
+        ? 'seg'
+        : 'clip'
+    : 'seg'
+
+  const hasSelection = docMode ? !!docSelId : !!(selClip || selSeg || selText || selSeqClip)
+  const engineSplit = (): void => {
+    if (docMode) getSharedEngine()?.splitAtPlayhead()
+    else s.hotkeySplit()
+  }
+  const engineDelete = (): void => {
+    if (docMode) getSharedEngine()?.deleteSelection(true)
+    else s.hotkeyDelete()
+  }
   // Delete acts on the selected base segment (kept or already-cut). "Delete all"
   // appears whenever there is removed footage (greyed cuts) to ripple away.
   const delSeg = selSeg
@@ -49,6 +74,7 @@ export default function MobileApp(): JSX.Element {
     s.selectSeg(null)
     s.selectText(null)
     s.selectSeqClip(null)
+    getSharedEngine()?.clearSelection()
   }
 
   function onScript(): void {
@@ -107,6 +133,16 @@ export default function MobileApp(): JSX.Element {
           >
             🧲
           </button>
+          <button
+            className={'m-zoom-b m-magnet' + (snap?.session.settings.snapping ? ' on' : '')}
+            onClick={() => {
+              const e = getSharedEngine()
+              if (e) e.updateSettings({ snapping: !e.sessionState.settings.snapping })
+            }}
+            title={`Snap ${snap?.session.settings.snapping ? 'on' : 'off'}`}
+          >
+            ⊟
+          </button>
           <button className="m-zoom-b" onClick={() => s.setPlayhead(0)} disabled={!hasBase} title="Jump to start">⏮</button>
         </div>
 
@@ -121,6 +157,7 @@ export default function MobileApp(): JSX.Element {
         </div>
 
         <div className="m-del-group">
+          <button className="m-tp" onClick={engineSplit} disabled={!hasBase} title="Split at playhead">✂</button>
           <button className="m-tp" onClick={s.undo} disabled={!s.canUndo} title="Undo">↶</button>
           <button className="m-tp" onClick={s.redo} disabled={!s.canRedo} title="Redo">↷</button>
           {delSeg ? (
@@ -151,10 +188,10 @@ export default function MobileApp(): JSX.Element {
       <div className="m-dock">
         {hasSelection ? (
           <ContextBar
-            kind={selClip ? 'clip' : selText ? 'text' : selSeqClip ? 'seg' : selSeg?.kind === 'cut' ? 'cut' : 'seg'}
-            onSplit={() => s.hotkeySplit()}
+            kind={docMode ? docKind : selClip ? 'clip' : selText ? 'text' : selSeqClip ? 'seg' : selSeg?.kind === 'cut' ? 'cut' : 'seg'}
+            onSplit={engineSplit}
             onDelete={() => {
-              s.hotkeyDelete()
+              engineDelete()
               clearSelection()
             }}
             onRestore={() => {
