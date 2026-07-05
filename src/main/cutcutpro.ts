@@ -93,7 +93,19 @@ async function extractMp3(path: string): Promise<string> {
   return out
 }
 
-type Choices = { choices: { message: { content: string | null } }[] }
+type Choices = { choices?: { message?: { content?: string | null } }[]; error?: { message?: string } }
+
+/** Extract the message text, surfacing the API's own error instead of a
+ *  cryptic `Cannot read properties of undefined` when a call comes back as an
+ *  `{error}` body with no choices (seen with a shadowed/invalid API key). */
+function contentOf(res: unknown, label: string): string {
+  const r = res as Choices
+  if (!r?.choices?.length) {
+    const why = r?.error?.message ? `: ${r.error.message}` : ''
+    throw new Error(`${label} returned no choices${why}`)
+  }
+  return r.choices[0]?.message?.content ?? ''
+}
 
 /**
  * GPT FIRST pass: LISTEN to a compressed copy of the audio + read the indexed
@@ -138,8 +150,9 @@ async function gptFirstPass(
               req.seed = 7
             }
             const res = await openai.chat.completions.create(req as never)
+            const content = contentOf(res, model)
             phases.push(`gpt-listen(${model}${withParams ? '' : ', bare'})`)
-            return (res as Choices).choices[0]?.message?.content ?? ''
+            return content
           } catch (e) {
             lastErr = e as Error
             const msg = lastErr.message || ''
@@ -166,8 +179,9 @@ async function gptFirstPass(
         { role: 'user', content: userText }
       ]
     } as never)
+    const content = contentOf(res, OPENAI_TEXT_MODEL)
     phases.push('gpt-text')
-    return (res as Choices).choices[0]?.message?.content ?? ''
+    return content
   }
 }
 

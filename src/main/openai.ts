@@ -67,12 +67,24 @@ function scanDirForKey(dir: string): string | null {
 
 let cachedKey: string | null | undefined
 
-/** Resolve the OpenAI API key from env or a local *.env / key file (cached). */
+/** Resolve the OpenAI API key from a local *.env / key file, else env (cached).
+
+    The PROJECT FILE wins over process.env: other local tools set a global
+    OPENAI_API_KEY for themselves (found in the wild: LM Studio's `sk-lm-…`
+    user-level variable), and that shadow key silently broke every OpenAI call
+    — ProCut's audio pass included. The file in the app folder is this app's
+    documented configuration; the env var is only a fallback when no file
+    exists. */
 export function resolveOpenAIKey(): string | null {
   if (cachedKey !== undefined) return cachedKey
+  const fileKey = scanKnownDirs()
+  if (fileKey) return (cachedKey = fileKey)
   const fromEnv = process.env.OPENAI_API_KEY?.trim()
   if (fromEnv) return (cachedKey = fromEnv)
+  return (cachedKey = null)
+}
 
+function scanKnownDirs(): string | null {
   const dirs = [
     process.cwd(),
     join(process.cwd(), '..'),
@@ -82,9 +94,9 @@ export function resolveOpenAIKey(): string | null {
   for (const dir of dirs) {
     if (!existsSync(dir)) continue
     const k = scanDirForKey(dir)
-    if (k) return (cachedKey = k)
+    if (k) return k
   }
-  return (cachedKey = null)
+  return null
 }
 
 /** True when an OpenAI key is available (cloud backends usable). */
@@ -98,10 +110,16 @@ export const NO_KEY_MESSAGE =
 
 let client: OpenAI | null = null
 
-/** Get a shared OpenAI client; throws a clear error if no key is configured. */
+/** Get a shared OpenAI client; throws a clear error if no key is configured.
+
+    baseURL is PINNED to the real OpenAI platform: the SDK silently honours an
+    OPENAI_BASE_URL environment variable, and a machine-wide one left behind by
+    a local-LLM tool (found in the wild: LM Studio's http://127.0.0.1:8875 +
+    sk-lm-… key) rerouted every call — whisper, gpt-audio, gpt-5 — to a local
+    server that 200-OKs an {error} body. This app only ever talks to OpenAI. */
 export function getOpenAI(): OpenAI {
   const key = resolveOpenAIKey()
   if (!key) throw new Error(NO_KEY_MESSAGE)
-  if (!client) client = new OpenAI({ apiKey: key })
+  if (!client) client = new OpenAI({ apiKey: key, baseURL: 'https://api.openai.com/v1' })
   return client
 }
