@@ -64,6 +64,122 @@ function seqRatio(a: string[], b: string[]): number {
   if (!a.length || !b.length) return 0
   return (2 * lcsLen(a, b)) / (a.length + b.length)
 }
+
+// ---- clause-level retake detection (keep the LAST take) -------------------
+// Real retakes VARY: the last take adds/reorders words ("definitely"), the first
+// take is padded with stutters/false-starts ("uh uh the the uh because your your
+// uh"). A symmetric similarity punishes exactly that shape, so we ask a directional
+// question: "is the LAST take mostly an ordered subset of the earlier one?"
+// (containment = LCS(earlier,last)/len(last)). When yes, the earlier clause is a
+// discarded take -> cut the WHOLE clause, keep the whole last take. This replaces
+// the old strict ">=0.90 adjacent-segment" rule that missed varied retakes and left
+// only the shared middle words flagged (the broken fragments).
+
+const PAUSE_GAP = 0.35 // s — a gap this long splits a clause even without punctuation
+const CONTAIN_MIN = 0.7 // fraction of the LAST take covered (in order) by the earlier
+const NEARDUP_MIN = 0.82 // symmetric near-duplicate ratio (lowered from 0.90)
+const MIN_CONTENT = 3 // min non-hesitation tokens for a clause to count as a take
+const MAX_RETAKE_GAP = 4 // s — takes farther apart in time aren't a retake
+
+/** A clause = a word-index range [from,to); `content` = normalized non-hesitation tokens. */
+interface Clause {
+  from: number
+  to: number
+  content: string[]
+}
+
+/** Split words into clauses on sentence punctuation OR a pause — so two takes
+ *  separate even when whisper put no period between them. */
+function buildClauses(t: Transcript): Clause[] {
+  const w = t.words
+  const out: Clause[] = []
+  let start = 0
+  const push = (a: number, b: number): void => {
+    if (b <= a) return
+    const content = w.slice(a, b).map((x) => norm(x.text)).filter((s) => s && !HESITATION.has(s))
+    out.push({ from: a, to: b, content })
+  }
+  for (let i = 0; i < w.length; i++) {
+    const endsSentence = /[.!?…]["')\]]*$/.test(w[i].text.trim())
+    const gapAfter = i + 1 < w.length ? w[i + 1].start - w[i].end : 0
+    if (endsSentence || gapAfter >= PAUSE_GAP || i === w.length - 1) {
+      push(start, i + 1)
+      start = i + 1
+    }
+  }
+  return out
+}
+
+/** Is `b` a retake of the earlier `a`? Directional containment OR near-duplicate. */
+function isRetake(a: Clause, b: Clause): boolean {
+  if (a.content.length < MIN_CONTENT || b.content.length < MIN_CONTENT) return false
+  const contain = lcsLen(a.content, b.content) / b.content.length
+  return contain >= CONTAIN_MIN || seqRatio(a.content, b.content) >= NEARDUP_MIN
+}
+
+/** Classify clauses into discarded EARLIER takes (cut whole) and surviving LAST
+ *  takes (protect). Keep-last: across a run of retakes only the final one survives. */
+function retakeClauses(t: Transcript): { clauses: Clause[]; cut: Set<number>; kept: Set<number> } {
+  const clauses = buildClauses(t)
+  const w = t.words
+  const cut = new Set<number>()
+  const kept = new Set<number>()
+  // content clauses only (skip filler-only bridges), in order.
+  const content = clauses.map((c, i) => ({ c, i })).filter((x) => x.c.content.length >= MIN_CONTENT)
+  for (let k = 0; k < content.length - 1; k++) {
+    const A = content[k]
+    const B = content[k + 1]
+    const gap = w[B.c.from].start - w[A.c.to - 1].end // time between the two takes
+    if (gap > MAX_RETAKE_GAP) continue
+    if (isRetake(A.c, B.c)) {
+      cut.add(A.i)
+      for (let j = A.i + 1; j < B.i; j++) cut.add(j) // filler-only clauses go with the discarded take
+      kept.add(B.i) // provisional — cleared below if B is itself an earlier take
+    }
+  }
+  for (const i of cut) kept.delete(i)
+  return { clauses, cut, kept }
+}
+
+/**
+ * Clean an arbitrary flag set (e.g. the FastCut union of the Python engine +
+ * detectRepeatIds) into whole-clause cuts using the retake structure:
+ *  - add every word of a discarded earlier take,
+ *  - expand a mostly-flagged normal clause to the WHOLE clause (turns leftover
+ *    fragments into a clean cut), but never the surviving last take,
+ *  - protect the surviving last take: drop stray fragment flags there, keeping
+ *    only genuine immediate stutters.
+ * Pure. Used to stop broken half-sentence cuts on retake-heavy footage.
+ */
+export function snapRetakeFlags(ids: string[], t: Transcript): string[] {
+  const w = t.words
+  const { clauses, cut, kept } = retakeClauses(t)
+  const flagged = new Set(ids)
+  // 1) whole discarded takes.
+  for (const idx of cut) for (let j = clauses[idx].from; j < clauses[idx].to; j++) flagged.add(w[j].id)
+  // 2) expand a mostly-flagged NORMAL clause to whole (fragment -> clean cut).
+  for (let ci = 0; ci < clauses.length; ci++) {
+    if (cut.has(ci) || kept.has(ci)) continue
+    const c = clauses[ci]
+    const total = c.to - c.from
+    if (total < MIN_CONTENT) continue
+    let f = 0
+    for (let j = c.from; j < c.to; j++) if (flagged.has(w[j].id)) f++
+    if (f / total >= 0.5) for (let j = c.from; j < c.to; j++) flagged.add(w[j].id)
+  }
+  // 3) protect the surviving last take: keep only immediate stutters flagged.
+  for (const ci of kept) {
+    const c = clauses[ci]
+    const stutter = new Set<string>()
+    for (let j = c.from + 1; j < c.to; j++) {
+      const a = norm(w[j].text)
+      if (a && a === norm(w[j - 1].text)) stutter.add(w[j - 1].id)
+    }
+    for (let j = c.from; j < c.to; j++) if (flagged.has(w[j].id) && !stutter.has(w[j].id)) flagged.delete(w[j].id)
+  }
+  return [...flagged]
+}
+
 /**
  * Word ids that are REPEATS / discarded extra takes — PRECISE (won't flag
  * unrelated sentences that merely share a few words):
@@ -127,19 +243,11 @@ export function detectRepeatIds(t: Transcript): string[] {
     if (!hit) i++
   }
 
-  // 3) Restarted / duplicated SENTENCE: a segment that is a clean prefix of, or a
-  //    near-duplicate (>=0.85) of, the very NEXT segment -> the earlier is a
-  //    discarded take. Strict + adjacent-only so unrelated sentences aren't cut.
-  const seg = t.segments.map((s) => s.words.map((w) => norm(w.text)).filter(Boolean))
-  for (let s = 0; s < t.segments.length - 1; s++) {
-    const a = seg[s]
-    const b = seg[s + 1]
-    if (a.length < 4 || b.length < 4) continue
-    const isPrefix = a.length < b.length && a.every((w, k) => w === b[k])
-    if (isPrefix || seqRatio(a, b) >= 0.9) {
-      t.segments[s].words.forEach((w) => ids.add(w.id))
-    }
-  }
+  // 3) Clause-level retakes: cut the WHOLE earlier take, keep the last (see
+  //    retakeClauses — containment + pause segmentation). Replaces the old strict
+  //    >=0.90 adjacent-segment rule that missed varied retakes and left fragments.
+  const { clauses, cut } = retakeClauses(t)
+  for (const idx of cut) for (let j = clauses[idx].from; j < clauses[idx].to; j++) ids.add(words[j].id)
 
   return [...ids]
 }

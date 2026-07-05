@@ -26,7 +26,7 @@ import type { TimelineDocument } from '@shared/timeline/types'
 import { documentToProject } from '@shared/timeline/bridge'
 import { renderTextPng } from './textRender'
 import { TIMELINE_TRACK_COUNT } from '@shared/types'
-import { detectFillerIds, detectRepeatIds, DEFAULT_FILLERS } from '@shared/fillers'
+import { detectFillerIds, detectRepeatIds, snapRetakeFlags, DEFAULT_FILLERS } from '@shared/fillers'
 import { computeKeepRanges, subtractRanges, collapseTime, isMultiBase, stitchMontageWaveform, virtualToClip, baseTimelineDuration } from '@shared/edit'
 import { runSmartSmoothCut, DEFAULT_SMART_CUT_PRESET, SMART_CUT_PRESETS, type SmartCutPresetName } from '@shared/smartsmooth'
 import {
@@ -1712,9 +1712,10 @@ export const useStore = create<AppState>((set, get) => ({
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Cut Lord is thinking…' } })
     try {
       const res = await window.api.fastCut(t)
-      // Union with the deterministic in-text repeat finder, same as Smart Cut, so
-      // an obvious doubled phrase is never missed.
-      const ids = new Set([...res.ids, ...detectRepeatIds(t)])
+      // Union the Python engine with the deterministic repeat finder, then SNAP the
+      // whole set to clause boundaries: retakes become whole-take cuts (no broken
+      // half-sentences) and the surviving last take is protected from stray flags.
+      const ids = new Set(snapRetakeFlags([...res.ids, ...detectRepeatIds(t)], t))
       set({
         selectedWordIds: ids,
         job: {
