@@ -62,7 +62,12 @@ word_cuts use INCLUSIVE word indices from the list. pause_cuts reference pause i
 const GPT_FIRST_SYSTEM = `You are the FIRST PASS of a two-pass professional video cutting pipeline. The pipeline's GOAL is a clean video with ZERO repeated content, where the words that remain still read as one coherent script. You are given an index-anchored VERBATIM transcript (word indices, exact pause markers, fillers and stutters flagged) and you can HEAR the attached audio.
 
 Propose the cuts:
-- REPEATED TAKES / RESTARTS: whenever the speaker says the same sentence or line more than once (retakes, false starts, "let me say that again"), CUT EVERY EARLIER ATTEMPT AND KEEP ONLY THE LAST clean take — opening words of the earlier takes included. Never leave two copies of the same line. Use the audio to tell which take is the clean/final one.
+- REPEATED TAKES / RESTARTS: whenever the speaker says the same sentence or line more than once (retakes, false starts, "let me say that again"), CUT EVERY EARLIER ATTEMPT AND KEEP ONLY THE LAST take — opening words of the earlier takes included. Never leave two copies of the same line. The LAST occurrence in time ALWAYS survives: even when an earlier take sounds just as clean, cut the earlier one and keep the final one.
+- PRODUCTION ARTIFACTS (not meant for the published video — cut them ALL):
+  * slates / count-ins / take markers: "skip 10, hook one", "take three", clapper words, counting down;
+  * the speaker talking ABOUT the recording instead of TO the audience: planning a take out loud ("Okay, I'm gonna walk in. I'm gonna say…"), directing someone off-camera ("can you focus"), reacting to a flubbed take ("ugh, again");
+  * session wrap markers at the very start or end: "okay, that's it", "cut", "that's the take", "we're rolling".
+  BUT keep audience-facing lines that merely sound similar: an outro spoken TO viewers ("that's it for today, thanks for watching") is content, not a wrap marker. Use the audio delivery to tell them apart.
 - STUTTERS & DOUBLE-SPOKEN WORDS: cut the stuttered or duplicated words, leaving one clean instance.
 - DEAD-AIR PAUSES: remove or hard-trim silent pauses; keep only natural sentence rhythm and deliberate dramatic beats.
 Do NOT cut deliberate rhetorical repetition (emphasis). Never remove the ONLY copy of an idea, and never leave a broken half-sentence.
@@ -72,7 +77,8 @@ ${EDL_SHAPE}`
 const CLAUDE_VERIFY_SYSTEM = `You are the SECOND PASS (verification + finalization) of a professional video cutting pipeline. GOAL: after your cuts the kept transcript must contain ZERO repeated sentences/lines and read as one coherent script. You receive the index-anchored VERBATIM transcript map and the FIRST PASS's proposed EDL.
 
 Finalize it:
-- Re-scan the WHOLE transcript for any repeated take or line the first pass missed or only partially cut. For every group of duplicate takes, make sure ONLY THE LAST clean take survives — add or extend word_cuts to delete the earlier copies ENTIRELY (their opening words included).
+- Re-scan the WHOLE transcript for any repeated take or line the first pass missed or only partially cut. For every group of duplicate takes, make sure ONLY THE LAST take survives — the last occurrence IN TIME, never an earlier one, even if the earlier take reads cleaner. Add or extend word_cuts to delete the earlier copies ENTIRELY (their opening words included).
+- Remove any PRODUCTION ARTIFACTS the first pass missed: slates/count-ins/take markers ("skip 10, hook one", "take three"), the speaker talking ABOUT the recording instead of TO the audience (planning a take out loud, directing someone off-camera), and session wrap markers at the very start/end ("okay, that's it", "cut"). Audience-facing outros ("that's it for today, thanks for watching") are content — keep them.
 - Remove any leftover stutters or double-spoken words.
 - Never leave a broken or dangling half-sentence: the words that remain must flow as a script.
 - Keep the first pass's correct cuts; only add/adjust what's needed to reach zero repeats.
@@ -102,7 +108,7 @@ async function gptFirstPass(
   onProgress?: (p: number, m?: string) => void
 ): Promise<string> {
   const openai = getOpenAI()
-  const userText = `${payload}\nListen to the attached audio and return the first-pass EDL (remove repeated takes keeping the LAST, stutters, double words, dead-air pauses).`
+  const userText = `${payload}\nListen to the attached audio and return the first-pass EDL (remove repeated takes keeping the LAST, production artifacts like slates/take-planning/wrap markers, stutters, double words, dead-air pauses).`
   try {
     onProgress?.(45, 'Cut Lord is listening & cutting (2/4)…')
     const mp3 = await extractMp3(audioPath)
