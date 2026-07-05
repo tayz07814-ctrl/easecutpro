@@ -155,6 +155,24 @@ class Config:
     use_classifier: bool = False
     """Trained MiniLM/DistilBERT retake classifier for the hybrid decision."""
 
+    # ---- batched ML verification of the FINAL cuts (engine._verify_cuts) ----
+    # The tiers never run inside the candidate search (a model call per window
+    # pair is minutes of CPU on long transcripts); they only judge the final cuts.
+    verify_corroborate_sim: float = 0.75
+    """Semantic/acoustic similarity at or above this corroborates a cut (small
+    confidence lift; an acoustic match also blocks the semantic veto)."""
+    verify_veto_sim: float = 0.0
+    """A cut whose abandoned attempt reads as a DIFFERENT thought (semantic sim
+    below this) is vetoed — but only when the heuristic was unsure (below
+    verify_veto_max_conf) and the audio doesn't say 'same delivery'. DISABLED
+    (0.0) by default: reworded restarts ("So if they're in stock." -> "So if you
+    see that link…") legitimately read as different thoughts to MiniLM, so a
+    semantic veto deletes true cuts the tuned lexical gates fought to keep.
+    Raise to ~0.3 to experiment with over-cut protection."""
+    verify_veto_max_conf: float = 0.72
+    """Cuts at or above this heuristic confidence are never semantically vetoed
+    (the tuned lexical core has final say on its confident cuts)."""
+
     semantic_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     audio_model: str = "facebook/wav2vec2-base-960h"
     classifier_path: str = ""  # path to a fine-tuned classifier dir (optional)

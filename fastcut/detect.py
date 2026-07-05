@@ -22,9 +22,25 @@ from __future__ import annotations
 from typing import List, Optional
 
 from .config import Config
-from .features import extract_features
+from .features import _marker_before, extract_features
 from .scoring import score_retake
 from .types import Candidate, Cut, Features, WordToken
+
+
+def _next_norm_index(words: List[WordToken]) -> List[Optional[int]]:
+    """nxt[k] = index of the first word at or after k with a non-empty norm.
+    Lets the anchor requirement (shared leading word) be tested BEFORE the full
+    feature extraction — on long transcripts ~96% of (i, j) pairs fail it, and
+    extract_features is ~200µs each, so testing first is the difference between
+    ~10 s and well under a second on a 15-minute transcript."""
+    n = len(words)
+    nxt: List[Optional[int]] = [None] * n
+    last: Optional[int] = None
+    for k in range(n - 1, -1, -1):
+        if words[k].norm:
+            last = k
+        nxt[k] = last
+    return nxt
 
 
 def _classify(f: Features) -> str:
@@ -70,6 +86,7 @@ def find_candidates(
     cands: List[Candidate] = []
     if ctx is None:
         ctx = build_ctx(words)
+    nxt = _next_norm_index(words)
 
     for j in range(1, n):
         best: Optional[Candidate] = None
@@ -79,10 +96,22 @@ def find_candidates(
         # ('anymore.') — that misaligns the cut onto the prior sentence's tail.
         if words[j].ends_sentence:
             continue
+        marker_j = _marker_before(words, j, cfg.markers)
         for i in range(lo, j):
             L = min(cfg.max_phrase, j - i, n - j)
             if L < cfg.min_phrase:
                 continue
+            # Early anchor test (same reject as the post-feature check below,
+            # hoisted before the expensive extract_features call): the attempt
+            # and the restart must share their leading word, unless a correction
+            # marker stands in for the anchor.
+            if marker_j < 1.0:
+                ai, bj = nxt[i], nxt[j]
+                if (
+                    ai is None or ai >= i + L or bj is None or bj >= j + L
+                    or words[ai].norm != words[bj].norm
+                ):
+                    continue
             # If the token immediately before both spans also matches, this is a
             # shifted alignment ("trying..." vs "trying...") that leaves the true
             # restart word ("I'm") inside the cut. Let the earlier i/j pair own it.

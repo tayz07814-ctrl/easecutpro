@@ -9,7 +9,10 @@ so the app can surface "Fast Cut (semantic+audio)" vs "Fast Cut (heuristic)".
 
 from __future__ import annotations
 
+import time
 from typing import List, Optional
+
+import numpy as np
 
 from .config import Config
 from .detect import build_ctx, extend_cuts_back, find_candidates, merge_overlapping_cuts, resolve_cuts
@@ -57,20 +60,97 @@ def run(
     if len(words) < cfg.min_window:
         return [], {"semantic": False, "audio": False, "classifier": False, "words": len(words)}
 
+    t0 = time.time()
     sem, audio, clf, meta = _load_tiers(cfg, audio_path)
 
+    # The ML tiers must NEVER run inside the candidate search: that is one
+    # batch-1 forward pass per window pair — thousands of pairs on a 15-minute
+    # transcript = minutes on CPU. The tuned lexical core searches alone, then
+    # the tiers verify the handful of final cuts in one batched pass below.
     ctx = build_ctx(words)  # shared repeat-count context (built once)
-    candidates = find_candidates(words, cfg, sem=sem, audio=audio, ctx=ctx)
+    candidates = find_candidates(words, cfg, sem=None, audio=None, ctx=ctx)
     apply_hybrid(candidates, words, cfg, classifier=clf)
     candidates = [c for c in candidates if c.final_prob >= cfg.accept_threshold]
     cuts = resolve_cuts(candidates, words, cfg)
-    extend_cuts_back(cuts, words, cfg, sem=sem, audio=audio, ctx=ctx)  # swallow chained restarts
+    extend_cuts_back(cuts, words, cfg, sem=None, audio=None, ctx=ctx)  # swallow chained restarts
     cuts = merge_overlapping_cuts(cuts, words, cfg)                    # tidy overlapping ranges
+    cuts, vetoed = _verify_cuts(cuts, words, cfg, sem=sem, audio=audio)
 
     meta["words"] = len(words)
     meta["candidates"] = len(candidates)
     meta["cuts"] = len(cuts)
+    meta["vetoed"] = vetoed
+    meta["ms"] = int((time.time() - t0) * 1000)
     return cuts, meta
+
+
+def _verify_cuts(
+    cuts: List[Cut], words: List[WordToken], cfg: Config, sem=None, audio=None
+) -> tuple[List[Cut], int]:
+    """Batched ML verification of the final cuts — bounded work: ONE semantic
+    encode call for all cuts plus one acoustic comparison per cut.
+
+    Semantic (MiniLM): compare each abandoned attempt against the take that
+    replaces it. Same thought re-said -> corroborated (small confidence lift).
+    A different thought behind a cut the heuristic was already unsure about ->
+    veto the cut (protects real content from over-cuts).
+    Acoustic (wav2vec2): matching delivery corroborates, and an acoustic match
+    blocks the semantic veto — a reworded retake can read as a "new thought" to
+    MiniLM while sounding like the same line being re-taken.
+    """
+    if not cuts or (sem is None and audio is None):
+        return cuts, 0
+
+    kept_texts: List[str] = []
+    for c in cuts:
+        s, jw = c.word_range
+        span = max(3, jw - s)
+        kept = words[jw : min(len(words), jw + int(1.3 * span) + 3)]
+        kept_texts.append(" ".join(w.word for w in kept))
+
+    sem_sims: List[Optional[float]] = [None] * len(cuts)
+    if sem is not None:
+        try:
+            texts: List[str] = []
+            for c, kt in zip(cuts, kept_texts):
+                texts.extend((c.text, kt))
+            vecs = sem.encode(texts)  # one batched forward pass for every cut
+            for k in range(len(cuts)):
+                sem_sims[k] = float(np.clip(np.dot(vecs[2 * k], vecs[2 * k + 1]), 0.0, 1.0))
+        except Exception:
+            sem_sims = [None] * len(cuts)
+
+    out: List[Cut] = []
+    vetoed = 0
+    for k, c in enumerate(cuts):
+        s, jw = c.word_range
+        audio_sim: Optional[float] = None
+        if audio is not None and jw < len(words):
+            try:
+                b_end = min(len(words), jw + max(3, jw - s))
+                audio_sim = audio.segment_similarity(
+                    words[s].start, words[jw - 1].end, words[jw].start, words[b_end - 1].end
+                )
+            except Exception:
+                audio_sim = None
+
+        acoustic_match = audio_sim is not None and audio_sim >= cfg.verify_corroborate_sim
+        corroborated = acoustic_match or (
+            sem_sims[k] is not None and sem_sims[k] >= cfg.verify_corroborate_sim
+        )
+        contradicted = (
+            sem_sims[k] is not None
+            and sem_sims[k] < cfg.verify_veto_sim
+            and c.confidence < cfg.verify_veto_max_conf
+            and not acoustic_match
+        )
+        if contradicted:
+            vetoed += 1
+            continue
+        if corroborated:
+            c.confidence = min(0.98, c.confidence + 0.08)
+        out.append(c)
+    return out, vetoed
 
 
 def run_json(payload: dict) -> dict:
