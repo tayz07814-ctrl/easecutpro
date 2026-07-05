@@ -21,6 +21,11 @@ import numpy as np
 
 
 class AudioEmbedder:
+    # wav2vec2 model/feature-extractor cache, keyed by (model_name, device). The warm
+    # sidecar (long-lived process) loads the model ONCE and reuses it across calls;
+    # only the per-call audio is loaded fresh. (The one-shot CLI can't share it.)
+    _model_cache: dict = {}
+
     def __init__(self, model_name: str, audio_path: str, device: str = "auto"):
         import torch
         import torchaudio
@@ -31,17 +36,41 @@ class AudioEmbedder:
         self.device = device
         self.torch = torch
 
-        wav, sr = torchaudio.load(audio_path)        # (channels, samples)
-        if wav.shape[0] > 1:                          # downmix to mono
-            wav = wav.mean(dim=0, keepdim=True)
-        if sr != 16000:                               # wav2vec2 expects 16 kHz
+        # Load audio WITHOUT torchaudio.load: torchaudio 2.11 routes .load through
+        # torchcodec (not shipped on Windows), which raises ImportError and silently
+        # disabled this whole tier. We always feed a 16 kHz WAV, read here via scipy;
+        # torchaudio.load stays as a fallback for environments that do have torchcodec.
+        try:
+            from scipy.io import wavfile
+
+            sr, data = wavfile.read(audio_path)
+            arr = np.asarray(data)
+            if arr.dtype.kind in "iu":                 # int PCM -> float [-1, 1]
+                arr = arr.astype(np.float32) / float(np.iinfo(data.dtype).max)
+            else:
+                arr = arr.astype(np.float32)
+            if arr.ndim == 2:                          # (samples, channels) -> mono
+                arr = arr.mean(axis=1)
+            wav = torch.from_numpy(np.ascontiguousarray(arr)).unsqueeze(0)  # (1, samples)
+        except Exception:
+            wav, sr = torchaudio.load(audio_path)      # (channels, samples)
+            if wav.shape[0] > 1:                        # downmix to mono
+                wav = wav.mean(dim=0, keepdim=True)
+        if sr != 16000:                                # wav2vec2 expects 16 kHz
             wav = torchaudio.functional.resample(wav, sr, 16000)
             sr = 16000
         self.sr = sr
-        self.wav = wav.squeeze(0)                      # (samples,)
+        self.wav = wav.squeeze(0)                       # (samples,)
 
-        self.fe = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
-        self.model = Wav2Vec2Model.from_pretrained(model_name).to(device).eval()
+        # Reuse the loaded wav2vec2 model across instances (warm in the sidecar).
+        key = (model_name, device)
+        cached = AudioEmbedder._model_cache.get(key)
+        if cached is None:
+            fe = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
+            model = Wav2Vec2Model.from_pretrained(model_name).to(device).eval()
+            cached = (fe, model)
+            AudioEmbedder._model_cache[key] = cached
+        self.fe, self.model = cached
         self._cache: dict[tuple[int, int], np.ndarray] = {}
 
     @classmethod

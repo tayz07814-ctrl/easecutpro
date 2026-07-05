@@ -30,7 +30,7 @@ import { transcribeParakeet } from '../main/parakeet'
 import { suggestCutsAI } from '../main/ai-cut'
 import { judgeCuts } from '../main/ai-cut-judge'
 import { cutCutPro } from '../main/cutcutpro'
-import { fastCutSuggest } from '../main/fast-cut'
+import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from '../main/fast-cut'
 import { generateOverlayTimeline } from '../main/overlay-rules'
 import { openaiAvailable } from '../main/openai'
 import type { Project, Transcript, TranscribeBackend, OverlayAsset, OverlayRule } from '../shared/types'
@@ -396,7 +396,9 @@ app.post('/api/fast-cut', (req, res) => {
     const userId = uid(req)
     const transcript = req.body?.transcript as Transcript | undefined
     if (!transcript?.words) throw new Error('No transcript provided')
-    const jobId = runJob('transcribe', userId, (op) => fastCutSuggest(transcript, (pct, msg) => op(pct, msg)))
+    // Optional audio path (uploaded by the client) enables the acoustic tier.
+    const audioPath = req.body?.path ? assertAllowed(userId, String(req.body.path)) : undefined
+    const jobId = runJob('transcribe', userId, (op) => fastCutSuggest(transcript, audioPath, (pct, msg) => op(pct, msg)))
     res.json({ jobId })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -760,4 +762,7 @@ server.listen(PORT, HOST, () => {
   for (const ip of lanIps()) console.log(`  network: http://${ip}:${PORT}`)
   console.log(`  work dir: ${WORK}`)
   console.log(`  accounts: ${Object.keys(users).length} · signup ${SIGNUP_CODE ? 'gated by code' : 'OPEN (set EC_SIGNUP_CODE before exposing!)'}`)
+  // Warm up the Fast Cut model sidecar so its tiers stay loaded (best-effort).
+  void startFastcutSidecar()
 })
+for (const sig of ['SIGINT', 'SIGTERM', 'exit'] as const) process.on(sig, stopFastcutSidecar)

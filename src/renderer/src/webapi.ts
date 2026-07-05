@@ -190,7 +190,15 @@ const webApi: Window['api'] = {
     return runJob(() => call('/api/transcribe', { path: sp, backend, modelName }))
   },
   suggestCuts: (transcript) => runJob(() => call('/api/suggest-cuts', { transcript })),
-  fastCut: (transcript) => runJob(() => call('/api/fast-cut', { transcript })),
+  fastCut: async (transcript, audioPath) => {
+    // Upload just the audio (small) so the PC-side engine can run the acoustic tier.
+    const sp = audioPath
+      ? isWebMediaId(audioPath)
+        ? await ensureAudioUploaded(audioPath, (p) => emitProgress(p, 'Fast Cut is working…', 'transcribe'))
+        : audioPath
+      : undefined
+    return runJob(() => call('/api/fast-cut', { transcript, path: sp }))
+  },
   cutCutPro: async (path, transcript, modelName, runVad) => {
     // Only audio is needed on the PC — upload the small extracted track.
     const sp = isWebMediaId(path)

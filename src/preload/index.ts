@@ -38,8 +38,8 @@ const api = {
     ipcRenderer.invoke(IPC.transcribe, path, backend, modelName),
   suggestCuts: (transcript: Transcript): Promise<AICutResult> =>
     ipcRenderer.invoke(IPC.suggestCuts, transcript),
-  fastCut: (transcript: Transcript): Promise<AICutResult> =>
-    ipcRenderer.invoke(IPC.fastCut, transcript),
+  fastCut: (transcript: Transcript, audioPath?: string): Promise<AICutResult> =>
+    ipcRenderer.invoke(IPC.fastCut, transcript, audioPath),
   /** CutCutPro: 4-phase pipeline (whisper+Parakeet+VAD -> Claude -> OpenAI listen -> EDL). */
   cutCutPro: (path: string, transcript: Transcript | null, modelName?: string, runVad?: boolean): Promise<CutCutProResult> =>
     ipcRenderer.invoke(IPC.cutCutPro, path, transcript, modelName, runVad),

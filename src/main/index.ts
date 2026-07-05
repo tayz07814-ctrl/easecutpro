@@ -14,7 +14,7 @@ import { transcribeParakeet } from './parakeet'
 import { suggestCutsAI } from './ai-cut'
 import { judgeCuts } from './ai-cut-judge'
 import { cutCutPro } from './cutcutpro'
-import { fastCutSuggest } from './fast-cut'
+import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from './fast-cut'
 import { generateOverlayTimeline } from './overlay-rules'
 import { openaiAvailable } from './openai'
 import {
@@ -143,6 +143,9 @@ function emitProgress(
 app.whenReady().then(() => {
   // Shared with the MCP server so Claude's edits show up in the editor.
   setProjectsDir(defaultProjectsRoot())
+
+  // Warm up the Fast Cut model sidecar so its tiers stay loaded (best-effort).
+  void startFastcutSidecar()
 
   // Stream local media files with proper HTTP Range support so the <video>
   // element can SEEK (skip cuts, scrub) without resetting to the start.
@@ -277,9 +280,9 @@ app.whenReady().then(() => {
   })
 
   // ---- Fast Cut (local Python heuristic+ML engine, no API) ----
-  ipcMain.handle(IPC.fastCut, async (_e, transcript: Transcript) => {
+  ipcMain.handle(IPC.fastCut, async (_e, transcript: Transcript, audioPath?: string) => {
     const jobId = randomUUID()
-    return fastCutSuggest(transcript, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
+    return fastCutSuggest(transcript, audioPath, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
   })
 
   // ---- CutCutPro: 4-phase premium pipeline (whisper+Parakeet+VAD -> Claude -> OpenAI listen -> EDL) ----
@@ -394,3 +397,4 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+app.on('will-quit', stopFastcutSidecar)

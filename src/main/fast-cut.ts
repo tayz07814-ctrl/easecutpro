@@ -9,14 +9,92 @@
 
 import { spawn } from 'child_process'
 import { existsSync } from 'fs'
+import { unlink } from 'fs/promises'
+import { tmpdir } from 'os'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import http from 'http'
+import { FFMPEG } from './binaries'
 import type { Transcript, AICut, AICutResult } from '../shared/types'
+
+/** Extract a 16 kHz mono WAV — what the engine's acoustic tier (fastcut/audio.py)
+ *  reads via scipy. Source media can be any format; the tier only wants a wav. */
+function extractWav16k(input: string): Promise<string> {
+  const out = join(tmpdir(), `fc-${randomUUID()}.wav`)
+  return new Promise((resolve, reject) => {
+    const p = spawn(FFMPEG, ['-y', '-i', input, '-vn', '-ac', '1', '-ar', '16000', out])
+    p.on('error', reject)
+    p.on('close', (c) => (c === 0 ? resolve(out) : reject(new Error('Fast Cut: wav extract failed'))))
+  })
+}
 
 type ProgressFn = (pct: number, msg?: string) => void
 
 const SIDECAR_HOST = process.env.FASTCUT_HOST || '127.0.0.1'
 const SIDECAR_PORT = Number(process.env.FASTCUT_PORT || 8799)
+
+// ---- warm sidecar lifecycle -------------------------------------------------
+// The one-shot CLI reloads the model tiers on every call (seconds on CPU). We
+// launch the FastAPI sidecar once on boot so the models stay warm; every Fast Cut
+// then hits it. Best-effort: if Python/deps are missing it just exits and Fast Cut
+// falls back to the CLI (heuristic).
+let sidecarProc: ReturnType<typeof spawn> | null = null
+
+/** GET /health on the sidecar; true if it answers. */
+function sidecarHealthy(timeoutMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: SIDECAR_HOST, port: SIDECAR_PORT, path: '/health', method: 'GET', timeout: timeoutMs },
+      (res) => {
+        res.resume()
+        resolve((res.statusCode ?? 500) < 500)
+      }
+    )
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(false)
+    })
+    req.end()
+  })
+}
+
+/** Launch the warm sidecar so the model tiers stay loaded. No-op if one is already
+ *  up, or if Python/deps are missing. Safe to call on app/server boot. */
+export async function startFastcutSidecar(): Promise<void> {
+  if (sidecarProc) return
+  if (await sidecarHealthy()) return // already running (started elsewhere)
+  try {
+    const root = repoRoot()
+    const proc = spawn(pythonPath(root), ['-m', 'fastcut.server'], {
+      cwd: root,
+      env: { ...process.env, FASTCUT_PORT: String(SIDECAR_PORT), FASTCUT_HOST: SIDECAR_HOST },
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    proc.on('error', () => {
+      if (sidecarProc === proc) sidecarProc = null
+    })
+    proc.on('exit', () => {
+      if (sidecarProc === proc) sidecarProc = null
+    })
+    sidecarProc = proc
+  } catch {
+    sidecarProc = null
+  }
+}
+
+/** Stop the sidecar we spawned (on app/server shutdown). */
+export function stopFastcutSidecar(): void {
+  if (sidecarProc) {
+    try {
+      sidecarProc.kill()
+    } catch {
+      /* ignore */
+    }
+    sidecarProc = null
+  }
+}
 
 /** Locate the repo root that contains the `fastcut/` package. */
 function repoRoot(): string {
@@ -114,57 +192,77 @@ function mapKind(k?: string): AICut['kind'] {
 /** Detect retakes/repetitions with the local engine. Same contract as suggestCutsAI. */
 export async function fastCutSuggest(
   transcript: Transcript,
+  /** source audio for the acoustic tier (wav2vec2 self-similarity). When set the
+   *  engine also runs the audio tier; absent = text/semantic tiers only. */
+  audioPath?: string,
   onProgress?: ProgressFn
 ): Promise<AICutResult> {
   const words = transcript.words.filter((w) => !w.deleted)
   if (words.length < 3) return { ids: [], cuts: [] }
 
   onProgress?.(8, 'Fast Cut analyzing transcript…')
-  const payload = {
-    words: words.map((w) => ({
-      word: w.text,
-      start: w.start,
-      end: w.end,
-      conf: typeof w.conf === 'number'
-        ? w.conf
-        : typeof w.confidence === 'number'
-          ? w.confidence
-          : 1,
-    })),
-    verbose: true,
+  // Extract a 16 kHz WAV for the acoustic tier (best-effort; the text/semantic tiers
+  // run regardless of audio). Removed in the finally below.
+  let wavPath: string | undefined
+  if (audioPath) {
+    try {
+      wavPath = await extractWav16k(audioPath)
+    } catch {
+      wavPath = undefined
+    }
   }
+  try {
+    const payload = {
+      words: words.map((w) => ({
+        word: w.text,
+        start: w.start,
+        end: w.end,
+        conf: typeof w.conf === 'number' ? w.conf : typeof w.confidence === 'number' ? w.confidence : 1,
+      })),
+      // Acoustic tier: the engine embeds spans with wav2vec2 and corroborates retakes
+      // acoustically. Tiers degrade gracefully (heuristic) if the models/deps/audio are
+      // missing, so this is always safe to request.
+      audio_path: wavPath || undefined,
+      config: { use_audio: !!wavPath, use_semantic: true },
+      verbose: true,
+    }
 
-  // Warm sidecar (GPU tiers) -> else spawn the CLI (heuristic core).
-  let result = await trySidecar(payload)
-  if (!result) {
-    const root = repoRoot()
-    result = await runCli(pythonPath(root), root, payload)
+    // Warm sidecar (GPU tiers) -> else spawn the CLI (heuristic core).
+    let result = await trySidecar(payload)
+    if (!result) {
+      const root = repoRoot()
+      result = await runCli(pythonPath(root), root, payload)
+    }
+    onProgress?.(85, 'Mapping cuts to words…')
+
+    const EPS = 1e-3
+    const cuts: AICut[] = []
+    const allIds = new Set<string>()
+    for (const cut of (result.cuts ?? []) as Array<{ cut_start: number; cut_end: number; kind?: string; text?: string }>) {
+      // A word belongs to the cut if it STARTS inside [cut_start, cut_end). The
+      // surviving take's first word starts exactly at cut_end, so it's excluded.
+      const inCut = words.filter((w) => w.start >= cut.cut_start - EPS && w.start < cut.cut_end - EPS)
+      const ids = inCut.map((w) => w.id).filter((id) => !allIds.has(id))
+      if (ids.length === 0) continue
+      ids.forEach((id) => allIds.add(id))
+      cuts.push({
+        ids,
+        kind: mapKind(cut.kind),
+        reason: cut.kind || 'retake',
+        text: cut.text || inCut.map((w) => w.text).join(' '),
+      })
+    }
+
+    const tiers =
+      [result.meta?.semantic ? 'semantic' : '', result.meta?.audio ? 'audio' : ''].filter(Boolean).join('+') ||
+      'heuristic'
+    onProgress?.(100, allIds.size
+      ? `Fast Cut (${tiers}) flagged ${allIds.size} word(s) — review, then Delete`
+      : 'Fast Cut found nothing to cut')
+    return { ids: [...allIds], cuts }
+  } finally {
+    if (wavPath) await unlink(wavPath).catch(() => undefined)
   }
-  onProgress?.(85, 'Mapping cuts to words…')
-
-  const EPS = 1e-3
-  const cuts: AICut[] = []
-  const allIds = new Set<string>()
-  for (const cut of (result.cuts ?? []) as Array<{ cut_start: number; cut_end: number; kind?: string; text?: string }>) {
-    // A word belongs to the cut if it STARTS inside [cut_start, cut_end). The
-    // surviving take's first word starts exactly at cut_end, so it's excluded.
-    const inCut = words.filter((w) => w.start >= cut.cut_start - EPS && w.start < cut.cut_end - EPS)
-    const ids = inCut.map((w) => w.id).filter((id) => !allIds.has(id))
-    if (ids.length === 0) continue
-    ids.forEach((id) => allIds.add(id))
-    cuts.push({
-      ids,
-      kind: mapKind(cut.kind),
-      reason: cut.kind || 'retake',
-      text: cut.text || inCut.map((w) => w.text).join(' '),
-    })
-  }
-
-  const tiers = result.meta?.semantic ? 'semantic' : 'heuristic'
-  onProgress?.(100, allIds.size
-    ? `Fast Cut (${tiers}) flagged ${allIds.size} word(s) — review, then Delete`
-    : 'Fast Cut found nothing to cut')
-  return { ids: [...allIds], cuts }
 }
 
 /** Is the engine reachable at all? (sidecar up, or a python + package present.) */
