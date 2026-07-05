@@ -123,10 +123,14 @@ def extract_features(
     # ---- prefix overlap: restarts repeat the opening words ----
     pre = prefix_overlap(a_tok, b_tok)
     f.prefix_overlap = pre / max(1, min(len(a_tok), len(b_tok)))
+    f.prefix_len = pre
 
     # ---- how often the shared OPENING phrase recurs in the whole transcript ----
     # A long opening that appears many times marks a heavily re-taken line.
-    if ctx is not None and pre >= cfg.retake_repeat_minlen:
+    # Counted from 3 shared words (scoring demands a much higher count + real
+    # similarity before a 3-word opening may fire the repeat rule — see
+    # scoring.repeat_rule_fires).
+    if ctx is not None and pre >= 3:
         f.prefix_repeat_count = _count_occurrences(ctx["tokens"], tuple(a_tok[:pre]), ctx["cache"])
     else:
         f.prefix_repeat_count = 1
@@ -167,6 +171,25 @@ def extract_features(
     later_end = min(len(words), j + int(1.7 * span) + 3)
     later_full = [w.norm for w in words[j:later_end] if w.norm]
     f.align_sim = seq_ratio(earlier_full, later_full)
+    # The 1.7x window above recovers LONGER kept takes, but it also DILUTES the
+    # ratio when the kept take is the SAME length (16 matching tokens vs a
+    # 30-token window caps out at ~0.7) — that dilution hid a verbatim doubled
+    # sentence in the 2026-07-05 bed-skit run. Also compare length-matched, and
+    # at char level: ASR garble re-spells retaken words ('toner'->'turn or',
+    # 'kojic'->'cook'/'cojac'), which token matching reads as different words
+    # while char-level Levenshtein still sees the same line (small discount so
+    # exact token matches keep ranking above garble matches).
+    if earlier_full:
+        lf_trim = later_full[: len(earlier_full)]
+        f.align_sim = max(
+            f.align_sim,
+            seq_ratio(earlier_full, lf_trim),
+            0.97 * lev_ratio(" ".join(earlier_full), " ".join(lf_trim)),
+            # Space-stripped: ASR garble also SPLITS/JOINS words ('toner' ->
+            # 'turn or'), which even char-level matching over spaced text
+            # penalizes twice. Concatenation makes the split invisible.
+            0.97 * lev_ratio("".join(earlier_full), "".join(lf_trim)),
+        )
     f.combined_sim = max(f.combined_sim, f.align_sim)
 
     # ---- tail divergence: after the shared prefix, are the continuations the
@@ -188,6 +211,20 @@ def extract_features(
             x, y = a_tail[0], b_tail[0]
             if len(x) >= 3 and len(y) >= 3 and (x.startswith(y) or y.startswith(x)):
                 lex_tail = max(lex_tail, 0.9)
+            elif len(x) >= 5 and len(y) >= 5 and lev_ratio(x, y) >= 0.66:
+                # GARBLED same word: ASR re-spells the retaken word two ways
+                # ('transitionic' vs 'transemic' for tranexamic). Two long words
+                # 2/3 char-identical at the divergence point are the same word
+                # misheard, not two thoughts. Short/different words stay safe:
+                # lev('strengthen','restore')≈0.42, lev('year','summer')<0.4.
+                lex_tail = max(lex_tail, 0.9)
+        elif not a_tail and b_tail and pre >= 4:
+            # The earlier attempt is a strict PREFIX of the restart: the speaker
+            # said the same >=4-word opening and stopped ("...used to be pitch"
+            # -> "...used to be pitch black"). That is the definition of a false
+            # start; an empty tail must read as corroborated, not divergent.
+            # pre >= 4 keeps 2-3 word connective openings ("and then") safe.
+            lex_tail = max(lex_tail, 0.9)
         if use_sem and (a_tail or b_tail):
             sem_tail = sem.similarity(" ".join(a_tail), " ".join(b_tail))
             f.tail_sem = max(lex_tail, sem_tail)

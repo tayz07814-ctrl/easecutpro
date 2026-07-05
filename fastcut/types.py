@@ -95,6 +95,7 @@ class Features:
     conf_diff: float = 0.0        # later - earlier
     audio_sim: float = 0.0
     prefix_repeat_count: int = 1  # how many times the shared opening appears overall
+    prefix_len: int = 0           # shared leading tokens (raw count, not fraction)
     final_word_swap: float = 0.0  # same sentence, only the ending swapped (tails <=2 words)
     connector_restart: float = 0.0  # short attempt restarted w/ same opening + longer re-elaboration
     earlier_ends_sentence: float = 0.0
@@ -124,6 +125,7 @@ class Candidate:
     kind: str = "retake"   # retake | repetition | false_start | partial_restart
     ml_prob: Optional[float] = None
     final_prob: float = 0.0
+    probe: bool = False    # gate-rejected garble shape kept ONLY for semantic rescue
 
 
 @dataclass

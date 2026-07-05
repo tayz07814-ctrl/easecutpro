@@ -76,8 +76,16 @@ def run(
     ctx = build_ctx(words)  # shared repeat-count context (built once)
     all_candidates = find_candidates(words, cfg, sem=None, audio=None, ctx=ctx)
     apply_hybrid(all_candidates, words, cfg, classifier=clf)
-    candidates = [c for c in all_candidates if c.final_prob >= cfg.accept_threshold]
+    meta["rescued"] = _semantic_rescue(all_candidates, words, cfg, sem)
+    # probes are rescue-only shapes: never cut unless rescue promoted them
+    # (rescue clears the probe flag when it does)
+    candidates = [c for c in all_candidates if c.final_prob >= cfg.accept_threshold and not c.probe]
     cuts = resolve_cuts(candidates, words, cfg)
+    # Merge BEFORE extending: backward extension compares earlier chunks against
+    # each cut's kept take (word_range[1]) — pre-merge that can be a garbled
+    # intermediate fragment, post-merge it is the true final survivor. Then
+    # merge again, because extension can grow cuts into each other.
+    cuts = merge_overlapping_cuts(cuts, words, cfg)
     extend_cuts_back(cuts, words, cfg, sem=None, audio=None, ctx=ctx)  # swallow chained restarts
     cuts = merge_overlapping_cuts(cuts, words, cfg)                    # tidy overlapping ranges
     cuts, vetoed, verify_log = _verify_cuts(cuts, words, cfg, sem=sem, audio=audio)
@@ -149,6 +157,59 @@ def _write_debug_dump(
             json.dump(dump, fh, ensure_ascii=False, indent=1)
     except Exception:
         pass
+
+
+def _semantic_rescue(candidates: List, words: List[WordToken], cfg: Config, sem) -> int:
+    """Second chance for BORDERLINE candidates, batched (one encode call).
+
+    ASR garble floors lexical similarity on true retakes ('turn or'/'toner',
+    'transitionic'/'transemic') — exactly where MiniLM still reads the two spans
+    as the same line. A candidate in [semantic_rescue_floor, accept_threshold)
+    whose full spans agree semantically (>= semantic_rescue_sim) gets the sem-
+    blended similarity and a corroboration floor, then is re-scored through the
+    normal tuned scorer. Distinct thoughts sharing an opening score ~0.6-0.7
+    semantically and are NOT rescued (strengthen/restore stays kept)."""
+    from .scoring import score_retake as _score
+
+    if sem is None:
+        return 0
+    pend = [
+        c for c in candidates
+        if c.final_prob < cfg.accept_threshold
+        and (
+            c.final_prob >= cfg.semantic_rescue_floor
+            or (c.probe and c.final_prob >= 0.15)
+        )
+    ]
+    # bounded: strongest 40 borderliners — one modest batched encode, always
+    pend = sorted(pend, key=lambda c: c.final_prob, reverse=True)[:40]
+    if not pend:
+        return 0
+    texts: List[str] = []
+    for c in pend:
+        span = c.j - c.i
+        texts.append(" ".join(w.word for w in words[c.i : c.j]))
+        texts.append(" ".join(w.word for w in words[c.j : min(len(words), c.j + max(3, min(span, 24)))]))
+    try:
+        vecs = sem.encode(texts)  # one batched forward pass
+    except Exception:
+        return 0
+    rescued = 0
+    for k, c in enumerate(pend):
+        s = float(np.clip(np.dot(vecs[2 * k], vecs[2 * k + 1]), 0.0, 1.0))
+        c.feats.sem_sim = s
+        if s < cfg.semantic_rescue_sim:
+            continue
+        f = c.feats
+        f.combined_sim = max(f.combined_sim, 0.5 * s + 0.3 * f.seq_sim + 0.2 * f.lev_sim)
+        f.tail_sem = max(f.tail_sem, cfg.retake_repeat_floor)
+        p = _score(f, cfg)
+        if p > c.final_prob:
+            c.prob = c.final_prob = p
+            if p >= cfg.accept_threshold:
+                c.probe = False  # promoted to a real candidate
+                rescued += 1
+    return rescued
 
 
 def _verify_cuts(

@@ -23,8 +23,15 @@ from typing import List, Optional
 
 from .config import Config
 from .features import _marker_before, extract_features
-from .scoring import score_retake
+from .scoring import repeat_rule_fires, score_retake
 from .types import Candidate, Cut, Features, WordToken
+
+
+def _anchor_markers(cfg: Config) -> tuple:
+    """Markers allowed to STAND IN for the shared-leading-word anchor. Weak
+    markers ('no', 'again') are ordinary content words too often — they keep
+    their scoring bonus but cannot anchor a candidate by themselves."""
+    return tuple(m for m in cfg.markers if m not in cfg.weak_markers)
 
 
 def _next_norm_index(words: List[WordToken]) -> List[Optional[int]]:
@@ -87,16 +94,20 @@ def find_candidates(
     if ctx is None:
         ctx = build_ctx(words)
     nxt = _next_norm_index(words)
+    anchor_markers = _anchor_markers(cfg)
 
     for j in range(1, n):
         best: Optional[Candidate] = None
+        second: Optional[Candidate] = None
+        long_span: Optional[Candidate] = None  # widest borderline pair (garbled chains)
+        probe: Optional[Candidate] = None      # gate-rejected garble shape, for semantic rescue
         lo = max(0, j - cfg.max_lookback)
         # A restart begins a NEW sentence; it never anchors on the previous
         # sentence's trailing word. Skip j whose first word ends a sentence
         # ('anymore.') — that misaligns the cut onto the prior sentence's tail.
         if words[j].ends_sentence:
             continue
-        marker_j = _marker_before(words, j, cfg.markers)
+        marker_j = _marker_before(words, j, anchor_markers)
         for i in range(lo, j):
             L = min(cfg.max_phrase, j - i, n - j)
             if L < cfg.min_phrase:
@@ -135,30 +146,23 @@ def find_candidates(
             # — a shifted sub-window with high mid-sequence overlap but mismatched
             # first words (e.g. comparing '...help strengthen' against
             # 'But most importantly...'). These misalignments are the main source
-            # of over-cutting. A correction marker can stand in for the anchor.
-            if f.prefix_overlap <= 0.0 and f.marker_before < 1.0:
+            # of over-cutting. A non-weak correction marker can stand in for
+            # the anchor (weak markers like 'no' are ordinary content words).
+            if f.prefix_overlap <= 0.0 and marker_j < 1.0:
                 continue
 
             # Cheap reject: nothing lexical, no marker — cannot be a retake.
             if f.combined_sim < 0.34 and f.prefix_overlap < 0.5 and f.marker_before < 1.0:
                 continue
 
-            if (
-                f.earlier_incomplete < 0.25
-                and f.tail_sem < 0.45
-                and f.prefix_repeat_count < cfg.retake_repeat_count
-                and f.combined_sim < 0.88
-                and not _strong_prefix_retake(f)
-                and not _connector_restart(f)
-            ):
-                continue
-
-            # A short completed question/statement can share a word with a later
-            # sentence ("use it?" ... "safe to use.") without being a retake.
-            # Require very strong evidence before cutting sentence-final spans.
+            # Sentence-final guard FIRST: a short completed question/statement
+            # can share a word with a later sentence ("use it?" ... "safe to
+            # use.") without being a retake. Nothing rejected here is ever
+            # revived — not even by semantic rescue (strengthen/restore lives
+            # behind this guard).
             if (
                 f.earlier_ends_sentence >= 1.0
-                and f.prefix_repeat_count < cfg.retake_repeat_count
+                and not repeat_rule_fires(f, cfg)
                 and f.tail_sem < 0.75
                 and f.combined_sim < 0.92
                 and not _strong_prefix_retake(f)
@@ -166,13 +170,69 @@ def find_candidates(
             ):
                 continue
 
-            p = score_retake(f, cfg)
-            if best is None or p > best.prob:
-                best = Candidate(i=i, j=j, L=L, prob=p, feats=f)
+            if (
+                f.earlier_incomplete < 0.25
+                and f.tail_sem < 0.45
+                and not repeat_rule_fires(f, cfg)
+                and f.combined_sim < 0.88
+                and not _strong_prefix_retake(f)
+                and not _connector_restart(f)
+            ):
+                # Divergent-tail reject — but a GARBLED retake looks exactly
+                # like this (ASR re-spelled the repeated words, flooring the
+                # lexical tail). Keep the strongest such shape per restart as a
+                # PROBE: it can only become a cut if the semantic tier reads
+                # both spans as the same line (engine._semantic_rescue).
+                if f.combined_sim >= 0.50 and f.prefix_overlap > 0.0 and f.earlier_len_words >= 4:
+                    pp = score_retake(f, cfg)
+                    if probe is None or pp > probe.prob:
+                        probe = Candidate(i=i, j=j, L=L, prob=pp, feats=f, probe=True)
+                continue
 
-        if best is not None and best.prob >= cfg.min_candidate_prob:
-            best.kind = _classify(best.feats)
-            cands.append(best)
+            p = score_retake(f, cfg)
+            cand = Candidate(i=i, j=j, L=L, prob=p, feats=f)
+            if best is None or p > best.prob:
+                second = best
+                best = cand
+            elif second is None or p > second.prob:
+                second = cand
+            if (
+                j - i >= 8
+                and p >= cfg.semantic_rescue_floor
+                and (long_span is None or j - i > long_span.j - long_span.i)
+            ):
+                long_span = cand
+
+        # Keep the best pair AND the runner-up for this restart point. Both
+        # share endpoint j, so they always overlap each other — the runner-up
+        # can only win in resolve_cuts when the best is itself rejected for
+        # overlapping an already-accepted cut. That is exactly the chained-take
+        # case: for j = final take, best spans takes 1+2 but take 1 is already
+        # cut, so the runner-up (take 2 alone) rescues the middle take that a
+        # single-candidate-per-j search silently kept (skincare 'pitch/pitch
+        # black' chain, 2026-07-05: the middle take scored 0.993 yet survived).
+        seen_i = set()
+        for c in (best, second, long_span):
+            if c is not None and c.prob >= cfg.min_candidate_prob and c.i not in seen_i:
+                seen_i.add(c.i)
+                c.kind = _classify(c.feats)
+                cands.append(c)
+        # The widest borderline pair rides along below min_candidate_prob too:
+        # a garbled 3-take chain scores ~0.35 lexically while local stutters at
+        # the same restart score 0.9+ — without this slot the chain pair never
+        # exists for the semantic tier to rescue. Filtered out before cutting
+        # unless rescued past accept_threshold.
+        if (
+            long_span is not None
+            and long_span.i not in seen_i
+            and long_span.prob < cfg.min_candidate_prob
+        ):
+            seen_i.add(long_span.i)
+            long_span.kind = _classify(long_span.feats)
+            cands.append(long_span)
+        if probe is not None and probe.i not in seen_i:
+            probe.kind = _classify(probe.feats)
+            cands.append(probe)
 
     return cands
 
@@ -187,10 +247,12 @@ def extend_cuts_back(cuts: List[Cut], words: List[WordToken], cfg: Config, sem=N
     earlier sentences ('the cat sat.' before 'the cat ran.') are never eaten."""
     if ctx is None:
         ctx = build_ctx(words)
+    anchor_markers = _anchor_markers(cfg)
     for cut in cuts:
         jw = cut.word_range[1]          # kept take starts here
         s = cut.word_range[0]           # current cut start (moves left)
         best_conf = cut.confidence
+        marker_jw = _marker_before(words, jw, anchor_markers)
         for _ in range(6):              # bounded: at most 6 chained attempts
             if s <= 0:
                 break
@@ -210,26 +272,26 @@ def extend_cuts_back(cuts: List[Cut], words: List[WordToken], cfg: Config, sem=N
                 if words[p].ends_sentence:   # don't anchor on a prior sentence's tail
                     continue
                 f = extract_features(words, p, jw, L, cfg, sem=sem, audio=audio, ctx=ctx)
-                if f.prefix_overlap <= 0.0 and f.marker_before < 1.0:
+                if f.prefix_overlap <= 0.0 and marker_jw < 1.0:
                     continue
                 if (
                     f.earlier_incomplete < 0.25
                     and f.tail_sem < 0.45
-                    and f.prefix_repeat_count < cfg.retake_repeat_count
+                    and not repeat_rule_fires(f, cfg)
                     and f.combined_sim < 0.88
                     and not _strong_prefix_retake(f)
                 ):
                     continue
                 if (
                     f.earlier_ends_sentence >= 1.0
-                    and f.prefix_repeat_count < cfg.retake_repeat_count
+                    and not repeat_rule_fires(f, cfg)
                     and f.tail_sem < 0.75
                     and f.combined_sim < 0.92
                     and not _strong_prefix_retake(f)
                 ):
                     continue
                 pr = score_retake(f, cfg)
-                if pr >= cfg.accept_threshold and pr > best_pr:
+                if pr >= cfg.extend_accept_threshold and pr > best_pr:
                     best_p, best_pr = p, pr
             if best_p is None:
                 break

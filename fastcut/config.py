@@ -134,6 +134,13 @@ class Config:
     """A pair must score at least this to become a cut candidate."""
     accept_threshold: float = 0.60
     """Final hybrid probability required to actually emit a cut."""
+    extend_accept_threshold: float = 0.50
+    """Lower bar for BACKWARD EXTENSION of an already-confirmed cut. The line is
+    proven re-taken at this point and the distinct-content protections live in
+    the detect gates (sentence-anchor, tail/corroboration), so a chained earlier
+    take that scores 0.5+ against the true survivor is swallowed instead of
+    surviving on a technicality (garbled 'Warning you warn you might…' take 1,
+    2026-07-05 skincare run: 0.568 vs the old 0.60 bar)."""
     merge_gap: float = 0.25
     """Adjacent cuts closer than this (seconds) are merged into one range."""
 
@@ -145,6 +152,13 @@ class Config:
     """These signal an intentional redo when they sit just before a repeat. NOTE:
     a marker ALONE never triggers a cut — there must also be a matching repeat —
     which is how we avoid nuking a legitimate 'I mean' that is real content."""
+
+    weak_markers: tuple[str, ...] = ("no", "again")
+    """Markers too common as ORDINARY content words to stand in for the shared
+    leading-word anchor. They still add score (weights.marker_before) next to a
+    real repeat, but a candidate whose ONLY anchor is a weak marker is rejected
+    — 'there's NO way this works' must not license a cut of the words before it
+    (real false cut caught in the 2026-07-05 bed-skit run)."""
 
     # ---- tiers (auto-disabled if deps/inputs are missing) ----
     use_semantic: bool = True
@@ -182,6 +196,18 @@ class Config:
     verify_veto_max_conf: float = 0.72
     """Cuts at or above this heuristic confidence are never semantically vetoed
     (the tuned lexical core has final say on its confident cuts)."""
+
+    # ---- batched semantic RESCUE of borderline candidates ----
+    semantic_rescue_floor: float = 0.30
+    """Candidates scoring in [floor, accept_threshold) get ONE batched semantic
+    re-score. This is where the ML tier earns recall: ASR garble ('transitionic'
+    vs 'transemic acid' for tranexamic) floors lexical similarity on true
+    retakes, while MiniLM still reads both spans as the same line."""
+    semantic_rescue_sim: float = 0.80
+    """Semantic similarity of the full spans required to rescue. High on
+    purpose: distinct points sharing an opening ('help strengthen.' vs 'help
+    restore your skin barrier.') read as DIFFERENT meanings to MiniLM and stay
+    below this, so the strengthen/restore keep-guarantee holds."""
 
     semantic_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     audio_model: str = "facebook/wav2vec2-base-960h"

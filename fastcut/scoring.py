@@ -45,6 +45,20 @@ def sigmoid(x: float) -> float:
     return z / (1.0 + z)
 
 
+def repeat_rule_fires(f: Features, cfg: Config) -> bool:
+    """Is the shared opening re-taken often enough to trust the repeat rule?
+    4+ shared words: `retake_repeat_count` occurrences (the tuned rule).
+    Exactly 3 shared words: far stricter — common 3-word openings ('and then
+    we', 'i think the') recur naturally in ordinary speech, so demand
+    `retake_repeat_count + 2` occurrences AND real window similarity
+    ('warning you might' x6 in the 2026-07-05 skincare run qualifies)."""
+    if f.prefix_len >= cfg.retake_repeat_minlen:
+        return f.prefix_repeat_count >= cfg.retake_repeat_count
+    if f.prefix_len == 3:
+        return f.prefix_repeat_count >= cfg.retake_repeat_count + 2 and f.combined_sim >= 0.70
+    return False
+
+
 def corroboration(f: Features, cfg: Config) -> float:
     """In [0,1]: how much the CONTINUATION (not just the opening) supports a
     retake. High when the tails match, or when the earlier attempt was abandoned.
@@ -52,8 +66,21 @@ def corroboration(f: Features, cfg: Config) -> float:
     shared opening recurs many times (a heavily re-taken line), in which case a
     floor is applied so earlier complete takes still get cut."""
     base = f.tail_sem + (1.0 - f.tail_sem) * f.earlier_incomplete
-    if f.prefix_repeat_count >= cfg.retake_repeat_count:
+    if repeat_rule_fires(f, cfg):
         return max(base, cfg.retake_repeat_floor)
+    if (
+        f.earlier_len_words >= 6
+        and f.combined_sim >= 0.93
+        and f.prefix_overlap >= 0.75
+        and f.immediate >= 0.70
+    ):
+        # VERBATIM DOUBLE: a complete 6+-word sentence immediately re-said
+        # almost word for word ("...20 seconds just by pulling up the sheets."
+        # -> "...20 seconds by just pulling up the sheets."). A tiny mid-
+        # sentence transposition drops tail_sem, but 0.93 whole-window
+        # similarity IS the corroboration — two distinct thoughts never match
+        # that closely (bed-skit run, 2026-07-05).
+        return max(base, 0.72)
     if (
         f.earlier_len_words >= 5
         and f.prefix_overlap >= 0.75
@@ -93,7 +120,7 @@ def score_retake(f: Features, cfg: Config) -> float:
     z += w.immediate * f.immediate * corr
     z += w.audio_similarity * f.audio_sim * corr
     z += w.confidence_drop * max(0.0, f.conf_diff)
-    if f.prefix_repeat_count >= cfg.retake_repeat_count:
+    if repeat_rule_fires(f, cfg):
         z += w.repeat_bonus * f.combined_sim  # heavily-retaken line: drop earlier takes
     z += w.connector_restart * f.connector_restart  # paraphrase restart of a short attempt
 
@@ -115,7 +142,7 @@ def explain(f: Features, cfg: Config) -> dict:
         "audio_similarity": w.audio_similarity * f.audio_sim * corr,
         "confidence_drop": w.confidence_drop * max(0.0, f.conf_diff),
         "repeat_bonus": (w.repeat_bonus * f.combined_sim
-                         if f.prefix_repeat_count >= cfg.retake_repeat_count else 0.0),
+                         if repeat_rule_fires(f, cfg) else 0.0),
         "connector_restart": w.connector_restart * f.connector_restart,
         "-gap": -w.gap * max(0.0, f.gap - 1.0),
     }
