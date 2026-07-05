@@ -155,6 +155,16 @@ class Config:
     use_classifier: bool = False
     """Trained MiniLM/DistilBERT retake classifier for the hybrid decision."""
 
+    # ---- debug dump ----
+    debug_dump: bool = True
+    """Write a full record of every run (input words, config, every candidate
+    with its features/score, final cuts, ML verify verdicts) to `debug_path` so
+    a surprising run can be diagnosed after the fact. Best-effort: a failed
+    write never breaks the run."""
+    debug_path: str = ""
+    """Where the dump goes. Empty = `fastcut/last_run.json` next to the package
+    (overwritten each run; the previous run is kept as last_run.prev.json)."""
+
     # ---- batched ML verification of the FINAL cuts (engine._verify_cuts) ----
     # The tiers never run inside the candidate search (a model call per window
     # pair is minutes of CPU on long transcripts); they only judge the final cuts.

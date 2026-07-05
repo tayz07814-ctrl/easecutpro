@@ -22,3 +22,7 @@ test videos/
 .fr/
 .ecweb/
 tools/
+
+# FastCut debug dumps
+fastcut/last_run.json
+fastcut/last_run.prev.json

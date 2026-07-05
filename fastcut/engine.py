@@ -9,7 +9,10 @@ so the app can surface "Fast Cut (semantic+audio)" vs "Fast Cut (heuristic)".
 
 from __future__ import annotations
 
+import json
+import os
 import time
+from dataclasses import asdict
 from typing import List, Optional
 
 import numpy as np
@@ -58,7 +61,10 @@ def run(
 ) -> tuple[List[Cut], dict]:
     cfg = cfg or Config()
     if len(words) < cfg.min_window:
-        return [], {"semantic": False, "audio": False, "classifier": False, "words": len(words)}
+        meta = {"semantic": False, "audio": False, "classifier": False, "words": len(words)}
+        _write_debug_dump(cfg, words, audio_path, meta, [], [], [],
+                          note=f"transcript too short (<{cfg.min_window} words) — engine skipped")
+        return [], meta
 
     t0 = time.time()
     sem, audio, clf, meta = _load_tiers(cfg, audio_path)
@@ -68,25 +74,86 @@ def run(
     # transcript = minutes on CPU. The tuned lexical core searches alone, then
     # the tiers verify the handful of final cuts in one batched pass below.
     ctx = build_ctx(words)  # shared repeat-count context (built once)
-    candidates = find_candidates(words, cfg, sem=None, audio=None, ctx=ctx)
-    apply_hybrid(candidates, words, cfg, classifier=clf)
-    candidates = [c for c in candidates if c.final_prob >= cfg.accept_threshold]
+    all_candidates = find_candidates(words, cfg, sem=None, audio=None, ctx=ctx)
+    apply_hybrid(all_candidates, words, cfg, classifier=clf)
+    candidates = [c for c in all_candidates if c.final_prob >= cfg.accept_threshold]
     cuts = resolve_cuts(candidates, words, cfg)
     extend_cuts_back(cuts, words, cfg, sem=None, audio=None, ctx=ctx)  # swallow chained restarts
     cuts = merge_overlapping_cuts(cuts, words, cfg)                    # tidy overlapping ranges
-    cuts, vetoed = _verify_cuts(cuts, words, cfg, sem=sem, audio=audio)
+    cuts, vetoed, verify_log = _verify_cuts(cuts, words, cfg, sem=sem, audio=audio)
 
     meta["words"] = len(words)
     meta["candidates"] = len(candidates)
     meta["cuts"] = len(cuts)
     meta["vetoed"] = vetoed
     meta["ms"] = int((time.time() - t0) * 1000)
+    _write_debug_dump(cfg, words, audio_path, meta, all_candidates, cuts, verify_log)
     return cuts, meta
+
+
+def _write_debug_dump(
+    cfg: Config,
+    words: List[WordToken],
+    audio_path: Optional[str],
+    meta: dict,
+    candidates: List,
+    cuts: List[Cut],
+    verify_log: List[dict],
+    note: str = "",
+) -> None:
+    """Record the full run (inputs, every candidate + features, cuts, verify
+    verdicts) so 'why did/didn't it flag X?' is answerable after the fact.
+    Best-effort: any failure is swallowed — debugging must never break a cut."""
+    if not cfg.debug_dump:
+        return
+    try:
+        path = cfg.debug_path or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "last_run.json"
+        )
+        rnd = lambda v: round(v, 3) if isinstance(v, float) else v  # noqa: E731
+        dump = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "note": note,
+            "meta": meta,
+            "audio_path": audio_path or "",
+            "audio_exists": bool(audio_path) and os.path.exists(audio_path),
+            "config": cfg.to_dict(),
+            "candidates": [
+                {
+                    "i": c.i,
+                    "j": c.j,
+                    "kind": c.kind,
+                    "prob": rnd(c.prob),
+                    "final_prob": rnd(c.final_prob),
+                    "accepted": c.final_prob >= cfg.accept_threshold,
+                    "attempt": " ".join(w.word for w in words[c.i : c.j]),
+                    "restart": " ".join(w.word for w in words[c.j : c.j + c.L]),
+                    "features": {k: rnd(v) for k, v in asdict(c.feats).items()},
+                }
+                for c in candidates
+            ],
+            "cuts": [c.to_json(verbose=True) for c in cuts],
+            "verify": verify_log,
+            "input_words": [
+                {"w": w.word, "s": round(w.start, 3), "e": round(w.end, 3), "conf": round(w.conf, 3)}
+                for w in words
+            ],
+        }
+        if os.path.exists(path):  # keep exactly one previous run for comparisons
+            try:
+                prev = os.path.splitext(path)[0] + ".prev.json"
+                os.replace(path, prev)
+            except OSError:
+                pass
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(dump, fh, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
 
 
 def _verify_cuts(
     cuts: List[Cut], words: List[WordToken], cfg: Config, sem=None, audio=None
-) -> tuple[List[Cut], int]:
+) -> tuple[List[Cut], int, List[dict]]:
     """Batched ML verification of the final cuts — bounded work: ONE semantic
     encode call for all cuts plus one acoustic comparison per cut.
 
@@ -99,7 +166,7 @@ def _verify_cuts(
     MiniLM while sounding like the same line being re-taken.
     """
     if not cuts or (sem is None and audio is None):
-        return cuts, 0
+        return cuts, 0, []
 
     kept_texts: List[str] = []
     for c in cuts:
@@ -122,6 +189,7 @@ def _verify_cuts(
 
     out: List[Cut] = []
     vetoed = 0
+    log: List[dict] = []
     for k, c in enumerate(cuts):
         s, jw = c.word_range
         audio_sim: Optional[float] = None
@@ -144,13 +212,22 @@ def _verify_cuts(
             and c.confidence < cfg.verify_veto_max_conf
             and not acoustic_match
         )
+        log.append({
+            "text": c.text,
+            "cut_start": round(c.cut_start, 3),
+            "cut_end": round(c.cut_end, 3),
+            "sem_sim": round(sem_sims[k], 3) if sem_sims[k] is not None else None,
+            "audio_sim": round(audio_sim, 3) if audio_sim is not None else None,
+            "corroborated": corroborated,
+            "vetoed": contradicted,
+        })
         if contradicted:
             vetoed += 1
             continue
         if corroborated:
             c.confidence = min(0.98, c.confidence + 0.08)
         out.append(c)
-    return out, vetoed
+    return out, vetoed, log
 
 
 def run_json(payload: dict) -> dict:
