@@ -243,6 +243,12 @@ def extract_features(
         gap = max(0.0, words[j].start - words[j - 1].end)
     f.gap = gap
     f.immediate = math.exp(-gap / 0.5)  # ~1 for a tight restart, decays with pause
+    # Real restarts begin at a clause boundary (after a pause or sentence punct);
+    # 0.35 s matches the renderer's clause splitter. Competing alignments of the
+    # same retake anchored MID-clause (on the takes' shared tail) lack this and
+    # lose to the clause-start alignment in the greedy resolver.
+    if j > 0 and (words[j - 1].ends_sentence or gap >= 0.35):
+        f.restart_clause_start = 1.0
 
     # ---- restart-shape flags ----
     # Tail lengths must be SENTENCE-bounded, not L-window-bounded: the compared

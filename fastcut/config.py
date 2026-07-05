@@ -81,6 +81,13 @@ class ScoringWeights:
     run."). Lexical tail similarity is blind to these paraphrase restarts, so
     the shape carries its own evidence (features.connector_restart)."""
 
+    clause_start: float = 0.6
+    """Bonus (gated by corroboration) when the restart begins a CLAUSE — a
+    pause >=0.35 s or sentence punctuation right before it. Real restarts start
+    clauses; alignments of the same retake anchored mid-clause (on the takes'
+    shared tail) miss this bonus, so the clause-start alignment wins the greedy
+    resolver and the cut boundary lands where the speaker actually restarted."""
+
     repeat_bonus: float = 1.1
     """Bonus (x combined_sim) applied when the shared opening recurs enough times
     to trip the repeat-count rule. A line taken 3+ times where THIS take still
@@ -153,12 +160,15 @@ class Config:
     a marker ALONE never triggers a cut — there must also be a matching repeat —
     which is how we avoid nuking a legitimate 'I mean' that is real content."""
 
-    weak_markers: tuple[str, ...] = ("no", "again")
+    weak_markers: tuple[str, ...] = ("no", "again", "wait")
     """Markers too common as ORDINARY content words to stand in for the shared
     leading-word anchor. They still add score (weights.marker_before) next to a
-    real repeat, but a candidate whose ONLY anchor is a weak marker is rejected
-    — 'there's NO way this works' must not license a cut of the words before it
-    (real false cut caught in the 2026-07-05 bed-skit run)."""
+    real repeat, but a candidate whose ONLY anchor is a weak marker is rejected.
+    Both caught as real false-cut anchors in the 2026-07-05 bed-skit run:
+    'there's NO way this works' licensed cutting the words before it, and the
+    dialogue 'WAIT, you got them?' let the takes' shared tail masquerade as a
+    restart point — swallowing the clean final take. A genuine correction
+    ('wait, let me start over — <repeat>') still anchors on its repeated words."""
 
     # ---- tiers (auto-disabled if deps/inputs are missing) ----
     use_semantic: bool = True

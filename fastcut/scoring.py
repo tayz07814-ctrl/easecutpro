@@ -118,6 +118,7 @@ def score_retake(f: Features, cfg: Config) -> float:
     # forcing a cut on an unrelated span that merely sits near the marker.
     z += w.marker_before * f.marker_before * corr
     z += w.immediate * f.immediate * corr
+    z += w.clause_start * f.restart_clause_start * corr
     z += w.audio_similarity * f.audio_sim * corr
     z += w.confidence_drop * max(0.0, f.conf_diff)
     if repeat_rule_fires(f, cfg):
@@ -139,6 +140,7 @@ def explain(f: Features, cfg: Config) -> dict:
         "earlier_incomplete": w.earlier_incomplete * f.earlier_incomplete,
         "marker_before": w.marker_before * f.marker_before * corr,
         "immediate": w.immediate * f.immediate * corr,
+        "clause_start": w.clause_start * f.restart_clause_start * corr,
         "audio_similarity": w.audio_similarity * f.audio_sim * corr,
         "confidence_drop": w.confidence_drop * max(0.0, f.conf_diff),
         "repeat_bonus": (w.repeat_bonus * f.combined_sim

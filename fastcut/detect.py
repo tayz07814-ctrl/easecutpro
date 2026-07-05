@@ -79,6 +79,24 @@ def _strong_prefix_retake(f: Features) -> bool:
     )
 
 
+def _long_sentence_retake(f: Features) -> bool:
+    """A LONG complete sentence immediately re-taken from a clause start with a
+    largely matching continuation ('I'm gonna say babe it actually does work. I
+    just tried it out… you got them.' -> 'Babe, it does work. I just tried it
+    out. Wait, you got them?'). The sentence-final guard exists for SHORT
+    sentences sharing a word with later content ('use it?' … 'safe to use.');
+    a 10+-word attempt whose tail matches >=0.65 token-for-token, restarted
+    immediately at a clause boundary, is a retake — two distinct 10+-word
+    thoughts never overlap that much."""
+    return (
+        f.earlier_len_words >= 10
+        and f.tail_sem >= 0.65
+        and f.combined_sim >= 0.70
+        and f.immediate >= 0.70
+        and f.restart_clause_start >= 1.0
+    )
+
+
 def _connector_restart(f: Features) -> bool:
     """Short complete attempt restarted with the same opening then re-elaborated
     at length ("So if they're in stock." -> "So if you see that link there…").
@@ -112,10 +130,12 @@ def find_candidates(
             L = min(cfg.max_phrase, j - i, n - j)
             if L < cfg.min_phrase:
                 continue
-            # Early anchor test (same reject as the post-feature check below,
-            # hoisted before the expensive extract_features call): the attempt
-            # and the restart must share their leading word, unless a correction
-            # marker stands in for the anchor.
+            # Early anchor test (before the expensive extract_features call):
+            # the attempt and the restart must share their leading word, or a
+            # non-weak correction marker stands in. STRICT on purpose — a fuzzy
+            # (first-4-words) variant was tried 2026-07-05 and immediately
+            # produced floating over-cuts ('lightning and', 'them in'); the
+            # strict anchor is the engine's main over-cut defence.
             if marker_j < 1.0:
                 ai, bj = nxt[i], nxt[j]
                 if (
@@ -140,16 +160,9 @@ def find_candidates(
                 continue
             f = extract_features(words, i, j, L, cfg, sem=sem, audio=audio, ctx=ctx)
 
-            # Anchor requirement: a genuine restart re-says the OPENING at the
-            # restart point, so the abandoned attempt and the kept take must share
-            # a leading word. Rejecting un-anchored pairs kills "floating" matches
-            # — a shifted sub-window with high mid-sequence overlap but mismatched
-            # first words (e.g. comparing '...help strengthen' against
-            # 'But most importantly...'). These misalignments are the main source
-            # of over-cutting. A non-weak correction marker can stand in for
-            # the anchor (weak markers like 'no' are ordinary content words).
-            if f.prefix_overlap <= 0.0 and marker_j < 1.0:
-                continue
+            # (Anchor requirement is enforced by the early test above — it
+            # kills "floating" matches with high mid-sequence overlap but
+            # unrelated openings, the main source of over-cutting.)
 
             # Cheap reject: nothing lexical, no marker — cannot be a retake.
             if f.combined_sim < 0.34 and f.prefix_overlap < 0.5 and f.marker_before < 1.0:
@@ -167,6 +180,7 @@ def find_candidates(
                 and f.combined_sim < 0.92
                 and not _strong_prefix_retake(f)
                 and not _connector_restart(f)
+                and not _long_sentence_retake(f)
             ):
                 continue
 
@@ -288,6 +302,7 @@ def extend_cuts_back(cuts: List[Cut], words: List[WordToken], cfg: Config, sem=N
                     and f.tail_sem < 0.75
                     and f.combined_sim < 0.92
                     and not _strong_prefix_retake(f)
+                    and not _long_sentence_retake(f)
                 ):
                     continue
                 pr = score_retake(f, cfg)

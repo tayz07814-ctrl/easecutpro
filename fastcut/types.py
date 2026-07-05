@@ -101,6 +101,7 @@ class Features:
     earlier_ends_sentence: float = 0.0
     trailing_fragment: float = 0.0
     restart_pause: float = 0.0
+    restart_clause_start: float = 0.0  # restart begins a clause (pause/punct before j)
 
     def vector(self) -> List[float]:
         """Ordered numeric vector (handy for ML / logging / ONNX)."""
