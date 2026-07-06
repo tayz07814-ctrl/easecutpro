@@ -33,6 +33,11 @@ export function localUrl(id: string): string {
 export function getFile(id: string): File | undefined {
   return registry.get(id)?.file
 }
+/** Is the File for this id still in this browser session? (Loaded projects can
+ *  reference ids from an earlier session — those can't be uploaded anymore.) */
+export function hasLocalFile(id: string): boolean {
+  return registry.has(id)
+}
 
 /** Read width/height/duration straight from the browser — no server needed. */
 export function localProbe(id: string): Promise<MediaInfo> {

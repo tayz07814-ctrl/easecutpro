@@ -6,6 +6,7 @@ import type { Project, ProjectMeta, ProjectRec } from '@shared/types'
 import {
   registerLocalFile,
   isWebMediaId,
+  hasLocalFile,
   localProbe,
   localWaveform,
   localThumbnails,
@@ -151,7 +152,9 @@ async function uploadProjectMedia(
 ): Promise<Project> {
   const ids = new Set<string>()
   collectWebMediaIds(project, ids)
-  const list = [...ids]
+  // Ids whose File is gone (project loaded from an earlier session) can't be
+  // uploaded — skip them so ONE dead reference can't fail the whole save.
+  const list = [...ids].filter((id) => hasLocalFile(id))
   if (!list.length) return project
   const map: Record<string, string> = {}
   for (let i = 0; i < list.length; i++) {

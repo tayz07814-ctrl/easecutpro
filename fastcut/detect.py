@@ -319,6 +319,43 @@ def extend_cuts_back(cuts: List[Cut], words: List[WordToken], cfg: Config, sem=N
             cut.text = " ".join(w.word for w in words[s:jw])
 
 
+def _keep_last_swap(accepted: List[Candidate], candidates: List[Candidate], words: List[WordToken], cfg: Config) -> None:
+    """Replace an accepted cut with an EARLIER-SHIFTED equivalent when one exists.
+
+    Interleaved block retakes (link-line + exact-line said twice: A B A' B')
+    admit two content-equivalent edits: cut the middle B+A' (keeps A…B') or cut
+    the leading A+B (keeps A'+B'). The middle cut often scores higher (whichever
+    inner pair is more verbatim), but it KEEPS THE EARLIER take of A — violating
+    keep-last. Swap is allowed only when it provably changes nothing but WHICH
+    take airs: the block the swap newly cuts ([y.i, c.i)) must match the block
+    it releases ([y.j, c.j)) at >=0.70 token similarity. By construction the
+    kept text stays equivalent, just resolved to the LATER takes."""
+    from .textsim import seq_ratio as _sr
+
+    for idx, c in enumerate(accepted):
+        best = None
+        for y in candidates:
+            if y is c or y.probe or y.final_prob < cfg.accept_threshold:
+                continue
+            if not (y.i < c.i and y.j < c.j and c.i < y.j):  # earlier-shifted overlap
+                continue
+            newly_cut = [w.norm for w in words[y.i : c.i] if w.norm]
+            released = [w.norm for w in words[y.j : c.j] if w.norm]
+            if not newly_cut or not released:
+                continue
+            if min(len(newly_cut), len(released)) / max(len(newly_cut), len(released)) < 0.6:
+                continue
+            if _sr(newly_cut, released) < 0.70:
+                continue
+            # must not collide with the other accepted cuts
+            if any(o is not c and y.i < o.j and o.i < y.j for o in accepted):
+                continue
+            if best is None or y.i < best.i:
+                best = y
+        if best is not None:
+            accepted[idx] = best
+
+
 def merge_overlapping_cuts(cuts: List[Cut], words: List[WordToken], cfg: Config) -> List[Cut]:
     """Collapse cuts whose word ranges overlap or touch into single clean ranges.
     Backward extension can grow cuts until they overlap each other; this tidies
@@ -356,6 +393,8 @@ def resolve_cuts(
             continue
         accepted.append(c)
         occupied.append((c.i, c.j))
+
+    _keep_last_swap(accepted, candidates, words, cfg)
 
     accepted.sort(key=lambda c: c.i)
 
