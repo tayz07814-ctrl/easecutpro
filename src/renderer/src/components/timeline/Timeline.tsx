@@ -26,7 +26,7 @@ import { Ruler } from './Ruler'
 import { TrackHeader } from './TrackHeader'
 import { TrackLane } from './TrackLane'
 import { Playhead } from './Playhead'
-import { HEADER_W, RULER_H, MIN_ZOOM, MAX_ZOOM, frameToPx, pxToFrame, clamp } from './geometry'
+import { HEADER_W, RULER_H, MIN_ZOOM, MAX_ZOOM, frameToPx, pxToFrame, clamp, laneHeight } from './geometry'
 import { secondsToFrames, formatTimecode } from '@shared/timeline/time'
 
 /** Clip ids whose [start,end] × lane-Y overlaps the frame×content-Y rectangle. */
@@ -35,7 +35,7 @@ function clipsInRect(doc: TimelineDocument, f0: number, f1: number, y0: number, 
   let y = 0
   for (const t of doc.tracks) {
     const top = y
-    const bottom = y + t.height
+    const bottom = y + laneHeight(t)
     if (bottom > y0 && top < y1) {
       for (const c of t.clips) if (c.start < f1 && c.end > f0) ids.push(c.id)
     }
@@ -73,7 +73,7 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
 
   const padFrames = secondsToFrames(30, tb)
   const laneWidth = Math.max(frameToPx(activeDoc.duration + padFrames, zoom, tb), viewW - HEADER_W)
-  const lanesHeight = activeDoc.tracks.reduce((h, t) => h + t.height, 0)
+  const lanesHeight = activeDoc.tracks.reduce((h, t) => h + laneHeight(t), 0)
   const gridHeight = RULER_H + lanesHeight
 
   // --- pointer -> frame/track geometry (reads live engine state, no stale closures) ---
@@ -96,8 +96,9 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
       let y = el.scrollTop + (clientY - rect.top) - RULER_H
       if (y < 0) return { zone: 'above' }
       for (const t of engine.document.tracks) {
-        if (y >= 0 && y < t.height) return { trackId: t.id }
-        y -= t.height
+        const lh = laneHeight(t)
+        if (y >= 0 && y < lh) return { trackId: t.id }
+        y -= lh
       }
       return { zone: 'below' }
     },

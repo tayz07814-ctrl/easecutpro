@@ -67,7 +67,9 @@ export function defaultCache(): CacheRefs {
 }
 
 const TRACK_KIND_HEIGHT: Record<TrackKind, number> = {
-  video: 64,
+  // Main video lane is TALL by default: the waveform + filmstrip need vertical
+  // room to be readable. Users can still drag any track's height (28-360).
+  video: 112,
   audio: 48,
   text: 36,
   overlay: 56,
@@ -328,6 +330,13 @@ function withEnd(c: Clip): Clip {
 
 export function normalizeTrack(track: Track): Track {
   let changed = false
+  // One-time upgrade: video lanes still at the OLD default height (64) move to
+  // the new taller default so waveform + filmstrip are readable. 64 was only
+  // ever the default (never a drag detent), so a stored 64 = "never adjusted".
+  if (track.kind === 'video' && track.isMain && track.height === 64) {
+    track = { ...track, height: TRACK_KIND_HEIGHT.video }
+    changed = true
+  }
   const clips = track.clips.map((c) => {
     const fixed = withEnd(c)
     if (fixed !== c) changed = true

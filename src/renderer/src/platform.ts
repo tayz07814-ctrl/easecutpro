@@ -5,8 +5,12 @@
 
 import { isWebMediaId, localUrl } from './webmedia'
 
+// Web = no Electron preload. The preload's contextBridge exposes window.api
+// BEFORE any page script runs, so its absence is definitive — unlike UA
+// sniffing, which broke inside any Electron-shelled browser (their UAs carry
+// "Electron" even when loading the site over plain HTTP).
 export const IS_WEB =
-  typeof navigator !== 'undefined' && !/electron/i.test(navigator.userAgent)
+  typeof window !== 'undefined' && !(window as { api?: unknown }).api
 
 /** Build a playable/streamable URL for a server- or local-side media path. */
 export function mediaSrc(p: string): string {

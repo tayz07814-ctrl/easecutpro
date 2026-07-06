@@ -1,7 +1,7 @@
 // One track's lane: the horizontal strip that holds its clips.
 
 import { ClipView } from './ClipView'
-import { TRACK_COLOR } from './geometry'
+import { TRACK_COLOR, laneHeight } from './geometry'
 import type { Track } from '@shared/timeline/types'
 import type { Timebase } from '@shared/timeline/time'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
@@ -31,7 +31,7 @@ export function TrackLane({
   return (
     <div
       className={`ec-tl-lane kind-${track.kind} ${track.hidden ? 'hidden' : ''} ${track.locked ? 'locked' : ''}`}
-      style={{ width, height: track.height }}
+      style={{ width, height: laneHeight(track) }}
     >
       {track.clips.map((c) => (
         <ClipView

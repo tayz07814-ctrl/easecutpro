@@ -27,6 +27,32 @@ export default function MobileApp(): JSX.Element {
   // A montage base has no `media`; gate actions on hasBase so transcribe/tools work.
   const hasBase = hasMedia || ((project.baseSequence?.length ?? 0) > 0)
   const [sheet, setSheet] = useState<Sheet>(null)
+  // Preview height (vh): tall by default (~2/3 of the screen) and user-adjustable
+  // by dragging the grab handle under the canvas — like the desktop divider.
+  const [stageVh, setStageVh] = useState<number>(() => {
+    const v = Number(localStorage.getItem('ec.mStageVh'))
+    return v >= 22 && v <= 78 ? v : 62
+  })
+  useEffect(() => localStorage.setItem('ec.mStageVh', String(stageVh)), [stageVh])
+  function startStageDrag(clientY0: number): void {
+    const vh0 = stageVh
+    const onMove = (ev: TouchEvent | MouseEvent): void => {
+      const y = 'touches' in ev ? (ev.touches[0]?.clientY ?? clientY0) : ev.clientY
+      const dvh = ((y - clientY0) / window.innerHeight) * 100
+      setStageVh(Math.min(78, Math.max(22, vh0 + dvh)))
+      ev.preventDefault()
+    }
+    const onUp = (): void => {
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('touchend', onUp)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('touchend', onUp)
+    window.addEventListener('mouseup', onUp)
+  }
   const [pendingTranscript, setPendingTranscript] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [addMenu, setAddMenu] = useState(false)
@@ -112,8 +138,15 @@ export default function MobileApp(): JSX.Element {
       </header>
 
       {/* Preview (its built-in transport is hidden on mobile via CSS) */}
-      <div className="m-stage">
+      <div className="m-stage" style={{ height: `${stageVh}vh` }}>
         <VideoPreview />
+      </div>
+      <div
+        className="m-stage-grip"
+        onTouchStart={(e) => startStageDrag(e.touches[0].clientY)}
+        onMouseDown={(e) => startStageDrag(e.clientY)}
+      >
+        <span />
       </div>
 
       {/* Transport: undo/redo · play · keyframes + magnet/snap/delete (monochrome) */}

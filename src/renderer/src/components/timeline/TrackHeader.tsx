@@ -3,7 +3,7 @@
 
 import { useEngine } from './TimelineContext'
 import * as C from '@shared/timeline/commands'
-import { TRACK_COLOR } from './geometry'
+import { TRACK_COLOR, laneHeight } from './geometry'
 import type { Track } from '@shared/timeline/types'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 
@@ -59,7 +59,7 @@ export function TrackHeader({
   return (
     <div
       className="ec-tl-header"
-      style={{ height: track.height }}
+      style={{ height: laneHeight(track) }}
       onContextMenu={(e) => onHeaderContextMenu(track.id, e)}
     >
       <span className="ec-tl-kind" style={{ background: TRACK_COLOR[track.kind] }}>

@@ -10,7 +10,7 @@ import { useEngine, useTimeline } from './TimelineContext'
 import { useMediaData, clipPeaks, type MediaData } from './MediaData'
 import { WaveformCanvas } from './WaveformCanvas'
 import { Filmstrip } from './Filmstrip'
-import { frameToPx, pxToFrame, TRACK_COLOR } from './geometry'
+import { frameToPx, pxToFrame, TRACK_COLOR, laneHeight } from './geometry'
 import { formatTimecode, secondsToFrames, type Timebase } from '@shared/timeline/time'
 import type { Clip } from '@shared/timeline/types'
 import { useStore } from '../../store'
@@ -210,7 +210,7 @@ export default function MobileTimeline(): JSX.Element {
       >
         <div className="ec-mtl-content" style={{ width: contentWidth }}>
           {activeDoc.tracks.map((t) => (
-            <div className="ec-mtl-lane" key={t.id} style={{ height: t.height, marginLeft: pad, width: laneWidth }}>
+            <div className="ec-mtl-lane" key={t.id} style={{ height: laneHeight(t), marginLeft: pad, width: laneWidth }}>
               {t.clips.map((c) => (
                 <MobileClip
                   key={c.id}

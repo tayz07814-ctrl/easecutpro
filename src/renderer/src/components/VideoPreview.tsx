@@ -4,6 +4,8 @@ import { computeKeepRanges, editedDuration, isMultiBase } from '@shared/edit'
 import OverlayLayer from './OverlayLayer'
 import TextLayer from './TextLayer'
 import SequencePreview from './SequencePreview'
+import DocPreview from './DocPreview'
+import { useSharedEngineSnapshot } from '../timelineEngine'
 import { playClock } from '../clock'
 import { mediaSrc } from '../platform'
 
@@ -19,6 +21,7 @@ export default function VideoPreview(): JSX.Element {
   const setPlaying = useStore((s) => s.setPlaying)
   const setPlayhead = useStore((s) => s.setPlayhead)
   const setAspect = useStore((s) => s.setAspect)
+  const docSnap = useSharedEngineSnapshot()
 
   // Keep ranges recomputed on edit changes; used to skip during playback.
   // The waveform makes cut edges snap to energy valleys (matches the export).
@@ -222,8 +225,14 @@ export default function VideoPreview(): JSX.Element {
     playClock.t = project.playhead
   }, [playing, project.playhead])
 
-  // Document mode (authoritative timeline) or montage mode: use the multi-clip
-  // player, which renders the document's main lane + overlays + text + audio.
+  // Document mode (authoritative timeline): the rebuilt doc-native player —
+  // element pool per source + one reconciliation loop, immune to the remount
+  // wedges (undo/redrop/lane moves) that plagued the retrofitted legacy player.
+  const docMain = docSnap?.doc?.tracks.find((t) => t.isMain)
+  if (docSnap?.doc && docMain && docMain.clips.length > 0) {
+    return <DocPreview doc={docSnap.doc} />
+  }
+  // Legacy montage mode (multi-clip baseSequence, no timeline document).
   if (project.timeline || isMultiBase(project)) {
     return <SequencePreview />
   }

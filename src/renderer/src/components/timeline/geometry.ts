@@ -6,6 +6,18 @@ import type { TrackKind } from '@shared/timeline/types'
 
 export const HEADER_W = 176
 export const RULER_H = 30
+/** Height of an EMPTY overlay/text/subtitle lane. They collapse until content
+ *  is dropped in, so the main track keeps the vertical room (waveform +
+ *  thumbnails) — expanding back to their stored height once used. */
+export const EMPTY_LANE_H = 22
+
+/** The height a lane actually renders at: every EMPTY lane except the main
+ *  video lane and audio lanes collapses (overlay lanes are kind 'video' too,
+ *  so key off isMain, not kind). */
+export function laneHeight(t: { kind: TrackKind; height: number; clips: unknown[]; isMain?: boolean }): number {
+  if (!t.clips.length && !t.isMain && t.kind !== 'audio') return EMPTY_LANE_H
+  return t.height
+}
 export const MIN_ZOOM = 2
 export const MAX_ZOOM = 6000
 
