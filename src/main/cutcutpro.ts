@@ -218,6 +218,9 @@ export async function cutCutPro(
   /** run the Silero VAD pass for the pause map. false = the VAD testing switch is
    *  off (silence is handled at Execute instead), so ProCut does word cuts only. */
   runVad = true,
+  /** the creator's INTENDED script: ground truth for what belongs in the final
+   *  video. Both passes keep the delivery that matches it and cut deviations. */
+  script?: string,
   onProgress?: (pct: number, msg?: string) => void
 ): Promise<CutCutProResult> {
   const warnings: string[] = []
@@ -257,7 +260,11 @@ export async function cutCutPro(
   }
 
   const map: TimestampMap = buildTimestampMap(transcript.words, vad)
-  const payload = buildAiPayload(map)
+  let payload = buildAiPayload(map)
+  if (script?.trim()) {
+    payload += `\n\nCREATOR'S INTENDED SCRIPT (ground truth — this is what the final video should say):\n"""\n${script.trim()}\n"""\nUse it to decide the cuts: among repeated takes KEEP THE LAST take that matches the script; speech that deviates from the script (flubbed lines, asides, production talk, abandoned tangents) is cut material. Do NOT cut a line merely because the wording differs slightly — natural delivery beats verbatim — but content with no counterpart in the script does not belong in the final video.`
+    phases.push('script-guided')
+  }
 
   // ---- Phase 2: GPT first pass (listens, proposes cuts) ----------------------
   let gptEdl: Edl | null = null

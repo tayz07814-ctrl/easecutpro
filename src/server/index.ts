@@ -398,7 +398,8 @@ app.post('/api/fast-cut', (req, res) => {
     if (!transcript?.words) throw new Error('No transcript provided')
     // Optional audio path (uploaded by the client) enables the acoustic tier.
     const audioPath = req.body?.path ? assertAllowed(userId, String(req.body.path)) : undefined
-    const jobId = runJob('transcribe', userId, (op) => fastCutSuggest(transcript, audioPath, (pct, msg) => op(pct, msg)))
+    const script = typeof req.body?.script === 'string' ? req.body.script : undefined
+    const jobId = runJob('transcribe', userId, (op) => fastCutSuggest(transcript, audioPath, script, (pct, msg) => op(pct, msg)))
     res.json({ jobId })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -414,7 +415,8 @@ app.post('/api/cutcutpro', (req, res) => {
     const transcript = (req.body?.transcript ?? null) as Transcript | null
     const modelName = req.body?.modelName as string | undefined
     const runVad = req.body?.runVad as boolean | undefined
-    const jobId = runJob('transcribe', userId, (op) => cutCutPro(p, transcript, modelName, runVad ?? true, (pct, msg) => op(pct, msg)))
+    const script = typeof req.body?.script === 'string' ? req.body.script : undefined
+    const jobId = runJob('transcribe', userId, (op) => cutCutPro(p, transcript, modelName, runVad ?? true, script, (pct, msg) => op(pct, msg)))
     res.json({ jobId })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })

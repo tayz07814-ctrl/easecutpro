@@ -181,6 +181,7 @@ function runCli(py: string, root: string, payload: unknown, timeoutMs = 120000):
 
 function mapKind(k?: string): AICut['kind'] {
   switch (k) {
+    case 'off_script': return 'ramble'
     case 'false_start': return 'stutter'
     case 'repetition':
     case 'partial_restart':
@@ -195,6 +196,9 @@ export async function fastCutSuggest(
   /** source audio for the acoustic tier (wav2vec2 self-similarity). When set the
    *  engine also runs the audio tier; absent = text/semantic tiers only. */
   audioPath?: string,
+  /** the creator's INTENDED script — the engine aligns the transcript against it
+   *  and treats off-script speech (flubs, asides, slates) as cut evidence. */
+  script?: string,
   onProgress?: ProgressFn
 ): Promise<AICutResult> {
   const words = transcript.words.filter((w) => !w.deleted)
@@ -223,6 +227,7 @@ export async function fastCutSuggest(
       // acoustically. Tiers degrade gracefully (heuristic) if the models/deps/audio are
       // missing, so this is always safe to request.
       audio_path: wavPath || undefined,
+      script: script && script.trim() ? script : undefined,
       config: { use_audio: !!wavPath, use_semantic: true },
       verbose: true,
     }

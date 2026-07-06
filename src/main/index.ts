@@ -280,15 +280,15 @@ app.whenReady().then(() => {
   })
 
   // ---- Fast Cut (local Python heuristic+ML engine, no API) ----
-  ipcMain.handle(IPC.fastCut, async (_e, transcript: Transcript, audioPath?: string) => {
+  ipcMain.handle(IPC.fastCut, async (_e, transcript: Transcript, audioPath?: string, script?: string) => {
     const jobId = randomUUID()
-    return fastCutSuggest(transcript, audioPath, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
+    return fastCutSuggest(transcript, audioPath, script, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
   })
 
   // ---- CutCutPro: 4-phase premium pipeline (whisper+Parakeet+VAD -> Claude -> OpenAI listen -> EDL) ----
-  ipcMain.handle(IPC.cutCutPro, async (_e, path: string, transcript: Transcript | null, modelName?: string, runVad?: boolean) => {
+  ipcMain.handle(IPC.cutCutPro, async (_e, path: string, transcript: Transcript | null, modelName?: string, runVad?: boolean, script?: string) => {
     const jobId = randomUUID()
-    return cutCutPro(path, transcript, modelName, runVad ?? true, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
+    return cutCutPro(path, transcript, modelName, runVad ?? true, script, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
   })
 
   // ---- Smart Smooth Cut (beta): AI pause judge + debug dump ----

@@ -167,12 +167,54 @@ function ClutterCleaner(): JSX.Element {
     setPlaying(true)
   }
 
+  // The engine buttons must exist BEFORE a transcript does — they're what
+  // creates it. Shared between the empty state and the full panel.
+  const engineActions = (
+    <div className="row cl-actions">
+      <button
+        className="primary"
+        onClick={() => void runFastCutLord()}
+        disabled={jobActive}
+        title="FastCut — offline repeat/retake engine + VAD silence scan (⚙ profile). Highlights only; nothing is cut until Execute."
+      >
+        ⚡ FastCut
+      </button>
+      <button
+        className="primary"
+        onClick={() => void runProCut()}
+        disabled={jobActive}
+        title="ProCut — premium 4-phase AI pipeline (whisper+Parakeet map → Claude → OpenAI listens) + VAD silence scan. Highlights only; nothing is cut until Execute."
+      >
+        ✂ ProCut
+      </button>
+      <button className="cl-gear" onClick={() => setShowSettings((v) => !v)} title="FastCut / ProCut silence-cleaning profile">
+        ⚙
+      </button>
+      <span className="spacer" />
+      <button
+        className="danger"
+        onClick={executeCuts}
+        disabled={!executable || jobActive}
+        title="Apply the reviewed cuts: delete highlighted words + clean highlighted silences"
+      >
+        ▶ Execute cuts ({executable})
+      </button>
+    </div>
+  )
+
   if (!transcript) {
     return (
-      <div className="transcript empty muted">
-        No transcript yet. Click <b>⚡ FastCut</b> or <b>✂ ProCut</b> — they transcribe automatically
-        (FastCut with Parakeet, ProCut with OpenAI) and highlight fillers, repeats and silences here for review.
-      </div>
+      <>
+        <div className="transcript-head">
+          {engineActions}
+          {showSettings && <CutLordSettingsDrop />}
+          <ScriptSection />
+        </div>
+        <div className="transcript empty muted">
+          No transcript yet. Click <b>⚡ FastCut</b> or <b>✂ ProCut</b> — they transcribe automatically
+          (FastCut with Parakeet, ProCut with OpenAI) and highlight fillers, repeats and silences here for review.
+        </div>
+      </>
     )
   }
 
@@ -185,37 +227,9 @@ function ClutterCleaner(): JSX.Element {
   return (
     <>
       <div className="transcript-head">
-        <div className="row cl-actions">
-          <button
-            className="primary"
-            onClick={() => void runFastCutLord()}
-            disabled={jobActive}
-            title="FastCut — offline repeat/retake engine + VAD silence scan (⚙ profile). Highlights only; nothing is cut until Execute."
-          >
-            ⚡ FastCut
-          </button>
-          <button
-            className="primary"
-            onClick={() => void runProCut()}
-            disabled={jobActive}
-            title="ProCut — premium 4-phase AI pipeline (whisper+Parakeet map → Claude → OpenAI listens) + VAD silence scan. Highlights only; nothing is cut until Execute."
-          >
-            ✂ ProCut
-          </button>
-          <button className="cl-gear" onClick={() => setShowSettings((v) => !v)} title="FastCut / ProCut silence-cleaning profile">
-            ⚙
-          </button>
-          <span className="spacer" />
-          <button
-            className="danger"
-            onClick={executeCuts}
-            disabled={!executable || jobActive}
-            title="Apply the reviewed cuts: delete highlighted words + clean highlighted silences"
-          >
-            ▶ Execute cuts ({executable})
-          </button>
-        </div>
+        {engineActions}
         {showSettings && <CutLordSettingsDrop />}
+        <ScriptSection />
         <div className="row">
           <button className="danger" onClick={deleteSelected} disabled={!selected.size}>
             Delete ({selected.size})
@@ -319,6 +333,43 @@ function ClutterCleaner(): JSX.Element {
 // ---------------------------------------------------------------------------
 // ⚙ dropdown — smooth / aggressive / manual profile
 // ---------------------------------------------------------------------------
+
+/** Collapsible "Your script" box. When filled, FastCut and ProCut compare the
+ *  verbatim transcript against it — off-script speech (flubs, asides, slates)
+ *  becomes cut evidence and the take closest to the script survives. */
+function ScriptSection(): JSX.Element {
+  const script = useStore((s) => s.project.script ?? '')
+  const setScript = useStore((s) => s.setScript)
+  const [open, setOpen] = useState(script.length > 0)
+  return (
+    <div className="cl-script">
+      <div className="row">
+        <button className="mini" onClick={() => setOpen((v) => !v)}>
+          {open ? '📜 Script ▴' : '📜 Script ▾'}
+        </button>
+        {!open && script.length > 0 && (
+          <span className="muted mini-note">guiding cuts ({script.split(/\s+/).filter(Boolean).length} words)</span>
+        )}
+      </div>
+      {open && (
+        <>
+          <textarea
+            className="cl-script-box"
+            rows={5}
+            value={script}
+            placeholder={'Paste the script you meant to say.\nFastCut + ProCut will keep the takes that match it and flag everything off-script (flubs, asides, retakes).'}
+            onChange={(e) => setScript(e.target.value)}
+          />
+          {script.length > 0 && (
+            <div className="row">
+              <button className="mini" onClick={() => setScript('')}>Clear script</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
 
 function CutLordSettingsDrop(): JSX.Element {
   const cfg = useStore((s) => s.cutLordSettings)

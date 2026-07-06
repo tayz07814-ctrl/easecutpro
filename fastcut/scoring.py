@@ -95,6 +95,10 @@ def corroboration(f: Features, cfg: Config) -> float:
         # ("…help strengthen." -> "…help restore your skin barrier."), which is a
         # distinct point that must be KEPT.
         return max(base, 0.65)
+    if f.script_gap >= 0.5 and f.combined_sim >= 0.5:
+        # The attempt deviates from the creator's pasted script while the
+        # restart matches it: ground truth that this is the flubbed take.
+        return max(base, 0.70)
     if f.connector_restart >= 1.0:
         # "So if they're in stock." -> "So if you see that link there, I would…":
         # a short complete attempt restarted with the same opening and then
@@ -119,6 +123,7 @@ def score_retake(f: Features, cfg: Config) -> float:
     z += w.marker_before * f.marker_before * corr
     z += w.immediate * f.immediate * corr
     z += w.clause_start * f.restart_clause_start * corr
+    z += w.script_gap * max(0.0, f.script_gap) * corr
     z += w.audio_similarity * f.audio_sim * corr
     z += w.confidence_drop * max(0.0, f.conf_diff)
     if repeat_rule_fires(f, cfg):
@@ -141,6 +146,7 @@ def explain(f: Features, cfg: Config) -> dict:
         "marker_before": w.marker_before * f.marker_before * corr,
         "immediate": w.immediate * f.immediate * corr,
         "clause_start": w.clause_start * f.restart_clause_start * corr,
+        "script_gap": w.script_gap * max(0.0, f.script_gap) * corr,
         "audio_similarity": w.audio_similarity * f.audio_sim * corr,
         "confidence_drop": w.confidence_drop * max(0.0, f.conf_diff),
         "repeat_bonus": (w.repeat_bonus * f.combined_sim

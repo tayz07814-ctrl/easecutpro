@@ -257,23 +257,48 @@ async function jpost(pathname: string, body: unknown): Promise<any> {
   return r.json()
 }
 
-/** Chunk-upload a Blob to the PC; returns its server path. */
+/** Chunk-upload a Blob to the PC; returns its server path.
+ *  Chunks are retried with backoff — phone connections through the tunnel drop
+ *  large POSTs routinely, and a single failed chunk used to abandon the whole
+ *  upload, stranding a 0-byte file on the server (and, downstream, a saved
+ *  project whose media never made it up). One full-upload retry from scratch
+ *  covers a server restart mid-upload (its in-memory upload session is gone). */
 async function uploadBlob(name: string, blob: Blob, onProgress?: (pct: number) => void): Promise<string> {
-  const { uploadId, path } = await jpost('/api/upload-init', { name })
-  const CHUNK = 8 * 1024 * 1024
-  for (let off = 0; off < blob.size; off += CHUNK) {
-    const part = blob.slice(off, off + CHUNK)
-    const r = await fetch(`/api/upload-chunk?uploadId=${encodeURIComponent(uploadId)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: part,
-      credentials: 'include'
-    })
-    if (!r.ok) throw new Error('Upload failed')
-    onProgress?.(Math.min(99, Math.round(((off + CHUNK) / blob.size) * 100)))
+  const attempt = async (): Promise<string> => {
+    const { uploadId, path } = await jpost('/api/upload-init', { name })
+    const CHUNK = 4 * 1024 * 1024
+    for (let off = 0; off < blob.size; off += CHUNK) {
+      const part = blob.slice(off, off + CHUNK)
+      let lastErr: Error | null = null
+      let ok = false
+      for (let tries = 0; tries < 3 && !ok; tries++) {
+        if (tries > 0) await new Promise((r) => setTimeout(r, 800 * tries))
+        try {
+          const r = await fetch(`/api/upload-chunk?uploadId=${encodeURIComponent(uploadId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: part,
+            credentials: 'include'
+          })
+          if (r.status === 404) throw new Error('upload session lost') // server restarted
+          if (!r.ok) throw new Error(`chunk HTTP ${r.status}`)
+          ok = true
+        } catch (e) {
+          lastErr = e as Error
+          if (lastErr.message === 'upload session lost') throw lastErr // no point retrying the chunk
+        }
+      }
+      if (!ok) throw lastErr ?? new Error('Upload failed')
+      onProgress?.(Math.min(99, Math.round(((off + CHUNK) / blob.size) * 100)))
+    }
+    await jpost('/api/upload-complete', { uploadId })
+    return path
   }
-  await jpost('/api/upload-complete', { uploadId })
-  return path
+  try {
+    return await attempt()
+  } catch {
+    return attempt() // one clean retry from scratch (fresh upload session)
+  }
 }
 
 /** Ensure the FULL local file is on the PC; returns its server path (uploaded once). */

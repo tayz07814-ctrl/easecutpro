@@ -102,6 +102,7 @@ class Features:
     trailing_fragment: float = 0.0
     restart_pause: float = 0.0
     restart_clause_start: float = 0.0  # restart begins a clause (pause/punct before j)
+    script_gap: float = 0.0       # off-script(attempt) - off-script(restart); >0 = attempt deviates from the pasted script
 
     def vector(self) -> List[float]:
         """Ordered numeric vector (handy for ML / logging / ONNX)."""

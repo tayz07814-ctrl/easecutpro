@@ -38,11 +38,11 @@ const api = {
     ipcRenderer.invoke(IPC.transcribe, path, backend, modelName),
   suggestCuts: (transcript: Transcript): Promise<AICutResult> =>
     ipcRenderer.invoke(IPC.suggestCuts, transcript),
-  fastCut: (transcript: Transcript, audioPath?: string): Promise<AICutResult> =>
-    ipcRenderer.invoke(IPC.fastCut, transcript, audioPath),
+  fastCut: (transcript: Transcript, audioPath?: string, script?: string): Promise<AICutResult> =>
+    ipcRenderer.invoke(IPC.fastCut, transcript, audioPath, script),
   /** CutCutPro: 4-phase pipeline (whisper+Parakeet+VAD -> Claude -> OpenAI listen -> EDL). */
-  cutCutPro: (path: string, transcript: Transcript | null, modelName?: string, runVad?: boolean): Promise<CutCutProResult> =>
-    ipcRenderer.invoke(IPC.cutCutPro, path, transcript, modelName, runVad),
+  cutCutPro: (path: string, transcript: Transcript | null, modelName?: string, runVad?: boolean, script?: string): Promise<CutCutProResult> =>
+    ipcRenderer.invoke(IPC.cutCutPro, path, transcript, modelName, runVad, script),
   /** Smart Smooth Cut (beta): AI pause judge — JSON in, raw JSON text out. */
   cutJudge: (payload: unknown): Promise<string> => ipcRenderer.invoke(IPC.cutJudge, payload),
   /** Smart Smooth Cut (beta): persist the per-run debug JSON; returns the path. */

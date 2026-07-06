@@ -325,6 +325,15 @@ def extract_features(
     f.conf_later = _mean_conf(b)
     f.conf_diff = f.conf_later - f.conf_earlier
 
+    # ---- script alignment (only when the user pasted their script) ----
+    # attempt off-script while the restart matches the script => the attempt is
+    # the flubbed take; the scripted line survives.
+    smask = ctx.get("script_mask") if ctx else None
+    if smask:
+        from .script import offscript_ratio
+
+        f.script_gap = offscript_ratio(smask, i, j) - offscript_ratio(smask, j, j + L)
+
     # ---- audio (optional) ----
     if audio is not None:
         try:

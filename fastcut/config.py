@@ -81,6 +81,11 @@ class ScoringWeights:
     run."). Lexical tail similarity is blind to these paraphrase restarts, so
     the shape carries its own evidence (features.connector_restart)."""
 
+    script_gap: float = 1.5
+    """Bonus (x max(0, script_gap), corroboration-gated) when the ATTEMPT
+    deviates from the creator's pasted script while the RESTART matches it —
+    ground truth that the earlier take is the flubbed one."""
+
     clause_start: float = 0.6
     """Bonus (gated by corroboration) when the restart begins a CLAUSE — a
     pause >=0.35 s or sentence punctuation right before it. Real restarts start
@@ -206,6 +211,16 @@ class Config:
     verify_veto_max_conf: float = 0.72
     """Cuts at or above this heuristic confidence are never semantically vetoed
     (the tuned lexical core has final say on its confident cuts)."""
+
+    # ---- script-anchored cutting (only when the user pastes a script) ----
+    script_offcut_min_words: int = 5
+    """A contiguous run of at least this many transcript words with NO
+    counterpart in the pasted script is flagged as an off-script cut (slates,
+    asides, production talk). Conservative on purpose — short ad-libs live."""
+    script_min_coverage: float = 0.3
+    """If less than this fraction of the transcript aligns to the script, the
+    script probably doesn't belong to this video — script features are skipped
+    (a wrong paste must never nuke a good video)."""
 
     # ---- batched semantic RESCUE of borderline candidates ----
     semantic_rescue_floor: float = 0.30

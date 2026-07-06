@@ -283,6 +283,10 @@ export interface Project {
   texts: TextClip[]
   /** background music / OST mixed under the edit. */
   music?: MusicClip
+  /** the creator's INTENDED script (pasted in Cut Lord). FastCut and ProCut
+   *  compare the verbatim transcript against it: content that deviates is a
+   *  flub/aside/retake candidate, and the take closest to the script survives. */
+  script?: string
   /** EXPORT-ONLY audio lanes folded out of the timeline document (detached audio,
    *  dropped audio, music). Present only on the project handed to the exporter in
    *  document mode; mixed under the base voice at each clip's edited position. */

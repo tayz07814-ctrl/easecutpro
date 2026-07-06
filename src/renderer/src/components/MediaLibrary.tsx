@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useStore } from '../store'
 import { mediaSrc } from '../platform'
 import type { LibraryItem } from '@shared/types'
@@ -37,6 +38,14 @@ export default function MediaLibrary(): JSX.Element {
 
   const hasVideos = library.some((it) => it.kind === 'video')
   const seq = sequence ?? []
+  // grid ⇄ list layout for the media items (persisted per user)
+  const [view, setViewState] = useState<'list' | 'grid'>(
+    () => (localStorage.getItem('ec.mediaView') === 'grid' ? 'grid' : 'list')
+  )
+  function setView(v: 'list' | 'grid'): void {
+    localStorage.setItem('ec.mediaView', v)
+    setViewState(v)
+  }
 
   return (
     <div className="media-lib">
@@ -57,6 +66,11 @@ export default function MediaLibrary(): JSX.Element {
           <button onClick={addAllToSequence} disabled={busy || !hasVideos} title="Add every video to the montage sequence, in order (clip 1, 2, 3…)">
             ▦ Add all → sequence
           </button>
+          <span className="spacer" />
+          <span className="view-toggle" title="Media library layout">
+            <button className={'mini' + (view === 'list' ? ' on toggle' : '')} onClick={() => setView('list')} title="List view">☰</button>
+            <button className={'mini' + (view === 'grid' ? ' on toggle' : '')} onClick={() => setView('grid')} title="Grid view">▦</button>
+          </span>
         </div>
         <div className="hint muted small">
           Import once, reuse many. <b>Use as base</b> for a single video, <b>+ Seq</b> to build a
@@ -64,7 +78,7 @@ export default function MediaLibrary(): JSX.Element {
         </div>
       </div>
 
-      <div className="media-lib-list">
+      <div className={view === 'grid' ? 'media-lib-list grid' : 'media-lib-list'}>
         {library.length === 0 ? (
           <div className="media-lib-empty muted">
             <p>No media yet.</p>

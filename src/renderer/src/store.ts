@@ -488,6 +488,8 @@ interface AppState {
   setZoom: (px: number) => void
   setTrackHeight: (h: number) => void
   setAspect: (w: number, h: number) => void
+  /** set the creator's intended script (guides FastCut/ProCut cut decisions). */
+  setScript: (script: string) => void
   toggleMagnet: () => void
   toggleThumbnails: () => void
   addBrollToTrack: (trackIndex: number) => Promise<void>
@@ -1470,7 +1472,7 @@ export const useStore = create<AppState>((set, get) => ({
       // ProCut transcribes with its own OpenAI whisper-1 (inside cutCutPro) and pulls
       // it into the word selector below. VAD switch OFF => runVad=false (word cuts only).
       const vadOn = get().cutLordSettings.vadDuringAnalysis
-      const res = await window.api.cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, vadOn)
+      const res = await window.api.cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, vadOn, get().project.script || undefined)
       // REVIEW-ONLY: adopt the transcript if the pipeline made one (ids must
       // match), HIGHLIGHT the words + stage the pause cuts — nothing is applied
       // until the user presses Execute cuts. ⚙ filler switch adds filler words.
@@ -1721,7 +1723,7 @@ export const useStore = create<AppState>((set, get) => ({
       } catch {
         audioPath = undefined
       }
-      const res = await window.api.fastCut(t, audioPath)
+      const res = await window.api.fastCut(t, audioPath, get().project.script || undefined)
       // Union the Python engine with the deterministic repeat finder, then SNAP the
       // whole set to clause boundaries: retakes become whole-take cuts (no broken
       // half-sentences) and the surviving last take is protected from stray flags.
@@ -1946,6 +1948,7 @@ export const useStore = create<AppState>((set, get) => ({
   toggleThumbnails: () =>
     set((s) => ({ project: { ...s.project, showThumbnails: !s.project.showThumbnails } })),
   setAspect: (w, h) => set((s) => ({ project: { ...s.project, aspectW: w, aspectH: h } })),
+  setScript: (script) => set((s) => ({ project: { ...s.project, script } })),
 
   addClipFromSource: (trackIndex, sourceIn, sourceOut, start, name) =>
     set((s) => ({

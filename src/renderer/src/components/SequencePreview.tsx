@@ -289,6 +289,15 @@ export default function SequencePreview(): JSX.Element {
       seekingRef.current = pendingSeekRef.current
       seekBackRef.current = false
       setMountedSrc(seg.src)
+    } else if (seg && loadedSrcRef.current !== seg.src) {
+      // SAME src re-appearing on a fresh element (clip moved off the main lane
+      // and back) — nothing changes mountedSrc, and if the browser already had
+      // the metadata cached the load events can fire before our handlers attach.
+      // Hand the target to onLoaded and force a reload so an event ALWAYS fires.
+      pendingSeekRef.current = seg.sourceStart + Math.max(0, ph - seg.start) * (seg.speed ?? 1)
+      seekingRef.current = pendingSeekRef.current
+      seekBackRef.current = false
+      ref.current?.load()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segsKey])
@@ -668,11 +677,22 @@ export default function SequencePreview(): JSX.Element {
   const shownSrc = mountedSrc || first?.src || ''
   const inGap = docMode && displayIdx(t) < 0 // interior magnet-off dead space → show black (past-end shows last frame)
 
-  if (!segs.length) {
+  // A project saved by an older build can reference browser-local media that no
+  // longer exists after a reload (dead `webmedia:` ids). Say so instead of
+  // rendering a silent black frame.
+  const deadMedia = segs.length > 0 && segs.every((s) => mediaSrc(s.src) === '')
+
+  if (!segs.length || deadMedia) {
     return (
       <div className="preview">
         <div className="video-wrap">
-          <div className="stage"><div className="video-empty">No clips in the sequence</div></div>
+          <div className="stage">
+            <div className="video-empty">
+              {deadMedia
+                ? 'This project’s media isn’t available anymore (saved before upload finished). Re-import the clip to continue — your edits are intact.'
+                : 'No clips in the sequence'}
+            </div>
+          </div>
         </div>
       </div>
     )

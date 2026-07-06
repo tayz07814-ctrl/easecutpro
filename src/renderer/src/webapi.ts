@@ -112,17 +112,45 @@ function emitProgress(percent: number, message: string, kind = 'export'): void {
   for (const cb of progressListeners) cb({ jobId: 'upload', kind, percent, message })
 }
 
-/** Upload every local file a project references; return a copy with server paths. */
+/** Every webmedia: id referenced ANYWHERE in a value (deep walk). Field-by-field
+ *  scanning kept missing newer homes for source paths — the doc-native
+ *  `project.timeline` clips were saved with browser-only webmedia: ids, which are
+ *  dead on reload → the classic BLACK PREVIEW after reopening a project. */
+function collectWebMediaIds(node: unknown, out: Set<string>): void {
+  if (typeof node === 'string') {
+    if (isWebMediaId(node)) out.add(node)
+    return
+  }
+  if (Array.isArray(node)) {
+    for (const v of node) collectWebMediaIds(v, out)
+    return
+  }
+  if (node && typeof node === 'object') {
+    for (const v of Object.values(node)) collectWebMediaIds(v, out)
+  }
+}
+
+/** Deep-clone `node` with every mapped webmedia: id swapped for its server path. */
+function replaceWebMediaIds<T>(node: T, map: Record<string, string>): T {
+  if (typeof node === 'string') return ((map[node] as unknown) ?? node) as T
+  if (Array.isArray(node)) return node.map((v) => replaceWebMediaIds(v, map)) as unknown as T
+  if (node && typeof node === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(node)) out[k] = replaceWebMediaIds(v, map)
+    return out as T
+  }
+  return node
+}
+
+/** Upload every local file a project references; return a copy with server paths.
+ *  Generic on purpose: any string field anywhere in the project (timeline clips,
+ *  legacy tracks, baseSequence, media, music, overlays, future fields) is covered. */
 async function uploadProjectMedia(
   project: Project,
   onProgress?: (pct: number) => void
 ): Promise<Project> {
   const ids = new Set<string>()
-  if (isWebMediaId(project.media?.path)) ids.add(project.media!.path)
-  for (const t of project.tracks ?? [])
-    for (const c of t.clips ?? []) if (isWebMediaId(c.sourcePath)) ids.add(c.sourcePath)
-  for (const c of project.baseSequence ?? []) if (isWebMediaId(c.sourcePath)) ids.add(c.sourcePath)
-  if (isWebMediaId(project.music?.path)) ids.add(project.music!.path)
+  collectWebMediaIds(project, ids)
   const list = [...ids]
   if (!list.length) return project
   const map: Record<string, string> = {}
@@ -131,13 +159,7 @@ async function uploadProjectMedia(
       onProgress?.(Math.round(((i + p / 100) / list.length) * 100))
     )
   }
-  const proj: Project = JSON.parse(JSON.stringify(project))
-  if (proj.media && map[proj.media.path]) proj.media.path = map[proj.media.path]
-  for (const t of proj.tracks ?? [])
-    for (const c of t.clips ?? []) if (map[c.sourcePath]) c.sourcePath = map[c.sourcePath]
-  for (const c of proj.baseSequence ?? []) if (map[c.sourcePath]) c.sourcePath = map[c.sourcePath]
-  if (proj.music && map[proj.music.path]) proj.music.path = map[proj.music.path]
-  return proj
+  return replaceWebMediaIds(project, map)
 }
 
 function triggerDownload(url: string, name: string): void {
@@ -190,21 +212,21 @@ const webApi: Window['api'] = {
     return runJob(() => call('/api/transcribe', { path: sp, backend, modelName }))
   },
   suggestCuts: (transcript) => runJob(() => call('/api/suggest-cuts', { transcript })),
-  fastCut: async (transcript, audioPath) => {
+  fastCut: async (transcript, audioPath, script) => {
     // Upload just the audio (small) so the PC-side engine can run the acoustic tier.
     const sp = audioPath
       ? isWebMediaId(audioPath)
         ? await ensureAudioUploaded(audioPath, (p) => emitProgress(p, 'Fast Cut is working…', 'transcribe'))
         : audioPath
       : undefined
-    return runJob(() => call('/api/fast-cut', { transcript, path: sp }))
+    return runJob(() => call('/api/fast-cut', { transcript, path: sp, script }))
   },
-  cutCutPro: async (path, transcript, modelName, runVad) => {
+  cutCutPro: async (path, transcript, modelName, runVad, script) => {
     // Only audio is needed on the PC — upload the small extracted track.
     const sp = isWebMediaId(path)
       ? await ensureAudioUploaded(path, (p) => emitProgress(p, 'Cut Lord is working…', 'transcribe'))
       : path
-    return runJob(() => call('/api/cutcutpro', { path: sp, transcript, modelName, runVad }))
+    return runJob(() => call('/api/cutcutpro', { path: sp, transcript, modelName, runVad, script }))
   },
   cutJudge: async (payload) => {
     const r = (await call('/api/cut-judge', { payload })) as { raw: string }

@@ -58,6 +58,7 @@ def run(
     words: List[WordToken],
     cfg: Optional[Config] = None,
     audio_path: Optional[str] = None,
+    script: Optional[str] = None,
 ) -> tuple[List[Cut], dict]:
     cfg = cfg or Config()
     if len(words) < cfg.min_window:
@@ -69,11 +70,25 @@ def run(
     t0 = time.time()
     sem, audio, clf, meta = _load_tiers(cfg, audio_path)
 
+    # Script-anchored tier: align the transcript to the creator's pasted script.
+    # A wrong paste (low coverage) disables it — it must never nuke a good video.
+    mask = None
+    if script and script.strip():
+        from .script import coverage, script_mask
+        mask = script_mask(words, script)
+        if mask is not None and coverage(mask) < cfg.script_min_coverage:
+            meta["script"] = "ignored (low match — wrong script?)"
+            mask = None
+        elif mask is not None:
+            meta["script"] = True
+
     # The ML tiers must NEVER run inside the candidate search: that is one
     # batch-1 forward pass per window pair — thousands of pairs on a 15-minute
     # transcript = minutes on CPU. The tuned lexical core searches alone, then
     # the tiers verify the handful of final cuts in one batched pass below.
     ctx = build_ctx(words)  # shared repeat-count context (built once)
+    if mask is not None:
+        ctx["script_mask"] = mask
     all_candidates = find_candidates(words, cfg, sem=None, audio=None, ctx=ctx)
     apply_hybrid(all_candidates, words, cfg, classifier=clf)
     meta["rescued"] = _semantic_rescue(all_candidates, words, cfg, sem)
@@ -89,6 +104,9 @@ def run(
     extend_cuts_back(cuts, words, cfg, sem=None, audio=None, ctx=ctx)  # swallow chained restarts
     cuts = merge_overlapping_cuts(cuts, words, cfg)                    # tidy overlapping ranges
     cuts, vetoed, verify_log = _verify_cuts(cuts, words, cfg, sem=sem, audio=audio)
+    if mask is not None:
+        cuts = _offscript_cuts(cuts, words, mask, cfg, script or "")
+        cuts = merge_overlapping_cuts(cuts, words, cfg)
 
     meta["words"] = len(words)
     meta["candidates"] = len(candidates)
@@ -212,6 +230,51 @@ def _semantic_rescue(candidates: List, words: List[WordToken], cfg: Config, sem)
     return rescued
 
 
+def _offscript_cuts(
+    cuts: List[Cut], words: List[WordToken], mask: List[bool], cfg: Config, script: str
+) -> List[Cut]:
+    """Flag contiguous runs of words with NO counterpart in the pasted script —
+    slates ('skip 10, hook one'), take-planning narration, session wrap markers,
+    abandoned tangents. Guards:
+      * interior runs need `script_offcut_min_words` words (ad-libs live); runs
+        touching the very START or END of the transcript need only 2 (that's
+        where slates and wrap markers live);
+      * a run that reads as a DUPLICATE of scripted content is an earlier take
+        of a scripted line — retake territory, never flagged here;
+      * ranges already inside a cut are skipped."""
+    from .script import run_duplicates_script
+
+    covered = [False] * len(words)
+    for c in cuts:
+        for k in range(c.word_range[0], min(len(words), c.word_range[1])):
+            covered[k] = True
+    out = list(cuts)
+    k = 0
+    while k < len(words):
+        if mask[k] or covered[k]:
+            k += 1
+            continue
+        j = k
+        while j < len(words) and not mask[j] and not covered[j]:
+            j += 1
+        at_edge = k == 0 or j >= len(words)
+        min_run = 2 if at_edge else cfg.script_offcut_min_words
+        if j - k >= min_run and not run_duplicates_script(words, k, j, script):
+            out.append(
+                Cut(
+                    cut_start=words[k].start,
+                    cut_end=words[j].start if j < len(words) else words[j - 1].end,
+                    confidence=0.75,
+                    kind="off_script",
+                    text=" ".join(w.word for w in words[k:j]),
+                    word_range=(k, j),
+                )
+            )
+        k = j
+    out.sort(key=lambda c: c.word_range[0])
+    return out
+
+
 def _verify_cuts(
     cuts: List[Cut], words: List[WordToken], cfg: Config, sem=None, audio=None
 ) -> tuple[List[Cut], int, List[dict]]:
@@ -305,7 +368,8 @@ def run_json(payload: dict) -> dict:
     cfg = Config.from_dict(payload.get("config"))
     words = words_from_json(payload.get("words", []))
     audio_path = payload.get("audio_path")
+    script = payload.get("script")
     verbose = bool(payload.get("verbose", False))
 
-    cuts, meta = run(words, cfg, audio_path=audio_path)
+    cuts, meta = run(words, cfg, audio_path=audio_path, script=script)
     return {"cuts": [c.to_json(verbose=verbose) for c in cuts], "meta": meta}
