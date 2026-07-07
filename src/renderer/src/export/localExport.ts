@@ -425,6 +425,17 @@ export async function exportOnDevice(
   const harvest: { stop: null | (() => void) } = { stop: null }
   let curSeg: Seg | null = null
   let lastWant = 0
+  // TRUE source frame spacing (min observed gap between presented frames): weak
+  // devices DROP presented frames under load, so the average presented spacing
+  // lies — the minimum doesn't. Any harvested frame further than ~1.3 true
+  // spacings from its exact time is rejected and that ONE frame is seeked
+  // instead, so a struggling device degrades to slow-but-correct, never to
+  // frozen/wrong frames (the failure mode of realtime capture). 0 = unmeasured.
+  let minSpacing = 0
+  let prevPresentedT = -1
+  const grabTolerance = (): number => Math.max(frameDur, minSpacing || frameDur) * 1.3
+  let fallbacks = 0 // per-segment; too many → the harvest is thrash, go pure seek
+  let segHarvesting = false
   const closeBuf = (): void => {
     for (const g of buf) g.frame.close()
     buf = []
@@ -437,10 +448,16 @@ export async function exportOnDevice(
       if (!live) return
       try {
         buf.push({ frame: new VideoFrame(v, { timestamp: 0 }), t: meta.mediaTime })
+        const gap = prevPresentedT >= 0 ? meta.mediaTime - prevPresentedT : 0
+        if (gap > 0.0005) {
+          const clamped = Math.max(1 / 120, gap)
+          minSpacing = minSpacing === 0 ? clamped : Math.min(minSpacing, clamped)
+        }
+        prevPresentedT = meta.mediaTime
       } catch {
-        /* decoder hiccup — the consumer's stall fallback covers it */
+        /* decoder hiccup — the consumer's seek fallback covers it */
       }
-      while (buf.length > 3) buf.shift()!.frame.close()
+      while (buf.length > 4) buf.shift()!.frame.close()
       // Don't decode ahead of consumption (the encoder may be the slow side);
       // the consumer resumes playback when it needs more.
       if (meta.mediaTime > lastWant + 0.5) {
@@ -459,7 +476,7 @@ export async function exportOnDevice(
     }
   }
   const waitPresented = async (v: HTMLVideoElement, want: number): Promise<void> => {
-    const deadline = performance.now() + 2000
+    const deadline = performance.now() + 1500
     while (performance.now() < deadline) {
       const latest = buf[buf.length - 1]
       if (latest && latest.t >= want - frameDur / 4) return
@@ -468,16 +485,24 @@ export async function exportOnDevice(
         try {
           await v.play()
         } catch {
-          return // playback refused — stall fallback takes over
+          return // playback refused — seek fallback takes over
         }
       }
       await new Promise((r) => setTimeout(r, 12))
     }
   }
+  // ONLY a frame within tolerance of the exact source time counts — a presented
+  // stream that skipped `want` (dropped frame) returns null and the caller
+  // seeks. Never "nearest available": that is where freezes come from.
   const pickGrab = (want: number): Grab | null => {
+    const tol = grabTolerance()
     let best: Grab | null = null
-    for (const g of buf) if (g.t <= want + frameDur / 4 && (!best || g.t > best.t)) best = g
-    return best ?? (buf.length ? buf[0] : null)
+    for (const g of buf) {
+      if (g.t > want + frameDur / 4) continue
+      if (want - g.t > tol) continue
+      if (!best || g.t > best.t) best = g
+    }
+    return best
   }
   const tExport0 = performance.now()
   try {
@@ -496,34 +521,40 @@ export async function exportOnDevice(
           harvest.stop?.()
           closeBuf()
           curSeg = seg
+          minSpacing = 0
+          prevPresentedT = -1
+          fallbacks = 0
+          segHarvesting = rvfcOK
           try {
             v.pause()
           } catch {
             /* ignore */
           }
           if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
-          if (rvfcOK) {
+          if (segHarvesting) {
             try {
               v.playbackRate = Math.min(4, Math.max(0.25, seg.speed))
             } catch {
-              /* rate unsupported — plays at 1x; nearest-frame pick still holds */
+              /* rate unsupported — plays at 1x; exactness check still holds */
             }
             startHarvest(v)
             try {
               await v.play()
             } catch {
-              /* refused — per-frame fallback below */
+              segHarvesting = false // refused — pure seek for this segment
             }
           }
         }
         let frame: VideoFrame | null = null
-        if (rvfcOK && !document.hidden) {
+        if (segHarvesting && !document.hidden) {
           await waitPresented(v, want)
           const g = pickGrab(want)
           if (g) frame = g.frame.clone() // buf keeps the original: the next output frame may reuse it
         }
         if (!frame) {
-          // SEEK fallback: no rVFC, hidden tab, or a stalled harvest.
+          // SEEK for this frame: the presented stream skipped it (dropped
+          // frame), the harvest stalled, rVFC is unavailable, or the tab is
+          // hidden. Exactness beats speed.
           try {
             v.pause()
           } catch {
@@ -540,11 +571,21 @@ export async function exportOnDevice(
             })
           }
           frame = new VideoFrame(v, { timestamp: 0 })
-          if (rvfcOK && !document.hidden) {
-            try {
-              await v.play() // resume the harvest for the next frames
-            } catch {
-              /* stays on fallback */
+          if (segHarvesting) {
+            // A device dropping frames this often gains nothing from the
+            // harvest — stop fighting it and stay in seek mode for the rest of
+            // this segment.
+            if (++fallbacks > 10) {
+              harvest.stop?.()
+              closeBuf()
+              segHarvesting = false
+              dbg('harvest off for segment (frame drops)', { fallbacks })
+            } else if (!document.hidden) {
+              try {
+                await v.play() // resume the harvest for the next frames
+              } catch {
+                segHarvesting = false
+              }
             }
           }
         }
