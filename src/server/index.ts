@@ -311,10 +311,33 @@ app.post('/api/upload-chunk', express.raw({ type: 'application/octet-stream', li
     return
   }
   try {
+    // RESUMABLE: the client says which byte this chunk starts at. On a mismatch
+    // (a retried chunk that actually landed, or a dropped one) reply 409 with
+    // the real size so the client realigns — a 600MB upload survives flaky
+    // tunnel/mobile connections instead of restarting from byte zero.
+    const size = fs.statSync(u.path).size
+    const offset = req.query.offset !== undefined ? Number(req.query.offset) : NaN
+    if (!Number.isNaN(offset) && offset !== size) {
+      res.status(409).json({ error: 'offset mismatch', size })
+      return
+    }
     fs.appendFileSync(u.path, req.body as Buffer)
-    res.json({ ok: true })
+    res.json({ ok: true, size: size + (req.body as Buffer).length })
   } catch (e) {
     res.status(500).json({ error: String((e as Error).message) })
+  }
+})
+// Where an interrupted upload left off (client resumes from here).
+app.get('/api/upload-status', (req, res) => {
+  const u = chunkUploads.get(String(req.query.uploadId || ''))
+  if (!u || u.userId !== uid(req)) {
+    res.status(404).json({ error: 'unknown upload' })
+    return
+  }
+  try {
+    res.json({ size: fs.statSync(u.path).size })
+  } catch {
+    res.json({ size: 0 })
   }
 })
 app.post('/api/upload-complete', (req, res) => {
@@ -623,6 +646,19 @@ app.get('/api/files', (req, res) => {
 })
 
 // ---- WebSocket (progress + job results), scoped per user ----
+// Quiet handler for ABORTED request bodies (a phone/tunnel dropping mid-chunk
+// is routine, not a crash): reply 400 without the stack-trace spam. Everything
+// else keeps the default behaviour.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: Error & { type?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (err?.type === 'request.aborted' || err?.message === 'request aborted') {
+    if (!res.headersSent) res.status(400).json({ error: 'request aborted' })
+    return
+  }
+  console.error('[server]', err?.message ?? err)
+  if (!res.headersSent) res.status(500).json({ error: String(err?.message ?? err) })
+})
+
 const server = http.createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
 const clients = new Set<WebSocket & { userId?: string }>()
