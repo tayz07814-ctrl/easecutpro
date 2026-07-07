@@ -30,6 +30,9 @@ function connectWs(): Promise<void> {
     const sock = new WebSocket(`${proto}://${location.host}/ws`)
     ws = sock
     sock.onopen = () => resolve()
+    // A blocked/failed WS must never wedge job starts — jobs poll for their
+    // result over HTTP anyway; the socket only adds live progress.
+    sock.onerror = () => resolve()
     sock.onmessage = (ev) => {
       let msg: any
       try {
@@ -76,7 +79,32 @@ async function call(pathname: string, body?: unknown): Promise<any> {
 async function runJob(start: () => Promise<{ jobId: string }>): Promise<any> {
   await connectWs()
   const { jobId } = await start()
-  return new Promise((resolve, reject) => jobWaiters.set(jobId, { resolve, reject }))
+  return new Promise((resolve, reject) => {
+    jobWaiters.set(jobId, { resolve, reject })
+    // Polling safety net: the WS routinely drops on tunnels and locked phones,
+    // and a result sent while it's down used to be lost forever (UI stuck
+    // busy). The job keeps running on the PC, so ask for the outcome over
+    // plain HTTP until it lands — whichever channel answers first wins.
+    const timer = setInterval(async () => {
+      if (!jobWaiters.has(jobId)) {
+        clearInterval(timer)
+        return
+      }
+      void connectWs() // nudge the socket back up for live progress
+      try {
+        const r = await call(`/api/job-result?id=${encodeURIComponent(jobId)}`)
+        if (r.pending) return
+        const w = jobWaiters.get(jobId)
+        jobWaiters.delete(jobId)
+        clearInterval(timer)
+        if (!w) return
+        if (r.msg?.type === 'result') w.resolve(r.msg.data)
+        else w.reject(new Error(r.msg?.message || 'job failed'))
+      } catch {
+        /* offline / old server — try again next tick */
+      }
+    }, 4000)
+  })
 }
 
 function pickFile(accept: string): Promise<File | null> {

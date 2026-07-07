@@ -679,6 +679,30 @@ function send(userId: string, obj: unknown): void {
 }
 
 type ProgressFn = (pct: number, msg?: string) => void
+
+// Finished-job outbox: the WS-only delivery LOST results when the socket was
+// down at completion time (tunnel WS drops + phones locking mid-job are
+// routine) — the client then waited forever with the UI stuck busy. Results
+// are now also buffered here and the client polls /api/job-result as a
+// fallback, so a finished job always lands.
+const jobOutbox = new Map<string, { userId: string; msg: unknown; at: number }>()
+function finishJob(userId: string, jobId: string, msg: unknown): void {
+  send(userId, msg)
+  jobOutbox.set(jobId, { userId, msg, at: Date.now() })
+  const cutoff = Date.now() - 30 * 60_000
+  for (const [k, v] of jobOutbox) if (v.at < cutoff) jobOutbox.delete(k)
+}
+app.get('/api/job-result', (req, res) => {
+  const id = String(req.query.id || '')
+  const e = jobOutbox.get(id)
+  if (!e || e.userId !== uid(req)) {
+    res.json({ pending: true })
+    return
+  }
+  jobOutbox.delete(id)
+  res.json({ pending: false, msg: e.msg })
+})
+
 function runJob(kind: string, userId: string, fn: (op: ProgressFn) => Promise<unknown>): string {
   const jobId = randomUUID()
   setImmediate(async () => {
@@ -686,10 +710,10 @@ function runJob(kind: string, userId: string, fn: (op: ProgressFn) => Promise<un
     try {
       const data = await fn((percent, message) => send(userId, { type: 'progress', jobId, kind, percent, message }))
       console.log(`[job] ${kind} ${jobId} done`)
-      send(userId, { type: 'result', jobId, kind, data })
+      finishJob(userId, jobId, { type: 'result', jobId, kind, data })
     } catch (e) {
       console.error(`[job] ${kind} ${jobId} FAILED:`, (e as Error)?.message ?? e)
-      send(userId, { type: 'error', jobId, kind, message: String((e as Error)?.message ?? e) })
+      finishJob(userId, jobId, { type: 'error', jobId, kind, message: String((e as Error)?.message ?? e) })
     }
   })
   return jobId
