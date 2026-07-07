@@ -16,6 +16,93 @@ interface MediaRec {
 const registry = new Map<string, MediaRec>()
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|bmp)$/i
 
+// ---- IndexedDB persistence: imported Files survive reloads on THIS device ----
+// Autosave stores only the small project JSON on the PC; the media BYTES live
+// here so a reopened project plays without ever uploading the video. Everything
+// is best-effort: a quota/eviction failure only means that file needs a
+// re-import (or already re-resolves via a PC path if something uploaded it).
+const IDB_NAME = 'ec-localmedia'
+const IDB_STORE = 'files'
+let idbPromise: Promise<IDBDatabase | null> | null = null
+function idb(): Promise<IDBDatabase | null> {
+  if (idbPromise) return idbPromise
+  idbPromise = new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(IDB_NAME, 1)
+      req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE)
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => resolve(null)
+    } catch {
+      resolve(null)
+    }
+  })
+  return idbPromise
+}
+async function idbPut(id: string, file: File): Promise<void> {
+  const db = await idb()
+  if (!db) return
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite')
+      tx.objectStore(IDB_STORE).put({ name: file.name, type: file.type, blob: file }, id)
+      tx.oncomplete = () => resolve()
+      tx.onabort = () => resolve()
+      tx.onerror = () => resolve()
+    } catch {
+      resolve()
+    }
+  })
+}
+async function idbGet(id: string): Promise<File | null> {
+  const db = await idb()
+  if (!db) return null
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly')
+      const rq = tx.objectStore(IDB_STORE).get(id)
+      rq.onsuccess = () => {
+        const v = rq.result as { name: string; type: string; blob: Blob } | undefined
+        resolve(v ? new File([v.blob], v.name, { type: v.type }) : null)
+      }
+      rq.onerror = () => resolve(null)
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
+/** Ask the browser not to evict our media under storage pressure (best effort;
+ *  matters on iOS, which drops site storage after ~7 days without a visit). */
+export function requestPersistentStorage(): void {
+  try {
+    void navigator.storage?.persist?.()
+  } catch {
+    /* unsupported */
+  }
+}
+
+/** Re-register webmedia ids from this device's IndexedDB (project reopened
+ *  after a reload). Returns the ids that could be restored. */
+export async function hydrateLocalMedia(ids: string[]): Promise<string[]> {
+  const restored: string[] = []
+  for (const id of ids) {
+    if (registry.has(id)) {
+      restored.push(id)
+      continue
+    }
+    const f = await idbGet(id)
+    if (!f) continue
+    registry.set(id, { file: f, url: URL.createObjectURL(f) })
+    restored.push(id)
+  }
+  return restored
+}
+
+/** Server path this id is KNOWN to have (already uploaded this session), else undefined. */
+export function serverPathOf(id: string): string | undefined {
+  return registry.get(id)?.serverPath
+}
+
 export function isWebMediaId(p: string | undefined): boolean {
   return !!p && p.startsWith('webmedia:')
 }
@@ -24,6 +111,7 @@ export function isWebMediaId(p: string | undefined): boolean {
 export function registerLocalFile(file: File): string {
   const id = `webmedia:${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
   registry.set(id, { file, url: URL.createObjectURL(file) })
+  void idbPut(id, file) // survive reloads on this device (best effort)
   return id
 }
 

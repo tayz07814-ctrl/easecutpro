@@ -46,6 +46,7 @@ import {
 import { positionToBox } from '@shared/overlay'
 import { mediaSrc, IS_WEB } from './platform'
 import { createProject, saveProject, serializeProject } from './projectsApi'
+import { hydrateProjectMedia } from './webapi'
 import { cleanVideo } from './batchClean'
 
 function uid(): string {
@@ -2476,7 +2477,20 @@ export const useStore = create<AppState>((set, get) => ({
   setShowExportModal: (b) => set({ showExportModal: b }),
 
   save: async () => {
-    const { project } = get()
+    const { project, currentProjectId } = get()
+    // Web: explicit Save = push EVERYTHING (media included) to the PC — the
+    // durable, open-anywhere copy. Autosave only ever sends the small JSON.
+    if (IS_WEB && currentProjectId) {
+      set({ job: { active: true, kind: 'export', percent: 0, message: 'Saving to PC — uploading media…' } })
+      try {
+        const serialized = await serializeProject(project)
+        await saveProject(currentProjectId, { project: serialized, name: project.name })
+        set({ job: { active: false, percent: 100, message: 'Project + media saved to the PC' } })
+      } catch (e) {
+        set({ job: { active: false, percent: 0, message: `Save failed: ${(e as Error).message}` } })
+      }
+      return
+    }
     const p = await window.api.saveProject(project)
     if (p) set({ job: { active: false, percent: 100, message: `Saved: ${p}` } })
   },
@@ -2510,7 +2524,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   openProjectRecord: (rec) => {
     const project = rec.project ?? newProject()
-    set({
+    const open = (): void => set({
       project,
       currentProjectId: rec.id,
       currentProjectName: rec.name,
@@ -2532,13 +2546,30 @@ export const useStore = create<AppState>((set, get) => ({
       canUndo: false,
       canRedo: false
     })
-    if (project.media?.path) {
-      const p = project.media.path
-      window.api.waveform(p).then((wf) => set({ waveform: wf })).catch(() => undefined)
-      if (project.media.hasVideo) window.api.thumbnails(p).then((t) => set({ thumbnails: t })).catch(() => undefined)
+    const kickBackground = (): void => {
+      if (project.media?.path) {
+        const p = project.media.path
+        window.api.waveform(p).then((wf) => set({ waveform: wf })).catch(() => undefined)
+        if (project.media.hasVideo) window.api.thumbnails(p).then((t) => set({ thumbnails: t })).catch(() => undefined)
+      }
+      if (project.music?.path) {
+        window.api.waveform(project.music.path).then((wf) => set({ musicWaveform: wf })).catch(() => undefined)
+      }
     }
-    if (project.music?.path) {
-      window.api.waveform(project.music.path).then((wf) => set({ musicWaveform: wf })).catch(() => undefined)
+    if (IS_WEB) {
+      // Restore this device's local media (IndexedDB) for the project's
+      // webmedia ids BEFORE the editor renders — autosave no longer uploads
+      // videos to the PC, so this is what makes a reopened project play.
+      set({ view: 'loading' })
+      void hydrateProjectMedia(project)
+        .catch(() => undefined)
+        .then(() => {
+          open()
+          kickBackground()
+        })
+    } else {
+      open()
+      kickBackground()
     }
   },
 

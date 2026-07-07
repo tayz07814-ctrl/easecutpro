@@ -6,7 +6,7 @@ import HomeScreen from './components/HomeScreen'
 import { useStore } from './store'
 import { IS_WEB } from './platform'
 import { installWebApi, authMe } from './webapi'
-import { serializeProject, saveProject } from './projectsApi'
+import { serializeProjectLite, saveProject } from './projectsApi'
 import './styles.css'
 
 if (IS_WEB) {
@@ -27,8 +27,11 @@ function Root(): JSX.Element {
     authMe().then(({ user }) => useStore.setState({ user, view: user ? 'home' : 'auth' }))
   }, [])
 
-  // Autosave the open project (desktop + web). On web this also uploads any
-  // browser-local media so the project reloads later.
+  // Autosave the open project (desktop + web). On web this saves ONLY the small
+  // project JSON — the media bytes autosave to THIS device (IndexedDB, written
+  // at import) and upload lazily when the PC actually needs them (engines:
+  // audio-only; PC export / explicit Save: full file). Ids that already have a
+  // PC copy are swapped for their server paths, still with zero network.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
     const unsub = useStore.subscribe((st, prev) => {
@@ -40,7 +43,7 @@ function Root(): JSX.Element {
         const s = useStore.getState()
         if (s.view !== 'editor' || !s.currentProjectId) return
         try {
-          const serialized = await serializeProject(s.project)
+          const serialized = serializeProjectLite(s.project)
           await saveProject(s.currentProjectId, {
             project: serialized,
             name: s.project.name,

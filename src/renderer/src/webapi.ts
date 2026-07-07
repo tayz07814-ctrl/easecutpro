@@ -11,7 +11,10 @@ import {
   localWaveform,
   localThumbnails,
   ensureUploaded,
-  ensureAudioUploaded
+  ensureAudioUploaded,
+  hydrateLocalMedia,
+  serverPathOf,
+  requestPersistentStorage
 } from './webmedia'
 
 // ---- WebSocket (progress + job results) ----
@@ -288,6 +291,8 @@ const webApi: Window['api'] = {
 
 export function installWebApi(): void {
   window.api = webApi
+  // Media autosaves to THIS device (IndexedDB) — ask the browser to keep it.
+  requestPersistentStorage()
 }
 
 // ---- Accounts ----
@@ -361,4 +366,27 @@ async function httpDeleteProject(id: string): Promise<void> {
 /** Upload any browser-local media a project references; returns a server-path copy. */
 export async function uploadAndServerize(project: Project): Promise<Project> {
   return uploadProjectMedia(project)
+}
+
+/** ZERO-network serialize for autosave: swap only the webmedia ids that are
+ *  ALREADY on the PC (an engine/export/save uploaded them earlier) for their
+ *  server paths. Records converge to PC paths over time without autosave ever
+ *  uploading a video itself. */
+export function serializeKnownUploads(project: Project): Project {
+  const ids = new Set<string>()
+  collectWebMediaIds(project, ids)
+  const map: Record<string, string> = {}
+  for (const id of ids) {
+    const sp = serverPathOf(id)
+    if (sp) map[id] = sp
+  }
+  return Object.keys(map).length ? replaceWebMediaIds(project, map) : project
+}
+
+/** Restore this device's local media (IndexedDB) for every webmedia id the
+ *  project references, so a reopened project plays without any upload. */
+export async function hydrateProjectMedia(project: Project): Promise<void> {
+  const ids = new Set<string>()
+  collectWebMediaIds(project, ids)
+  if (ids.size) await hydrateLocalMedia([...ids])
 }

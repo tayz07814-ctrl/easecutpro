@@ -1,7 +1,7 @@
 // Unified project library — works on desktop (Electron IPC -> local files) and
 // web (HTTP -> per-user server store), both through window.api.
 import { IS_WEB } from './platform'
-import { uploadAndServerize } from './webapi'
+import { uploadAndServerize, serializeKnownUploads } from './webapi'
 import type { Project, ProjectMeta, ProjectRec } from '@shared/types'
 
 export type { ProjectMeta, ProjectRec }
@@ -16,7 +16,14 @@ export const saveProject = (
 ): Promise<void> => window.api.saveProjectRecord(id, patch)
 export const deleteProject = (id: string): Promise<void> => window.api.deleteProjectRecord(id)
 
-/** Prepare a project for saving: web uploads any browser-local media; desktop keeps local paths. */
+/** Prepare a project for a FULL save: web uploads any browser-local media so the
+ *  PC has everything (cross-device open, PC export); desktop keeps local paths. */
 export async function serializeProject(project: Project): Promise<Project> {
   return IS_WEB ? uploadAndServerize(project) : project
+}
+
+/** Prepare a project for AUTOSAVE: never uploads. Media stays on this device
+ *  (IndexedDB); ids already uploaded earlier are swapped for their PC paths. */
+export function serializeProjectLite(project: Project): Project {
+  return IS_WEB ? serializeKnownUploads(project) : project
 }
