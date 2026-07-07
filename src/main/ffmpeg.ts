@@ -384,62 +384,47 @@ export function detectSilence(
 const even = (n: number): number => Math.max(2, Math.round(n / 2) * 2)
 
 /**
- * ROOT-CAUSE FIX for Ken Burns micro-jitter on slow zooms.
+ * WOBBLE-FREE animated zoom (Ken Burns) — per-frame `scale` + focal `crop`.
  *
- * ffmpeg's `zoompan` rasterises BOTH the zoom (scales the source to
- * round(iw*z) px) and the crop position to WHOLE pixels on every frame. On a
- * slow zoom the motion is a fraction of a pixel per frame, so the integer value
- * holds for several frames and then jumps a full pixel — visible stutter. Big
- * zooms move >1px/frame so the rounding is invisible (why 300–400% looked
- * smooth). The transform EXPRESSIONS we feed zoompan are already exact floats
- * computed independently from time — the loss happens only inside zoompan's
- * rasteriser.
+ * Why not zoompan: it rounds its internally-scaled width and the crop position
+ * INDEPENDENTLY every frame, so the visible window's centre alternates a
+ * fraction of a pixel left/right during a zoom — the exact shimmy users see on
+ * slow pushes (measured on a line pattern: 37 direction reversals per 90 frames
+ * linear, 12 after easing+truncation — and ZERO with this chain).
  *
- * The fix is to run zoompan on an S× supersampled frame: one integer pixel then
- * equals 1/S of an OUTPUT pixel (genuinely sub-pixel motion), and a single
- * Lanczos pass downscales to the target. S scales down as resolution rises
- * (4K pixels are already tiny, and the cost is S²).
+ * Here every frame is Lanczos-scaled to its exact per-frame size (t-based
+ * expression, so source fps doesn't matter) and the crop position derives from
+ * the frame's REAL size — the centre cannot alternate, only step monotonically,
+ * and the K× supersample turns the residual symmetric breathing sub-pixel.
+ * K is capped so the supersampled long edge stays ≤ 8192 (K=1 at 4K, where
+ * native pixels are already sub-perceptual).
  */
-function superFactor(W: number, H: number, rampPerSec = Infinity): number {
-  const long = Math.max(W, H)
-  let S: number
-  if (long <= 1280) S = 4 // ≤720p  → 0.25 output-px steps
-  else if (long <= 1920) S = 3 // 1080p  → 0.33 output-px steps
-  else if (long <= 2560) S = 2 // 1440p  → 0.50 output-px steps
-  else S = 1 // 4K+: native pixels already sub-perceptual at normal rates
-  // VERY slow ramps still creep a fraction of a pixel per frame after the base
-  // supersample — boost S so the step stays sub-perceptual ("butter"), capped
-  // so the supersampled canvas never exceeds ~8K on its long edge.
-  if (rampPerSec < 0.05) S += 2
-  else if (rampPerSec < 0.15) S += 1
-  return Math.max(1, Math.min(S, Math.max(1, Math.floor(8192 / long))))
+function animatedZoomChain(zExpr: string, fx: number, fy: number, W: number, H: number): string {
+  const F6 = (n: number): string => n.toFixed(6)
+  const K = Math.max(1, Math.min(4, Math.floor(8192 / Math.max(W, H))))
+  const KW = even(W * K)
+  const KH = even(H * K)
+  // The per-frame width, EXACTLY as the scale filter computes it (same trunc),
+  // so the crop offset below can never overrun the real frame. crop's in_w/in_h
+  // bind at init with variable-size streams (a centred '(in_w-out_w)/2' quietly
+  // became a LEFT anchor — measured 120px drift instead of 24), so the offsets
+  // are computed analytically from the same t-expression instead.
+  const wT = `(trunc(${KW}*(${zExpr})/2)*2)`
+  const hT = `(trunc(${KH}*(${zExpr})/2)*2)`
+  const parts: string[] = []
+  if (K > 1) parts.push(`scale=${KW}:${KH}:flags=lanczos+accurate_rnd`)
+  parts.push(`scale=w='${wT}':h='${hT}':eval=frame:flags=lanczos+accurate_rnd`)
+  parts.push(`crop=${KW}:${KH}:x='max(0,(${wT}-${KW})*${F6(fx)})':y='max(0,(${hT}-${KH})*${F6(fy)})'`)
+  if (K > 1) parts.push(`scale=${W}:${H}:flags=lanczos+accurate_rnd`)
+  return parts.join(',')
 }
 
-/**
- * Build a jitter-free zoom/pan chain. `z`/`x`/`y` are float ffmpeg expressions
- * (already per-frame, no accumulation). They use `iw`/`ih`, which become the
- * supersampled dimensions, so they stay correct unchanged: scale up (Lanczos) →
- * one zoompan pass at S× → scale down (Lanczos). `src`/`out` are stream labels
- * (pass '' when used mid-chain).
- */
-function zoompanStage(
-  src: string,
-  z: string,
-  x: string,
-  y: string,
-  W: number,
-  H: number,
-  fps: number,
-  out: string,
-  rampPerSec = Infinity
-): string {
-  const zp = (sw: number, sh: number): string =>
-    `zoompan=z='${z}':x='${x}':y='${y}':d=1:s=${sw}x${sh}:fps=${fps}`
-  const S = superFactor(W, H, rampPerSec)
-  if (S <= 1) return `${src}${zp(W, H)}${out}`
-  const SW = even(W * S)
-  const SH = even(H * S)
-  return `${src}scale=${SW}:${SH}:flags=lanczos+accurate_rnd,${zp(SW, SH)},scale=${W}:${H}:flags=lanczos+accurate_rnd${out}`
+/** Smoothstep-eased progress over `spanSec` using stream time `t` (valid after
+ *  the per-clip setpts=PTS-STARTPTS reset; fps-independent). Linear ramps read
+ *  as mechanical — ease-in-out is what makes zooms feel like butter. */
+function easedProgressT(spanSec: number): string {
+  const P = `min(t/${Math.max(0.05, spanSec).toFixed(6)},1)`
+  return `(pow(${P},2)*(3-2*${P}))`
 }
 
 /** Chain `atempo` filters to reach `speed` (each stage handles 0.5..2.0), for
@@ -459,14 +444,6 @@ export function atempoChain(speed: number): string {
   }
   factors.push(s)
   return factors.map((f) => `,atempo=${f.toFixed(6)}`).join('')
-}
-
-/** Smoothstep-eased progress expression for zoompan (`on` = output frame index).
- *  Linear ramps read as mechanical and steppy; ease-in-out is what makes CapCut
- *  zooms feel like butter. Commas are safe inside zoompan's quoted expressions. */
-function easedProgressExpr(frames: number): string {
-  const P = `min(on/${frames},1)`
-  return `(pow(${P},2)*(3-2*${P}))`
 }
 
 /**
@@ -521,12 +498,10 @@ export function baseTransformFilter(
   // (zoomStart/End are >=1). The exotic size<1 + Ken Burns case can't zoom out, so
   // fall back to a static render at the start scale.
   if (Math.min(s0, s1) >= 1 - eps) {
-    const frames = Math.max(1, Math.round(spanSec * fps))
-    const z = `${F(s0)}+(${F(s1)}-${F(s0)})*${easedProgressExpr(frames)}`
-    const x = `iw*${F(fx)}*(1-1/zoom)`
-    const y = `ih*${F(fy)}*(1-1/zoom)`
-    const rampPerSec = Math.abs(s1 - s0) / Math.max(0.1, spanSec)
-    return { chain: ',' + zoompanStage('', z, x, y, W, H, fps, '', rampPerSec), zoompan: true }
+    const zExpr = `${F(s0)}+(${F(s1)}-${F(s0)})*${easedProgressT(spanSec)}`
+    // zoompan:false — this chain keeps source PTS/frame-rate (the caller's
+    // normal speed/fps tail applies), unlike zoompan's resampled output.
+    return { chain: ',' + animatedZoomChain(zExpr, fx, fy, W, H), zoompan: false }
   }
   return { chain: staticX(s0), zoompan: false }
 }
@@ -951,16 +926,12 @@ export async function exportProject(
           // Supersampled zoompan (see zoompanStage) so slow b-roll pushes are
           // sub-pixel smooth too; its internal scale-up replaces the plain
           // scale=ow:oh and establishes the ow:oh canvas at S× before zooming.
-          scaleZoom = zoompanStage(
-            '',
-            `${zs}+(${ze}-${zs})*${easedProgressExpr(frames)}`,
-            'iw/2-(iw/zoom/2)',
-            'ih/2-(ih/zoom/2)',
+          scaleZoom = animatedZoomChain(
+            `${zs}+(${ze}-${zs})*${easedProgressT(len)}`,
+            0.5,
+            0.5,
             ow,
-            oh,
-            fps,
-            '',
-            Math.abs(Number(ze) - Number(zs)) / Math.max(0.1, frames / fps)
+            oh
           )
         } else {
           // No zoom: scale to the overlay width and let the height follow the

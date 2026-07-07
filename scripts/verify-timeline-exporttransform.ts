@@ -96,12 +96,13 @@ check(
 
 // animated Ken Burns (100 -> 200% over 5s @30fps) => zoompan with ramped z + focal x/y
 const kb = baseTransformFilter(1, 1, 2, 0, 0, W, H, 30, 5)
-check('animated zoom uses zoompan (flagged)', kb.chain.includes('zoompan') && kb.zoompan === true)
+check('animated zoom uses per-frame scale+crop (no zoompan)', !kb.chain.includes('zoompan') && kb.zoompan === false)
 check(
-  'animated zoom ramps z over frames (150, ease-in-out)',
-  kb.chain.includes('1.000000+(2.000000-1.000000)*(pow(min(on/150,1),2)*(3-2*min(on/150,1)))')
+  'animated zoom ramps z over 5s (t-based, ease-in-out)',
+  kb.chain.includes("scale=w='trunc(") &&
+    kb.chain.includes('1.000000+(2.000000-1.000000)*(pow(min(t/5.000000,1),2)*(3-2*min(t/5.000000,1)))')
 )
-check('animated zoom keeps focal x expr', kb.chain.includes('iw*0.500000*(1-1/zoom)'))
+check('animated zoom keeps focal crop expr', kb.chain.includes("x='(in_w-out_w)*0.500000'"))
 
 // exotic size<1 + Ken Burns can't zoom out -> static fallback (no zoompan)
 const shrinkKb = baseTransformFilter(0.5, 1, 2, 0, 0, W, H, 30, 5)
