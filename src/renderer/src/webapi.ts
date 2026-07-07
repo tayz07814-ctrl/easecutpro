@@ -262,6 +262,13 @@ const webApi: Window['api'] = {
       : path
     return runJob(() => call('/api/cutcutpro', { path: sp, transcript, modelName, runVad, script }))
   },
+  retakeAwareCut: async (path) => {
+    // Retake-Aware Cut Beta: separate job/mode; audio-only upload like ProCut.
+    const sp = isWebMediaId(path)
+      ? await ensureAudioUploaded(path, (p) => emitProgress(p, 'Retake β is working…', 'transcribe'))
+      : path
+    return runJob(() => call('/api/retake-cut', { path: sp, cut_mode: 'retake_aware_beta' }))
+  },
   cutJudge: async (payload) => {
     const r = (await call('/api/cut-judge', { payload })) as { raw: string }
     return r.raw

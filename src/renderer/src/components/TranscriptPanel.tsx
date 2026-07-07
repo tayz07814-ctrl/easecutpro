@@ -90,6 +90,7 @@ function ClutterCleaner(): JSX.Element {
   const setSmartCutPreset = useStore((s) => s.setSmartCutPreset)
   const runFastCutLord = useStore((s) => s.runFastCutLord)
   const runProCut = useStore((s) => s.runProCut)
+  const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
   const executeCuts = useStore((s) => s.executeCuts)
   const stagedSilences = useStore((s) => s.stagedSilences)
   const stagedSel = useStore((s) => s.stagedSilenceSel)
@@ -186,6 +187,13 @@ function ClutterCleaner(): JSX.Element {
         title="ProCut — premium 4-phase AI pipeline (whisper+Parakeet map → Claude → OpenAI listens) + VAD silence scan. Highlights only; nothing is cut until Execute."
       >
         ✂ ProCut
+      </button>
+      <button
+        onClick={() => void runRetakeCutBeta()}
+        disabled={jobActive}
+        title="Retake-Aware Cut Beta — separate experimental engine: verbatim transcript (AssemblyAI/Deepgram, whisper fallback), whole-take retake removal (never splices takes), natural-vs-ugly filler triage. Highlights only; nothing is cut until Execute."
+      >
+        🧪 Retake β
       </button>
       <button className="cl-gear" onClick={() => setShowSettings((v) => !v)} title="FastCut / ProCut silence-cleaning profile">
         ⚙

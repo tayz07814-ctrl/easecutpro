@@ -14,6 +14,7 @@ import { transcribeParakeet } from './parakeet'
 import { suggestCutsAI } from './ai-cut'
 import { judgeCuts } from './ai-cut-judge'
 import { cutCutPro } from './cutcutpro'
+import { retakeAwareCut } from './retakeaware/engine'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from './fast-cut'
 import { generateOverlayTimeline } from './overlay-rules'
 import { openaiAvailable } from './openai'
@@ -289,6 +290,12 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.cutCutPro, async (_e, path: string, transcript: Transcript | null, modelName?: string, runVad?: boolean, script?: string) => {
     const jobId = randomUUID()
     return cutCutPro(path, transcript, modelName, runVad ?? true, script, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
+  })
+
+  // ---- Retake-Aware Cut Beta: separate experimental engine (cut_mode: retake_aware_beta) ----
+  ipcMain.handle(IPC.retakeAwareCut, async (_e, path: string) => {
+    const jobId = randomUUID()
+    return retakeAwareCut(path, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
   })
 
   // ---- Smart Smooth Cut (beta): AI pause judge + debug dump ----

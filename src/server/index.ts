@@ -30,6 +30,7 @@ import { transcribeParakeet } from '../main/parakeet'
 import { suggestCutsAI } from '../main/ai-cut'
 import { judgeCuts } from '../main/ai-cut-judge'
 import { cutCutPro } from '../main/cutcutpro'
+import { retakeAwareCut } from '../main/retakeaware/engine'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from '../main/fast-cut'
 import { generateOverlayTimeline } from '../main/overlay-rules'
 import { openaiAvailable } from '../main/openai'
@@ -441,6 +442,18 @@ app.post('/api/cutcutpro', (req, res) => {
     const script = typeof req.body?.script === 'string' ? req.body.script : undefined
     const jobId = runJob('transcribe', userId, (op) => cutCutPro(p, transcript, modelName, runVad ?? true, script, (pct, msg) => op(pct, msg)))
     res.json({ jobId })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+// ---- Retake-Aware Cut Beta: separate experimental engine ----
+app.post('/api/retake-cut', (req, res) => {
+  try {
+    const userId = uid(req)
+    const p = assertAllowed(userId, String(req.body?.path || ''))
+    console.log('[retake-aware-beta] job requested (cut_mode: retake_aware_beta)')
+    const jobId = runJob('transcribe', userId, (op) => retakeAwareCut(p, (pct, msg) => op(pct, msg)))
+    res.json({ jobId, cut_mode: 'retake_aware_beta' })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }

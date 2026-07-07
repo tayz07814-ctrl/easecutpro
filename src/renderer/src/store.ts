@@ -467,6 +467,9 @@ interface AppState {
   runFastCutLord: () => Promise<void>
   /** ProCut: the CutCutPro 4-phase pipeline + VAD silence staging. Review-only. */
   runProCut: () => Promise<void>
+  /** Retake-Aware Cut Beta: separate experimental engine (verbatim provider +
+   *  whole-take retake removal + filler triage). Review-only, like the others. */
+  runRetakeCutBeta: () => Promise<void>
   /** apply everything the user reviewed: delete selected words + cut enabled staged
    *  silences. Async because the VAD-off switch defers the silence pass to here. */
   executeCuts: () => Promise<void>
@@ -1554,6 +1557,62 @@ export const useStore = create<AppState>((set, get) => ({
       if (vadOn) await get()._stageVadSilences('ProCut', res.silenceAdds)
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `ProCut failed: ${(e as Error).message}` } })
+    }
+  },
+
+  runRetakeCutBeta: async () => {
+    // Retake-Aware Cut Beta — fully separate path (cut_mode: retake_aware_beta).
+    // Same review-first contract as FastCut/ProCut: highlight + stage, apply on
+    // Execute cuts. Deliberately does NOT call snapRetakeFlags or any standard-
+    // engine helper: the beta engine guarantees whole-attempt spans itself.
+    const p0 = get().project
+    const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
+    if (!hasBase) {
+      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
+      return
+    }
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Retake β is working…' } })
+    try {
+      let path: string
+      if (isMultiBase(p0)) {
+        const combined = await window.api.combineClips(p0.baseSequence!, true)
+        path = combined.path
+      } else {
+        path = p0.media!.path
+      }
+      const res = await window.api.retakeAwareCut(path)
+      const cur = get().project
+      let flagIds: string[]
+      let nextProject = cur
+      if (cur.transcript && cur.transcript.words.length) {
+        // The project already has a transcript the user may have edited — keep
+        // it, and map the beta's cut SPANS onto its words by time overlap.
+        flagIds = cur.transcript.words
+          .filter((w) => {
+            const mid = (w.start + w.end) / 2
+            return res.cutSpans.some((s) => mid >= s.start && mid <= s.end)
+          })
+          .map((w) => w.id)
+      } else {
+        // No transcript yet — adopt the beta's verbatim transcript (raw words;
+        // decisions were made on these, clean_text is display-only elsewhere).
+        nextProject = { ...cur, transcript: res.transcript }
+        flagIds = res.deleteWordIds
+      }
+      set({
+        project: nextProject,
+        selectedWordIds: new Set(flagIds),
+        job: {
+          active: false,
+          percent: 100,
+          message:
+            `${res.summary} — review, then Execute cuts` +
+            (res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
+            (res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '')
+        }
+      })
+    } catch (e) {
+      set({ job: { active: false, percent: 0, message: `Retake β failed: ${(e as Error).message}` } })
     }
   },
 

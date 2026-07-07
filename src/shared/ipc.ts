@@ -11,6 +11,7 @@ export const IPC = {
   cutJudge: 'media:cutJudge',
   saveSmartCutDebug: 'media:saveSmartCutDebug',
   cutCutPro: 'media:cutCutPro',
+  retakeAwareCut: 'media:retakeAwareCut', // Retake-Aware Cut Beta (cut_mode: retake_aware_beta)
   generateOverlays: 'media:generateOverlays',
   openaiStatus: 'tools:openaiStatus',
   whisperModels: 'tools:whisperModels',
