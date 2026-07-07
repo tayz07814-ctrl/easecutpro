@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../store'
 import { mediaSrc } from '../platform'
+import { insertLibraryItemAtPlayhead } from '../timelineInsert'
 import type { LibraryItem } from '@shared/types'
 
 function fmtDur(s: number): string {
@@ -94,6 +95,7 @@ export default function MediaLibrary(): JSX.Element {
               item={it}
               active={it.path === currentPath}
               onBase={() => setBaseFromLibrary(it.id)}
+              onMain={() => insertLibraryItemAtPlayhead(it, 'main')}
               onOverlay={() => addLibraryToOverlay(it.id, 1)}
               onSeq={() => addToSequence(it.id)}
               onRemove={() => removeFromLibrary(it.id)}
@@ -162,6 +164,7 @@ function MediaCard({
   item,
   active,
   onBase,
+  onMain,
   onOverlay,
   onSeq,
   onRemove
@@ -169,6 +172,7 @@ function MediaCard({
   item: LibraryItem
   active: boolean
   onBase: () => void
+  onMain: () => void
   onOverlay: () => void
   onSeq: () => void
   onRemove: () => void
@@ -201,6 +205,11 @@ function MediaCard({
           {item.kind !== 'image' && (
             <button className="mini" onClick={onBase} title="Load as the base (A-roll) track">
               Use as base
+            </button>
+          )}
+          {item.kind !== 'audio' && (
+            <button className="mini" onClick={onMain} title="Insert into the MAIN track at the playhead (images become 4s clips)">
+              + Main
             </button>
           )}
           {item.kind === 'video' && (

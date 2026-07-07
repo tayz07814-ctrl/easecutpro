@@ -76,7 +76,9 @@ export default function MobileApp(): JSX.Element {
   // DOCUMENT mode: selection + edits live on the shared engine, not the legacy
   // store — so delete/split must read and drive the engine.
   const snap = useSharedEngineSnapshot()
-  const docMode = !!project.timeline && !!snap?.doc
+  // Engine doc is authoritative even before project.timeline materializes
+  // (fresh projects are bridged) — same gate fix as MobileTools.
+  const docMode = !!snap?.doc
   const docSelId = docMode ? snap!.interaction.selection[0] ?? null : null
   const hasSelection = docMode ? !!docSelId : !!(selClip || selSeg || selText || selSeqClip)
   const engineDelete = (): void => {

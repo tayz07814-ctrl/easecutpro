@@ -414,7 +414,7 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
       const tb = doc.timebase
       const isImage = item.kind === 'image'
       const isAudio = item.kind === 'audio'
-      const durSec = isImage ? 5 : item.duration || 5
+      const durSec = isImage ? 4 : item.duration || 4
       const kind = isImage ? 'image' : isAudio ? 'audio' : 'video'
       const dropFrame = Math.max(0, frameFromClientX(e.clientX))
       const mainId = mainTrackId(doc)

@@ -59,7 +59,10 @@ export function MobileTools({ onImport, onCutlord, onEditText }: {
   const project = useStore((s) => s.project)
   const playhead = useStore((s) => s.project.playhead)
   const snap = useSharedEngineSnapshot()
-  const docMode = !!project.timeline && !!snap?.doc
+  // The shared engine's doc is authoritative even before project.timeline
+  // materializes (fresh projects are BRIDGED into a doc) — gating on
+  // project.timeline hid the whole clip toolbar on brand-new projects.
+  const docMode = !!snap?.doc
   const selId = docMode ? snap!.interaction.selection[0] ?? null : null
   const loc = selId && snap?.doc ? findClip(snap.doc, selId) : null
   const clip = loc?.clip ?? null

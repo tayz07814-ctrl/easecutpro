@@ -24,6 +24,7 @@ import type {
 } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 import { documentToProject } from '@shared/timeline/bridge'
+import { insertLibraryItemAtPlayhead } from './timelineInsert'
 import { renderTextPng } from './textRender'
 import { TIMELINE_TRACK_COUNT } from '@shared/types'
 import { detectFillerIds, detectRepeatIds, snapRetakeFlags, DEFAULT_FILLERS } from '@shared/fillers'
@@ -151,8 +152,11 @@ function saveLibrary(lib: LibraryItem[]): void {
 
 /** Probe a file and build a library item (with a small preview thumbnail). */
 async function buildLibraryItem(path: string): Promise<LibraryItem> {
-  const isImage = IMAGE_RE.test(path)
   const info = await window.api.probe(path).catch(() => null)
+  // Web media ids (webmedia:xxxx) carry no file extension, so extension sniffing
+  // alone classified every browser-imported image as "video". The probe knows:
+  // an image has visuals but no duration and no audio.
+  const isImage = IMAGE_RE.test(path) || (!!info && info.hasVideo && !info.hasAudio && (info.duration || 0) === 0)
   const name = path.split(/[\\/]/).pop() ?? 'media'
   let kind: LibraryItem['kind'] = 'video'
   if (isImage) kind = 'image'
@@ -1044,14 +1048,24 @@ export const useStore = create<AppState>((set, get) => ({
       saveLibrary(library)
       set({ library })
     }
-    get().addLibraryToOverlay(item.id, 1)
+    // Engine-native: the clip lands on a real overlay lane of the authoritative
+    // timeline at the playhead (the lane is created on first use). The legacy
+    // project.tracks path is invisible to doc-native projects.
+    const ok = insertLibraryItemAtPlayhead(item, 'overlay')
+    set({
+      job: {
+        active: false,
+        percent: 100,
+        message: ok ? `Overlay added at the playhead — drag or use Adjust to place it` : 'Import a base video first'
+      }
+    })
   },
 
   addLibraryToOverlay: (id, trackIndex = 1) => {
     const item = get().library.find((it) => it.id === id)
     if (!item) return
     const isImage = item.kind === 'image'
-    const dur = isImage ? 5 : item.duration || 5
+    const dur = isImage ? 4 : item.duration || 4
     const clip: Clip = {
       id: uid(),
       name: item.name,
