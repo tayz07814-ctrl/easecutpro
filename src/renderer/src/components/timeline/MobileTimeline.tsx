@@ -82,6 +82,25 @@ function MobileClip({
   )
 }
 
+/** Mobile lane set, CapCut-style: main video first, then populated lanes
+ *  (overlays etc. with content), then ONE text lane and ONE audio lane —
+ *  extra empty lanes don't exist on a phone until something needs them. */
+function mobileLanes(tracks: TimelineDocument['tracks']): TimelineDocument['tracks'] {
+  const main = tracks.filter((t) => t.isMain)
+  const populated = tracks.filter((t) => !t.isMain && t.clips.length > 0)
+  const order = (k: string): number => (k === 'text' ? 1 : k === 'audio' ? 2 : 0)
+  const out = [...main, ...[...populated].sort((a, b) => order(a.kind) - order(b.kind))]
+  if (!populated.some((t) => t.kind === 'text')) {
+    const firstText = tracks.find((t) => t.kind === 'text' && !t.clips.length)
+    if (firstText) out.push(firstText)
+  }
+  if (!populated.some((t) => t.kind === 'audio')) {
+    const firstAudio = tracks.find((t) => t.kind === 'audio' && !t.clips.length)
+    if (firstAudio) out.push(firstAudio)
+  }
+  return out
+}
+
 export default function MobileTimeline(): JSX.Element {
   const engine = useEngine()
   const { doc, session, interaction } = useTimeline()
@@ -190,16 +209,11 @@ export default function MobileTimeline(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewW])
 
-  const setStoreZoom = useStore((s) => s.setZoom)
   const px = useStore((s) => s.project.pxPerSec)
 
   return (
     <div className="ec-mtl">
       <div className="ec-mtl-tc">{formatTimecode(session.playhead, tb)}</div>
-      <div className="ec-mtl-zoom">
-        <button onClick={() => setStoreZoom(px - 24)} title="Zoom out">−</button>
-        <button onClick={() => setStoreZoom(px + 24)} title="Zoom in">+</button>
-      </div>
       <div
         className="ec-mtl-scroll"
         ref={scrollRef}
@@ -209,8 +223,20 @@ export default function MobileTimeline(): JSX.Element {
         onClick={() => engine.clearSelection()}
       >
         <div className="ec-mtl-content" style={{ width: contentWidth }}>
-          {activeDoc.tracks.map((t) => (
+          {mobileLanes(activeDoc.tracks).map((t) => (
             <div className="ec-mtl-lane" key={t.id} style={{ height: laneHeight(t), marginLeft: pad, width: laneWidth }}>
+              {!t.clips.length && (t.kind === 'text' || t.kind === 'audio') && (
+                <button
+                  className="ec-mtl-addlane"
+                  style={{ marginLeft: -pad }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    window.dispatchEvent(new CustomEvent('ec:sheet', { detail: t.kind === 'text' ? 'text' : 'music' }))
+                  }}
+                >
+                  ＋ {t.kind === 'text' ? 'Add text' : 'Add music'}
+                </button>
+              )}
               {t.clips.map((c) => (
                 <MobileClip
                   key={c.id}

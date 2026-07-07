@@ -27,11 +27,16 @@ export default function MobileApp(): JSX.Element {
   // A montage base has no `media`; gate actions on hasBase so transcribe/tools work.
   const hasBase = hasMedia || ((project.baseSequence?.length ?? 0) > 0)
   const [sheet, setSheet] = useState<Sheet>(null)
+  useEffect(() => {
+    const open = (e: Event): void => setSheet((e as CustomEvent).detail as Sheet)
+    window.addEventListener('ec:sheet', open)
+    return () => window.removeEventListener('ec:sheet', open)
+  }, [])
   // Preview height (vh): tall by default (~2/3 of the screen) and user-adjustable
   // by dragging the grab handle under the canvas — like the desktop divider.
   const [stageVh, setStageVh] = useState<number>(() => {
     const v = Number(localStorage.getItem('ec.mStageVh'))
-    return v >= 22 && v <= 78 ? v : 62
+    return v >= 22 && v <= 58 ? v : 46
   })
   useEffect(() => localStorage.setItem('ec.mStageVh', String(stageVh)), [stageVh])
   function startStageDrag(clientY0: number): void {
@@ -39,7 +44,7 @@ export default function MobileApp(): JSX.Element {
     const onMove = (ev: TouchEvent | MouseEvent): void => {
       const y = 'touches' in ev ? (ev.touches[0]?.clientY ?? clientY0) : ev.clientY
       const dvh = ((y - clientY0) / window.innerHeight) * 100
-      setStageVh(Math.min(78, Math.max(22, vh0 + dvh)))
+      setStageVh(Math.min(58, Math.max(22, vh0 + dvh)))
       ev.preventDefault()
     }
     const onUp = (): void => {
@@ -154,6 +159,8 @@ export default function MobileApp(): JSX.Element {
         <div className="m-tp-side">
           <button className="m-ic" onClick={s.undo} disabled={!s.canUndo} title="Undo"><Icon name="undo" /></button>
           <button className="m-ic" onClick={s.redo} disabled={!s.canRedo} title="Redo"><Icon name="redo" /></button>
+          <button className="m-ic m-zoom" onClick={() => s.setZoom((snap?.session.zoom ?? 60) - 24)} disabled={!hasBase} title="Zoom out">−</button>
+          <button className="m-ic m-zoom" onClick={() => s.setZoom((snap?.session.zoom ?? 60) + 24)} disabled={!hasBase} title="Zoom in">+</button>
         </div>
         <button className="m-ic m-play" onClick={() => hasBase && s.setPlaying(!s.playing)} disabled={!hasBase} title={s.playing ? 'Pause' : 'Play'}>
           <Icon name={s.playing ? 'pause' : 'play'} size={20} />

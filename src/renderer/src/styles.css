@@ -566,10 +566,18 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .m-export:disabled { opacity: 0.5; box-shadow: none; }
 
 /* Preview — smaller, with VideoPreview's own desktop transport hidden */
-.m-stage { flex: 0 0 auto; height: 62vh; min-height: 0; display: flex; background: #000; }
+.m-stage { flex: 0 0 auto; height: 46vh; min-height: 0; display: flex; background: #000; }
 .m-stage-grip { flex: 0 0 auto; height: 14px; display: flex; align-items: center; justify-content: center;
   cursor: row-resize; touch-action: none; background: var(--bg2); }
 .m-stage-grip span { width: 44px; height: 4px; border-radius: 2px; background: var(--border); }
+/* Mobile: no visible scrollbars anywhere — touch scrolling only (CapCut-style). */
+.m-app * { scrollbar-width: none; }
+.m-app *::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* Empty text/music lanes carry their own + affordance (CapCut's "+ Add music"). */
+.ec-mtl-addlane { position: sticky; left: 10px; margin: 2px 0; height: calc(100% - 4px); display: inline-flex;
+  align-items: center; gap: 6px; padding: 0 14px; border: none; border-radius: 6px;
+  background: rgba(255,255,255,0.07); color: var(--muted); font-size: 12px; white-space: nowrap; z-index: 2; }
+.m-zoom { font-size: 17px; font-weight: 700; }
 .m-stage .preview { flex: 1; min-height: 0; background: #000; }
 .m-stage .transport { display: none; }
 
@@ -606,7 +614,7 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .m-del.all { color: #ffd27a; border-color: #6b5a2c; background: #2a2515; }
 
 /* Timeline fills the remaining space; tracks themselves are compact */
-.m-tl { flex: 1 1 auto; min-height: 200px; min-width: 0; display: flex; border-top: 1px solid var(--border); }
+.m-tl { flex: 1 1 auto; min-height: 132px; min-width: 0; display: flex; border-top: 1px solid var(--border); }
 .m-tl > .timeline { flex: 1; min-width: 0; height: 100%; }
 .timeline.mobile { background: var(--bg); }
 .timeline.mobile .ruler { background: var(--bg2); color: var(--muted); }

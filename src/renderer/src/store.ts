@@ -405,6 +405,9 @@ interface AppState {
   setBaseFromLibrary: (id: string) => void
   /** add a library item as an overlay clip at the playhead. */
   addLibraryToOverlay: (id: string, trackIndex?: number) => void
+  /** Mobile: pick an image/video from the device and drop it on an overlay
+   *  track at the playhead (CapCut-style Overlay button). */
+  importOverlayFromDevice: () => Promise<void>
 
   // background music (OST)
   addMusic: () => Promise<void>
@@ -1028,6 +1031,20 @@ export const useStore = create<AppState>((set, get) => ({
       window.api.thumbnails(item.path).then((t) => set({ thumbnails: t })).catch(() => undefined)
     }
     set({ job: { active: false, percent: 100, message: `Loaded ${item.name}. Click Transcribe to generate the transcript.` } })
+  },
+
+  importOverlayFromDevice: async () => {
+    const path = await window.api.openMediaDialog()
+    if (!path) return
+    set({ job: { active: true, kind: 'probe', percent: 0, message: 'Adding overlay…' } })
+    let item = get().library.find((it) => it.path === path)
+    if (!item) {
+      item = await buildLibraryItem(path)
+      const library = [...get().library, item]
+      saveLibrary(library)
+      set({ library })
+    }
+    get().addLibraryToOverlay(item.id, 1)
   },
 
   addLibraryToOverlay: (id, trackIndex = 1) => {

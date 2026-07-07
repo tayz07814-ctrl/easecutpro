@@ -234,6 +234,7 @@ export function MobileTools({ onImport, onCutlord, onEditText }: {
       {quick}
       <div className="mt-row">
         <Tool icon="split" label="Split" onClick={() => engine?.splitAtPlayhead()} />
+        <Tool icon="overlay" label="Overlay" onClick={() => void useStore.getState().importOverlayFromDevice()} />
         <Tool icon="speed" label="Speed" onClick={() => setPanel('speed')} />
         <Tool icon="zoom" label="Zoom" onClick={() => setPanel('zoom')} />
         <Tool icon="crop" label="Crop" onClick={() => setPanel('crop')} />

@@ -6,7 +6,7 @@ export type IconName =
   | 'back' | 'undo' | 'redo' | 'play' | 'pause'
   | 'magnet' | 'snap' | 'trash' | 'split' | 'speed' | 'crop' | 'removeBg'
   | 'animation' | 'audioExtract' | 'adjust' | 'zoom' | 'duplicate' | 'lock'
-  | 'replace' | 'more' | 'plus' | 'text' | 'music' | 'volume' | 'video'
+  | 'replace' | 'more' | 'plus' | 'text' | 'music' | 'volume' | 'video' | 'overlay'
   | 'kfPrev' | 'kfNext' | 'kfAdd' | 'import' | 'cutlord' | 'export' | 'check'
 
 const PATHS: Record<IconName, JSX.Element> = {
@@ -35,6 +35,7 @@ const PATHS: Record<IconName, JSX.Element> = {
   music: <><path d="M9 18V5l10-2v13" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="16.5" cy="16" r="2.5" /></>,
   volume: <><path d="M5 9v6h4l5 4V5L9 9H5z" /><path d="M17 8a5 5 0 010 8" /></>,
   video: <><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none" /></>,
+  overlay: <><rect x="3" y="3" width="13" height="13" rx="2" /><rect x="8" y="8" width="13" height="13" rx="2" /></>,
   kfPrev: <><path d="M12 4l4 8-4 8-4-8 4-8z" /><path d="M9 7l-3 5 3 5" /></>,
   kfNext: <><path d="M12 4l4 8-4 8-4-8 4-8z" /><path d="M15 7l3 5-3 5" /></>,
   kfAdd: <><path d="M12 4l4 8-4 8-4-8 4-8z" /><path d="M12 9v6M9 12h6" stroke="#111" /></>,
