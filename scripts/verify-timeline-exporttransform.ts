@@ -99,10 +99,15 @@ const kb = baseTransformFilter(1, 1, 2, 0, 0, W, H, 30, 5)
 check('animated zoom uses per-frame scale+crop (no zoompan)', !kb.chain.includes('zoompan') && kb.zoompan === false)
 check(
   'animated zoom ramps z over 5s (t-based, ease-in-out)',
-  kb.chain.includes("scale=w='trunc(") &&
+  kb.chain.includes("scale=w='(trunc(") &&
     kb.chain.includes('1.000000+(2.000000-1.000000)*(pow(min(t/5.000000,1),2)*(3-2*min(t/5.000000,1)))')
 )
-check('animated zoom keeps focal crop expr', kb.chain.includes("x='(in_w-out_w)*0.500000'"))
+// the crop offset is ANALYTIC (same trunc'd width expression), never in_w-based:
+// crop's in_w binds at init on variable-size streams (left-anchor bug).
+check(
+  'animated zoom keeps analytic focal crop expr',
+  kb.chain.includes("-7680)*0.500000)'") && !kb.chain.includes('in_w')
+)
 
 // exotic size<1 + Ken Burns can't zoom out -> static fallback (no zoompan)
 const shrinkKb = baseTransformFilter(0.5, 1, 2, 0, 0, W, H, 30, 5)
