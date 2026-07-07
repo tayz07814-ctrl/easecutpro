@@ -353,6 +353,17 @@ export async function ensureAudioUploaded(id: string, onProgress?: (pct: number)
   const rec = registry.get(id)
   if (!rec) throw new Error('media not found in browser')
   if (rec.audioServerPath) return rec.audioServerPath
+  // The FULL file is already on the PC (autosave/export uploaded it)? Use it —
+  // the server extracts audio with ffmpeg in seconds. This is why Cut Lord jobs
+  // used to stall for minutes: the browser was re-decoding a whole video that
+  // the server already had.
+  if (rec.serverPath) return rec.serverPath
+  // Big files: decodeAudioData buffers the ENTIRE file in RAM — on phones a
+  // multi-hundred-MB video takes minutes or dies. The resumable full upload +
+  // server-side ffmpeg is strictly faster and more reliable there.
+  if (rec.file.size > 250 * 1024 * 1024) {
+    return ensureUploaded(id, onProgress)
+  }
   const wav = await extractAudioWavBlob(id, (p) => onProgress?.(Math.round(p * 0.35)))
   if (!wav) {
     // Couldn't decode in this browser — fall back to uploading the whole file.

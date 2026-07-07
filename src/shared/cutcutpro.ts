@@ -156,11 +156,38 @@ export function buildAiPayload(map: TimestampMap): string {
 }
 
 /** Parse + clamp an AI EDL reply. Never throws; ok=false means unusable. */
+/** Pull the first complete JSON object out of a model reply — models wrap the
+ *  EDL in prose or markdown fences routinely, and a leading sentence used to
+ *  fail the whole Claude verification pass (silently shipping the unverified
+ *  first draft). Brace-scans with string awareness; falls back to the raw. */
+export function extractJsonObject(raw: string): string {
+  // Anchor on the EDL's own key when present, so a stray earlier object in the
+  // reply ("here's a summary {…}") can't shadow the real payload.
+  const key = raw.indexOf('"word_cuts"')
+  const start = key >= 0 ? raw.lastIndexOf('{', key) : raw.indexOf('{')
+  if (start < 0) return raw.trim()
+  let depth = 0
+  let inStr = false
+  let esc = false
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i]
+    if (esc) { esc = false; continue }
+    if (ch === '\\') { esc = true; continue }
+    if (ch === '"') inStr = !inStr
+    if (inStr) continue
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return raw.slice(start, i + 1)
+    }
+  }
+  return raw.slice(start).trim() // truncated reply: let JSON.parse report it
+}
+
 export function validateEdl(raw: string, map: TimestampMap): { ok: boolean; edl: Edl } {
   const empty: Edl = { word_cuts: [], pause_cuts: [] }
   try {
-    const cleaned = raw.replace(/^```(json)?/m, '').replace(/```\s*$/m, '').trim()
-    const j = JSON.parse(cleaned)
+    const j = JSON.parse(extractJsonObject(raw))
     const maxI = map.words.length - 1
     const pauseIds = new Set(map.pauses.map((p) => p.id))
     const word_cuts: Edl['word_cuts'] = []
@@ -359,6 +386,8 @@ export interface CutCutProDebug {
   deleted_words: number
   pause_edits: number
   warnings: string[]
+  openai_raw?: string
+  claude_raw?: string
 }
 
 export interface CutCutProResult {

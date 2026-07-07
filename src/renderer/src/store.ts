@@ -1510,14 +1510,19 @@ export const useStore = create<AppState>((set, get) => ({
       const tRes = res.transcript ?? p0.transcript
       const fillerIds =
         get().cutLordSettings.fillers && tRes ? detectFillerIds(tRes, get().fillerWords) : []
+      // SNAP the AI's flags to whole clauses and PROTECT the surviving last
+      // take — the same deterministic guard FastCut uses. Kills the "first
+      // half of take 1 spliced onto the tail of the final take" class of AI
+      // boundary mistakes regardless of what the model returned.
+      const snapped = tRes ? snapRetakeFlags(res.deleteWordIds, tRes) : res.deleteWordIds
       set((s) => ({
         project: res.transcript ? { ...s.project, transcript: res.transcript } : s.project,
-        selectedWordIds: new Set([...res.deleteWordIds, ...fillerIds]),
+        selectedWordIds: new Set([...snapped, ...fillerIds]),
         job: {
           active: false,
           percent: 100,
           message:
-            `ProCut flagged ${res.deleteWordIds.length} word(s) + ${res.silenceAdds.length} pause(s) — review, then Execute cuts` +
+            `ProCut flagged ${snapped.length} word(s) + ${res.silenceAdds.length} pause(s) — review, then Execute cuts` +
             (res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '')
         }
       }))

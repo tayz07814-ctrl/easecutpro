@@ -70,7 +70,10 @@ Propose the cuts:
   BUT keep audience-facing lines that merely sound similar: an outro spoken TO viewers ("that's it for today, thanks for watching") is content, not a wrap marker. Use the audio delivery to tell them apart.
 - STUTTERS & DOUBLE-SPOKEN WORDS: cut the stuttered or duplicated words, leaving one clean instance.
 - DEAD-AIR PAUSES: remove or hard-trim silent pauses; keep only natural sentence rhythm and deliberate dramatic beats.
-Do NOT cut deliberate rhetorical repetition (emphasis). Never remove the ONLY copy of an idea, and never leave a broken half-sentence.
+HARD RULES:
+- CUT WHOLE TAKES ONLY: a retake cut runs from the earlier take's FIRST word up to the word right before the surviving take begins. NEVER splice takes — never keep the first half of one take joined to the second half of another, and never start or end a cut in the middle of a sentence.
+- THE ONLY COPY OF AN IDEA IS UNTOUCHABLE: verbal mistakes, awkward wording, hedges, filler words and small stumbles INSIDE the only take of a line stay in the video. You are not a line editor — if there is no later take of the same line, do not cut anything from it (a pure stutter duplicate like "the the" is the sole exception).
+- Do NOT cut deliberate rhetorical repetition (emphasis). When in doubt, KEEP.
 
 ${EDL_SHAPE}`
 
@@ -81,6 +84,8 @@ Finalize it:
 - Remove any PRODUCTION ARTIFACTS the first pass missed: slates/count-ins/take markers ("skip 10, hook one", "take three"), the speaker talking ABOUT the recording instead of TO the audience (planning a take out loud, directing someone off-camera), and session wrap markers at the very start/end ("okay, that's it", "cut"). Audience-facing outros ("that's it for today, thanks for watching") are content — keep them.
 - Remove any leftover stutters or double-spoken words.
 - Never leave a broken or dangling half-sentence: the words that remain must flow as a script.
+- CUT WHOLE TAKES ONLY: retake cuts run from the earlier take's first word to the word before the surviving take begins — never splice half of one take onto half of another; never start or end a cut mid-sentence. REMOVE any first-pass cut that violates this by EXTENDING it to the full take boundary.
+- THE ONLY COPY of an idea is untouchable: verbal mistakes, hedges and filler words inside the only take of a line are NOT cuts — DELETE any first-pass cut whose reason is just "filler"/"cleaner delivery"/"incomplete thought" unless a later take of the same line survives.
 - Keep the first pass's correct cuts; only add/adjust what's needed to reach zero repeats.
 - If the proposed EDL is empty, perform the full analysis yourself.
 Return the DEFINITIVE final EDL (same ids/indices; your reply FULLY REPLACES the proposal).
@@ -203,7 +208,7 @@ async function claudeVerifyPass(
     `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
   const res = await client.messages.create({
     model: CLAUDE_MODEL,
-    max_tokens: 8192,
+    max_tokens: 16000,
     system: CLAUDE_VERIFY_SYSTEM,
     messages: [{ role: 'user', content: userText }]
   })
@@ -225,6 +230,8 @@ export async function cutCutPro(
 ): Promise<CutCutProResult> {
   const warnings: string[] = []
   const phases: string[] = []
+  let rawGpt = ''
+  let rawClaude = ''
 
   // ---- Phase 1: transcription (whisper-1, verbatim) + pause mapping -----------
   onProgress?.(2, 'Cut Lord is transcribing (1/4)…')
@@ -271,6 +278,7 @@ export async function cutCutPro(
   if (openaiAvailable()) {
     try {
       const raw = await gptFirstPass(payload, audioPath, warnings, phases, onProgress)
+      rawGpt = raw.slice(0, 4000)
       const v = validateEdl(raw, map)
       if (v.ok) {
         gptEdl = v.edl
@@ -288,6 +296,7 @@ export async function cutCutPro(
   if (claudeAvailable()) {
     try {
       const raw = await claudeVerifyPass(payload, gptEdl ?? { word_cuts: [], pause_cuts: [] }, onProgress)
+      rawClaude = raw.slice(0, 4000)
       const v = validateEdl(raw, map)
       if (v.ok) {
         claudeEdl = v.edl
@@ -323,7 +332,10 @@ export async function cutCutPro(
     refine_notes: refined.notes,
     deleted_words: edits.deleteWordIds.length,
     pause_edits: edits.silenceAdds.length,
-    warnings
+    warnings,
+    // raw model replies (truncated) — diagnose WHY a pass was rejected
+    openai_raw: rawGpt,
+    claude_raw: rawClaude
   }
   let debugPath = ''
   try {
