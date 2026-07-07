@@ -24,6 +24,7 @@ import type {
 } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 import { documentToProject } from '@shared/timeline/bridge'
+import { getSharedEngine } from './timelineEngine'
 import { insertLibraryItemAtPlayhead } from './timelineInsert'
 import { exportOnDevice } from './export/localExport'
 import { renderTextPng } from './textRender'
@@ -997,11 +998,22 @@ export const useStore = create<AppState>((set, get) => ({
       return
     }
     const cur = get().project
-    if (cur.media?.path === item.path) {
+    // The timeline is authoritative: "already loaded" only when the MAIN lane
+    // still carries this source. The legacy media field alone can be stale —
+    // deleting the clip from the timeline never clears it, which used to lock
+    // the library item out of "Use as base" forever.
+    const doc = getSharedEngine()?.document ?? cur.timeline
+    const onMainLane = doc
+      ? doc.tracks.some((t) => t.isMain && t.clips.some((c) => c.sourcePath === item.path))
+      : cur.media?.path === item.path
+    if (onMainLane) {
       set({ job: { active: false, percent: 100, message: `${item.name} is already the base track` } })
       return
     }
-    if (cur.media && cur.transcript) {
+    // Only warn when there's actually an edit to lose: a populated main lane
+    // (or, pre-doc, a loaded media) plus a transcript.
+    const mainHasClips = doc ? doc.tracks.some((t) => t.isMain && t.clips.length > 0) : !!cur.media
+    if (mainHasClips && cur.transcript) {
       const ok = window.confirm(
         'Load this as the base track? The current transcript and base edits are cleared. ' +
           '(Your media library and any overlay/text clips for this base are also reset.)'
