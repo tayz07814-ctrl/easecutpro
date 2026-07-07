@@ -25,6 +25,7 @@ import type {
 import type { TimelineDocument } from '@shared/timeline/types'
 import { documentToProject } from '@shared/timeline/bridge'
 import { insertLibraryItemAtPlayhead } from './timelineInsert'
+import { exportOnDevice } from './export/localExport'
 import { renderTextPng } from './textRender'
 import { TIMELINE_TRACK_COUNT } from '@shared/types'
 import { detectFillerIds, detectRepeatIds, snapRetakeFlags, DEFAULT_FILLERS } from '@shared/fillers'
@@ -561,6 +562,9 @@ interface AppState {
 
   // io
   exportVideo: (settings: ExportSettings) => Promise<void>
+  /** Render + encode entirely IN THIS BROWSER (WebCodecs) and save to the
+   *  device — no upload. Falls back with a clear message when unsupported. */
+  exportVideoOnDevice: (settings: ExportSettings) => Promise<void>
   setShowExportModal: (b: boolean) => void
   save: () => Promise<void>
   load: () => Promise<void>
@@ -2404,6 +2408,30 @@ export const useStore = create<AppState>((set, get) => ({
       selectedWordIds: new Set()
     })
     history.applying = false
+  },
+
+  exportVideoOnDevice: async (settings) => {
+    set({ showExportModal: false, job: { active: true, kind: 'export', percent: 1, message: 'Exporting on this device…' } })
+    try {
+      const { blob, name } = await exportOnDevice(
+        get().project,
+        { width: settings.width, height: settings.height, bitrateMbps: settings.bitrateMbps },
+        (percent, message) => set({ job: { active: true, kind: 'export', percent, message } })
+      )
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 8000)
+      set({ job: { active: false, percent: 100, message: `Saved ${name} to this device` } })
+    } catch (e) {
+      set({
+        job: { active: false, percent: 0, message: `On-device export: ${(e as Error).message} — use the normal Export instead` }
+      })
+    }
   },
 
   exportVideo: async (settings) => {

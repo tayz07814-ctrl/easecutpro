@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { canEncodeOnDevice, whyNotLocal } from '../export/localExport'
+import { IS_WEB } from '../platform'
 import { useStore } from '../store'
 
 interface Preset {
@@ -26,6 +28,20 @@ function dimsFor(ratio: [number, number], srcW: number, srcH: number): { w: numb
 }
 
 export default function ExportModal(): JSX.Element {
+  // On-device (in-browser) export: shown on web when the browser can encode
+  // H.264+AAC and the timeline only uses phase-1 features.
+  const project = useStore((s) => s.project)
+  const exportVideoOnDevice = useStore((s) => s.exportVideoOnDevice)
+  const [deviceOk, setDeviceOk] = useState(false)
+  useEffect(() => {
+    if (!IS_WEB) return
+    let alive = true
+    void canEncodeOnDevice().then((ok) => alive && setDeviceOk(ok))
+    return () => {
+      alive = false
+    }
+  }, [])
+  const localGate = IS_WEB && deviceOk ? whyNotLocal(project) : ''
   const media = useStore((s) => s.project.media)
   const sequence = useStore((s) => s.project.baseSequence)
   const exportVideo = useStore((s) => s.exportVideo)
@@ -101,6 +117,19 @@ export default function ExportModal(): JSX.Element {
 
         <div className="row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
           <button onClick={() => close(false)}>Cancel</button>
+          {IS_WEB && deviceOk && (
+            <button
+              disabled={!canExport || w < 16 || h < 16 || !!localGate}
+              title={
+                localGate
+                  ? `Not available for this timeline yet: ${localGate}`
+                  : 'Render + encode in this browser and save straight to this device — nothing is uploaded'
+              }
+              onClick={() => void exportVideoOnDevice({ width: w, height: h, bitrateMbps: bitrate })}
+            >
+              📱 Export on this device <span className="muted small">beta</span>
+            </button>
+          )}
           <button
             className="primary"
             disabled={!canExport || w < 16 || h < 16}

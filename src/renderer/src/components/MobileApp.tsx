@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useStore } from '../store'
+import { canEncodeOnDevice, whyNotLocal } from '../export/localExport'
 import { useSmoothProgress } from '../useSmoothProgress'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
 import * as C from '@shared/timeline/commands'
@@ -334,6 +335,17 @@ const ASPECTS: { label: string; r: [number, number] | null }[] = [
 function MobileExport({ onClose }: { onClose: () => void }): JSX.Element {
   const media = useStore((s) => s.project.media)
   const exportVideo = useStore((s) => s.exportVideo)
+  const exportVideoOnDevice = useStore((s) => s.exportVideoOnDevice)
+  const project = useStore((s) => s.project)
+  const [deviceOk, setDeviceOk] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void canEncodeOnDevice().then((ok) => alive && setDeviceOk(ok))
+    return () => {
+      alive = false
+    }
+  }, [])
+  const localGate = deviceOk ? whyNotLocal(project) : ''
   const setAspect = useStore((s) => s.setAspect)
   const aspectW = useStore((s) => s.project.aspectW)
   const aspectH = useStore((s) => s.project.aspectH)
@@ -425,6 +437,20 @@ function MobileExport({ onClose }: { onClose: () => void }): JSX.Element {
 
           <p className="muted small" style={{ textAlign: 'center' }}>≈ {estMb} MB per minute</p>
 
+          {deviceOk && (
+            <button
+              className="m-export-big"
+              style={{ marginBottom: 8 }}
+              disabled={!media || job.active || !!localGate}
+              title={localGate ? `Not available for this timeline yet: ${localGate}` : undefined}
+              onClick={() => {
+                onClose()
+                void exportVideoOnDevice({ width: W, height: H, bitrateMbps: bitrate })
+              }}
+            >
+              📱 Save to this device {RES[resIdx].label} (beta)
+            </button>
+          )}
           <button
             className="m-export-big"
             disabled={!media || job.active}
