@@ -73,6 +73,27 @@ export async function extractAudioWav(path: string): Promise<string> {
   return out
 }
 
+/** Extract the audio stream as an .m4a (AAC 48k stereo) for BROWSER-side decode —
+ *  the on-device exporter pulls this (~1.5MB/min) instead of the full video, which
+ *  over a tunnel is 50-100x more data and routinely times out. Transcoded (not
+ *  stream-copied) so first_pts=0 re-aligns phone .mov delayed audio to the video
+ *  timeline and the result is always decodable by decodeAudioData. */
+export async function extractAudioM4a(path: string): Promise<string> {
+  const out = join(tmpdir(), `easecut-${randomUUID()}.m4a`)
+  await execFileP(FFMPEG, [
+    '-y',
+    '-i', path,
+    '-vn',
+    '-af', 'aresample=async=1:first_pts=0',
+    '-ar', '48000',
+    '-ac', '2',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    out
+  ], { maxBuffer: 1024 * 1024 * 16 })
+  return out
+}
+
 /**
  * Decode audio to mono 8kHz PCM and reduce to amplitude peaks for a waveform.
  * Streams stdout so memory stays bounded even for long files.

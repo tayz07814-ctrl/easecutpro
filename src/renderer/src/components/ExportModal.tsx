@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { canEncodeOnDevice, whyNotLocal } from '../export/localExport'
+import { useSharedEngineSnapshot } from '../timelineEngine'
 import { IS_WEB } from '../platform'
 import { useStore } from '../store'
 
@@ -49,7 +50,11 @@ export default function ExportModal(): JSX.Element {
 
   const aspectW = useStore((s) => s.project.aspectW)
   const aspectH = useStore((s) => s.project.aspectH)
-  const canExport = !!media || !!(sequence && sequence.length)
+  // Doc-native projects don't set the legacy media/baseSequence fields — the
+  // MAIN lane having clips is the real "there is something to export".
+  const snap = useSharedEngineSnapshot()
+  const hasBase = !!snap?.doc.tracks.some((t) => t.isMain && t.clips.length > 0)
+  const canExport = !!media || !!(sequence && sequence.length) || hasBase
   const srcW = media?.width || sequence?.[0]?.srcW || 1920
   const srcH = media?.height || sequence?.[0]?.srcH || 1080
   // Default to the preview's locked aspect if one is set.

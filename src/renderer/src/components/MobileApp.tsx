@@ -334,6 +334,10 @@ const ASPECTS: { label: string; r: [number, number] | null }[] = [
 
 function MobileExport({ onClose }: { onClose: () => void }): JSX.Element {
   const media = useStore((s) => s.project.media)
+  // Doc-native projects never set the legacy media field — gate on the MAIN
+  // lane actually having clips instead (why the buttons used to grey out).
+  const expSnap = useSharedEngineSnapshot()
+  const hasBase = !!expSnap?.doc.tracks.some((t) => t.isMain && t.clips.length > 0)
   const exportVideo = useStore((s) => s.exportVideo)
   const exportVideoOnDevice = useStore((s) => s.exportVideoOnDevice)
   const project = useStore((s) => s.project)
@@ -438,22 +442,29 @@ function MobileExport({ onClose }: { onClose: () => void }): JSX.Element {
           <p className="muted small" style={{ textAlign: 'center' }}>≈ {estMb} MB per minute</p>
 
           {deviceOk && (
-            <button
-              className="m-export-big"
-              style={{ marginBottom: 8 }}
-              disabled={!media || job.active || !!localGate}
-              title={localGate ? `Not available for this timeline yet: ${localGate}` : undefined}
-              onClick={() => {
-                onClose()
-                void exportVideoOnDevice({ width: W, height: H, bitrateMbps: bitrate })
-              }}
-            >
-              📱 Save to this device {RES[resIdx].label} (beta)
-            </button>
+            <>
+              <button
+                className="m-export-big"
+                style={{ marginBottom: localGate ? 2 : 8 }}
+                disabled={job.active || !!localGate}
+                onClick={() => {
+                  onClose()
+                  void exportVideoOnDevice({ width: W, height: H, bitrateMbps: bitrate })
+                }}
+              >
+                📱 Save to this device {RES[resIdx].label} (beta)
+              </button>
+              {/* tooltips don't exist on touch — say WHY it's disabled */}
+              {localGate && (
+                <p className="muted small" style={{ textAlign: 'center', margin: '0 0 8px' }}>
+                  Not available yet: {localGate}
+                </p>
+              )}
+            </>
           )}
           <button
             className="m-export-big"
-            disabled={!media || job.active}
+            disabled={(!media && !hasBase) || job.active}
             onClick={() => exportVideo({ width: W, height: H, bitrateMbps: bitrate })}
           >
             ⬆ Export {RES[resIdx].label}

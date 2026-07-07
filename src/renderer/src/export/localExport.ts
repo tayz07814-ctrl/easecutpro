@@ -17,6 +17,8 @@ import { getSharedEngine } from '../timelineEngine'
 import { mainTrackId } from '@shared/timeline/model'
 import { framesToSeconds } from '@shared/timeline/time'
 import { resolveMedia } from '../media/resolver'
+import { isWebMediaId, getFile } from '../webmedia'
+import { IS_WEB } from '../platform'
 import { easeInOut } from '../clock'
 import type { Project } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
@@ -26,6 +28,8 @@ const AUDIO_RATE = 48000
 
 interface Seg {
   url: string
+  /** the clip's original source path/id — the audio decoder keys off this. */
+  src: string
   sourceStart: number
   sourceEnd: number
   start: number
@@ -33,6 +37,7 @@ interface Seg {
   speed: number
   gain: number
   muted: boolean
+  hasAudio: boolean
   size: number
   zs: number
   ze: number
@@ -42,6 +47,7 @@ interface Seg {
 
 interface AudioClipSched {
   url: string
+  src: string
   start: number
   sourceIn: number
   dur: number
@@ -85,7 +91,10 @@ export function whyNotLocal(project: Project): string {
   if (!doc) return 'timeline not ready'
   const main = doc.tracks.find((t) => t.isMain)
   if (!main || !main.clips.length) return 'nothing on the main track'
-  if ((project.texts ?? []).length > 0) return 'text overlays render on the PC for now'
+  // The document is authoritative for texts too — project.texts is only folded
+  // at export time and can be stale in both directions.
+  const hasTexts = doc.tracks.some((t) => t.kind === 'text' && t.clips.some((c) => !!c.text))
+  if (hasTexts) return 'text overlays render on the PC for now'
   const hasOverlays = doc.tracks.some(
     (t) => !t.isMain && (t.kind === 'video' || t.kind === 'overlay') && t.clips.length > 0
   )
@@ -108,6 +117,7 @@ function planFromDoc(doc: TimelineDocument, project: Project): { segs: Seg[]; au
     const speed = typeof c.speed === 'number' && c.speed > 0 ? c.speed : 1
     segs.push({
       url: r.url,
+      src: c.sourcePath,
       sourceStart: c.sourceIn,
       sourceEnd: c.sourceOut,
       start: framesToSeconds(c.start, tb),
@@ -115,6 +125,7 @@ function planFromDoc(doc: TimelineDocument, project: Project): { segs: Seg[]; au
       speed,
       gain: typeof c.gain === 'number' ? c.gain : 1,
       muted: c.audioDetached === true || c.muted === true,
+      hasAudio: c.kind !== 'image' && c.hasAudio !== false,
       size: num(c.metadata?.ovScale, 1),
       zs: num(c.metadata?.ovZoomStart, 1),
       ze: num(c.metadata?.ovZoomEnd, 1),
@@ -133,6 +144,7 @@ function planFromDoc(doc: TimelineDocument, project: Project): { segs: Seg[]; au
       if (!r.url) continue
       audio.push({
         url: r.url,
+        src: c.sourcePath,
         start: framesToSeconds(c.start, tb),
         sourceIn: c.sourceIn,
         dur: Math.max(0.02, c.sourceOut - c.sourceIn),
@@ -148,6 +160,7 @@ function planFromDoc(doc: TimelineDocument, project: Project): { segs: Seg[]; au
       const end = Math.min(music.endAt ?? total, total)
       audio.push({
         url: r.url,
+        src: music.path,
         start: Math.max(0, music.startAt),
         sourceIn: 0,
         dur: Math.max(0.02, end - Math.max(0, music.startAt)),
@@ -173,23 +186,48 @@ async function renderAudio(
 ): Promise<AudioBuffer | null> {
   const frames = Math.max(1, Math.ceil(total * AUDIO_RATE))
   const off = new OfflineAudioContext(2, frames, AUDIO_RATE)
-  const cache = new Map<string, AudioBuffer>()
-  const decode = async (url: string): Promise<AudioBuffer | null> => {
-    if (cache.has(url)) return cache.get(url)!
+  const cache = new Map<string, AudioBuffer | null>()
+  // Get the source's audio bytes the CHEAPEST reliable way:
+  //  1. a browser-local File → read it directly (no fetch; blob-URL fetch is
+  //     blocked in some shells and copies the whole video anyway),
+  //  2. a server path on web → ask the PC for just the extracted audio
+  //     (~1.5MB/min) — round-tripping a 100MB+ video through a tunnel is what
+  //     made tunnel exports silently lose their audio,
+  //  3. otherwise (Electron, or an old server without the endpoint) → fetch the
+  //     full media URL as before.
+  const decode = async (src: string, url: string): Promise<AudioBuffer | null> => {
+    if (cache.has(src)) return cache.get(src) ?? null
+    let buf: AudioBuffer | null = null
     try {
-      const ab = await (await fetch(url)).arrayBuffer()
-      const buf = await off.decodeAudioData(ab)
-      cache.set(url, buf)
-      return buf
+      let ab: ArrayBuffer | null = null
+      if (isWebMediaId(src)) {
+        const f = getFile(src)
+        if (f) ab = await f.arrayBuffer()
+      } else if (IS_WEB) {
+        try {
+          const r = await fetch(`/api/export-audio?p=${encodeURIComponent(src)}`, { credentials: 'include' })
+          if (r.ok) ab = await r.arrayBuffer()
+        } catch {
+          /* older server / network hiccup — full-file fallback below */
+        }
+      }
+      if (!ab) ab = await (await fetch(url)).arrayBuffer()
+      buf = await off.decodeAudioData(ab)
     } catch {
-      return null // e.g. an image, or an undecodable container
+      buf = null // undecodable container, dead URL, or decode OOM
     }
+    cache.set(src, buf)
+    return buf
   }
   let any = false
+  let failed = 0
   for (const s of segs) {
-    if (s.muted) continue
-    const buf = await decode(s.url)
-    if (!buf) continue
+    if (s.muted || !s.hasAudio) continue
+    const buf = await decode(s.src, s.url)
+    if (!buf) {
+      failed++
+      continue
+    }
     any = true
     const node = off.createBufferSource()
     node.buffer = buf
@@ -200,8 +238,11 @@ async function renderAudio(
     node.start(s.start, s.sourceStart, Math.max(0.01, s.sourceEnd - s.sourceStart))
   }
   for (const a of extra) {
-    const buf = await decode(a.url)
-    if (!buf) continue
+    const buf = await decode(a.src, a.url)
+    if (!buf) {
+      failed++
+      continue
+    }
     any = true
     const node = off.createBufferSource()
     node.buffer = buf
@@ -217,6 +258,10 @@ async function renderAudio(
       node.start(a.start, a.sourceIn, a.dur)
     }
   }
+  // HONEST failure: never silently ship a video without its sound. If a source
+  // that should contribute audio couldn't be decoded, fail the export so the UI
+  // says so (and suggests the PC export) instead of muxing a silent file.
+  if (failed > 0) throw new Error(`couldn't read the audio of ${failed} source${failed > 1 ? 's' : ''} in this browser`)
   if (!any) return null
   onProgress(4)
   return off.startRendering()

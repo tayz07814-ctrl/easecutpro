@@ -23,7 +23,7 @@ import multer from 'multer'
 import { WebSocketServer, WebSocket } from 'ws'
 
 import { checkTools, listWhisperModels } from '../main/binaries'
-import { probe, extractWaveform, extractThumbnails, detectSilence, exportProject, combineClips } from '../main/ffmpeg'
+import { probe, extractWaveform, extractThumbnails, detectSilence, exportProject, combineClips, extractAudioM4a } from '../main/ffmpeg'
 import { transcribe } from '../main/whisper'
 import { transcribeOpenAI } from '../main/openai-transcribe'
 import { transcribeParakeet } from '../main/parakeet'
@@ -731,6 +731,37 @@ function mimeForPath(p: string): string {
       return 'application/octet-stream'
   }
 }
+// Just the AUDIO of a media file, as AAC/m4a (~1.5MB/min) — the on-device
+// exporter decodes this in the browser instead of round-tripping the full
+// video through the tunnel.
+app.get('/api/export-audio', async (req, res) => {
+  const userId = userIdFromReq(req)
+  if (!userId) {
+    res.status(401).end()
+    return
+  }
+  let p: string
+  try {
+    p = assertAllowed(userId, String(req.query.p || ''))
+  } catch {
+    res.status(403).end()
+    return
+  }
+  try {
+    const out = await extractAudioM4a(p)
+    res.setHeader('Content-Type', 'audio/mp4')
+    res.sendFile(out, () => {
+      try {
+        fs.unlinkSync(out)
+      } catch {
+        /* temp file already gone */
+      }
+    })
+  } catch {
+    res.status(422).json({ error: 'no decodable audio stream' })
+  }
+})
+
 app.get('/media', (req, res) => {
   const userId = userIdFromReq(req)
   if (!userId) {
