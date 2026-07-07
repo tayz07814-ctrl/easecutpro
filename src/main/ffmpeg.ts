@@ -400,12 +400,19 @@ const even = (n: number): number => Math.max(2, Math.round(n / 2) * 2)
  * Lanczos pass downscales to the target. S scales down as resolution rises
  * (4K pixels are already tiny, and the cost is S²).
  */
-function superFactor(W: number, H: number): number {
+function superFactor(W: number, H: number, rampPerSec = Infinity): number {
   const long = Math.max(W, H)
-  if (long <= 1280) return 4 // ≤720p  → 0.25 output-px steps
-  if (long <= 1920) return 3 // 1080p  → 0.33 output-px steps
-  if (long <= 2560) return 2 // 1440p  → 0.50 output-px steps
-  return 1 // 4K+: native pixels already sub-perceptual; skip the S² cost
+  let S: number
+  if (long <= 1280) S = 4 // ≤720p  → 0.25 output-px steps
+  else if (long <= 1920) S = 3 // 1080p  → 0.33 output-px steps
+  else if (long <= 2560) S = 2 // 1440p  → 0.50 output-px steps
+  else S = 1 // 4K+: native pixels already sub-perceptual at normal rates
+  // VERY slow ramps still creep a fraction of a pixel per frame after the base
+  // supersample — boost S so the step stays sub-perceptual ("butter"), capped
+  // so the supersampled canvas never exceeds ~8K on its long edge.
+  if (rampPerSec < 0.05) S += 2
+  else if (rampPerSec < 0.15) S += 1
+  return Math.max(1, Math.min(S, Math.max(1, Math.floor(8192 / long))))
 }
 
 /**
@@ -423,11 +430,12 @@ function zoompanStage(
   W: number,
   H: number,
   fps: number,
-  out: string
+  out: string,
+  rampPerSec = Infinity
 ): string {
   const zp = (sw: number, sh: number): string =>
     `zoompan=z='${z}':x='${x}':y='${y}':d=1:s=${sw}x${sh}:fps=${fps}`
-  const S = superFactor(W, H)
+  const S = superFactor(W, H, rampPerSec)
   if (S <= 1) return `${src}${zp(W, H)}${out}`
   const SW = even(W * S)
   const SH = even(H * S)
@@ -451,6 +459,14 @@ export function atempoChain(speed: number): string {
   }
   factors.push(s)
   return factors.map((f) => `,atempo=${f.toFixed(6)}`).join('')
+}
+
+/** Smoothstep-eased progress expression for zoompan (`on` = output frame index).
+ *  Linear ramps read as mechanical and steppy; ease-in-out is what makes CapCut
+ *  zooms feel like butter. Commas are safe inside zoompan's quoted expressions. */
+function easedProgressExpr(frames: number): string {
+  const P = `min(on/${frames},1)`
+  return `(pow(${P},2)*(3-2*${P}))`
 }
 
 /**
@@ -506,10 +522,11 @@ export function baseTransformFilter(
   // fall back to a static render at the start scale.
   if (Math.min(s0, s1) >= 1 - eps) {
     const frames = Math.max(1, Math.round(spanSec * fps))
-    const z = `${F(s0)}+(${F(s1)}-${F(s0)})*on/${frames}`
+    const z = `${F(s0)}+(${F(s1)}-${F(s0)})*${easedProgressExpr(frames)}`
     const x = `iw*${F(fx)}*(1-1/zoom)`
     const y = `ih*${F(fy)}*(1-1/zoom)`
-    return { chain: ',' + zoompanStage('', z, x, y, W, H, fps, ''), zoompan: true }
+    const rampPerSec = Math.abs(s1 - s0) / Math.max(0.1, spanSec)
+    return { chain: ',' + zoompanStage('', z, x, y, W, H, fps, '', rampPerSec), zoompan: true }
   }
   return { chain: staticX(s0), zoompan: false }
 }
@@ -936,13 +953,14 @@ export async function exportProject(
           // scale=ow:oh and establishes the ow:oh canvas at S× before zooming.
           scaleZoom = zoompanStage(
             '',
-            `${zs}+(${ze}-${zs})*on/${frames}`,
+            `${zs}+(${ze}-${zs})*${easedProgressExpr(frames)}`,
             'iw/2-(iw/zoom/2)',
             'ih/2-(ih/zoom/2)',
             ow,
             oh,
             fps,
-            ''
+            '',
+            Math.abs(Number(ze) - Number(zs)) / Math.max(0.1, frames / fps)
           )
         } else {
           // No zoom: scale to the overlay width and let the height follow the

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { playClock } from '../clock'
+import { playClock, easeInOut } from '../clock'
 import { mediaSrc } from '../platform'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
 import { framesToSeconds, secondsToFrames } from '@shared/timeline/time'
@@ -210,7 +210,7 @@ function OverlayBox({
   useEffect(() => {
     const el: HTMLElement | null = isImage ? imgRef.current : ref.current
     if (!el) return
-    const zoomFromProg = (prog: number): number => zs + (ze - zs) * Math.min(1, Math.max(0, prog))
+    const zoomFromProg = (prog: number): number => zs + (ze - zs) * easeInOut(prog)
     // Drive progress off the shared play clock (edited time) for BOTH images and
     // videos: it advances even while the base <video> is paused traversing a
     // magnet-off gap, so the Ken Burns zoom keeps ramping over dead space too.

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { mediaSrc } from '../platform'
 import { computeKeepRanges, virtualKeepsToClipSegments } from '@shared/edit'
-import { playClock } from '../clock'
+import { playClock, easeInOut } from '../clock'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -554,7 +554,7 @@ export default function SequencePreview(): JSX.Element {
       const zs = seg.ovZoomStart ?? 1
       const ze = seg.ovZoomEnd ?? 1
       const prog = seg.len > 0 ? Math.min(1, Math.max(0, (playClock.t - seg.start) / seg.len)) : 0
-      const scale = size * (zs + (ze - zs) * prog)
+      const scale = size * (zs + (ze - zs) * easeInOut(prog))
       v.style.transformOrigin = `${50 + (seg.ovX ?? 0) * 100}% ${50 + (seg.ovY ?? 0) * 100}%`
       v.style.transform = Math.abs(scale - 1) > 0.001 ? `scale(${scale})` : ''
     }

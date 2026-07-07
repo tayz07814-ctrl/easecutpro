@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { playClock } from '../clock'
+import { playClock, easeInOut } from '../clock'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -384,7 +384,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           const zs = shown.ovZoomStart ?? 1
           const ze = shown.ovZoomEnd ?? 1
           const prog = shown.len > 0 ? clamp((t - shown.start) / shown.len, 0, 1) : 0
-          const scale = size * (zs + (ze - zs) * prog)
+          const scale = size * (zs + (ze - zs) * easeInOut(prog))
           v.style.transformOrigin = `${50 + (shown.ovX ?? 0) * 100}% ${50 + (shown.ovY ?? 0) * 100}%`
           v.style.transform = Math.abs(scale - 1) > 0.001 ? `scale(${scale})` : ''
         } else if (!isShown && !v.paused && isPlaying && shown?.src !== src) {
