@@ -62,5 +62,32 @@ check('snap: stray flags on kept take B2 removed', none(B2.words, snapped))
 check('snap: kept take C2 stays clean', none(C2.words, snapped))
 check('snap: non-retake A stays clean', none(A.words, snapped))
 
+
+// ---- Case: LONG rambling clause whose TAIL is the retake (perfume clip,
+// 2026-07-07). Containment used to cut the WHOLE 40-word clause; only the
+// aligned tail is the earlier take — the unique head must survive.
+{
+  const text =
+    `Okay ladies, if you are a baddie on a budget, I'm gonna need then this is for you because I've seriously never had this many people coming up to me. ` +
+    `Like no men have ever come up to me. ` +
+    `But now like at the gym at the grocery store, like guys left and right, even guys with girlfriends are saying like you smell so good, like I need my I'm trying to get my girl this scent. ` +
+    `I'm trying to get my girl this perfume. But it's this voyage nova perfume. It's brand new.`
+  const toks = text.split(/\s+/)
+  let t0 = 0
+  const ws = toks.map((w, i) => {
+    const start = t0
+    t0 += 0.3
+    return { id: 'pf' + i, text: w, start, end: start + 0.28 }
+  })
+  const t = { words: ws, segments: [{ id: 'pfs', words: ws }] } as never
+  const snapped = new Set(snapRetakeFlags(detectRepeatIds(t), t))
+  const headSafe = !snapped.has(ws[toks.indexOf('gym')].id) && !snapped.has(ws[toks.indexOf('girlfriends')].id)
+  const tailCut = snapped.has(ws[toks.lastIndexOf('scent.')].id)
+  const keptSafe = !snapped.has(ws[toks.indexOf('perfume.')].id)
+  check('long-clause tail retake: unique head survives', headSafe)
+  check('long-clause tail retake: retaken tail cut', tailCut)
+  check('long-clause tail retake: kept take protected', keptSafe)
+}
+
 console.log(ok ? '\nRETAKE-CUTS OK' : '\nRETAKE-CUTS FAILED')
 process.exit(ok ? 0 : 1)

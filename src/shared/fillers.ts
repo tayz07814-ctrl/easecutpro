@@ -86,6 +86,8 @@ interface Clause {
   from: number
   to: number
   content: string[]
+  /** word index of each content token (content[k] came from words[contentIdx[k]]). */
+  contentIdx: number[]
 }
 
 /** Split words into clauses on sentence punctuation OR a pause — so two takes
@@ -96,8 +98,16 @@ function buildClauses(t: Transcript): Clause[] {
   let start = 0
   const push = (a: number, b: number): void => {
     if (b <= a) return
-    const content = w.slice(a, b).map((x) => norm(x.text)).filter((s) => s && !HESITATION.has(s))
-    out.push({ from: a, to: b, content })
+    const content: string[] = []
+    const contentIdx: number[] = []
+    for (let j = a; j < b; j++) {
+      const nrm = norm(w[j].text)
+      if (nrm && !HESITATION.has(nrm)) {
+        content.push(nrm)
+        contentIdx.push(j)
+      }
+    }
+    out.push({ from: a, to: b, content, contentIdx })
   }
   for (let i = 0; i < w.length; i++) {
     const endsSentence = /[.!?…]["')\]]*$/.test(w[i].text.trim())
@@ -110,19 +120,52 @@ function buildClauses(t: Transcript): Clause[] {
   return out
 }
 
-/** Is `b` a retake of the earlier `a`? Directional containment OR near-duplicate. */
-function isRetake(a: Clause, b: Clause): boolean {
-  if (a.content.length < MIN_CONTENT || b.content.length < MIN_CONTENT) return false
+/** How `b` relates to the earlier `a`:
+ *  - 'whole'  — a IS a take of b (near-duplicate, or containment on a clause of
+ *               comparable size): discard ALL of a;
+ *  - 'tail'   — a is a LONG clause whose trailing words are a take of b (the
+ *               speaker rambled on and only restarted the ENDING): discard only
+ *               the aligned tail, `tailFromWord` onward. Cutting the whole
+ *               clause here nuked 30+ words of unique content because the one
+ *               rambling sentence had no interior punctuation (perfume clip,
+ *               2026-07-07);
+ *  - null     — not a retake.
+ */
+function retakeMatch(a: Clause, b: Clause): { kind: 'whole' } | { kind: 'tail'; tailFromWord: number } | null {
+  if (a.content.length < MIN_CONTENT || b.content.length < MIN_CONTENT) return null
   const contain = lcsLen(a.content, b.content) / b.content.length
-  return contain >= CONTAIN_MIN || seqRatio(a.content, b.content) >= NEARDUP_MIN
+  const neardup = seqRatio(a.content, b.content) >= NEARDUP_MIN
+  if (neardup) return { kind: 'whole' }
+  if (contain < CONTAIN_MIN) return null
+  // comparable sizes -> the whole clause is the earlier take (original rule)
+  if (a.content.length <= Math.ceil(1.8 * b.content.length)) return { kind: 'whole' }
+  // long clause: find the SMALLEST suffix that still contains b. If no suffix
+  // of reasonable size (≤2.2×) reaches the bar, the matching words are spread
+  // through unrelated content — an incidental match, not a retake.
+  const maxTail = Math.ceil(2.2 * b.content.length)
+  for (let s = Math.max(0, a.content.length - b.content.length); s >= 0; s--) {
+    const suffix = a.content.slice(s)
+    if (suffix.length > maxTail) break
+    if (lcsLen(suffix, b.content) / b.content.length >= CONTAIN_MIN) {
+      return { kind: 'tail', tailFromWord: a.contentIdx[s] }
+    }
+  }
+  return null
 }
 
 /** Classify clauses into discarded EARLIER takes (cut whole) and surviving LAST
  *  takes (protect). Keep-last: across a run of retakes only the final one survives. */
-function retakeClauses(t: Transcript): { clauses: Clause[]; cut: Set<number>; kept: Set<number> } {
+function retakeClauses(t: Transcript): {
+  clauses: Clause[]
+  cut: Set<number>
+  /** partial cuts: only the TAIL of a long clause is a retake — [from,to) word range. */
+  cutRanges: { from: number; to: number }[]
+  kept: Set<number>
+} {
   const clauses = buildClauses(t)
   const w = t.words
   const cut = new Set<number>()
+  const cutRanges: { from: number; to: number }[] = []
   const kept = new Set<number>()
   // content clauses only (skip filler-only bridges), in order.
   const content = clauses.map((c, i) => ({ c, i })).filter((x) => x.c.content.length >= MIN_CONTENT)
@@ -131,14 +174,19 @@ function retakeClauses(t: Transcript): { clauses: Clause[]; cut: Set<number>; ke
     const B = content[k + 1]
     const gap = w[B.c.from].start - w[A.c.to - 1].end // time between the two takes
     if (gap > MAX_RETAKE_GAP) continue
-    if (isRetake(A.c, B.c)) {
+    const m = retakeMatch(A.c, B.c)
+    if (!m) continue
+    if (m.kind === 'whole') {
       cut.add(A.i)
       for (let j = A.i + 1; j < B.i; j++) cut.add(j) // filler-only clauses go with the discarded take
-      kept.add(B.i) // provisional — cleared below if B is itself an earlier take
+    } else {
+      cutRanges.push({ from: m.tailFromWord, to: A.c.to })
+      for (let j = A.i + 1; j < B.i; j++) cut.add(j)
     }
+    kept.add(B.i) // provisional — cleared below if B is itself an earlier take
   }
   for (const i of cut) kept.delete(i)
-  return { clauses, cut, kept }
+  return { clauses, cut, cutRanges, kept }
 }
 
 /**
@@ -153,10 +201,11 @@ function retakeClauses(t: Transcript): { clauses: Clause[]; cut: Set<number>; ke
  */
 export function snapRetakeFlags(ids: string[], t: Transcript): string[] {
   const w = t.words
-  const { clauses, cut, kept } = retakeClauses(t)
+  const { clauses, cut, cutRanges, kept } = retakeClauses(t)
   const flagged = new Set(ids)
-  // 1) whole discarded takes.
+  // 1) whole discarded takes + the retaken TAILS of long clauses.
   for (const idx of cut) for (let j = clauses[idx].from; j < clauses[idx].to; j++) flagged.add(w[j].id)
+  for (const r of cutRanges) for (let j = r.from; j < r.to; j++) flagged.add(w[j].id)
   // 2) expand a mostly-flagged NORMAL clause to whole (fragment -> clean cut).
   for (let ci = 0; ci < clauses.length; ci++) {
     if (cut.has(ci) || kept.has(ci)) continue
@@ -246,8 +295,9 @@ export function detectRepeatIds(t: Transcript): string[] {
   // 3) Clause-level retakes: cut the WHOLE earlier take, keep the last (see
   //    retakeClauses — containment + pause segmentation). Replaces the old strict
   //    >=0.90 adjacent-segment rule that missed varied retakes and left fragments.
-  const { clauses, cut } = retakeClauses(t)
+  const { clauses, cut, cutRanges } = retakeClauses(t)
   for (const idx of cut) for (let j = clauses[idx].from; j < clauses[idx].to; j++) ids.add(words[j].id)
+  for (const r of cutRanges) for (let j = r.from; j < r.to; j++) ids.add(words[j].id)
 
   return [...ids]
 }
