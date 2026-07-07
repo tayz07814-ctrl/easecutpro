@@ -1749,17 +1749,10 @@ export const useStore = create<AppState>((set, get) => ({
     }
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Cut Lord is thinking…' } })
     try {
-      // Resolve the source audio so the engine can run its acoustic (wav2vec2) tier —
-      // best-effort; if it fails the engine just uses the text/semantic tiers.
-      const p = get().project
-      let audioPath: string | undefined
-      try {
-        if (isMultiBase(p)) audioPath = (await window.api.combineClips(p.baseSequence!, true)).path
-        else if (p.media) audioPath = p.media.path
-      } catch {
-        audioPath = undefined
-      }
-      const res = await window.api.fastCut(t, audioPath, get().project.script || undefined)
+      // ML tiers are OFF (heuristic-only mode) — don't resolve or upload audio;
+      // the acoustic tier is the only consumer and skipping it makes web runs
+      // start instantly. Restore this block when re-enabling the tiers.
+      const res = await window.api.fastCut(t, undefined, get().project.script || undefined)
       // Union the Python engine with the deterministic repeat finder, then SNAP the
       // whole set to clause boundaries: retakes become whole-take cuts (no broken
       // half-sentences) and the surviving last take is protected from stray flags.

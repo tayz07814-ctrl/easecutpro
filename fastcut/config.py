@@ -176,9 +176,10 @@ class Config:
     ('wait, let me start over — <repeat>') still anchors on its repeated words."""
 
     # ---- tiers (auto-disabled if deps/inputs are missing) ----
-    use_semantic: bool = True
-    """sentence-transformers MiniLM embeddings for similarity. Falls back to
-    lexical-only if torch / the package is unavailable."""
+    use_semantic: bool = False
+    """sentence-transformers MiniLM embeddings for similarity (rescue/verify
+    passes). OFF by default since 2026-07-07 (user call: heuristic-only —
+    the tuned lexical core outperformed the tiers in practice)."""
     use_audio: bool = False
     """wav2vec2 acoustic similarity. Requires an audio file path + torchaudio."""
     use_classifier: bool = False

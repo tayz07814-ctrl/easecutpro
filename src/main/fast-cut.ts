@@ -205,10 +205,13 @@ export async function fastCutSuggest(
   if (words.length < 3) return { ids: [], cuts: [] }
 
   onProgress?.(8, 'Fast Cut analyzing transcript…')
-  // Extract a 16 kHz WAV for the acoustic tier (best-effort; the text/semantic tiers
-  // run regardless of audio). Removed in the finally below.
+  // ML tiers are OFF (user call, 2026-07-07): the tuned heuristic core beat the
+  // semantic/acoustic tiers in practice (wav2vec2 cosine isn't discriminative on
+  // same-speaker takes; MiniLM rescues fired rarely) and skipping them removes
+  // the audio extract/upload entirely. Flip to re-enable everything.
+  const ML_TIERS = false
   let wavPath: string | undefined
-  if (audioPath) {
+  if (ML_TIERS && audioPath) {
     try {
       wavPath = await extractWav16k(audioPath)
     } catch {
@@ -228,7 +231,7 @@ export async function fastCutSuggest(
       // missing, so this is always safe to request.
       audio_path: wavPath || undefined,
       script: script && script.trim() ? script : undefined,
-      config: { use_audio: !!wavPath, use_semantic: true },
+      config: { use_audio: ML_TIERS && !!wavPath, use_semantic: ML_TIERS },
       verbose: true,
     }
 
