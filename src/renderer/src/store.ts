@@ -23,7 +23,7 @@ import type {
   OverlayEvent
 } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
-import { documentToProject } from '@shared/timeline/bridge'
+import { documentToProject, projectToDocument, normalizeDefaultLanes } from '@shared/timeline/bridge'
 import { getSharedEngine } from './timelineEngine'
 import { insertLibraryItemAtPlayhead } from './timelineInsert'
 import { exportOnDevice } from './export/localExport'
@@ -1034,8 +1034,14 @@ export const useStore = create<AppState>((set, get) => ({
       hasAudio: item.hasAudio,
       hasVideo: item.hasVideo
     }
+    // Build the timeline document HERE (doc-native: it's authoritative from the
+    // first render). The legacy sig-diff rebuild in TimelinePanel can't be relied
+    // on — reloading the SAME video produces an identical structure key, so the
+    // engine would keep whatever lane state it had (e.g. an emptied main lane).
+    const fresh: Project = { ...newProject(), name: item.name, media }
+    fresh.timeline = normalizeDefaultLanes(projectToDocument(fresh))
     set({
-      project: { ...newProject(), name: item.name, media },
+      project: fresh,
       mediaUrl: mediaUrl(item.path),
       waveform: null,
       thumbnails: [],
