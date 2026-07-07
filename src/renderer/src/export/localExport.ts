@@ -405,7 +405,81 @@ export async function exportOnDevice(
     })
 
   dbg('pool ready')
-  // 5) frame loop — offline, sequential, index-timestamped
+  // 5) frame loop — offline, sequential, index-timestamped. Source frames come
+  //    from PLAY-HARVEST by default: each segment plays ONCE (muted, at the
+  //    clip's speed) while requestVideoFrameCallback captures presented frames
+  //    — one seek per SEGMENT. The old per-FRAME seeking cost 100-300ms per
+  //    output frame on weak phones (3-9x slower than realtime); it remains only
+  //    as the fallback when rVFC is unavailable, the tab is hidden (rVFC stops
+  //    firing), or the harvest stalls. Exactness is unchanged either way:
+  //    output frame N carries timestamp N/fps and shows the presented source
+  //    frame nearest its mapped time — the same frame a seek would land on.
+  const rvfcOK =
+    typeof (HTMLVideoElement.prototype as { requestVideoFrameCallback?: unknown }).requestVideoFrameCallback === 'function'
+  const frameDur = 1 / FPS
+  interface Grab {
+    frame: VideoFrame
+    t: number
+  }
+  let buf: Grab[] = []
+  const harvest: { stop: null | (() => void) } = { stop: null }
+  let curSeg: Seg | null = null
+  let lastWant = 0
+  const closeBuf = (): void => {
+    for (const g of buf) g.frame.close()
+    buf = []
+  }
+  const startHarvest = (v: HTMLVideoElement): void => {
+    let live = true
+    const rvfc = (cb: (now: number, meta: { mediaTime: number }) => void): void =>
+      (v as unknown as { requestVideoFrameCallback: (cb: unknown) => void }).requestVideoFrameCallback(cb)
+    const tick = (_now: number, meta: { mediaTime: number }): void => {
+      if (!live) return
+      try {
+        buf.push({ frame: new VideoFrame(v, { timestamp: 0 }), t: meta.mediaTime })
+      } catch {
+        /* decoder hiccup — the consumer's stall fallback covers it */
+      }
+      while (buf.length > 3) buf.shift()!.frame.close()
+      // Don't decode ahead of consumption (the encoder may be the slow side);
+      // the consumer resumes playback when it needs more.
+      if (meta.mediaTime > lastWant + 0.5) {
+        try {
+          v.pause()
+        } catch {
+          /* ignore */
+        }
+      }
+      rvfc(tick)
+    }
+    rvfc(tick)
+    harvest.stop = () => {
+      live = false
+      harvest.stop = null
+    }
+  }
+  const waitPresented = async (v: HTMLVideoElement, want: number): Promise<void> => {
+    const deadline = performance.now() + 2000
+    while (performance.now() < deadline) {
+      const latest = buf[buf.length - 1]
+      if (latest && latest.t >= want - frameDur / 4) return
+      if (v.ended) return
+      if (v.paused) {
+        try {
+          await v.play()
+        } catch {
+          return // playback refused — stall fallback takes over
+        }
+      }
+      await new Promise((r) => setTimeout(r, 12))
+    }
+  }
+  const pickGrab = (want: number): Grab | null => {
+    let best: Grab | null = null
+    for (const g of buf) if (g.t <= want + frameDur / 4 && (!best || g.t > best.t)) best = g
+    return best ?? (buf.length ? buf[0] : null)
+  }
+  const tExport0 = performance.now()
   try {
     for (let n = 0; n < totalFrames; n++) {
       if (workerError) fail(workerError)
@@ -416,17 +490,64 @@ export async function exportOnDevice(
       } else {
         const v = pool.get(seg.url)!
         const want = Math.min(seg.sourceEnd - 0.001, seg.sourceStart + (t - seg.start) * seg.speed)
-        if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
-        if (v.readyState < 2) {
-          await new Promise<void>((res) => {
-            const to = setTimeout(res, 2000)
-            v.onloadeddata = () => {
-              clearTimeout(to)
-              res()
+        lastWant = want
+        if (seg !== curSeg) {
+          // Segment switch: the ONE seek, then play-harvest from here.
+          harvest.stop?.()
+          closeBuf()
+          curSeg = seg
+          try {
+            v.pause()
+          } catch {
+            /* ignore */
+          }
+          if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
+          if (rvfcOK) {
+            try {
+              v.playbackRate = Math.min(4, Math.max(0.25, seg.speed))
+            } catch {
+              /* rate unsupported — plays at 1x; nearest-frame pick still holds */
             }
-          })
+            startHarvest(v)
+            try {
+              await v.play()
+            } catch {
+              /* refused — per-frame fallback below */
+            }
+          }
         }
-        const frame = new VideoFrame(v, { timestamp: 0 })
+        let frame: VideoFrame | null = null
+        if (rvfcOK && !document.hidden) {
+          await waitPresented(v, want)
+          const g = pickGrab(want)
+          if (g) frame = g.frame.clone() // buf keeps the original: the next output frame may reuse it
+        }
+        if (!frame) {
+          // SEEK fallback: no rVFC, hidden tab, or a stalled harvest.
+          try {
+            v.pause()
+          } catch {
+            /* ignore */
+          }
+          if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
+          if (v.readyState < 2) {
+            await new Promise<void>((res) => {
+              const to = setTimeout(res, 2000)
+              v.onloadeddata = () => {
+                clearTimeout(to)
+                res()
+              }
+            })
+          }
+          frame = new VideoFrame(v, { timestamp: 0 })
+          if (rvfcOK && !document.hidden) {
+            try {
+              await v.play() // resume the harvest for the next frames
+            } catch {
+              /* stays on fallback */
+            }
+          }
+        }
         // contain-fit + eased Ken Burns (same math as the preview + PC export)
         const vw = v.videoWidth || W
         const vh = v.videoHeight || H
@@ -457,7 +578,7 @@ export async function exportOnDevice(
       if (lastQueue > 8) await new Promise<void>((res) => (ackResolve = res))
       if (n % 15 === 0) onProgress(5 + Math.round((n / totalFrames) * 90), `Encoding on this device… ${Math.round((n / totalFrames) * 100)}%`)
     }
-    dbg('frames done')
+    dbg('frames done', `${Math.round(performance.now() - tExport0)}ms for ${totalFrames} frames (${rvfcOK ? 'play-harvest' : 'seek'})`)
     worker.postMessage({ type: 'finish' })
     onProgress(96, 'Finishing the file…')
     const buffer = await done
@@ -467,7 +588,14 @@ export async function exportOnDevice(
     dbg('FAILED', (e as Error).message)
     throw e
   } finally {
+    harvest.stop?.()
+    closeBuf()
     for (const v of pool.values()) {
+      try {
+        v.pause()
+      } catch {
+        /* already gone */
+      }
       v.removeAttribute('src')
       v.load()
       v.remove()
