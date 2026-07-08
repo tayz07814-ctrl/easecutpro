@@ -1594,16 +1594,50 @@ export const useStore = create<AppState>((set, get) => ({
       //    user presses Execute cuts (which is the only place deleted is set).
       const nextProject: typeof cur = { ...cur, transcript: res.transcript }
       const flagIds = res.deleteWordIds
+      const wordsBefore = cur.transcript?.words.length ?? 0
       set({
         project: nextProject,
-        selectedWordIds: new Set(flagIds),
+        selectedWordIds: new Set(flagIds)
+      })
+      // ---- REVIEW-STATE AUDIT (runs on the REAL post-update state) ----
+      // Proves in the console, after every run, that the full raw provider
+      // transcript is what the tab renders and that nothing was pre-applied.
+      const t = get().project.transcript
+      const shownIds = new Set(t?.words.map((w) => w.id) ?? [])
+      const missingFlags = flagIds.filter((id) => !shownIds.has(id))
+      const preDeleted = t?.words.filter((w) => w.deleted).length ?? 0
+      const audit = {
+        mode: 'retake_aware_beta' as const,
+        provider: res.provider,
+        raw_provider_words_count: res.verbatim.words.length,
+        project_transcript_words_count_before: wordsBefore,
+        project_transcript_words_count_after: t?.words.length ?? 0,
+        final_cut_spans_count: res.cutSpans.length,
+        mapped_word_ids_count: flagIds.length,
+        hidden_words_before_execute_count: missingFlags.length + preDeleted,
+        auto_applied_before_review: preDeleted > 0,
+        review_state_applied: true,
+        mapped_selected_word_text_preview: flagIds
+          .slice(0, 16)
+          .map((id) => t?.words.find((w) => w.id === id)?.text ?? '?')
+      }
+      console.log('[retake-aware-beta][review-audit]', audit)
+      const reviewBroken =
+        audit.hidden_words_before_execute_count > 0 ||
+        audit.auto_applied_before_review ||
+        audit.project_transcript_words_count_after !== audit.raw_provider_words_count
+      if (reviewBroken) {
+        console.error('[retake-aware-beta] REVIEW-STATE ERROR: words hidden/pre-applied before Execute cuts', audit)
+      }
+      set({
         job: {
           active: false,
           percent: 100,
           message:
             `${res.summary} — ${flagIds.length} word(s) highlighted, review then Execute cuts` +
             (res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
-            (res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '')
+            (res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '') +
+            (reviewBroken ? ' · ⚠ REVIEW-STATE ERROR — see console/debug' : '')
         }
       })
     } catch (e) {

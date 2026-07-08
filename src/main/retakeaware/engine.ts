@@ -103,6 +103,18 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
     warnings.push(`REVIEW-STATE: ${orphanIds.length} flagged id(s) are not in the visible transcript — they could not be highlighted.`)
   }
   const wordsHidden = visibleCount < rawCount || orphanIds.length > 0
+  const hiddenCount = Math.max(0, rawCount - visibleCount) + orphanIds.length
+  // The engine must NEVER pre-apply cuts: no word it hands to the UI may carry
+  // deleted=true. (executeCuts is the only place that flag is ever set.)
+  const autoApplied = transcript.words.some((w) => w.deleted === true)
+  if (autoApplied) {
+    errors.push('REVIEW-STATE ERROR: engine produced words with deleted=true before Execute cuts — this is a bug.')
+    console.error('[retake-aware-beta] REVIEW-STATE ERROR: pre-applied deleted flags detected')
+  }
+  if (wordsHidden) {
+    errors.push(`REVIEW-STATE ERROR: ${hiddenCount} word(s) would be hidden before Execute cuts (raw=${rawCount}, visible=${visibleCount}, orphan ids=${orphanIds.length}).`)
+    console.error('[retake-aware-beta] REVIEW-STATE ERROR: words hidden before execute', { rawCount, visibleCount, orphans: orphanIds.length })
+  }
   const idToText = new Map(transcript.words.map((w) => [w.id, w.text]))
   const previewText = deleteWordIds.slice(0, 24).map((id) => idToText.get(id) ?? '?')
 
@@ -112,11 +124,15 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
     transcription_provider: vt.provider,
     llm_provider: judge,
     raw_words_count: rawCount,
+    raw_provider_words_count: rawCount,
     visible_transcript_words_count: visibleCount,
+    final_cut_spans_count: cutSpans.length,
     mapped_word_ids_count: deleteWordIds.length,
     mapped_selected_word_text_preview: previewText,
     review_state_applied: true,
     words_hidden_before_execute: wordsHidden,
+    hidden_words_before_execute_count: hiddenCount,
+    auto_applied_before_review: autoApplied,
     raw_words: vt.words,
     clean_text: vt.clean_text,
     chunks,

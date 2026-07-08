@@ -118,12 +118,17 @@ export interface RetakeAwareDebug {
   llm_provider: string
   // ---- review-state audit (proves nothing is hidden before Execute cuts) ----
   raw_words_count: number
+  raw_provider_words_count: number
   /** words the transcript tab WILL show (must equal raw_words_count). */
   visible_transcript_words_count: number
+  final_cut_spans_count: number
   mapped_word_ids_count: number
   mapped_selected_word_text_preview: string[]
   review_state_applied: boolean
   words_hidden_before_execute: boolean
+  hidden_words_before_execute_count: number
+  /** the engine NEVER sets word.deleted — always false unless a bug slipped in. */
+  auto_applied_before_review: boolean
   raw_words: VerbatimWord[]
   clean_text: string
   chunks: Chunk[]
