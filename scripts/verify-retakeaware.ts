@@ -38,6 +38,18 @@ function vt(phrases: string[]): VerbatimTranscript {
   check('verbatim raw_text keeps disfluencies', /uh .*um/.test(x.raw_text))
 }
 
+// ---- review-state: chunks partition ALL words (nothing dropped from the
+//      transcript the UI renders from segments) ----
+{
+  const x = vt(['this product changed my', 'this product changed my skin in seven days', 'and one more clean line here'])
+  const chunks = buildChunks(x)
+  const covered = new Array(x.words.length).fill(false)
+  for (const c of chunks) for (let i = c.wordStart; i <= c.wordEnd; i++) covered[i] = true
+  check('every raw word is covered by exactly one chunk (no word hidden)', covered.every(Boolean) && chunks.length > 0, `${covered.filter(Boolean).length}/${x.words.length}`)
+  const noGapOverlap = chunks.every((c, i) => i === 0 || c.wordStart === chunks[i - 1].wordEnd + 1)
+  check('chunks are contiguous (no overlap/gap)', noGapOverlap)
+}
+
 // ---- 2. retake grouping: progressive attempts, keep the most complete ----
 {
   const x = vt([

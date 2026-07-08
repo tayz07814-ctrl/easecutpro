@@ -90,11 +90,33 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   const transcript = toAppTranscript(vt)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
+  // ---- review-state invariants (the store shows `transcript` in full and
+  // stages `deleteWordIds` as blue highlights — nothing is removed pre-Execute).
+  const rawCount = vt.words.length
+  const visibleCount = transcript.words.length // exactly what the transcript tab renders
+  const idSet = new Set(transcript.words.map((w) => w.id))
+  const orphanIds = deleteWordIds.filter((id) => !idSet.has(id))
+  if (visibleCount !== rawCount) {
+    warnings.push(`REVIEW-STATE: transcript will show ${visibleCount} words but raw has ${rawCount} — words would be hidden before Execute cuts!`)
+  }
+  if (orphanIds.length) {
+    warnings.push(`REVIEW-STATE: ${orphanIds.length} flagged id(s) are not in the visible transcript — they could not be highlighted.`)
+  }
+  const wordsHidden = visibleCount < rawCount || orphanIds.length > 0
+  const idToText = new Map(transcript.words.map((w) => [w.id, w.text]))
+  const previewText = deleteWordIds.slice(0, 24).map((id) => idToText.get(id) ?? '?')
+
   // 13. debug JSON — every run, always
   const debug: RetakeAwareDebug = {
     mode: 'retake_aware_beta',
     transcription_provider: vt.provider,
     llm_provider: judge,
+    raw_words_count: rawCount,
+    visible_transcript_words_count: visibleCount,
+    mapped_word_ids_count: deleteWordIds.length,
+    mapped_selected_word_text_preview: previewText,
+    review_state_applied: true,
+    words_hidden_before_execute: wordsHidden,
     raw_words: vt.words,
     clean_text: vt.clean_text,
     chunks,

@@ -1582,23 +1582,18 @@ export const useStore = create<AppState>((set, get) => ({
       }
       const res = await window.api.retakeAwareCut(path)
       const cur = get().project
-      let flagIds: string[]
-      let nextProject = cur
-      if (cur.transcript && cur.transcript.words.length) {
-        // The project already has a transcript the user may have edited — keep
-        // it, and map the beta's cut SPANS onto its words by time overlap.
-        flagIds = cur.transcript.words
-          .filter((w) => {
-            const mid = (w.start + w.end) / 2
-            return res.cutSpans.some((s) => mid >= s.start && mid <= s.end)
-          })
-          .map((w) => w.id)
-      } else {
-        // No transcript yet — adopt the beta's verbatim transcript (raw words;
-        // decisions were made on these, clean_text is display-only elsewhere).
-        nextProject = { ...cur, transcript: res.transcript }
-        flagIds = res.deleteWordIds
-      }
+      // REVIEW-STATE CONTRACT (the whole point of this fix):
+      //  - ALWAYS show the beta's FULL raw/verbatim transcript. Its decisions
+      //    were made on these exact words, so the displayed words and the
+      //    flagged ids are guaranteed to reference the same list (rw*). We do
+      //    NOT keep a prior transcript and time-map onto it — a mismatched
+      //    (whisper) transcript could highlight the wrong words or none.
+      //  - Proposed cuts are staged ONLY as `selectedWordIds` (the same blue-
+      //    highlight review set FastCut/ProCut use). We NEVER set word.deleted
+      //    and NEVER trim words here — nothing leaves the transcript until the
+      //    user presses Execute cuts (which is the only place deleted is set).
+      const nextProject: typeof cur = { ...cur, transcript: res.transcript }
+      const flagIds = res.deleteWordIds
       set({
         project: nextProject,
         selectedWordIds: new Set(flagIds),
@@ -1606,7 +1601,7 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 100,
           message:
-            `${res.summary} — review, then Execute cuts` +
+            `${res.summary} — ${flagIds.length} word(s) highlighted, review then Execute cuts` +
             (res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
             (res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '')
         }

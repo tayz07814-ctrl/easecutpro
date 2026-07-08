@@ -116,6 +116,14 @@ export interface RetakeAwareDebug {
   mode: 'retake_aware_beta'
   transcription_provider: string
   llm_provider: string
+  // ---- review-state audit (proves nothing is hidden before Execute cuts) ----
+  raw_words_count: number
+  /** words the transcript tab WILL show (must equal raw_words_count). */
+  visible_transcript_words_count: number
+  mapped_word_ids_count: number
+  mapped_selected_word_text_preview: string[]
+  review_state_applied: boolean
+  words_hidden_before_execute: boolean
   raw_words: VerbatimWord[]
   clean_text: string
   chunks: Chunk[]
