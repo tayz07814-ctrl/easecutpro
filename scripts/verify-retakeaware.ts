@@ -4,6 +4,8 @@ import {
   buildChunks,
   detectFillers,
   findRetakeGroups,
+  detectFalseStarts,
+  detectSelfCorrections,
   applyLlmDecisions,
   buildCutSpans,
   spansToWordIds
@@ -128,11 +130,14 @@ function vt(phrases: string[]): VerbatimTranscript {
   check('parallel list (foam/oil/mask) is NOT a retake group', groups.length === 0, JSON.stringify(groups.map(g => g.attempts.map(a => a.text))))
 }
 {
-  // parallel sentence pair with substituted tails
+  // parallel sentence pair with substituted tails: at most a PROVISIONAL group
+  // (LLM-gated) — rules alone must never cut it.
   const x = vt(["but most importantly it's gonna help strengthen.", "But most importantly it's gonna help restore your skin barrier."])
   const fillers = detectFillers(x.words)
   const { groups } = findRetakeGroups(buildChunks(x), x.words, fillers)
-  check('substituted-tail sentences are NOT a retake group', groups.length === 0)
+  const confirmed = groups.filter((g) => !g.provisional)
+  check('substituted-tail sentences are never a CONFIRMED retake group', confirmed.length === 0, JSON.stringify(groups.map((g) => g.candidate_type)))
+  check('…and rules alone cut nothing for them', buildCutSpans(x, groups, fillers).length === 0)
 }
 {
   // AssemblyAI-style broken-off attempt (trailing em dash) IS a retake
@@ -144,6 +149,89 @@ function vt(phrases: string[]): VerbatimTranscript {
     const keeper = groups[0].attempts.find((a) => a.attempt_id === groups[0].keep_attempt)!
     check('redo is kept, flub removed whole', keeper.text.includes('somewhere down here'), keeper.text)
   }
+}
+
+// ---- F1. abandoned false start: cut only the dashed tail, keep the hook ----
+{
+  const x = vt(["Okay ladies, if you are a baddie on a budget, I'm gonna need—", 'then this is for you because this stuff is great'])
+  const chunks = buildChunks(x)
+  const fillers = detectFillers(x.words)
+  const { groups } = findRetakeGroups(chunks, x.words, fillers)
+  const fs = detectFalseStarts(chunks, x.words, groups)
+  check('F1: false start detected', fs.length === 1, JSON.stringify(fs))
+  if (fs.length === 1) {
+    check('F1: cuts ONLY "I\'m gonna need—"', /gonna need/.test(fs[0].text) && !/baddie|budget/.test(fs[0].text), fs[0].text)
+    const spans = buildCutSpans(x, groups, fillers, fs, [])
+    const hookMid = (x.words[2].start + x.words[2].end) / 2 // "if" of the hook
+    check('F1: hook words untouched', !spans.some((s) => hookMid >= s.start && hookMid <= s.end))
+    const contMid = (x.words[14].start + x.words[14].end) / 2 // "this" of the continuation
+    check('F1: continuation untouched', !spans.some((s) => contMid >= s.start && contMid <= s.end))
+  }
+}
+
+// ---- F2. same sentence, final word swapped (scent -> perfume) ----
+{
+  const x = vt(["I'm trying to get my girl this scent.", "I'm trying to get my girl this perfume."])
+  const fillers = detectFillers(x.words)
+  const { groups } = findRetakeGroups(buildChunks(x), x.words, fillers)
+  check('F2: prefix-swap retake grouped', groups.length === 1 && !groups[0].provisional, JSON.stringify(groups.map((g) => g.candidate_type)))
+  if (groups.length === 1) {
+    const keeper = groups[0].attempts.find((a) => a.attempt_id === groups[0].keep_attempt)!
+    check('F2: keeps the LATER "perfume" version', /perfume/.test(keeper.text), keeper.text)
+    const spans = buildCutSpans(x, groups, fillers)
+    const first = groups[0].attempts[0]
+    check('F2: earlier version removed whole', spans.some((s) => s.start <= first.start + 0.01 && s.end >= first.end - 0.01))
+  }
+}
+
+// ---- F3. in-chunk self-correction ("…if you got— or …") ----
+{
+  const x = vt(['Like, do not be surprised if you got— or do not be surprised if your mans wants to live in your neck after this'])
+  const chunks = buildChunks(x)
+  const sc = detectSelfCorrections(chunks, x.words)
+  check('F3: self-correction detected', sc.length === 1, JSON.stringify(sc))
+  if (sc.length === 1) {
+    check('F3: cut covers "if you got— or"', /you got— or$/.test(sc[0].text), sc[0].text)
+    const spans = buildCutSpans(x, [], [], [], sc)
+    const idx = (t: string): number => x.words.findIndex((w) => w.word === t)
+    const mansMid = (x.words[idx('mans')].start + x.words[idx('mans')].end) / 2
+    check('F3: the redo ("your mans wants…") untouched', !spans.some((s) => mansMid >= s.start && mansMid <= s.end))
+    // the SECOND "do not be surprised" (the redo's opening) must stay
+    const secondDo = x.words.map((w, i) => ({ w, i })).filter((e) => e.w.word === 'do')[1]
+    const secondDoMid = (secondDo.w.start + secondDo.w.end) / 2
+    check('F3: re-said opening stays', !spans.some((s) => secondDoMid >= s.start && secondDoMid <= s.end))
+  }
+}
+
+// ---- F4. progressive incomplete attempt with dash (lowered threshold) ----
+{
+  const x = vt(['But I wish I grabbed 2 because I had to wait a freaking—', 'I wish I grabbed 2 because I literally had to wait 2 weeks to order this one.'])
+  const fillers = detectFillers(x.words)
+  const { groups } = findRetakeGroups(buildChunks(x), x.words, fillers)
+  check('F4: dash-abandoned low-sim retake grouped', groups.length === 1 && !groups[0].provisional, JSON.stringify(groups.map((g) => `${g.candidate_type}/${g.provisional}`)))
+  if (groups.length === 1) {
+    const keeper = groups[0].attempts.find((a) => a.attempt_id === groups[0].keep_attempt)!
+    check('F4: complete second attempt kept', /2 weeks/.test(keeper.text), keeper.text)
+  }
+}
+
+// ---- D. ambiguous pairs become PROVISIONAL (LLM-gated), never rule-cut ----
+{
+  const x = vt(['It just smells so clean, so rich, fresh.', 'It just smells so freaking good and fresh.'])
+  const fillers = detectFillers(x.words)
+  const { groups } = findRetakeGroups(buildChunks(x), x.words, fillers)
+  check('ambiguous mid-sim pair becomes provisional group', groups.length === 1 && groups[0].provisional === true, JSON.stringify(groups))
+  const spans = buildCutSpans(x, groups, fillers)
+  check('provisional group produces NO cuts without LLM', spans.length === 0)
+  // LLM veto path
+  const warnings: string[] = []
+  applyLlmDecisions(groups, fillers, { retake_group_decisions: [{ retake_group_id: groups[0].retake_group_id, keep_attempt: '', remove_attempts: [], reason: 'deliberate emphasis', not_a_retake: true }], filler_decisions: [] }, warnings)
+  check('LLM can veto (not_a_retake)', groups[0].llm_rejected === true)
+  // LLM affirm path on a fresh copy
+  const { groups: g2 } = findRetakeGroups(buildChunks(x), x.words, fillers)
+  applyLlmDecisions(g2, fillers, { retake_group_decisions: [{ retake_group_id: g2[0].retake_group_id, keep_attempt: 'take_2', remove_attempts: ['take_1'], reason: 'retry', not_a_retake: false }], filler_decisions: [] }, warnings)
+  const spans2 = buildCutSpans(x, g2, fillers)
+  check('LLM affirmation makes the provisional group cut', spans2.length === 1 && g2[0].provisional === undefined)
 }
 
 // ---- 8. invalid LLM output falls back to rules ----

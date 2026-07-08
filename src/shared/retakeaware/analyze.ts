@@ -17,6 +17,8 @@ import type {
   RetakeAttempt,
   RetakeGroup,
   RepetitionCandidate,
+  RejectedCandidate,
+  TailCut,
   CutSpan,
   LlmDecisions
 } from './types'
@@ -27,10 +29,18 @@ const CHUNK_MAX_WORDS = 26 // fallback split for run-on speech
 const RETAKE_WINDOW_S = 25 // compare chunks whose gap is at most this
 const RETAKE_MAX_LOOKAHEAD = 4 // ... and at most this many chunks apart
 const SIM_THRESHOLD = 0.55 // similarity for "same line, retried"
+const AMBIG_SIM = 0.35 // below this a pair is noise; between = LLM-reviewed
+const PREFIX_RETAKE_MIN = 5 // shared-opening tokens for a prefix-swap retake
 const MIN_PREFIX_TOKENS = 2 // retakes share how they START
 const PAD_S = 0.04 // safe padding around cut spans
 const MERGE_GAP_S = 0.12 // spans closer than this merge
 const MIN_SPAN_S = 0.12 // never emit micro-cuts
+const FALSE_START_MIN_PAUSE_MS = 400 // dash tail must be followed by real air
+const FALSE_START_MAX_TAIL = 8 // never tail-cut more than this many words
+/** cut-off marker AssemblyAI writes on abandoned words: "need—", "my—". */
+const DASH_RE = /[—–-]["')\]]?\s*$/
+const CORRECTION_MARKERS = new Set(['or', 'sorry', 'no', 'wait'])
+const LEADING_CONNECTIVES = new Set(['and', 'or', 'but', 'so', 'then', 'plus', 'also'])
 
 // Hesitations: candidates for removal (never automatic keepers).
 const HESITATIONS = new Set(['uh', 'um', 'er', 'ah', 'erm', 'mm', 'hmm', 'uhh', 'umm', 'mhm'])
@@ -193,10 +203,30 @@ export function similarity(aNorm: string, bNorm: string): number {
  *     trailing em dash: "my—", "bundle—"), or its leftover is re-said in b;
  *   - near-equal-length twins whose only difference is disjoint tail content
  *     get their jaccard capped below threshold (the parallel-list veto). */
-export function retakeSimilarity(a: Chunk, b: Chunk): number {
+export interface PairFeatures {
+  sim: number
+  jaccard: number
+  /** shared-opening token count. */
+  prefixTokens: number
+  prefixOverlap: number // prefixTokens / minLen, unqualified
+  restA: string[]
+  restB: string[]
+  /** earlier chunk audibly broke off (trailing em dash). */
+  abandoned: boolean
+  /** near-equal twins whose only difference is disjoint tail content. */
+  listLike: boolean
+  /** exactly one substituted final token on each side ("scent" -> "perfume"). */
+  singleTokenSwap: boolean
+}
+
+export function pairFeatures(a: Chunk, b: Chunk): PairFeatures {
   const ta = a.norm.split(' ').filter(Boolean)
   const tb = b.norm.split(' ').filter(Boolean)
-  if (!ta.length || !tb.length) return 0
+  const empty: PairFeatures = {
+    sim: 0, jaccard: 0, prefixTokens: 0, prefixOverlap: 0, restA: ta, restB: tb,
+    abandoned: false, listLike: false, singleTokenSwap: false
+  }
+  if (!ta.length || !tb.length) return empty
   const setA = new Set(ta)
   const setB = new Set(tb)
   let inter = 0
@@ -207,7 +237,7 @@ export function retakeSimilarity(a: Chunk, b: Chunk): number {
   while (p < minLen && ta[p] === tb[p]) p++
   const restA = ta.slice(p)
   const restB = tb.slice(p)
-  const abandoned = /[—–-]["')\]]?\s*$/.test(a.text.trim())
+  const abandoned = DASH_RE.test(a.text.trim())
   const leftoverCovered = restA.every((t) => setB.has(t))
   const prefixQualifies =
     p >= MIN_PREFIX_TOKENS && (restA.length === 0 || abandoned || (restA.length <= 2 && leftoverCovered))
@@ -215,34 +245,126 @@ export function retakeSimilarity(a: Chunk, b: Chunk): number {
   const disjointTails =
     restA.length > 0 && restB.length > 0 && !restA.some((t) => setB.has(t)) && !restB.some((t) => setA.has(t))
   const listLike = disjointTails && Math.abs(ta.length - tb.length) <= 1 && !abandoned
-  return Math.max(listLike ? Math.min(jaccard, 0.4) : jaccard, prefixRatio)
+  const singleTokenSwap = disjointTails && restA.length === 1 && restB.length === 1
+  return {
+    sim: Math.max(listLike ? Math.min(jaccard, 0.4) : jaccard, prefixRatio),
+    jaccard,
+    prefixTokens: p,
+    prefixOverlap: minLen ? p / minLen : 0,
+    restA,
+    restB,
+    abandoned,
+    listLike,
+    singleTokenSwap
+  }
+}
+
+/** Back-compat wrapper (harness + external callers). */
+export function retakeSimilarity(a: Chunk, b: Chunk): number {
+  return pairFeatures(a, b).sim
+}
+
+/** first 3 content-frame tokens (leading connectives stripped) — series probe. */
+function frame3(c: Chunk): string {
+  const toks = c.norm.split(' ').filter(Boolean)
+  let s = 0
+  while (s < toks.length && LEADING_CONNECTIVES.has(toks[s])) s++
+  return toks.slice(s, s + 3).join(' ')
+}
+
+/** ms of air after a chunk (before the next word), for debug + false starts. */
+function silenceAfterMs(c: Chunk, words: VerbatimWord[]): number {
+  const next = words[c.wordEnd + 1]
+  return next ? Math.max(0, Math.round((next.start - words[c.wordEnd].end) * 1000)) : 9999
 }
 
 export function findRetakeGroups(
   chunks: Chunk[],
   words: VerbatimWord[],
   fillers: FillerDecision[]
-): { groups: RetakeGroup[]; candidates: RepetitionCandidate[] } {
+): { groups: RetakeGroup[]; candidates: RepetitionCandidate[]; rejections: RejectedCandidate[] } {
   const candidates: RepetitionCandidate[] = []
-  // union-find over chunk indices
+  const rejections: RejectedCandidate[] = []
+  // union-find over chunk indices (CONFIRMED links only)
   const parent = chunks.map((_, i) => i)
   const find = (x: number): number => (parent[x] === x ? x : (parent[x] = find(parent[x])))
   const union = (a: number, b: number): void => {
     parent[find(b)] = find(a)
   }
+  const linkType = new Map<number, string>() // chunk index -> how it got linked
+  // Provisional pairs: plausible retakes the RULES are not sure about — they
+  // become provisional 2-member groups that cut ONLY if the LLM judge affirms.
+  const provisionalPairs: { i: number; j: number; f: PairFeatures; type: string }[] = []
   // A spoken retake command ("no wait, let me say that again") marks whatever
-  // precedes it as a flub even when similarity alone wouldn't catch it — link
-  // the chunk carrying/preceding the marker to the NEXT content chunk. The
-  // speaker explicitly declared a retake; the texts may legitimately differ.
+  // precedes it as a flub even when similarity alone wouldn't catch it.
   const markerStarts = fillers.filter((f) => f.classification === 'retake_marker').map((f) => f.word_start_index)
+  const reject = (i: number, j: number, f: PairFeatures, type: string, reason: string): void => {
+    rejections.push({
+      a: chunks[i].id,
+      b: chunks[j].id,
+      candidate_type: type,
+      similarity_score: Math.round(f.sim * 100) / 100,
+      prefix_overlap_score: Math.round(f.prefixOverlap * 100) / 100,
+      has_cutoff_marker: f.abandoned,
+      silence_after_ms: silenceAfterMs(chunks[i], words),
+      rejection_reason: reason,
+      was_sent_to_llm: false,
+      llm_decision_if_any: null
+    })
+  }
   for (let i = 0; i < chunks.length; i++) {
     for (let j = i + 1; j <= Math.min(i + RETAKE_MAX_LOOKAHEAD, chunks.length - 1); j++) {
       if (chunks[j].start - chunks[i].end > RETAKE_WINDOW_S) break
-      const sim = retakeSimilarity(chunks[i], chunks[j])
-      if (sim > 0.3) candidates.push({ a: chunks[i].id, b: chunks[j].id, similarity: Math.round(sim * 100) / 100 })
+      const f = pairFeatures(chunks[i], chunks[j])
+      if (f.sim > 0.3 || (f.prefixTokens >= PREFIX_RETAKE_MIN && f.singleTokenSwap))
+        candidates.push({ a: chunks[i].id, b: chunks[j].id, similarity: Math.round(f.sim * 100) / 100 })
       const markerLinks =
         j === i + 1 && markerStarts.some((m) => m >= chunks[i].wordStart && m < chunks[j].wordStart)
-      if (sim >= SIM_THRESHOLD || markerLinks) union(i, j)
+      // ---- tiered decision ----
+      if (f.sim >= SIM_THRESHOLD || markerLinks) {
+        union(i, j)
+        linkType.set(i, markerLinks && f.sim < SIM_THRESHOLD ? 'marker' : 'similarity')
+        continue
+      }
+      // dash-abandoned earlier chunk: the speaker audibly broke off — a much
+      // weaker text match is enough ("…I had to wait a freaking—" -> redo).
+      if (f.abandoned && f.sim >= AMBIG_SIM) {
+        union(i, j)
+        linkType.set(i, 'dash_retake')
+        continue
+      }
+      // parallel-series probe: 3+ nearby chunks sharing the same opening frame
+      // ("You get the cleansing FOAM / OIL / and the mud MASK") are enumerated
+      // content — never retakes, never worth an LLM call.
+      const seriesOf = (): number => {
+        const fr = frame3(chunks[i])
+        let n = 0
+        for (let k = Math.max(0, i - 3); k <= Math.min(chunks.length - 1, j + 3); k++) {
+          if (frame3(chunks[k]) === fr) n++
+        }
+        return n
+      }
+      // Applies to SUBSTITUTED-content pairs only: a progressive retake is a
+      // pure prefix extension (restA empty) or audibly broken off — those are
+      // exempt even when 3 takes share the frame.
+      const substituted = f.restA.length > 0 && !f.abandoned
+      if (substituted && frame3(chunks[i]) === frame3(chunks[j]) && seriesOf() >= 3) {
+        reject(i, j, f, f.singleTokenSwap ? 'prefix_swap' : 'substituted_tail', `parallel series of ${seriesOf()} chunks sharing "${frame3(chunks[i])}…" — content, not a retake`)
+        continue
+      }
+      // prefix-swap retake: same long opening, ONE substituted final word
+      // ("…my girl this SCENT." -> "…my girl this PERFUME.").
+      if (f.singleTokenSwap && f.prefixTokens >= PREFIX_RETAKE_MIN) {
+        union(i, j)
+        linkType.set(i, 'prefix_swap')
+        continue
+      }
+      // ambiguous: plausible but unproven — LLM judge decides, rules never cut.
+      if (f.sim >= AMBIG_SIM && j - i <= 2) {
+        provisionalPairs.push({ i, j, f, type: f.listLike ? 'substituted_tail' : 'ambiguous' })
+        continue
+      }
+      if (f.sim > 0.3) reject(i, j, f, 'similarity', `similarity ${f.sim.toFixed(2)} below ambiguity floor ${AMBIG_SIM}`)
     }
   }
   const byRoot = new Map<number, number[]>()
@@ -253,8 +375,8 @@ export function findRetakeGroups(
   }
   const groups: RetakeGroup[] = []
   let gid = 0
-  for (const members of byRoot.values()) {
-    if (members.length < 2) continue
+  const inConfirmed = new Set<number>()
+  const makeGroup = (members: number[], provisional: boolean, type: string): void => {
     members.sort((a, b) => a - b)
     const attempts: RetakeAttempt[] = members.map((ci, k) => {
       const c = chunks[ci]
@@ -277,10 +399,116 @@ export function findRetakeGroups(
       attempts,
       keep_attempt: keeper.attempt_id,
       remove_attempts: attempts.filter((a) => a !== keeper).map((a) => a.attempt_id),
-      reason: `${keeper.attempt_id} scored highest: ${keeper.reasons.join(', ') || 'most complete attempt'}`
+      reason: `${keeper.attempt_id} scored highest: ${keeper.reasons.join(', ') || 'most complete attempt'}`,
+      candidate_type: type,
+      provisional: provisional || undefined,
+      chunk_ids: members.map((ci) => chunks[ci].id)
     })
   }
-  return { groups, candidates }
+  for (const members of byRoot.values()) {
+    if (members.length < 2) continue
+    for (const m of members) inConfirmed.add(m)
+    makeGroup(members, false, linkType.get(members[0]) ?? 'similarity')
+  }
+  for (const p of provisionalPairs) {
+    if (inConfirmed.has(p.i) || inConfirmed.has(p.j)) continue
+    makeGroup([p.i, p.j], true, p.type)
+  }
+  return { groups, candidates, rejections }
+}
+
+// ---- 3b. abandoned false starts (dash tail, no matching redo) ----
+// "Okay ladies, if you are a baddie on a budget, I'm gonna need—" [pause]
+// "then this is for you…"  ->  cut ONLY "I'm gonna need—" (from the last
+// natural phrase boundary), keep the hook.
+export function detectFalseStarts(chunks: Chunk[], words: VerbatimWord[], groups: RetakeGroup[]): TailCut[] {
+  const grouped = new Set<number>()
+  for (const g of groups) {
+    if (g.llm_rejected) continue
+    for (const a of g.attempts) for (let i = a.word_start_index; i <= a.word_end_index; i++) grouped.add(i)
+  }
+  const out: TailCut[] = []
+  for (const c of chunks) {
+    if (!DASH_RE.test(c.text.trim())) continue
+    if (grouped.has(c.wordEnd)) continue // a retake group already owns it
+    const pause = silenceAfterMs(c, words)
+    if (pause < FALSE_START_MIN_PAUSE_MS) continue
+    // last natural phrase boundary: punctuation, an intra-chunk pause, or a
+    // clause connective starting the tail.
+    let boundary = -1
+    for (let t = c.wordStart; t < c.wordEnd; t++) {
+      const punct = /[,.;:!?]["')\]]?$/.test(words[t].word.trim())
+      const gap = words[t + 1].start - words[t].end >= 0.25
+      const conj = ['but', 'so', 'then'].includes(normToken(words[t + 1].word))
+      if (punct || gap || conj) boundary = t
+    }
+    let tailStart = boundary >= 0 ? boundary + 1 : c.wordStart
+    if (tailStart - c.wordStart < 3) tailStart = c.wordStart // no real setup -> whole chunk
+    const tailLen = c.wordEnd - tailStart + 1
+    if (tailLen > FALSE_START_MAX_TAIL) continue // too big to cut on a dash alone
+    out.push({
+      chunk_id: c.id,
+      word_start_index: tailStart,
+      word_end_index: c.wordEnd,
+      text: words.slice(tailStart, c.wordEnd + 1).map((w) => w.word).join(' '),
+      reason: `abandoned false start (cut-off "—", ${pause}ms pause after)`,
+      silence_after_ms: pause
+    })
+  }
+  return out
+}
+
+// ---- 3c. in-chunk self-corrections ----
+// "…do not be surprised if you got— or do not be surprised if your mans
+// wants…"  ->  cut the abandoned first attempt through the correction marker.
+export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): TailCut[] {
+  const out: TailCut[] = []
+  for (const c of chunks) {
+    for (let k = c.wordStart; k < c.wordEnd; k++) {
+      if (!DASH_RE.test(words[k].word.trim())) continue
+      // optional spoken correction marker right after the cut-off
+      let markerLen = 0
+      if (normToken(words[k + 1]?.word ?? '') === 'i' && normToken(words[k + 2]?.word ?? '') === 'mean') markerLen = 2
+      else if (CORRECTION_MARKERS.has(normToken(words[k + 1]?.word ?? ''))) markerLen = 1
+      const restart = k + 1 + markerLen
+      if (restart > c.wordEnd) continue // dash at chunk end -> false-start detector
+      // the re-said opening: longest 3-6 token run after the restart that also
+      // occurs earlier in the SAME chunk (that earlier occurrence is the flub).
+      let cutFrom = -1
+      for (let m = 6; m >= 3 && cutFrom < 0; m--) {
+        if (restart + m - 1 > c.wordEnd) continue
+        const seq = words.slice(restart, restart + m).map((w) => normToken(w.word))
+        for (let s = k - m; s >= c.wordStart; s--) {
+          if (seq.every((t, x) => normToken(words[s + x].word) === t)) {
+            cutFrom = s
+            break
+          }
+        }
+      }
+      if (cutFrom < 0 && markerLen > 0) {
+        // no repeated opening, but an explicit marker: cut back to the last
+        // phrase boundary before the dash.
+        cutFrom = k
+        for (let t = k - 1; t >= c.wordStart; t--) {
+          if (/[,.;:!?]["')\]]?$/.test(words[t].word.trim()) || words[t + 1].start - words[t].end >= 0.25) {
+            cutFrom = t + 1
+            break
+          }
+          cutFrom = t
+        }
+      }
+      if (cutFrom < 0) continue
+      if (restart - 1 - cutFrom + 1 > 12) continue // runaway guard
+      out.push({
+        chunk_id: c.id,
+        word_start_index: cutFrom,
+        word_end_index: restart - 1,
+        text: words.slice(cutFrom, restart).map((w) => w.word).join(' '),
+        reason: `in-chunk self-correction (cut-off "—"${markerLen ? ' + spoken marker' : ''}, restarted within the sentence)`
+      })
+    }
+  }
+  return out
 }
 
 /** Score attempts IN PLACE. The winner is one whole attempt — no splicing. */
@@ -353,6 +581,12 @@ export function applyLlmDecisions(
       warnings.push(`LLM referenced unknown retake group ${d?.retake_group_id} — ignored`)
       continue
     }
+    if (d.not_a_retake === true) {
+      // the judge vetoed the group — it produces no cuts.
+      g.llm_rejected = true
+      g.reason = `LLM rejected: ${String(d.reason || 'not a retake').slice(0, 300)}`
+      continue
+    }
     const keep = g.attempts.find((a) => a.attempt_id === d.keep_attempt)
     if (!keep) {
       warnings.push(`LLM chose impossible attempt ${d?.keep_attempt} in ${g.retake_group_id} — ignored`)
@@ -361,6 +595,7 @@ export function applyLlmDecisions(
     g.keep_attempt = keep.attempt_id
     g.remove_attempts = g.attempts.filter((a) => a.attempt_id !== keep.attempt_id).map((a) => a.attempt_id)
     g.reason = `LLM: ${String(d.reason || 'chosen by reviewer').slice(0, 300)}`
+    g.provisional = undefined // an affirmed provisional group is now real
   }
   const valid: FillerClass[] = ['keep', 'remove', 'shorten', 'retake_marker']
   for (const d of decisions.filler_decisions ?? []) {
@@ -375,11 +610,13 @@ export function applyLlmDecisions(
   }
 }
 
-// ---- 5. cut spans: whole attempts + ugly fillers, padded + merged ----
+// ---- 5. cut spans: whole attempts + false starts + corrections + fillers ----
 export function buildCutSpans(
   vt: VerbatimTranscript,
   groups: RetakeGroup[],
-  fillers: FillerDecision[]
+  fillers: FillerDecision[],
+  falseStarts: TailCut[] = [],
+  selfCorrections: TailCut[] = []
 ): CutSpan[] {
   const words = vt.words
   const spans: CutSpan[] = []
@@ -393,6 +630,8 @@ export function buildCutSpans(
     }
   }
   for (const g of groups) {
+    // provisional groups cut ONLY once the LLM affirmed them; vetoed never cut.
+    if (g.provisional || g.llm_rejected) continue
     for (const id of g.remove_attempts) {
       const a = g.attempts.find((x) => x.attempt_id === id)!
       const s = spanFor(a.word_start_index, a.word_end_index)
@@ -403,6 +642,22 @@ export function buildCutSpans(
         reason: `Removed ${id} (whole attempt) from ${g.retake_group_id}; keeping ${g.keep_attempt}`
       })
     }
+  }
+  for (const t of falseStarts) {
+    spans.push({
+      ...spanFor(t.word_start_index, t.word_end_index),
+      type: 'false_start',
+      source: 'retake_aware_beta',
+      reason: `${t.reason} ("${t.text}")`
+    })
+  }
+  for (const t of selfCorrections) {
+    spans.push({
+      ...spanFor(t.word_start_index, t.word_end_index),
+      type: 'self_correction',
+      source: 'retake_aware_beta',
+      reason: `${t.reason} ("${t.text}")`
+    })
   }
   // fillers inside a removed attempt are already covered; skip them
   const covered = (t: number): boolean => spans.some((s) => t >= s.start && t <= s.end)

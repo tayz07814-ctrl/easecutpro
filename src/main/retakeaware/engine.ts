@@ -19,6 +19,8 @@ import {
   buildChunks,
   detectFillers,
   findRetakeGroups,
+  detectFalseStarts,
+  detectSelfCorrections,
   applyLlmDecisions,
   buildCutSpans,
   spansToWordIds
@@ -72,21 +74,50 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   const chunks = buildChunks(vt)
   const fillerCandidates = detectFillers(vt.words)
   const fillerDecisions = fillerCandidates.map((f) => ({ ...f }))
-  const { groups, candidates } = findRetakeGroups(chunks, vt.words, fillerDecisions)
+  const { groups, candidates, rejections } = findRetakeGroups(chunks, vt.words, fillerDecisions)
 
-  // 10. optional LLM review of the STRUCTURED candidates only
+  // 10. optional LLM review of the STRUCTURED candidates only. Provisional
+  // groups (ambiguous detections) cut ONLY if the judge affirms them.
   op(65, 'Retake β: reviewing retake groups…')
   const context = chunks.map((c) => `[${c.id}] ${c.text}`).join('\n').slice(0, 12000)
   const ambiguousFillers = fillerDecisions.filter((f) => f.classification === 'keep' || f.classification === 'shorten')
+  const provisionalCount = groups.filter((g) => g.provisional).length
   const { decisions, judge } = await reviewRetakeGroups(
     { transcriptContext: context, retakeGroups: groups, fillerCandidates: ambiguousFillers, editingStyle: 'natural talking-head; keep conversational fillers unless ugly' },
     warnings
   )
   applyLlmDecisions(groups, fillerDecisions, decisions, warnings)
+  // Every provisional group's fate becomes a rejection-debug entry (E-spec).
+  for (const g of groups) {
+    if (!g.provisional && !g.llm_rejected) continue
+    const d = decisions?.retake_group_decisions?.find((x) => x.retake_group_id === g.retake_group_id)
+    rejections.push({
+      a: g.chunk_ids?.[0] ?? g.attempts[0]?.attempt_id ?? '?',
+      b: g.chunk_ids?.[1] ?? g.attempts[1]?.attempt_id ?? '?',
+      candidate_type: g.candidate_type ?? 'ambiguous',
+      similarity_score: -1,
+      prefix_overlap_score: -1,
+      has_cutoff_marker: false,
+      silence_after_ms: -1,
+      rejection_reason: g.llm_rejected
+        ? `LLM vetoed: ${g.reason}`
+        : judge === 'none'
+          ? 'ambiguous candidate — no LLM configured to review it, rules alone never cut ambiguous pairs'
+          : 'ambiguous candidate — LLM gave no decision for it',
+      was_sent_to_llm: judge !== 'none' && provisionalCount > 0,
+      llm_decision_if_any: d ? JSON.stringify(d).slice(0, 200) : null
+    })
+  }
+  const activeGroups = groups.filter((g) => !g.provisional && !g.llm_rejected)
 
-  // 11. cut spans (whole failed attempts + ugly fillers, padded + merged)
+  // 3b/3c. abandoned false starts + in-chunk self-corrections (run AFTER the
+  // LLM so a chunk owned by an affirmed retake group is not tail-cut twice).
+  const falseStarts = detectFalseStarts(chunks, vt.words, activeGroups)
+  const selfCorrections = detectSelfCorrections(chunks, vt.words)
+
+  // 11. cut spans (whole failed attempts + tails + corrections + fillers)
   op(85, 'Retake β: building cut spans…')
-  const cutSpans = buildCutSpans(vt, groups, fillerDecisions)
+  const cutSpans = buildCutSpans(vt, groups, fillerDecisions, falseStarts, selfCorrections)
   const transcript = toAppTranscript(vt)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
@@ -140,6 +171,9 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
     filler_decisions: fillerDecisions,
     repetition_candidates: candidates,
     retake_groups: groups,
+    rejected_retake_candidates: rejections,
+    false_starts: falseStarts,
+    self_corrections: selfCorrections,
     attempt_scores: groups.flatMap((g) => g.attempts.map((a) => ({ attempt_id: `${g.retake_group_id}/${a.attempt_id}`, score: a.score, reasons: a.reasons }))),
     llm_decisions: decisions,
     final_cut_spans: cutSpans,
@@ -152,7 +186,12 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   await writeFile(debugPath, JSON.stringify(debug, null, 2), 'utf8')
   console.log(`[retake-aware-beta] done: ${groups.length} retake group(s), ${cutSpans.length} span(s), debug: ${debugPath}`)
 
-  const removed = groups.reduce((n, g) => n + g.remove_attempts.length, 0)
+  const removed = activeGroups.reduce((n, g) => n + g.remove_attempts.length, 0)
+  const extras: string[] = []
+  if (falseStarts.length) extras.push(`${falseStarts.length} false start(s)`)
+  if (selfCorrections.length) extras.push(`${selfCorrections.length} self-correction(s)`)
+  const fillersFlagged = fillerDecisions.filter((f) => f.classification !== 'keep').length
+  if (fillersFlagged) extras.push(`${fillersFlagged} filler(s)`)
   return {
     cut_mode: 'retake_aware_beta',
     provider: vt.provider,
@@ -164,6 +203,6 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
     fillerDecisions,
     debugPath,
     warnings,
-    summary: `Retake β (${vt.provider}${judge !== 'none' ? ` + ${judge}` : ''}): ${groups.length} retake group(s), ${removed} failed attempt(s) removed whole, ${fillerDecisions.filter((f) => f.classification !== 'keep').length} filler(s) flagged`
+    summary: `Retake β (${vt.provider}${judge !== 'none' ? ` + ${judge}` : ''}): ${activeGroups.length} retake group(s), ${removed} failed attempt(s) removed whole${extras.length ? ', ' + extras.join(', ') : ''}`
   }
 }

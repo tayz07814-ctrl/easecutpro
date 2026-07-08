@@ -80,12 +80,45 @@ export interface RetakeGroup {
   keep_attempt: string
   remove_attempts: string[]
   reason: string
+  /** how the group was detected (similarity / dash_retake / prefix_swap / marker / ambiguous). */
+  candidate_type?: string
+  /** uncertain group: cut ONLY if the LLM judge affirms it (never by rules alone). */
+  provisional?: boolean
+  /** the LLM judge explicitly said "not a retake" — group produces no cuts. */
+  llm_rejected?: boolean
+  /** source chunk ids, for rejection debugging. */
+  chunk_ids?: string[]
+}
+
+/** An abandoned tail ("…I'm gonna need—") or in-chunk self-correction
+ *  ("…if you got— or do not be surprised…") — word-index range to cut. */
+export interface TailCut {
+  chunk_id: string
+  word_start_index: number
+  word_end_index: number // inclusive
+  text: string
+  reason: string
+  silence_after_ms?: number
+}
+
+/** A repetition candidate that did NOT become a cut — and exactly why. */
+export interface RejectedCandidate {
+  a: string
+  b: string
+  candidate_type: string
+  similarity_score: number
+  prefix_overlap_score: number
+  has_cutoff_marker: boolean
+  silence_after_ms: number
+  rejection_reason: string
+  was_sent_to_llm: boolean
+  llm_decision_if_any: string | null
 }
 
 export interface CutSpan {
   start: number
   end: number
-  type: 'failed_retake' | 'filler' | 'retake_marker'
+  type: 'failed_retake' | 'filler' | 'retake_marker' | 'false_start' | 'self_correction'
   source: 'retake_aware_beta'
   reason: string
 }
@@ -95,6 +128,8 @@ export interface LlmRetakeDecision {
   keep_attempt: string
   remove_attempts: string[]
   reason: string
+  /** the judge may VETO a provisional group entirely. */
+  not_a_retake?: boolean
 }
 export interface LlmFillerDecision {
   filler_id: string
@@ -136,6 +171,9 @@ export interface RetakeAwareDebug {
   filler_decisions: FillerDecision[]
   repetition_candidates: RepetitionCandidate[]
   retake_groups: RetakeGroup[]
+  rejected_retake_candidates: RejectedCandidate[]
+  false_starts: TailCut[]
+  self_corrections: TailCut[]
   attempt_scores: { attempt_id: string; score: number; reasons: string[] }[]
   llm_decisions: LlmDecisions | null
   final_cut_spans: CutSpan[]

@@ -28,8 +28,9 @@ const SYSTEM = `You review video-editing candidates for a talking-head editor. Y
 Rules:
 - For each retake group pick exactly ONE keep_attempt from the listed attempt_ids. NEVER combine words from different attempts.
 - Prefer the most complete, fluent, latest attempt.
+- Groups marked "provisional": true are UNCERTAIN detections. Decide honestly: if the two lines are really the same take retried (a flub + its redo), affirm with a keep_attempt; if they are deliberate content (parallel phrasing, intentional emphasis/repetition, a list), reject with {"retake_group_id":"…","not_a_retake":true,"reason":"…"}. When unsure, reject — cutting real content is worse than keeping a repeat.
 - For fillers: "keep" natural emphasis (e.g. "Honestly, this changed everything"), "remove" ugly hesitations (uh/um clusters), "shorten" stutters, "retake_marker" spoken commands like "let me say that again".
-Reply with ONLY a JSON object: {"retake_group_decisions":[{"retake_group_id":"","keep_attempt":"","remove_attempts":[""],"reason":""}],"filler_decisions":[{"filler_id":"","decision":"keep|remove|shorten|retake_marker","reason":""}]} — no prose, no markdown fences.`
+Reply with ONLY a JSON object: {"retake_group_decisions":[{"retake_group_id":"","keep_attempt":"","remove_attempts":[""],"reason":"","not_a_retake":false}],"filler_decisions":[{"filler_id":"","decision":"keep|remove|shorten|retake_marker","reason":""}]} — no prose, no markdown fences.`
 
 class AnthropicJudge implements LlmJudge {
   name = 'anthropic:claude-haiku-4-5'
