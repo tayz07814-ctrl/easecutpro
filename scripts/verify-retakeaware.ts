@@ -215,6 +215,38 @@ function vt(phrases: string[]): VerbatimTranscript {
   }
 }
 
+// ---- in-chunk patterns from the scalp-brush video (2026-07-08) ----
+{
+  // leading dashed orphan at chunk start
+  const x = vt(['your— be very careful using this scalp brush because it works'])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('leading orphan "your—" cut', sc.length === 1 && sc[0].text === 'your—', JSON.stringify(sc.map((s) => s.text)))
+}
+{
+  // corrected word breaks exact repeat ("30" -> "36")
+  const x = vt(['And these 30— and these 36 bristles massage it straight in.'])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('numeric correction "And these 30—" cut', sc.length === 1 && /30—$/.test(sc[0].text) && !/36/.test(sc[0].text), JSON.stringify(sc.map((s) => s.text)))
+}
+{
+  // redo inserts a lead-in token ("it's")
+  const x = vt(["Starting to get— it's starting to get popular on TikTok, so they've been selling out."])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('inserted-lead-in "Starting to get—" cut', sc.length === 1 && /get—$/.test(sc[0].text) && !/it's/.test(sc[0].text), JSON.stringify(sc.map((s) => s.text)))
+}
+{
+  // immediate stutter restart WITHOUT dash
+  const x = vt(["It's got PDRN, it's got PDRN and plant-derived exosomes that absorb in."])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('adjacent repeat "It\'s got PDRN," cut once', sc.length === 1 && /PDRN,?$/.test(sc[0].text), JSON.stringify(sc.map((s) => s.text)))
+}
+{
+  // single-word emphasis is NOT a stutter
+  const x = vt(["I've never, never gotten one from this one."])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('"never, never" emphasis untouched', sc.length === 0, JSON.stringify(sc.map((s) => s.text)))
+}
+
 // ---- D. ambiguous pairs become PROVISIONAL (LLM-gated), never rule-cut ----
 {
   const x = vt(['It just smells so clean, so rich, fresh.', 'It just smells so freaking good and fresh.'])

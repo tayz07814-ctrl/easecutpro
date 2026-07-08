@@ -458,13 +458,37 @@ export function detectFalseStarts(chunks: Chunk[], words: VerbatimWord[], groups
   return out
 }
 
-// ---- 3c. in-chunk self-corrections ----
+// ---- 3c. in-chunk self-corrections + lead-in orphans + stutter restarts ----
 // "…do not be surprised if you got— or do not be surprised if your mans
 // wants…"  ->  cut the abandoned first attempt through the correction marker.
+// Also covers (all real creator patterns, 2026-07-08 scalp-brush video):
+//  - "your— be very careful…"            leading dashed orphan at chunk start
+//  - "And these 30— and these 36…"       corrected word breaks the exact match
+//  - "Starting to get— it's starting…"   redo inserts a lead-in token
+//  - "It's got PDRN, it's got PDRN and…" immediate repeat WITHOUT a dash
 export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): TailCut[] {
   const out: TailCut[] = []
+  const taken = new Set<number>() // word indices already claimed by a cut
+  const claim = (a: number, b: number): void => {
+    for (let i = a; i <= b; i++) taken.add(i)
+  }
   for (const c of chunks) {
+    // leading dashed orphan: the first word(s) of the chunk are cut-off debris
+    // from an abandoned take ("your— be very careful using this brush…").
+    if (DASH_RE.test(words[c.wordStart].word.trim()) && c.wordEnd - c.wordStart >= 3) {
+      let e = c.wordStart
+      while (e + 1 < c.wordEnd && DASH_RE.test(words[e + 1].word.trim())) e++
+      claim(c.wordStart, e)
+      out.push({
+        chunk_id: c.id,
+        word_start_index: c.wordStart,
+        word_end_index: e,
+        text: words.slice(c.wordStart, e + 1).map((w) => w.word).join(' '),
+        reason: 'abandoned lead-in (cut-off "—" at the start of the sentence)'
+      })
+    }
     for (let k = c.wordStart; k < c.wordEnd; k++) {
+      if (taken.has(k)) continue
       if (!DASH_RE.test(words[k].word.trim())) continue
       // optional spoken correction marker right after the cut-off
       let markerLen = 0
@@ -472,16 +496,22 @@ export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): T
       else if (CORRECTION_MARKERS.has(normToken(words[k + 1]?.word ?? ''))) markerLen = 1
       const restart = k + 1 + markerLen
       if (restart > c.wordEnd) continue // dash at chunk end -> false-start detector
-      // the re-said opening: longest 3-6 token run after the restart that also
+      // The re-said opening: a 2-6 token run at/near the restart that also
       // occurs earlier in the SAME chunk (that earlier occurrence is the flub).
+      // `shift` lets the redo insert one lead-in token ("Starting to get— IT'S
+      // starting to get…"); the earlier occurrence may include the dashed word
+      // itself ("…to get—" matches "starting to get").
       let cutFrom = -1
-      for (let m = 6; m >= 3 && cutFrom < 0; m--) {
-        if (restart + m - 1 > c.wordEnd) continue
-        const seq = words.slice(restart, restart + m).map((w) => normToken(w.word))
-        for (let s = k - m; s >= c.wordStart; s--) {
-          if (seq.every((t, x) => normToken(words[s + x].word) === t)) {
-            cutFrom = s
-            break
+      outer: for (let m = 6; m >= 2 && cutFrom < 0; m--) {
+        for (let shift = 0; shift <= 1; shift++) {
+          if (restart + shift + m - 1 > c.wordEnd) continue
+          const seq = words.slice(restart + shift, restart + shift + m).map((w) => normToken(w.word))
+          for (let s = k - m + 1; s >= c.wordStart; s--) {
+            if (s + m - 1 > k) continue
+            if (seq.every((t, x) => normToken(words[s + x].word) === t)) {
+              cutFrom = s
+              break outer
+            }
           }
         }
       }
@@ -499,6 +529,7 @@ export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): T
       }
       if (cutFrom < 0) continue
       if (restart - 1 - cutFrom + 1 > 12) continue // runaway guard
+      claim(cutFrom, restart - 1)
       out.push({
         chunk_id: c.id,
         word_start_index: cutFrom,
@@ -506,6 +537,34 @@ export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): T
         text: words.slice(cutFrom, restart).map((w) => w.word).join(' '),
         reason: `in-chunk self-correction (cut-off "—"${markerLen ? ' + spoken marker' : ''}, restarted within the sentence)`
       })
+    }
+    // stutter restarts WITHOUT a dash: an immediately repeated 2-4 token
+    // opening ("It's got PDRN, it's got PDRN and…", "It's lightweight, it's
+    // lightweight, not greasy…") — cut the FIRST occurrence. Single-word
+    // repeats ("never, never") are deliberate emphasis and stay.
+    for (let i = c.wordStart; i <= c.wordEnd; i++) {
+      if (taken.has(i)) continue
+      for (let m = 4; m >= 2; m--) {
+        if (i + 2 * m - 1 > c.wordEnd) continue
+        let same = true
+        for (let x = 0; x < m; x++) {
+          if (normToken(words[i + x].word) !== normToken(words[i + m + x].word)) {
+            same = false
+            break
+          }
+        }
+        if (!same) continue
+        claim(i, i + m - 1)
+        out.push({
+          chunk_id: c.id,
+          word_start_index: i,
+          word_end_index: i + m - 1,
+          text: words.slice(i, i + m).map((w) => w.word).join(' '),
+          reason: 'stutter restart (opening said twice back-to-back)'
+        })
+        i += m - 1 // continue after the removed first occurrence
+        break
+      }
     }
   }
   return out
