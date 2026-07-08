@@ -1,0 +1,18 @@
+{
+  "description": "NEGATIVE case: cleansing foam/oil/mud-mask is a parallel list (content), not a retake; only the 'bundle—' retake and the 'This is,' stutter should cut",
+  "patterns": ["same-prefix retake", "stutter restart", "parallel-list negative"],
+  "expectCut": [
+    { "text": "leave the link to this bundle", "type": "failed_retake" },
+    { "text": "This is", "type": "self_correction" }
+  ],
+  "expectKeep": [
+    "You get the cleansing foam",
+    "You get the cleansing oil",
+    "you get the mud mask",
+    "routine to help clean out those pores",
+    "My wife tried this set for the very first time",
+    "link to this exact bundle somewhere down here"
+  ],
+  "expectPatternTypes": ["failed_retake", "self_correction"],
+  "maxSpanSeconds": 8
+}

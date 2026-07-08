@@ -1,0 +1,11 @@
+{
+  "description": "messy blooper reel (light assertions): spoken retake marker content cut, ambiguous dialogue stays provisional, no runaway cut",
+  "patterns": ["retake marker", "stutter restart", "whole-attempt retake", "ambiguous provisional"],
+  "expectCut": [
+    { "text": "say that again" }
+  ],
+  "expectKeep": [],
+  "expectPatternTypes": ["self_correction", "failed_retake"],
+  "expectProvisional": ["set a timer"],
+  "maxSpanSeconds": 8
+}

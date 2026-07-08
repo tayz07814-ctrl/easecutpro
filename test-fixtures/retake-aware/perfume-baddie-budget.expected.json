@@ -1,0 +1,22 @@
+{
+  "description": "false start (tail only), prefix-swap noun retake (scent->perfume), in-chunk self-correction, dash retakes; describe-it pair is LLM-gated",
+  "patterns": ["abandoned false start", "changed final noun retake", "in-chunk self-correction", "cutoff marker", "progressive repeated attempt"],
+  "expectCut": [
+    { "text": "I'm gonna need", "type": "false_start" },
+    { "text": "I need my", "type": "false_start" },
+    { "text": "get my girl this scent", "type": "failed_retake" },
+    { "text": "do not be surprised if you got", "type": "self_correction" },
+    { "text": "it smells so freaking", "type": "failed_retake" },
+    { "text": "had to wait a freaking", "type": "failed_retake" }
+  ],
+  "expectKeep": [
+    "if you are a baddie on a budget",
+    "get my girl this perfume",
+    "your mans wants to live",
+    "you think that this would be like a",
+    "wait 2 weeks to order this one"
+  ],
+  "expectPatternTypes": ["false_start", "self_correction", "failed_retake"],
+  "expectProvisional": ["I would just describe it as like that girl"],
+  "maxSpanSeconds": 8
+}

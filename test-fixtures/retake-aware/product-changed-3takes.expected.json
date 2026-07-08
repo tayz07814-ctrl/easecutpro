@@ -1,0 +1,18 @@
+{
+  "description": "3 progressive takes + bloating retake + dashed 'So if you have been—'",
+  "patterns": ["same-prefix progressive retake", "cutoff marker", "changed final word retake"],
+  "expectCut": [
+    { "text": "This product changed my", "type": "failed_retake" },
+    { "text": "This product changed my skin", "type": "failed_retake" },
+    { "text": "it helped with my bloating", "type": "failed_retake" },
+    { "text": "So if you have been", "type": "failed_retake" }
+  ],
+  "expectKeep": [
+    "changed my skin in 7 days",
+    "helped with my bloating go way down",
+    "wanting to try this",
+    "Honestly this changed everything"
+  ],
+  "expectPatternTypes": ["failed_retake"],
+  "maxSpanSeconds": 6
+}

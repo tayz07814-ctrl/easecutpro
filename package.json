@@ -17,6 +17,8 @@
     "server:dev": "tsx watch src/server/index.ts",
     "mcp": "tsx src/mcp/index.ts",
     "setup-parakeet": "node scripts/setup-parakeet.mjs",
+    "verify-retake-aware": "tsx scripts/verify-retakeaware.ts",
+    "verify-retake-aware-fixtures": "tsx scripts/verify-retake-fixtures.ts",
     "web": "electron-vite build && tsx src/server/index.ts",
     "remote": "node scripts/remote.mjs",
     "remote:named": "node scripts/remote.mjs lt",

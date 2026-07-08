@@ -1,0 +1,21 @@
+{
+  "description": "leading dashed orphan, dash-less stutter restarts, numeric self-correction, lightweight retake group, dandruff retake",
+  "patterns": ["cutoff marker", "leading orphan", "stutter restart", "in-chunk self-correction", "same-prefix retake"],
+  "expectCut": [
+    { "text": "your", "type": "self_correction" },
+    { "text": "It's got PDRN", "type": "self_correction" },
+    { "text": "And these 30", "type": "self_correction" },
+    { "text": "calms the red", "type": "failed_retake" },
+    { "text": "And it's been tested to cut hair", "type": "self_correction" },
+    { "text": "Starting to get", "type": "self_correction" }
+  ],
+  "expectKeep": [
+    "your scalp didn't have to look like this",
+    "plant-derived exosomes that are 1,600 times smaller",
+    "calms the itching and redness too",
+    "36 bristles massage it straight in",
+    "popular on TikTok"
+  ],
+  "expectPatternTypes": ["self_correction", "failed_retake"],
+  "maxSpanSeconds": 8
+}
