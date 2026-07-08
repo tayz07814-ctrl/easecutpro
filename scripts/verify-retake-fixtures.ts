@@ -28,6 +28,7 @@ import {
   detectSelfCorrections,
   detectRepeatedSetups,
   detectOrphanConnectors,
+  detectSilenceTrims,
   buildCutSpans
 } from '../src/shared/retakeaware/analyze'
 import type { VerbatimTranscript, CutSpan } from '../src/shared/retakeaware/types'
@@ -53,6 +54,20 @@ interface ExpectedSpec {
   /** snippets expected only as PROVISIONAL (LLM-gated) groups — present as a
    *  provisional group but NOT cut by rules alone. */
   expectProvisional?: string[]
+  /** Smart Silence Cutter expectations (time-only pause shortening). */
+  silence?: SilenceSpec
+}
+
+interface SilenceSpec {
+  /** the pause AFTER a word ending with this snippet must be SHORTENED, and
+   *  (if given) kept within [minKeptMs, maxKeptMs] with >= minRemovedMs removed. */
+  shortenAfter?: { text: string; maxKeptMs?: number; minKeptMs?: number; minRemovedMs?: number }[]
+  /** the pause after a word ending with this snippet must NOT be shortened. */
+  keepAfter?: string[]
+  /** total shortened time across the run must be at least this (seconds). */
+  minTotalRemovedS?: number
+  /** no shortened pause may keep LESS than this — proves "shorten, never delete". */
+  minKeptFloorMs?: number
 }
 
 const norm = (s: string): string =>
@@ -84,6 +99,9 @@ interface FixtureResult {
   missingPatternTypes: string[]
   oversizedSpans: string[]
   provisionalFailures: string[]
+  silenceTrimCount: number
+  totalSilenceRemovedS: number
+  silenceFailures: string[]
 }
 
 function runFixture(name: string, vt: VerbatimTranscript, exp: ExpectedSpec): FixtureResult {
@@ -140,12 +158,58 @@ function runFixture(name: string, vt: VerbatimTranscript, exp: ExpectedSpec): Fi
     else if (wrongfullyCut) provisionalFailures.push(`${p} — cut by RULES (should wait for LLM)`)
   }
 
+  // ---- Smart Silence Cutter (time-only) — asserted on the SAME word cut spans ----
+  const { trims } = detectSilenceTrims(vt, spans)
+  const totalSilenceRemovedS = trims.reduce((n, t) => n + t.removed_ms / 1000, 0)
+  const silenceFailures: string[] = []
+  const sil = exp.silence
+  const trimAfter = (snippet: string) => {
+    const want = norm(snippet)
+    // find a word whose text ends with the snippet, then the trim starting at it
+    for (let i = 0; i < vt.words.length; i++) {
+      if (!norm(vt.words[i].word).endsWith(want) && norm(vt.words[i].word) !== want) continue
+      const t = trims.find((x) => x.previous_word_index === i)
+      if (t) return t
+    }
+    return null
+  }
+  const gapAfter = (snippet: string): number | null => {
+    const want = norm(snippet)
+    for (let i = 0; i < vt.words.length - 1; i++) {
+      if (norm(vt.words[i].word).endsWith(want) || norm(vt.words[i].word) === want) {
+        return vt.words[i + 1].start - vt.words[i].end
+      }
+    }
+    return null
+  }
+  if (sil) {
+    for (const s of sil.shortenAfter ?? []) {
+      const t = trimAfter(s.text)
+      if (!t) { silenceFailures.push(`"${s.text}" — pause after NOT shortened`); continue }
+      if (s.minRemovedMs != null && t.removed_ms < s.minRemovedMs) silenceFailures.push(`"${s.text}" — removed ${t.removed_ms}ms < ${s.minRemovedMs}ms`)
+      if (s.maxKeptMs != null && t.kept_pause_ms > s.maxKeptMs) silenceFailures.push(`"${s.text}" — kept ${t.kept_pause_ms}ms > ${s.maxKeptMs}ms`)
+      if (s.minKeptMs != null && t.kept_pause_ms < s.minKeptMs) silenceFailures.push(`"${s.text}" — kept ${t.kept_pause_ms}ms < ${s.minKeptMs}ms`)
+    }
+    for (const k of sil.keepAfter ?? []) {
+      if (trimAfter(k)) silenceFailures.push(`"${k}" — pause after WRONGLY shortened (should keep)`)
+    }
+    if (sil.minTotalRemovedS != null && totalSilenceRemovedS < sil.minTotalRemovedS) {
+      silenceFailures.push(`total removed ${totalSilenceRemovedS.toFixed(2)}s < ${sil.minTotalRemovedS}s`)
+    }
+    if (sil.minKeptFloorMs != null) {
+      const tooShort = trims.filter((t) => t.kept_pause_ms < sil.minKeptFloorMs!)
+      if (tooShort.length) silenceFailures.push(`${tooShort.length} pause(s) kept below ${sil.minKeptFloorMs}ms floor — silence must SHORTEN, never delete`)
+    }
+    void gapAfter // reserved for future gap-value assertions
+  }
+
   const pass =
     !missedCuts.length &&
     !keepViolations.length &&
     !missingPatternTypes.length &&
     !oversizedSpans.length &&
-    !provisionalFailures.length
+    !provisionalFailures.length &&
+    !silenceFailures.length
 
   return {
     name,
@@ -157,7 +221,10 @@ function runFixture(name: string, vt: VerbatimTranscript, exp: ExpectedSpec): Fi
     keepViolations,
     missingPatternTypes,
     oversizedSpans,
-    provisionalFailures
+    provisionalFailures,
+    silenceTrimCount: trims.length,
+    totalSilenceRemovedS,
+    silenceFailures
   }
 }
 
@@ -191,11 +258,13 @@ for (const name of names) {
   if (!r.pass) failures++
   console.log(`\n${r.pass ? '✓ PASS' : '✗ FAIL'}  ${name}  —  ${exp.description}`)
   console.log(`        spans=${r.spanCount}  cut-words=${r.mappedWords}  patterns=[${r.patternsDetected.join(', ')}]`)
+  console.log(`        silence: ${r.silenceTrimCount} pause(s) shortened, −${r.totalSilenceRemovedS.toFixed(2)}s`)
   if (r.missedCuts.length) console.log(`        MISSED expected cuts: ${r.missedCuts.map((s) => `"${s}"`).join(', ')}`)
   if (r.keepViolations.length) console.log(`        WRONGLY CUT (should keep): ${r.keepViolations.map((s) => `"${s}"`).join(', ')}`)
   if (r.missingPatternTypes.length) console.log(`        MISSING pattern types: ${r.missingPatternTypes.join(', ')}`)
   if (r.oversizedSpans.length) console.log(`        OVERSIZED cut spans: ${r.oversizedSpans.join('; ')}`)
   if (r.provisionalFailures.length) console.log(`        PROVISIONAL issues: ${r.provisionalFailures.join('; ')}`)
+  if (r.silenceFailures.length) console.log(`        SILENCE issues: ${r.silenceFailures.join('; ')}`)
 }
 
 console.log(`\n${line(66)}`)

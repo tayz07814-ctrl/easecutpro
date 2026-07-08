@@ -21,6 +21,8 @@ import type {
   TailCut,
   MissedCutoff,
   CutSpan,
+  SilenceTrim,
+  DroppedSilence,
   LlmDecisions
 } from './types'
 
@@ -49,6 +51,26 @@ const LEADING_CONNECTIVES = new Set(['and', 'or', 'but', 'so', 'then', 'plus', '
 // ambiguous connectives that ARE sometimes doubled for emphasis ("so, so
 // good") are left out.
 const STUTTER_PRONE_SINGLE = new Set(['i', 'you', 'he', 'she', 'we', 'they', 'it', 'because', 'and', 'but'])
+
+// ---- Smart Silence Cutter tuning ----
+// Shorten over-long pauses to a NATURAL beat — never delete them. Removing all
+// air makes speech sound rushed/robotic (explicit non-goal), so every shortened
+// pause keeps a conversational residual and the FLOOR leaves short pauses alone.
+const SILENCE_FLOOR_S = 0.7 // pauses shorter than this read natural — never touched
+const SILENCE_MIN_REMOVE_S = 0.18 // don't emit a trim that removes less than this
+// Where the removed slice starts, measured from the previous word's end. Mirrors
+// the seam-fade scale used by computeKeepRanges (easecutpro-smoothseams): keep a
+// hair of air against the outgoing word so the cut can't clip its tail.
+const SILENCE_EDGE_KEEP_S = 0.04
+/** Pause class -> residual pause to KEEP (seconds). Longer pauses keep more air
+ *  so a beat still reads as a beat; none collapse below a natural ~0.3s. */
+const SILENCE_KEEP_TABLE: { max: number; keep: number; type: 'beat' | 'breath' | 'sentence' | 'long' | 'paragraph' }[] = [
+  { max: 1.2, keep: 0.35, type: 'beat' }, // clause beat
+  { max: 2.0, keep: 0.45, type: 'breath' }, // breath between sentences
+  { max: 3.5, keep: 0.55, type: 'sentence' }, // full sentence stop
+  { max: 6.0, keep: 0.7, type: 'long' }, // long deliberate pause
+  { max: Infinity, keep: 0.9, type: 'paragraph' } // paragraph / dead-air gap
+]
 
 // Hesitations: candidates for removal (never automatic keepers).
 const HESITATIONS = new Set(['uh', 'um', 'er', 'ah', 'erm', 'mm', 'hmm', 'uhh', 'umm', 'mhm'])
@@ -1023,6 +1045,82 @@ export function applyLlmDecisions(
     f.classification = d.decision
     f.reason = `LLM: ${String(d.reason || 'reviewed').slice(0, 300)}`
   }
+}
+
+// ---- 4b. Smart Silence Cutter — shorten (never delete) over-long pauses ----
+//
+// Timestamp-first: the transcript already carries exact word start/end times, so
+// a silence candidate is simply the gap between two consecutive KEPT words above
+// SILENCE_FLOOR_S. It is a TIME-ONLY edit — it removes gap air, never a spoken
+// word — so it is emitted as its own SilenceTrim stream and (crucially) never
+// fed to buildCutSpans / spansToWordIds. Boundary tightening (snap-to-valley,
+// anti-click seam fades) is handled uniformly downstream by computeKeepRanges at
+// preview/export time (easecutpro-smoothseams), so the detector stays pure.
+//
+// `wordCutSpans` are the already-decided WORD cuts: any gap sitting inside one is
+// dropped (that whole retake/false-start slice is being removed anyway).
+export function detectSilenceTrims(
+  vt: VerbatimTranscript,
+  wordCutSpans: CutSpan[] = []
+): { trims: SilenceTrim[]; dropped: DroppedSilence[] } {
+  const words = vt.words
+  const trims: SilenceTrim[] = []
+  const dropped: DroppedSilence[] = []
+  const insideWordCut = (a: number, b: number): boolean =>
+    wordCutSpans.some((s) => a < s.end && s.start < b)
+  const ms = (s: number): number => Math.round(s * 1000)
+  for (let i = 0; i < words.length - 1; i++) {
+    const prev = words[i]
+    const next = words[i + 1]
+    const gap = next.start - prev.end
+    if (gap < SILENCE_FLOOR_S) continue // natural pause — leave it
+    if (insideWordCut(prev.end, next.start)) {
+      dropped.push({ previous_word_index: i, next_word_index: i + 1, gap_ms: ms(gap), reason: 'gap sits inside a word cut (whole span already removed)' })
+      continue
+    }
+    const bucket = SILENCE_KEEP_TABLE.find((b) => gap <= b.max)!
+    const keep = bucket.keep
+    const removed = gap - keep - SILENCE_EDGE_KEEP_S
+    if (removed < SILENCE_MIN_REMOVE_S) {
+      dropped.push({ previous_word_index: i, next_word_index: i + 1, gap_ms: ms(gap), reason: `already near a natural ${bucket.type} pause — not enough excess to shorten` })
+      continue
+    }
+    // Removed slice starts a hair after the outgoing word; the kept residual sits
+    // against the incoming word (matches how computeKeepRanges applies a
+    // 'shorten' region: cut from start+pad forward by the excess).
+    const start = prev.end + SILENCE_EDGE_KEEP_S
+    trims.push({
+      type: 'silence_trim',
+      start,
+      end: start + removed,
+      previous_word_index: i,
+      next_word_index: i + 1,
+      original_gap_ms: ms(gap),
+      kept_pause_ms: ms(keep),
+      removed_ms: ms(removed),
+      pause_type: bucket.type,
+      reason: `${bucket.type} pause ${gap.toFixed(2)}s shortened to ${keep.toFixed(2)}s (removed ${removed.toFixed(2)}s)`
+    })
+  }
+  return { trims, dropped }
+}
+
+/** Silence trims -> review-first, timeline-only SilenceRegions (action:'shorten').
+ *  The region spans the WHOLE gap and carries the target kept duration; the edit
+ *  engine removes only the excess (edit.ts computeKeepRanges). Never produces a
+ *  word id — these are staged as silence chips, not word highlights. */
+export function buildSilenceRegions(
+  trims: SilenceTrim[],
+  vt: VerbatimTranscript
+): import('../types').SilenceRegion[] {
+  const words = vt.words
+  return trims.map((t, i) => ({
+    id: `sil-rt-${i}`,
+    start: words[t.previous_word_index].end,
+    end: words[t.next_word_index].start,
+    action: 'shorten' as const,
+    shortenTo: t.kept_pause_ms / 1000
+  }))
 }
 
 // ---- 5. cut spans: whole attempts + false starts + corrections + fillers ----

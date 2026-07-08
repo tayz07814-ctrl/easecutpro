@@ -1595,9 +1595,16 @@ export const useStore = create<AppState>((set, get) => ({
       const nextProject: typeof cur = { ...cur, transcript: res.transcript }
       const flagIds = res.deleteWordIds
       const wordsBefore = cur.transcript?.words.length ?? 0
+      // Smart Silence Cutter: pause-shortening is TIME-ONLY — it deletes no words
+      // and is NEVER in deleteWordIds. Stage it through the exact same review-first
+      // silence-chip path FastCut/ProCut use (highlighted, selected, NOT applied);
+      // Execute cuts merges the enabled ones into project.silences.
+      const silenceRegions = res.silenceRegions ?? []
       set({
         project: nextProject,
-        selectedWordIds: new Set(flagIds)
+        selectedWordIds: new Set(flagIds),
+        stagedSilences: silenceRegions,
+        stagedSilenceSel: new Set(silenceRegions.map((r) => r.id))
       })
       // ---- REVIEW-STATE AUDIT (runs on the REAL post-update state) ----
       // Proves in the console, after every run, that the full raw provider
@@ -1634,7 +1641,9 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 100,
           message:
-            `${res.summary} — ${flagIds.length} word(s) highlighted, review then Execute cuts` +
+            `${res.summary} — ${flagIds.length} word(s) highlighted` +
+            (silenceRegions.length ? ` + ${silenceRegions.length} pause(s) staged` : '') +
+            `, review then Execute cuts` +
             (res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
             (res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '') +
             (reviewBroken ? ' · ⚠ REVIEW-STATE ERROR — see console/debug' : '')

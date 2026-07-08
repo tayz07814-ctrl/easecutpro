@@ -14,5 +14,13 @@
     "link to this exact bundle somewhere down here"
   ],
   "expectPatternTypes": ["failed_retake", "self_correction"],
-  "maxSpanSeconds": 8
+  "maxSpanSeconds": 8,
+  "silence": {
+    "shortenAfter": [
+      { "text": "shocked", "minRemovedMs": 5000, "minKeptMs": 600, "maxKeptMs": 1200 },
+      { "text": "mask", "minRemovedMs": 2000, "minKeptMs": 500 }
+    ],
+    "minTotalRemovedS": 10.0,
+    "minKeptFloorMs": 300
+  }
 }

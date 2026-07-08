@@ -17,5 +17,13 @@
     "popular on TikTok"
   ],
   "expectPatternTypes": ["self_correction", "failed_retake"],
-  "maxSpanSeconds": 8
+  "maxSpanSeconds": 8,
+  "silence": {
+    "shortenAfter": [
+      { "text": "time", "maxKeptMs": 700, "minKeptMs": 300, "minRemovedMs": 900 },
+      { "text": "through", "maxKeptMs": 700, "minKeptMs": 300, "minRemovedMs": 700 }
+    ],
+    "minTotalRemovedS": 4.0,
+    "minKeptFloorMs": 300
+  }
 }
