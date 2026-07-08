@@ -99,6 +99,19 @@ export interface TailCut {
   text: string
   reason: string
   silence_after_ms?: number
+  /** detector family: self_correction | lead_in_orphan | stutter_restart |
+   *  partial_word_restart | micro_cutoff_fragment. Used only for debug bucketing. */
+  kind?: string
+}
+
+/** A cut-off word ("foo—") that NO detector removed — surfaced for debugging
+ *  so genuinely-missed fragments are visible instead of silently dropped. */
+export interface MissedCutoff {
+  chunk_id: string
+  word_index: number
+  word: string
+  gap_after_ms: number
+  reason: string
 }
 
 /** A repetition candidate that did NOT become a cut — and exactly why. */
@@ -174,6 +187,10 @@ export interface RetakeAwareDebug {
   rejected_retake_candidates: RejectedCandidate[]
   false_starts: TailCut[]
   self_corrections: TailCut[]
+  micro_cutoff_fragments: TailCut[]
+  partial_word_restarts: TailCut[]
+  missed_cutoff_candidates: MissedCutoff[]
+  cutoff_fragment_reason: string
   attempt_scores: { attempt_id: string; score: number; reasons: string[] }[]
   llm_decisions: LlmDecisions | null
   final_cut_spans: CutSpan[]

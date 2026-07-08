@@ -1,0 +1,17 @@
+{
+  "description": "multiple cutoff fragments in one chunk ('and it—' + 'and they help break—') and a partial-word restart ('pre- Pre'); tiny abandoned fragments must be caught without over-cutting",
+  "patterns": ["micro cutoff fragment", "multiple cutoffs inside same chunk", "partial word restart", "in-chunk self-correction"],
+  "expectCut": [
+    { "text": "and it", "type": "self_correction" },
+    { "text": "and they help break", "type": "self_correction" },
+    { "text": "pre", "type": "self_correction" }
+  ],
+  "expectKeep": [
+    "and they help break down the food that you eat",
+    "Pre and probiotics",
+    "There's not only enzymes in here",
+    "body produces its own digestive enzymes"
+  ],
+  "expectPatternTypes": ["self_correction", "failed_retake"],
+  "maxSpanSeconds": 6
+}

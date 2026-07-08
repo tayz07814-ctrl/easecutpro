@@ -247,6 +247,41 @@ function vt(phrases: string[]): VerbatimTranscript {
   check('"never, never" emphasis untouched', sc.length === 0, JSON.stringify(sc.map((s) => s.text)))
 }
 
+// ---- micro cutoff fragments + partial-word restarts (enzymes video) ----
+{
+  // two stacked cutoffs in one chunk: 'and it—' then 'and they help break—'
+  const x = vt(['So your body produces its own digestive enzymes and it— and they help break— and they help break down the food that you eat.'])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  const texts = sc.map((s) => s.text)
+  check('micro cutoff "and it—" caught', sc.some((s) => s.kind === 'micro_cutoff_fragment' && /and it—/.test(s.text)), JSON.stringify(texts))
+  check('second cutoff "and they help break—" caught', sc.some((s) => /and they help break—/.test(s.text)), JSON.stringify(texts))
+  const spans = buildCutSpans(x, [], [], [], sc)
+  const idx = x.words.findIndex((w) => w.word === 'down')
+  const downMid = (x.words[idx].start + x.words[idx].end) / 2
+  check('keeper "break down the food…" untouched', !spans.some((s) => downMid >= s.start && downMid <= s.end))
+}
+{
+  // partial-word restart: 'pre- Pre and probiotics' -> cut only 'pre-'
+  const x = vt(["There's not only enzymes in here but pre- Pre and probiotics."])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  const pw = sc.find((s) => s.kind === 'partial_word_restart')
+  check('partial-word "pre-" caught', !!pw && pw.text === 'pre-', JSON.stringify(sc.map((s) => `${s.kind}:${s.text}`)))
+  const spans = buildCutSpans(x, [], [], [], sc)
+  const preFull = x.words.findIndex((w) => w.word === 'Pre')
+  const preMid = (x.words[preFull].start + x.words[preFull].end) / 2
+  check('keeper "Pre and probiotics" untouched', !spans.some((s) => preMid >= s.start && preMid <= s.end))
+  const butIdx = x.words.findIndex((w) => w.word === 'but')
+  const butMid = (x.words[butIdx].start + x.words[butIdx].end) / 2
+  check('"but" not swept into the partial-word cut', !spans.some((s) => butMid >= s.start && butMid <= s.end))
+}
+{
+  // do NOT blindly cut every hyphen/dash: a dashed word whose stem is NOT the
+  // next word's prefix and has no same-connective restart stays.
+  const x = vt(['I love this big-ass burrito and it fills me up completely every time.'])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('hyphenated compound "big-ass" is not a cutoff', sc.length === 0, JSON.stringify(sc.map((s) => s.text)))
+}
+
 // ---- D. ambiguous pairs become PROVISIONAL (LLM-gated), never rule-cut ----
 {
   const x = vt(['It just smells so clean, so rich, fresh.', 'It just smells so freaking good and fresh.'])

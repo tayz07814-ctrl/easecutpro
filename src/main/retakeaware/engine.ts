@@ -23,7 +23,8 @@ import {
   detectSelfCorrections,
   applyLlmDecisions,
   buildCutSpans,
-  spansToWordIds
+  spansToWordIds,
+  findMissedCutoffs
 } from '../../shared/retakeaware/analyze'
 import { transcribeVerbatim } from './providers'
 import { reviewRetakeGroups } from './llm'
@@ -120,6 +121,11 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   const cutSpans = buildCutSpans(vt, groups, fillerDecisions, falseStarts, selfCorrections)
   const transcript = toAppTranscript(vt)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
+  // cutoff-fragment debug buckets (E-spec): split the self-correction family by
+  // detector kind, and surface any dash-terminated word NO span removed.
+  const microCutoffs = selfCorrections.filter((s) => s.kind === 'micro_cutoff_fragment')
+  const partialWordRestarts = selfCorrections.filter((s) => s.kind === 'partial_word_restart')
+  const missedCutoffs = findMissedCutoffs(chunks, vt.words, cutSpans)
 
   // ---- review-state invariants (the store shows `transcript` in full and
   // stages `deleteWordIds` as blue highlights — nothing is removed pre-Execute).
@@ -174,6 +180,13 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
     rejected_retake_candidates: rejections,
     false_starts: falseStarts,
     self_corrections: selfCorrections,
+    micro_cutoff_fragments: microCutoffs,
+    partial_word_restarts: partialWordRestarts,
+    missed_cutoff_candidates: missedCutoffs,
+    cutoff_fragment_reason:
+      'micro_cutoff_fragments = short abandoned mini-clauses restarted with the same connective; ' +
+      'partial_word_restarts = incomplete words ("pre-") finished/restarted by the next token; ' +
+      'missed_cutoff_candidates = dash-terminated words no span removed (each with a per-item reason).',
     attempt_scores: groups.flatMap((g) => g.attempts.map((a) => ({ attempt_id: `${g.retake_group_id}/${a.attempt_id}`, score: a.score, reasons: a.reasons }))),
     llm_decisions: decisions,
     final_cut_spans: cutSpans,

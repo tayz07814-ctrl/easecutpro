@@ -19,6 +19,7 @@ import type {
   RepetitionCandidate,
   RejectedCandidate,
   TailCut,
+  MissedCutoff,
   CutSpan,
   LlmDecisions
 } from './types'
@@ -484,7 +485,8 @@ export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): T
         word_start_index: c.wordStart,
         word_end_index: e,
         text: words.slice(c.wordStart, e + 1).map((w) => w.word).join(' '),
-        reason: 'abandoned lead-in (cut-off "—" at the start of the sentence)'
+        reason: 'abandoned lead-in (cut-off "—" at the start of the sentence)',
+        kind: 'lead_in_orphan'
       })
     }
     for (let k = c.wordStart; k < c.wordEnd; k++) {
@@ -535,7 +537,59 @@ export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): T
         word_start_index: cutFrom,
         word_end_index: restart - 1,
         text: words.slice(cutFrom, restart).map((w) => w.word).join(' '),
-        reason: `in-chunk self-correction (cut-off "—"${markerLen ? ' + spoken marker' : ''}, restarted within the sentence)`
+        reason: `in-chunk self-correction (cut-off "—"${markerLen ? ' + spoken marker' : ''}, restarted within the sentence)`,
+        kind: 'self_correction'
+      })
+    }
+    // partial-word restart: a dashed PARTIAL word whose stem is a prefix of the
+    // very next word after a small gap ("…but pre- Pre and probiotics" ->
+    // cut only "pre-"). Distinct from a whole-word repeat: the cut-off is an
+    // incomplete word finished/restarted by the next token.
+    for (let k = c.wordStart; k < c.wordEnd; k++) {
+      if (taken.has(k)) continue
+      if (!DASH_RE.test(words[k].word.trim())) continue
+      const stem = normToken(words[k].word) // normToken drops the trailing dash
+      if (stem.length < 2) continue
+      const nxt = words[k + 1]
+      if (nxt.start - words[k].end > 1.2) continue
+      const nn = normToken(nxt.word)
+      if (nn.length < stem.length || !nn.startsWith(stem)) continue
+      claim(k, k)
+      out.push({
+        chunk_id: c.id,
+        word_start_index: k,
+        word_end_index: k,
+        text: words[k].word,
+        reason: `partial-word restart (started "${words[k].word}", restarted as "${nxt.word}")`,
+        kind: 'partial_word_restart'
+      })
+    }
+    // micro cutoff fragment: a short abandoned mini-clause — a leading connective
+    // + tiny cut-off word, where the clause immediately RESTARTS with the same
+    // connective ("…enzymes and it— and they help break down…" -> cut "and it—").
+    // Multiple such fragments can stack inside one chunk.
+    for (let k = c.wordStart; k < c.wordEnd; k++) {
+      if (taken.has(k)) continue
+      if (!DASH_RE.test(words[k].word.trim())) continue
+      let s = -1
+      for (let t = k - 1; t >= Math.max(c.wordStart, k - 3); t--) {
+        if (LEADING_CONNECTIVES.has(normToken(words[t].word))) {
+          s = t
+          break
+        }
+      }
+      if (s < 0 || k - s + 1 > 4) continue // fragment must be a small mini-clause
+      const nxt = words[k + 1]
+      if (!nxt || nxt.start - words[k].end > 1.2) continue
+      if (normToken(nxt.word) !== normToken(words[s].word)) continue // same connective restart
+      claim(s, k)
+      out.push({
+        chunk_id: c.id,
+        word_start_index: s,
+        word_end_index: k,
+        text: words.slice(s, k + 1).map((w) => w.word).join(' '),
+        reason: `micro cutoff fragment (abandoned "${words.slice(s, k + 1).map((w) => w.word).join(' ')}", clause restarted with "${nxt.word}")`,
+        kind: 'micro_cutoff_fragment'
       })
     }
     // stutter restarts WITHOUT a dash: an immediately repeated 2-4 token
@@ -560,7 +614,8 @@ export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): T
           word_start_index: i,
           word_end_index: i + m - 1,
           text: words.slice(i, i + m).map((w) => w.word).join(' '),
-          reason: 'stutter restart (opening said twice back-to-back)'
+          reason: 'stutter restart (opening said twice back-to-back)',
+          kind: 'stutter_restart'
         })
         i += m - 1 // continue after the removed first occurrence
         break
@@ -761,4 +816,32 @@ export function spansToWordIds(
     if (spans.some((s) => mid >= s.start && mid <= s.end)) ids.push(w.id)
   }
   return ids
+}
+
+/** Dash-terminated ("foo—") words that NO final span removed — surfaced for
+ *  debugging so genuinely-missed cutoff fragments are visible, never silent. */
+export function findMissedCutoffs(
+  chunks: Chunk[],
+  words: VerbatimWord[],
+  spans: CutSpan[]
+): MissedCutoff[] {
+  const out: MissedCutoff[] = []
+  const chunkOf = (i: number): string => chunks.find((c) => i >= c.wordStart && i <= c.wordEnd)?.id ?? '?'
+  for (let i = 0; i < words.length; i++) {
+    if (!DASH_RE.test(words[i].word.trim())) continue
+    const mid = (words[i].start + words[i].end) / 2
+    if (spans.some((s) => mid >= s.start && mid <= s.end)) continue
+    const gapMs = words[i + 1] ? Math.round((words[i + 1].start - words[i].end) * 1000) : 9999
+    out.push({
+      chunk_id: chunkOf(i),
+      word_index: i,
+      word: words[i].word,
+      gap_after_ms: gapMs,
+      reason:
+        gapMs > 1200
+          ? 'cut-off followed by a long pause but no matching restart — likely intentional trailing dash'
+          : 'cut-off with no detected retake/restart/partial-word match'
+    })
+  }
+  return out
 }
