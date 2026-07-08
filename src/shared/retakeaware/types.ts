@@ -134,7 +134,7 @@ export interface RejectedCandidate {
 export interface CutSpan {
   start: number
   end: number
-  type: 'failed_retake' | 'filler' | 'retake_marker' | 'false_start' | 'self_correction'
+  type: 'failed_retake' | 'filler' | 'retake_marker' | 'false_start' | 'self_correction' | 'repeated_setup' | 'orphan_connector'
   source: 'retake_aware_beta'
   reason: string
 }
@@ -194,6 +194,8 @@ export interface RetakeAwareDebug {
   partial_word_restarts: TailCut[]
   missed_cutoff_candidates: MissedCutoff[]
   cutoff_fragment_reason: string
+  repeated_setups: TailCut[]
+  orphan_connectors: TailCut[]
   attempt_scores: { attempt_id: string; score: number; reasons: string[] }[]
   llm_decisions: LlmDecisions | null
   final_cut_spans: CutSpan[]

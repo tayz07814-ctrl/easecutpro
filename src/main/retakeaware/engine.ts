@@ -22,6 +22,8 @@ import {
   extendProgressiveRetakes,
   detectFalseStarts,
   detectSelfCorrections,
+  detectRepeatedSetups,
+  detectOrphanConnectors,
   applyLlmDecisions,
   buildCutSpans,
   spansToWordIds,
@@ -120,10 +122,12 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   // LLM so a chunk owned by an affirmed retake group is not tail-cut twice).
   const falseStarts = detectFalseStarts(chunks, vt.words, activeGroups)
   const selfCorrections = detectSelfCorrections(chunks, vt.words)
+  const repeatedSetups = detectRepeatedSetups(chunks, vt.words)
+  const orphanConnectors = detectOrphanConnectors(chunks, vt.words)
 
   // 11. cut spans (whole failed attempts + tails + corrections + fillers)
   op(85, 'Retake β: building cut spans…')
-  const cutSpans = buildCutSpans(vt, groups, fillerDecisions, falseStarts, selfCorrections)
+  const cutSpans = buildCutSpans(vt, groups, fillerDecisions, falseStarts, selfCorrections, repeatedSetups, orphanConnectors)
   const transcript = toAppTranscript(vt)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
   // cutoff-fragment debug buckets (E-spec): split the self-correction family by
@@ -192,6 +196,8 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
       'micro_cutoff_fragments = short abandoned mini-clauses restarted with the same connective; ' +
       'partial_word_restarts = incomplete words ("pre-") finished/restarted by the next token; ' +
       'missed_cutoff_candidates = dash-terminated words no span removed (each with a per-item reason).',
+    repeated_setups: repeatedSetups,
+    orphan_connectors: orphanConnectors,
     attempt_scores: groups.flatMap((g) => g.attempts.map((a) => ({ attempt_id: `${g.retake_group_id}/${a.attempt_id}`, score: a.score, reasons: a.reasons }))),
     llm_decisions: decisions,
     final_cut_spans: cutSpans,

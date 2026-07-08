@@ -1,0 +1,19 @@
+{
+  "description": "NEGATIVE case: 'not just gonna get one/two/three/... four' is an intentional rhetorical countdown/list, not a retake — must never be cut; other genuine retakes later in the same video must still be caught",
+  "patterns": ["parallel_countdown_list_false_positive", "numbered_progression_false_positive"],
+  "expectCut": [
+    { "text": "Not only does it help", "type": "failed_retake" },
+    { "text": "not only does it target gunk and buildup, but it also helps with teeth whitening", "type": "failed_retake" },
+    { "text": "I don't know how long this deal is gonna last for.", "type": "failed_retake" }
+  ],
+  "expectKeep": [
+    "you're not just gonna get one",
+    "you're not just gonna get two",
+    "you're not just gonna get three",
+    "you're not just gonna get four",
+    "but you are gonna get five",
+    "not only does it target gunk and buildup, but it also helps with whitening, and it doesn't burn because it's alcohol-free"
+  ],
+  "expectPatternTypes": ["failed_retake"],
+  "maxSpanSeconds": 8
+}

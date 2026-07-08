@@ -7,6 +7,9 @@ import {
   extendProgressiveRetakes,
   detectFalseStarts,
   detectSelfCorrections,
+  detectRepeatedSetups,
+  detectOrphanConnectors,
+  isNumberedProgressionPair,
   applyLlmDecisions,
   buildCutSpans,
   spansToWordIds
@@ -214,6 +217,75 @@ function vt(phrases: string[]): VerbatimTranscript {
     const keeper = groups[0].attempts.find((a) => a.attempt_id === groups[0].keep_attempt)!
     check('F4: complete second attempt kept', /2 weeks/.test(keeper.text), keeper.text)
   }
+}
+
+// ---- tail_fragment_continuation_veto / cross_chunk_completion_veto (pore-set video, 2026-07-08) ----
+{
+  // chunk 2 hits CHUNK_MAX_WORDS mid-sentence (no terminal punct) and its
+  // grammatical completion ("clear out those pores.") must NEVER be compared
+  // against an earlier, textually-similar SHORT sentence as an independent
+  // retake attempt.
+  const longNoPunct = Array.from({ length: 26 }, (_, i) => `filler${i}`).join(' ') + ' which is only a 5-step routine to help'
+  const x = vt(['5-step routine to help clear out those pores.', longNoPunct, 'clear out those pores.'])
+  const { groups, rejections } = findRetakeGroups(buildChunks(x), x.words, detectFillers(x.words))
+  check('tail-fragment continuation forms NO retake group', groups.length === 0, JSON.stringify(groups.map((g) => g.attempts.map((a) => a.text))))
+  check('veto reason names cross_chunk_completion_veto', rejections.some((r) => r.candidate_type === 'tail_fragment_continuation_veto' && /cross_chunk_completion_veto/.test(r.rejection_reason)), JSON.stringify(rejections))
+}
+
+// ---- numbered_progression_veto / parallel_countdown_list_veto (mouthwash video, 2026-07-08) ----
+{
+  const x = vt(["you're not just gonna get one, you're not just gonna get two, you're not just gonna get three,", "you're not just gonna get four,", 'but you are gonna get five of these.'])
+  const chunks = buildChunks(x)
+  check('countdown list is a numbered-progression pair', isNumberedProgressionPair(chunks[0].norm, chunks[1].norm))
+  const { groups, rejections } = findRetakeGroups(chunks, x.words, detectFillers(x.words))
+  check('countdown list forms NO retake group', groups.length === 0, JSON.stringify(groups.map((g) => g.attempts.map((a) => a.text))))
+  check('veto reason names parallel_countdown_list_veto', rejections.some((r) => r.candidate_type === 'numbered_progression_veto' && /parallel_countdown_list_veto/.test(r.rejection_reason)))
+  const spans = buildCutSpans(x, groups, detectFillers(x.words))
+  check('"four" is never cut', spans.length === 0)
+}
+{
+  // a genuinely doubled number ("one, one") is NOT a progression — stays out
+  // of scope for this veto (would need other signals to judge; the veto must
+  // not blanket-protect every number-adjacent pair).
+  const x = vt(['give me item one,', 'give me item one,'])
+  const chunks = buildChunks(x)
+  check('identical repeated number is NOT a progression pair', !isNumberedProgressionPair(chunks[0].norm, chunks[1].norm))
+}
+
+// ---- repeated_setup_retake_detector + orphan_connector_before_restart_detector (study-guide video, 2026-07-08) ----
+{
+  const x = vt([
+    'And I came across this study guide, and ever since then, every week at church, I came across',
+    'study guide.',
+    "And ever since then, every week at church when there's a different story being told, I can actually relate to it."
+  ])
+  const chunks = buildChunks(x)
+  const rs = detectRepeatedSetups(chunks, x.words)
+  check('repeated setup detected', rs.length === 1, JSON.stringify(rs.map((r) => r.text)))
+  if (rs.length === 1) {
+    check('cut covers the abandoned restart through the leftover fragment', /^and ever since then.*came across study guide\.$/i.test(rs[0].text), rs[0].text)
+    const spans = buildCutSpans(x, [], detectFillers(x.words), [], [], rs, [])
+    const idx = x.words.findIndex((w) => w.word === 'guide,')
+    const mid = (x.words[idx].start + x.words[idx].end) / 2
+    check('the FIRST "study guide," (real content) stays', !spans.some((s) => mid >= s.start && mid <= s.end))
+    const redoIdx = x.words.findIndex((w) => w.word === "there's")
+    const redoMid = (x.words[redoIdx].start + x.words[redoIdx].end) / 2
+    check('the redo sentence is untouched', !spans.some((s) => redoMid >= s.start && redoMid <= s.end))
+  }
+}
+{
+  const x = vt(['most Christians feel the same way.', 'And', "But now there's truly a better way to connect to our faith."])
+  const chunks = buildChunks(x)
+  const oc = detectOrphanConnectors(chunks, x.words)
+  check('orphan connector "And" detected', oc.length === 1 && oc[0].text === 'And', JSON.stringify(oc.map((o) => o.text)))
+}
+{
+  // negative: a REAL one-word sentence/interjection that ISN'T followed by a
+  // different connective must stay untouched.
+  const x = vt(['Okay.', 'Great, let us continue with the demo now.'])
+  const chunks = buildChunks(x)
+  const oc = detectOrphanConnectors(chunks, x.words)
+  check('non-connective single-word chunk is not flagged', oc.length === 0, JSON.stringify(oc.map((o) => o.text)))
 }
 
 // ---- large progressive retake spanning MULTIPLE chunks (calmeter video, 2026-07-08) ----

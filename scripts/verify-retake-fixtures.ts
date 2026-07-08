@@ -26,6 +26,8 @@ import {
   extendProgressiveRetakes,
   detectFalseStarts,
   detectSelfCorrections,
+  detectRepeatedSetups,
+  detectOrphanConnectors,
   buildCutSpans
 } from '../src/shared/retakeaware/analyze'
 import type { VerbatimTranscript, CutSpan } from '../src/shared/retakeaware/types'
@@ -93,7 +95,9 @@ function runFixture(name: string, vt: VerbatimTranscript, exp: ExpectedSpec): Fi
   const active = groups.filter((g) => !g.provisional && !g.llm_rejected)
   const falseStarts = detectFalseStarts(chunks, vt.words, active)
   const selfCorrections = detectSelfCorrections(chunks, vt.words)
-  const spans = buildCutSpans(vt, groups, fillers, falseStarts, selfCorrections)
+  const repeatedSetups = detectRepeatedSetups(chunks, vt.words)
+  const orphanConnectors = detectOrphanConnectors(chunks, vt.words)
+  const spans = buildCutSpans(vt, groups, fillers, falseStarts, selfCorrections, repeatedSetups, orphanConnectors)
 
   const coveredNorm = spans.map((s) => ({ s, text: norm(coveredText(s, vt)) }))
   const allCoveredWords = coveredNorm.reduce((n, c) => n + c.text.split(' ').filter(Boolean).length, 0)

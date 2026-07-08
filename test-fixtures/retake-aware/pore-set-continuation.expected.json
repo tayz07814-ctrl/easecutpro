@@ -1,0 +1,12 @@
+{
+  "description": "NEGATIVE case: a chunk-length-cap split mid-sentence produces a short tail fragment that completes the previous chunk — it must never be compared against an earlier, textually-similar SHORT sentence as if it were an independent retake",
+  "patterns": ["tail_fragment_continuation_false_positive", "cross_chunk_completion_mistaken_as_retake"],
+  "expectCut": [],
+  "expectKeep": [
+    "5-step routine to help clear out those pores",
+    "which is only a 5-step routine to help clear out those pores",
+    "You get the cleansing foam, the toner, the fresh ampoule, the clay mask"
+  ],
+  "expectPatternTypes": [],
+  "maxSpanSeconds": 8
+}

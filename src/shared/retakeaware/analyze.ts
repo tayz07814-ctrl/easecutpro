@@ -286,6 +286,95 @@ function silenceAfterMs(c: Chunk, words: VerbatimWord[]): number {
   return next ? Math.max(0, Math.round((next.start - words[c.wordEnd].end) * 1000)) : 9999
 }
 
+/**
+ * tail_fragment_continuation_veto / cross_chunk_completion_veto.
+ *
+ * TRUE when `chunks[idx]` is not an independent utterance at all — it exists
+ * only because CHUNK_MAX_WORDS forced buildChunks to split mid-sentence (the
+ * PREVIOUS chunk hit the length cap without ending on real punctuation, and
+ * the gap into this chunk is a normal same-breath gap, not a pause). Such a
+ * chunk is the grammatical COMPLETION of the previous chunk ("...a 5-step
+ * routine to help" | "clear out those pores.") and must never be compared
+ * against anything as if it were a standalone retake attempt — an earlier,
+ * textually-similar SHORT sentence elsewhere is not what it is a retake of. */
+function isTailFragmentContinuation(chunks: Chunk[], idx: number): boolean {
+  if (idx <= 0) return false
+  const prev = chunks[idx - 1]
+  const cur = chunks[idx]
+  const prevHitLengthCap = prev.wordEnd - prev.wordStart + 1 >= CHUNK_MAX_WORDS
+  const prevEndsSentence = /[.!?]["')\]]?$/.test(prev.text.trim())
+  return prevHitLengthCap && !prevEndsSentence && cur.start - prev.end < CHUNK_GAP_S
+}
+
+// numbered_progression_veto / parallel_countdown_list_veto — closed class of
+// cardinal/ordinal number words. Doubling a NUMBER is content (a countdown or
+// numbered list: "not just one, not just two, ... but five"), never a retake.
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10,
+  '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10
+}
+
+function maskNumbers(tokens: string[]): { masked: string[]; nums: number[] } {
+  const masked: string[] = []
+  const nums: number[] = []
+  for (const t of tokens) {
+    if (NUMBER_WORDS[t] !== undefined) {
+      masked.push('#')
+      nums.push(NUMBER_WORDS[t])
+    } else masked.push(t)
+  }
+  return { masked, nums }
+}
+
+/** Smallest block (>=2 tokens, containing the number slot) that `masked`
+ *  consists of repeated >=2 times back-to-back, or null. */
+function findRepeatingNumberBlock(masked: string[]): { blockLen: number } | null {
+  for (let blockLen = 2; blockLen <= Math.floor(masked.length / 2); blockLen++) {
+    const block = masked.slice(0, blockLen)
+    if (!block.includes('#')) continue
+    let count = 0
+    let p = 0
+    for (; p + blockLen <= masked.length; p += blockLen) {
+      if (!block.every((t, x) => masked[p + x] === t)) break
+      count++
+    }
+    if (count >= 2 && p >= masked.length - (blockLen - 1)) return { blockLen }
+  }
+  return null
+}
+
+/** TRUE when the only real difference between two chunk texts is WHICH
+ *  distinct number in a progression they name — a countdown/list, not a
+ *  failed-and-retried line. Handles both "chunk A itself repeats a <frame> #
+ *  template N times and chunk B repeats it once more" (the real case: "you're
+ *  not just gonna get one/two/three," then "...four,") and the simpler
+ *  two-chunk "step one…" / "step two…" form. */
+export function isNumberedProgressionPair(aNorm: string, bNorm: string): boolean {
+  const at = aNorm.split(' ').filter(Boolean)
+  const bt = bNorm.split(' ').filter(Boolean)
+  const am = maskNumbers(at)
+  const bm = maskNumbers(bt)
+  if (!am.nums.length && !bm.nums.length) return false
+  const distinctProgression = (nums: number[]): boolean => nums.length >= 2 && new Set(nums).size === nums.length
+  const tryDirection = (repSide: { masked: string[]; nums: number[] }, otherSide: { masked: string[]; nums: number[] }): boolean => {
+    const rep = findRepeatingNumberBlock(repSide.masked)
+    if (!rep) return false
+    const block = repSide.masked.slice(0, rep.blockLen)
+    if (otherSide.masked.length !== rep.blockLen) return false
+    if (!block.every((t, i) => t === otherSide.masked[i])) return false
+    return distinctProgression([...repSide.nums, ...otherSide.nums])
+  }
+  if (tryDirection(am, bm)) return true
+  if (tryDirection(bm, am)) return true
+  // simplest case: neither has internal repeats, both are "<frame> #", frames
+  // match, numbers differ.
+  if (am.masked.length === bm.masked.length && am.nums.length === 1 && bm.nums.length === 1) {
+    if (am.masked.every((t, i) => t === bm.masked[i]) && am.nums[0] !== bm.nums[0]) return true
+  }
+  return false
+}
+
 export function findRetakeGroups(
   chunks: Chunk[],
   words: VerbatimWord[],
@@ -321,11 +410,34 @@ export function findRetakeGroups(
     })
   }
   for (let i = 0; i < chunks.length; i++) {
+    // tail_fragment_continuation_veto / cross_chunk_completion_veto: this
+    // chunk is not an independent utterance — never usable as either side of
+    // a retake match.
+    if (isTailFragmentContinuation(chunks, i)) continue
     for (let j = i + 1; j <= Math.min(i + RETAKE_MAX_LOOKAHEAD, chunks.length - 1); j++) {
       if (chunks[j].start - chunks[i].end > RETAKE_WINDOW_S) break
+      if (isTailFragmentContinuation(chunks, j)) {
+        rejections.push({
+          a: chunks[i].id,
+          b: chunks[j].id,
+          candidate_type: 'tail_fragment_continuation_veto',
+          similarity_score: -1,
+          prefix_overlap_score: -1,
+          has_cutoff_marker: false,
+          silence_after_ms: silenceAfterMs(chunks[j - 1], words),
+          rejection_reason: `cross_chunk_completion_veto: "${chunks[j].text}" completes the previous chunk's unfinished phrase, not a standalone retake attempt`,
+          was_sent_to_llm: false,
+          llm_decision_if_any: null
+        })
+        continue
+      }
       const f = pairFeatures(chunks[i], chunks[j])
       if (f.sim > 0.3 || (f.prefixTokens >= PREFIX_RETAKE_MIN && f.singleTokenSwap))
         candidates.push({ a: chunks[i].id, b: chunks[j].id, similarity: Math.round(f.sim * 100) / 100 })
+      if (isNumberedProgressionPair(chunks[i].norm, chunks[j].norm)) {
+        reject(i, j, f, 'numbered_progression_veto', 'parallel_countdown_list_veto: numbers form a genuine ascending/distinct progression — rhetorical buildup, not a retake')
+        continue
+      }
       const markerLinks =
         j === i + 1 && markerStarts.some((m) => m >= chunks[i].wordStart && m < chunks[j].wordStart)
       // ---- tiered decision ----
@@ -657,6 +769,83 @@ export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): T
   return out
 }
 
+// ---- repeated_setup_retake_detector ----
+// "And I came across this study guide, and ever since then, every week at
+// church, I came across [study guide.]" then "And ever since then, every
+// week at church WHEN THERE'S A DIFFERENT STORY..., I can actually relate to
+// it." — the speaker abandons a setup mid-CHUNK (no dash, no punctuation, it
+// just trails off) and restarts the SAME opening a beat later, possibly after
+// a short leftover fragment the chunker split off on its own. Cut from the
+// abandoned restart's connective through the word right before the chunk that
+// actually completes the idea; that chunk (the redo) is left untouched.
+const REPEATED_SETUP_MAX_TAIL_WORDS = 14
+export function detectRepeatedSetups(chunks: Chunk[], words: VerbatimWord[]): TailCut[] {
+  const out: TailCut[] = []
+  for (let k = 0; k < chunks.length - 1; k++) {
+    const c = chunks[k]
+    const scanFrom = Math.max(c.wordStart, c.wordEnd - REPEATED_SETUP_MAX_TAIL_WORDS + 1)
+    let tailStart = -1
+    for (let j = scanFrom; j <= c.wordEnd; j++) {
+      if (LEADING_CONNECTIVES.has(normToken(words[j].word))) {
+        tailStart = j
+        break // the FIRST connective in the tail window starts the abandoned restart
+      }
+    }
+    if (tailStart < 0) continue
+    const tailToks = words.slice(tailStart, c.wordEnd + 1).map((w) => normToken(w.word)).filter(Boolean)
+    if (tailToks.length < MIN_PREFIX_TOKENS) continue
+    for (let r = k + 1; r <= Math.min(k + 2, chunks.length - 1); r++) {
+      const redo = chunks[r]
+      const redoToks = words.slice(redo.wordStart, redo.wordEnd + 1).map((w) => normToken(w.word)).filter(Boolean)
+      let p = 0
+      while (p < tailToks.length && p < redoToks.length && tailToks[p] === redoToks[p]) p++
+      if (p < PREFIX_RETAKE_MIN) continue
+      const cutEnd = redo.wordStart - 1
+      if (cutEnd < tailStart) continue
+      out.push({
+        chunk_id: c.id,
+        word_start_index: tailStart,
+        word_end_index: cutEnd,
+        text: words.slice(tailStart, cutEnd + 1).map((w) => w.word).join(' '),
+        reason: `repeated setup — abandoned restart of the same idea, completed later ("${redoToks.slice(0, p).join(' ')}…")`,
+        kind: 'repeated_setup_retake'
+      })
+      break // nearest matching redo only
+    }
+  }
+  return out
+}
+
+// ---- orphan_connector_before_restart_detector ----
+// "...most Christians feel the same way. And [2.4s pause] But now there's
+// truly a better way..." — a lone one-word connective chunk immediately
+// before a DIFFERENT connective starting the real sentence. The gap here is
+// often a real pause (unlike a same-breath stutter), so no tight seam-gap
+// bound applies — only a generous anti-runaway ceiling.
+const ORPHAN_CONNECTOR_MAX_GAP_S = 4.0
+export function detectOrphanConnectors(chunks: Chunk[], words: VerbatimWord[]): TailCut[] {
+  const out: TailCut[] = []
+  for (let k = 0; k < chunks.length - 1; k++) {
+    const c = chunks[k]
+    if (c.wordEnd !== c.wordStart) continue // must be a standalone single-word chunk
+    const tok = normToken(words[c.wordStart].word)
+    if (!LEADING_CONNECTIVES.has(tok)) continue
+    const next = chunks[k + 1]
+    const nextTok = normToken(words[next.wordStart].word)
+    if (!LEADING_CONNECTIVES.has(nextTok) || nextTok === tok) continue
+    if (next.start - c.end > ORPHAN_CONNECTOR_MAX_GAP_S) continue
+    out.push({
+      chunk_id: c.id,
+      word_start_index: c.wordStart,
+      word_end_index: c.wordEnd,
+      text: words[c.wordStart].word,
+      reason: `orphan connector before a stronger restart ("${words[c.wordStart].word}" abandoned, replaced by "${words[next.wordStart].word}")`,
+      kind: 'orphan_connector_before_restart'
+    })
+  }
+  return out
+}
+
 /** Score attempts IN PLACE. The winner is one whole attempt — no splicing. */
 export function scoreAttempts(attempts: RetakeAttempt[], words: VerbatimWord[], fillers: FillerDecision[]): void {
   const tokens = (a: RetakeAttempt): number => a.word_end_index - a.word_start_index + 1
@@ -842,7 +1031,9 @@ export function buildCutSpans(
   groups: RetakeGroup[],
   fillers: FillerDecision[],
   falseStarts: TailCut[] = [],
-  selfCorrections: TailCut[] = []
+  selfCorrections: TailCut[] = [],
+  repeatedSetups: TailCut[] = [],
+  orphanConnectors: TailCut[] = []
 ): CutSpan[] {
   const words = vt.words
   const spans: CutSpan[] = []
@@ -881,6 +1072,22 @@ export function buildCutSpans(
     spans.push({
       ...spanFor(t.word_start_index, t.word_end_index),
       type: 'self_correction',
+      source: 'retake_aware_beta',
+      reason: `${t.reason} ("${t.text}")`
+    })
+  }
+  for (const t of repeatedSetups) {
+    spans.push({
+      ...spanFor(t.word_start_index, t.word_end_index),
+      type: 'repeated_setup',
+      source: 'retake_aware_beta',
+      reason: `${t.reason} ("${t.text}")`
+    })
+  }
+  for (const t of orphanConnectors) {
+    spans.push({
+      ...spanFor(t.word_start_index, t.word_end_index),
+      type: 'orphan_connector',
       source: 'retake_aware_beta',
       reason: `${t.reason} ("${t.text}")`
     })

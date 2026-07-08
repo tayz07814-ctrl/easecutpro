@@ -1,0 +1,16 @@
+{
+  "description": "repeated setup/restart split across chunks (no dash) with a trailing leftover fragment, plus an orphan one-word connective before a stronger restart connective",
+  "patterns": ["mid_sentence_restart", "repeated_setup_retake", "orphan_connector_before_restart"],
+  "expectCut": [
+    { "text": "and ever since then, every week at church, I came across", "type": "repeated_setup" },
+    { "text": "study guide.", "type": "repeated_setup" },
+    { "text": "And", "type": "orphan_connector" }
+  ],
+  "expectKeep": [
+    "And I came across this study guide",
+    "And ever since then, every week at church when there's a different story being told, I can actually relate to it",
+    "But now there's truly a better way to connect to our faith"
+  ],
+  "expectPatternTypes": ["repeated_setup", "orphan_connector", "failed_retake"],
+  "maxSpanSeconds": 8
+}
