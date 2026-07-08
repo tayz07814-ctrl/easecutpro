@@ -44,6 +44,39 @@ function resolveKey(envName: string): string | null {
   return process.env[envName]?.trim() || null
 }
 
+/**
+ * `fetch()` throws a bare "fetch failed" for connection resets/DNS blips/TLS
+ * hiccups — real errors we saw drop a whole run to the whisper-1 fallback
+ * even though AssemblyAI itself was healthy and the key was fine. Retries
+ * those AND 429/5xx responses (transient) with backoff; never retries a
+ * definite 4xx (bad key, bad request) — retrying those just wastes time
+ * before the inevitable fallback.
+ */
+async function fetchRetry(url: string, init: RequestInit, opts?: { retries?: number; label?: string }): Promise<Response> {
+  const retries = opts?.retries ?? 3
+  const label = opts?.label ?? 'request'
+  let lastErr: Error | null = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, init)
+      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+        const delay = 1000 * 2 ** attempt
+        console.warn(`[retake-aware-beta] ${label}: HTTP ${res.status} (attempt ${attempt + 1}/${retries + 1}) — retrying in ${delay}ms`)
+        await new Promise((r) => setTimeout(r, delay))
+        continue
+      }
+      return res
+    } catch (e) {
+      lastErr = e as Error
+      if (attempt === retries) break
+      const delay = 1000 * 2 ** attempt
+      console.warn(`[retake-aware-beta] ${label}: network error (attempt ${attempt + 1}/${retries + 1}): ${lastErr.message} — retrying in ${delay}ms`)
+      await new Promise((r) => setTimeout(r, delay))
+    }
+  }
+  throw lastErr ?? new Error(`${label} failed after ${retries + 1} attempts`)
+}
+
 function finish(vt: Omit<VerbatimTranscript, 'raw_text' | 'clean_text'>): VerbatimTranscript {
   const raw = vt.words.map((w) => w.word).join(' ')
   return {
@@ -63,31 +96,46 @@ class AssemblyAIProvider implements TranscriptionProvider {
     const headers = { authorization: this.key }
     onProgress?.(8, 'Uploading audio to AssemblyAI…')
     const audio = await readFile(audioFilePath)
-    const up = await fetch(`${base}/upload`, { method: 'POST', headers, body: audio })
+    const up = await fetchRetry(`${base}/upload`, { method: 'POST', headers, body: audio }, { label: 'AssemblyAI upload' })
     if (!up.ok) throw new Error(`AssemblyAI upload failed: HTTP ${up.status} ${(await up.text()).slice(0, 200)}`)
     const { upload_url } = (await up.json()) as { upload_url: string }
     onProgress?.(15, 'AssemblyAI is transcribing (verbatim)…')
-    const start = await fetch(`${base}/transcript`, {
-      method: 'POST',
-      headers: { ...headers, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        audio_url: upload_url,
-        // verbatim/disfluency-preserving: keep uh/um/false starts in the words
-        disfluencies: true,
-        format_text: false,
-        punctuate: true,
-        // Universal-3 Pro first, Universal-2 fallback. NOTE: the singular
-        // `speech_model` param is deprecated and 400s — it must be the
-        // `speech_models` ARRAY (verified against the live API 2026-07-08).
-        speech_models: ['universal-3-5-pro', 'universal-2']
-      })
-    })
+    const start = await fetchRetry(
+      `${base}/transcript`,
+      {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          audio_url: upload_url,
+          // verbatim/disfluency-preserving: keep uh/um/false starts in the words
+          disfluencies: true,
+          format_text: false,
+          punctuate: true,
+          // Universal-3 Pro first, Universal-2 fallback. NOTE: the singular
+          // `speech_model` param is deprecated and 400s — it must be the
+          // `speech_models` ARRAY (verified against the live API 2026-07-08).
+          speech_models: ['universal-3-5-pro', 'universal-2']
+        })
+      },
+      { label: 'AssemblyAI transcript request' }
+    )
     if (!start.ok) throw new Error(`AssemblyAI transcript request failed: HTTP ${start.status} ${(await start.text()).slice(0, 200)}`)
     const { id } = (await start.json()) as { id: string }
+    let pollFailures = 0
     for (;;) {
       await new Promise((r) => setTimeout(r, 2500))
-      const res = await fetch(`${base}/transcript/${id}`, { headers })
+      let res: Response
+      try {
+        res = await fetchRetry(`${base}/transcript/${id}`, { headers }, { retries: 1, label: 'AssemblyAI poll' })
+      } catch (e) {
+        // The transcription job keeps running server-side regardless of a
+        // local network blip — tolerate a run of failed polls before giving
+        // up, instead of aborting the whole job on the first one.
+        if (++pollFailures >= 8) throw e
+        continue
+      }
       if (!res.ok) throw new Error(`AssemblyAI poll failed: HTTP ${res.status}`)
+      pollFailures = 0
       const t = (await res.json()) as {
         status: string
         error?: string
@@ -123,11 +171,11 @@ class DeepgramProvider implements TranscriptionProvider {
     const audio = await readFile(audioFilePath)
     // smart_format stays OFF: it can normalize away the disfluencies we need.
     const qs = 'model=nova-3&punctuate=true&filler_words=true&utterances=true&smart_format=false'
-    const res = await fetch(`https://api.deepgram.com/v1/listen?${qs}`, {
-      method: 'POST',
-      headers: { Authorization: `Token ${this.key}`, 'content-type': 'audio/wav' },
-      body: audio
-    })
+    const res = await fetchRetry(
+      `https://api.deepgram.com/v1/listen?${qs}`,
+      { method: 'POST', headers: { Authorization: `Token ${this.key}`, 'content-type': 'audio/wav' }, body: audio },
+      { label: 'Deepgram request' }
+    )
     if (!res.ok) throw new Error(`Deepgram failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`)
     const j = (await res.json()) as {
       results?: {
