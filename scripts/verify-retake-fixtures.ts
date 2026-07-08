@@ -23,6 +23,7 @@ import {
   buildChunks,
   detectFillers,
   findRetakeGroups,
+  extendProgressiveRetakes,
   detectFalseStarts,
   detectSelfCorrections,
   buildCutSpans
@@ -88,6 +89,7 @@ function runFixture(name: string, vt: VerbatimTranscript, exp: ExpectedSpec): Fi
   const chunks = buildChunks(vt)
   const fillers = detectFillers(vt.words)
   const { groups } = findRetakeGroups(chunks, vt.words, fillers)
+  extendProgressiveRetakes(chunks, groups, vt.words, fillers)
   const active = groups.filter((g) => !g.provisional && !g.llm_rejected)
   const falseStarts = detectFalseStarts(chunks, vt.words, active)
   const selfCorrections = detectSelfCorrections(chunks, vt.words)

@@ -4,6 +4,7 @@ import {
   buildChunks,
   detectFillers,
   findRetakeGroups,
+  extendProgressiveRetakes,
   detectFalseStarts,
   detectSelfCorrections,
   applyLlmDecisions,
@@ -213,6 +214,70 @@ function vt(phrases: string[]): VerbatimTranscript {
     const keeper = groups[0].attempts.find((a) => a.attempt_id === groups[0].keep_attempt)!
     check('F4: complete second attempt kept', /2 weeks/.test(keeper.text), keeper.text)
   }
+}
+
+// ---- large progressive retake spanning MULTIPLE chunks (calmeter video, 2026-07-08) ----
+{
+  // A restarted PARAGRAPH re-chunks differently than the original (the retry
+  // has an extra stutter-split not present in the first attempt) — this is
+  // exactly what breaks naive single-chunk-pair matching and requires the
+  // forward-extension pass.
+  const x = vt([
+    'Everybody who is not at their dream body thinks, okay, I work out a little, I eat somewhat healthy,',
+    'but I cheat, you know, I cheat a little bit.',
+    'I eat some ice cream, maybe some pizza.',
+    'Everybody who is not at their dream body thinks, okay, I work out a little bit,',
+    'I eat somewhat healthy,',
+    'but I like to cheat.',
+    'I like to have pizza, I like to have ice cream, but that is not that bad.'
+  ])
+  const chunks = buildChunks(x)
+  const fillers = detectFillers(x.words)
+  const { groups } = findRetakeGroups(chunks, x.words, fillers)
+  extendProgressiveRetakes(chunks, groups, x.words, fillers)
+  const confirmed = groups.filter((g) => !g.provisional && !g.llm_rejected)
+  check('progressive multi-chunk retake forms ONE group', confirmed.length === 1, JSON.stringify(confirmed.map((g) => g.attempts.length)))
+  if (confirmed.length === 1) {
+    const g = confirmed[0]
+    check('group is EXTENDED past its anchor chunk', g.extended === true)
+    const keeper = g.attempts.find((a) => a.attempt_id === g.keep_attempt)!
+    check('keeper covers the WHOLE second attempt (not just its opening chunk)', /that is not that bad/.test(keeper.text), keeper.text)
+    const loser = g.attempts.find((a) => a.attempt_id !== g.keep_attempt)!
+    check('removed attempt covers the WHOLE first attempt (not just its opening chunk)', /maybe some pizza/.test(loser.text), loser.text)
+    const spans = buildCutSpans(x, groups, fillers)
+    const keeperMid = (keeper.start + keeper.end) / 2
+    check('keeper is never touched by the removal span', !spans.some((s) => keeperMid >= s.start && keeperMid <= s.end))
+  }
+}
+
+// ---- micro pronoun / connector stutter (global, cross-chunk-boundary) ----
+{
+  // "I," ends one chunk, "I eat..." starts the next — the stutter seam lands
+  // exactly on the pause used to split chunks, so this must NOT be bounded to
+  // a single chunk (that was the original bug).
+  const x = vt(['I work out a little bit, I,', 'I eat somewhat healthy, but I like to cheat.'])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('cross-chunk pronoun stutter "I," caught', sc.some((s) => s.kind === 'stutter_restart' && s.text === 'I,'), JSON.stringify(sc.map((s) => s.text)))
+}
+{
+  // "Because," / "because" — a repeated CONNECTIVE, not a content word.
+  const x = vt(['Because, because I thought I was eating fifteen hundred calories a day.'])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('repeated connector "Because," caught', sc.some((s) => s.kind === 'stutter_restart' && /Because,/.test(s.text)), JSON.stringify(sc.map((s) => s.text)))
+}
+{
+  // content-word single repeats stay (regression: unchanged from before).
+  const x = vt(["I've never, never gotten one from this before."])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('content-word "never, never" still untouched', sc.length === 0, JSON.stringify(sc.map((s) => s.text)))
+}
+{
+  // NEGATIVE: two independent complete sentences sharing a word at the seam
+  // ("...literally it. It is that easy.") must NOT be treated as a stutter —
+  // the first occurrence ends a finished sentence, not an abandoned one.
+  const x = vt(['That is literally it.', 'It is that easy.'])
+  const sc = detectSelfCorrections(buildChunks(x), x.words)
+  check('sentence-boundary "it. It" is NOT a stutter', sc.length === 0, JSON.stringify(sc.map((s) => s.text)))
 }
 
 // ---- in-chunk patterns from the scalp-brush video (2026-07-08) ----

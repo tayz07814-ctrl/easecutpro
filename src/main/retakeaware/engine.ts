@@ -19,6 +19,7 @@ import {
   buildChunks,
   detectFillers,
   findRetakeGroups,
+  extendProgressiveRetakes,
   detectFalseStarts,
   detectSelfCorrections,
   applyLlmDecisions,
@@ -76,6 +77,10 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   const fillerCandidates = detectFillers(vt.words)
   const fillerDecisions = fillerCandidates.map((f) => ({ ...f }))
   const { groups, candidates, rejections } = findRetakeGroups(chunks, vt.words, fillerDecisions)
+  // Progressive retakes (a restarted PARAGRAPH, not just one line) often span
+  // several chunks per attempt — widen each confirmed group's anchor chunk to
+  // its full retried passage before the LLM sees it (better context either way).
+  extendProgressiveRetakes(chunks, groups, vt.words, fillerDecisions)
 
   // 10. optional LLM review of the STRUCTURED candidates only. Provisional
   // groups (ambiguous detections) cut ONLY if the judge affirms them.

@@ -1,0 +1,22 @@
+{
+  "description": "large progressive retake spanning MULTIPLE chunks (a restarted paragraph, not one line) + micro pronoun stutter + repeated connector stutter",
+  "patterns": ["large progressive retake", "repeated attempt across multiple chunks", "micro stutter restart", "repeated connector stutter", "cutoff marker"],
+  "expectCut": [
+    { "text": "Everybody who is", "type": "failed_retake" },
+    { "text": "But I cheat, you know, I cheat a little bit", "type": "failed_retake" },
+    { "text": "I eat some ice cream, maybe some pizza", "type": "failed_retake" },
+    { "text": "Every", "type": "self_correction" },
+    { "text": "I,", "type": "self_correction" },
+    { "text": "Because,", "type": "self_correction" }
+  ],
+  "expectKeep": [
+    "everybody who is not at their dream body thinks",
+    "I work out a little bit",
+    "I eat somewhat healthy, but I like to cheat",
+    "I like to have pizza, I like to have ice cream, but that's not that bad",
+    "literally it. It is that easy",
+    "Because it's tracking literally what I'm consuming"
+  ],
+  "expectPatternTypes": ["failed_retake", "self_correction"],
+  "maxSpanSeconds": 20
+}

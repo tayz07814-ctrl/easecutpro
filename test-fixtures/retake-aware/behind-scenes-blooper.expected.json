@@ -1,11 +1,14 @@
 {
-  "description": "messy blooper reel (light assertions): spoken retake marker content cut, ambiguous dialogue stays provisional, no runaway cut",
-  "patterns": ["retake marker", "stutter restart", "whole-attempt retake", "ambiguous provisional"],
+  "description": "messy blooper reel (light assertions): spoken retake marker content cut, a full-paragraph progressive retake extended and removed whole, ambiguous dialogue stays provisional, no runaway cut",
+  "patterns": ["retake marker", "stutter restart", "whole-attempt retake", "large progressive retake", "ambiguous provisional"],
   "expectCut": [
-    { "text": "say that again" }
+    { "text": "say that again" },
+    { "text": "The link's right here, but if you want them for the kids", "type": "failed_retake" }
   ],
-  "expectKeep": [],
+  "expectKeep": [
+    "I'll put the link right there, but if you want them for the kids"
+  ],
   "expectPatternTypes": ["self_correction", "failed_retake"],
   "expectProvisional": ["set a timer"],
-  "maxSpanSeconds": 8
+  "maxSpanSeconds": 15
 }

@@ -37,11 +37,18 @@ const PAD_S = 0.04 // safe padding around cut spans
 const MERGE_GAP_S = 0.12 // spans closer than this merge
 const MIN_SPAN_S = 0.12 // never emit micro-cuts
 const FALSE_START_MIN_PAUSE_MS = 400 // dash tail must be followed by real air
+const STUTTER_MAX_GAP_S = 1.1 // max pause at the SEAM of a same-breath stutter restart
 const FALSE_START_MAX_TAIL = 8 // never tail-cut more than this many words
 /** cut-off marker AssemblyAI writes on abandoned words: "need—", "my—". */
 const DASH_RE = /[—–-]["')\]]?\s*$/
 const CORRECTION_MARKERS = new Set(['or', 'sorry', 'no', 'wait'])
 const LEADING_CONNECTIVES = new Set(['and', 'or', 'but', 'so', 'then', 'plus', 'also'])
+// Closed-class function words: doubling one of these back-to-back is almost
+// always a stutter, never emphasis (unlike a doubled CONTENT word — "never,
+// never", "so good, so good" — which stays). Deliberately conservative:
+// ambiguous connectives that ARE sometimes doubled for emphasis ("so, so
+// good") are left out.
+const STUTTER_PRONE_SINGLE = new Set(['i', 'you', 'he', 'she', 'we', 'they', 'it', 'because', 'and', 'but'])
 
 // Hesitations: candidates for removal (never automatic keepers).
 const HESITATIONS = new Set(['uh', 'um', 'er', 'ah', 'erm', 'mm', 'hmm', 'uhh', 'umm', 'mhm'])
@@ -592,34 +599,59 @@ export function detectSelfCorrections(chunks: Chunk[], words: VerbatimWord[]): T
         kind: 'micro_cutoff_fragment'
       })
     }
-    // stutter restarts WITHOUT a dash: an immediately repeated 2-4 token
-    // opening ("It's got PDRN, it's got PDRN and…", "It's lightweight, it's
-    // lightweight, not greasy…") — cut the FIRST occurrence. Single-word
-    // repeats ("never, never") are deliberate emphasis and stay.
-    for (let i = c.wordStart; i <= c.wordEnd; i++) {
-      if (taken.has(i)) continue
-      for (let m = 4; m >= 2; m--) {
-        if (i + 2 * m - 1 > c.wordEnd) continue
-        let same = true
-        for (let x = 0; x < m; x++) {
-          if (normToken(words[i + x].word) !== normToken(words[i + m + x].word)) {
-            same = false
-            break
-          }
+  }
+  // Stutter restarts WITHOUT a dash: an immediately repeated 1-4 token
+  // opening ("It's got PDRN, it's got PDRN and…", "I, I eat somewhat
+  // healthy…", "Because, because I thought…") — cut the FIRST occurrence.
+  // Checked GLOBALLY (not bounded to one Chunk): the pause that splits words
+  // into chunks often lands EXACTLY at the stutter seam itself ("...I," ends
+  // one chunk, "I eat..." starts the next), so a same-chunk requirement
+  // misses it. What still bounds this to a genuine same-breath restart is the
+  // SEAM gap check below — the pause between the two occurrences must stay
+  // small, well under a paragraph-level pause.
+  // Single-word repeats are a stutter only for CLOSED-CLASS function words
+  // (subject pronouns, coordinating/causal conjunctions) — those are almost
+  // always disfluency when doubled. A single CONTENT word repeated
+  // ("never, never", "so good, so good") is deliberate emphasis and stays;
+  // that distinction is the generic rule, not the specific words involved.
+  const chunkIdFor = (i: number): string => {
+    const ci = chunkIndexForWord(chunks, i)
+    return ci >= 0 ? chunks[ci].id : (chunks[chunks.length - 1]?.id ?? '?')
+  }
+  for (let i = 0; i < words.length; i++) {
+    if (taken.has(i)) continue
+    for (let m = 4; m >= 1; m--) {
+      if (i + 2 * m - 1 >= words.length) continue
+      if (m === 1 && !STUTTER_PRONE_SINGLE.has(normToken(words[i].word))) continue
+      // A real stutter's FIRST occurrence is an unfinished utterance — if it
+      // ends a sentence (".", "!", "?"), this is two independent complete
+      // sentences that happen to share a word at the seam ("...literally it.
+      // It is that easy."), never a restart.
+      if (/[.!?]["')\]]?$/.test(words[i + m - 1].word.trim())) continue
+      const seamGap = words[i + m].start - words[i + m - 1].end
+      if (seamGap > STUTTER_MAX_GAP_S) continue
+      let same = true
+      for (let x = 0; x < m; x++) {
+        if (normToken(words[i + x].word) !== normToken(words[i + m + x].word)) {
+          same = false
+          break
         }
-        if (!same) continue
-        claim(i, i + m - 1)
-        out.push({
-          chunk_id: c.id,
-          word_start_index: i,
-          word_end_index: i + m - 1,
-          text: words.slice(i, i + m).map((w) => w.word).join(' '),
-          reason: 'stutter restart (opening said twice back-to-back)',
-          kind: 'stutter_restart'
-        })
-        i += m - 1 // continue after the removed first occurrence
-        break
       }
+      if (!same) continue
+      claim(i, i + m - 1)
+      out.push({
+        chunk_id: chunkIdFor(i),
+        word_start_index: i,
+        word_end_index: i + m - 1,
+        text: words.slice(i, i + m).map((w) => w.word).join(' '),
+        reason:
+          m === 1
+            ? 'repeated connector/pronoun stutter (function word said twice back-to-back)'
+            : 'stutter restart (opening said twice back-to-back)',
+        kind: 'stutter_restart'
+      })
+      i += m - 1 // continue after the removed first occurrence
+      break
     }
   }
   return out
@@ -679,6 +711,86 @@ export function scoreAttempts(attempts: RetakeAttempt[], words: VerbatimWord[], 
     a.score = Math.max(0, Math.min(100, score))
     a.reasons = reasons
   })
+}
+
+// ---- 3d. progressive retakes that span MULTIPLE chunks ----
+const RUN_GAP_S = 1.4 // pause marking the boundary of a retried "paragraph"
+const MAX_RUN_WORDS = 90 // guard against runaway extension
+const EXTEND_SIM_MIN = 0.35 // min overlap between FULLY EXTENDED attempts to accept
+
+function chunkIndexForWord(chunks: Chunk[], wordIdx: number): number {
+  for (let i = 0; i < chunks.length; i++) if (wordIdx >= chunks[i].wordStart && wordIdx <= chunks[i].wordEnd) return i
+  return -1
+}
+
+/**
+ * A creator restarting a whole paragraph rarely re-chunks it identically —
+ * extra stutters, different comma pauses — so findRetakeGroups only reliably
+ * matches the ANCHOR chunk where each attempt begins. This widens each
+ * CONFIRMED group's attempts forward through the chunks that follow their
+ * anchor: stop at the next attempt's anchor, a paragraph-level pause
+ * (>= RUN_GAP_S — clearly bigger than the clause-level CHUNK_GAP_S used to
+ * build chunks in the first place), or a length guard. The extension is only
+ * COMMITTED if the fully-widened attempts remain substantially similar to
+ * each other — this is the same protection the anchor match itself relies on
+ * (real text overlap), applied at paragraph scale, so it never annexes
+ * unrelated content that merely happens to follow a short anchor match. */
+export function extendProgressiveRetakes(
+  chunks: Chunk[],
+  groups: RetakeGroup[],
+  words: VerbatimWord[],
+  fillers: FillerDecision[]
+): void {
+  for (const g of groups) {
+    if (g.provisional || g.llm_rejected) continue
+    if (g.attempts.length < 2) continue
+    const anchors = g.attempts
+      .map((a) => ({ attempt: a, ci: chunkIndexForWord(chunks, a.word_start_index) }))
+      .filter((x) => x.ci >= 0)
+      .sort((a, b) => a.ci - b.ci)
+    if (anchors.length < 2) continue
+    const spans = anchors.map((anchor, idx) => {
+      const startCi = anchor.ci
+      const boundaryCi = idx + 1 < anchors.length ? anchors[idx + 1].ci : chunks.length
+      let endCi = startCi
+      for (let k = startCi + 1; k < boundaryCi; k++) {
+        if (chunks[k].start - chunks[k - 1].end >= RUN_GAP_S) break
+        if (chunks[k].wordEnd - chunks[startCi].wordStart + 1 > MAX_RUN_WORDS) break
+        endCi = k
+      }
+      return { ci0: startCi, ci1: endCi }
+    })
+    if (!spans.some((s) => s.ci1 > s.ci0)) continue // nothing actually widened
+    const texts = spans.map((s) => chunks.slice(s.ci0, s.ci1 + 1).map((c) => c.norm).join(' '))
+    let ok = true
+    for (let i = 0; i < texts.length && ok; i++) {
+      for (let j = i + 1; j < texts.length && ok; j++) {
+        if (similarity(texts[i], texts[j]) < EXTEND_SIM_MIN) ok = false
+      }
+    }
+    if (!ok) continue // the widened passages diverged — leave the short anchors as-is
+    g.attempts = anchors.map((a, k) => {
+      const ws = chunks[spans[k].ci0].wordStart
+      const we = chunks[spans[k].ci1].wordEnd
+      return {
+        attempt_id: a.attempt.attempt_id,
+        start: words[ws].start,
+        end: words[we].end,
+        text: words.slice(ws, we + 1).map((w) => w.word).join(' '),
+        word_start_index: ws,
+        word_end_index: we,
+        complete: false,
+        score: 0,
+        reasons: []
+      }
+    })
+    scoreAttempts(g.attempts, words, fillers)
+    const keeper = g.attempts.reduce((best, a) => (a.score >= best.score ? a : best), g.attempts[0])
+    g.keep_attempt = keeper.attempt_id
+    g.remove_attempts = g.attempts.filter((a) => a !== keeper).map((a) => a.attempt_id)
+    g.reason = `${keeper.attempt_id} scored highest after widening to the full retried passage: ${keeper.reasons.join(', ') || 'most complete attempt'}`
+    g.extended = true
+  }
 }
 
 // ---- 4. LLM decisions: validated, impossible ids ignored, rules stand ----

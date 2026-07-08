@@ -88,6 +88,9 @@ export interface RetakeGroup {
   llm_rejected?: boolean
   /** source chunk ids, for rejection debugging. */
   chunk_ids?: string[]
+  /** attempts were widened past their anchor chunk into a full multi-chunk
+   *  retried passage (see extendProgressiveRetakes). */
+  extended?: boolean
 }
 
 /** An abandoned tail ("…I'm gonna need—") or in-chunk self-correction
