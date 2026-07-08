@@ -181,6 +181,43 @@ export function similarity(aNorm: string, bNorm: string): number {
   return Math.max(jaccard, prefixRatio)
 }
 
+/** Retake similarity between an EARLIER chunk `a` and a LATER chunk `b`.
+ *
+ *  Sharper than plain text similarity: a true retake means the speaker
+ *  ABANDONED `a` and re-said it in `b`. A parallel construction ("You get the
+ *  cleansing FOAM / You get the cleansing OIL", "it's gonna help STRENGTHEN /
+ *  help RESTORE your skin barrier") shares the same frame but substitutes the
+ *  tail — that is content, never a retake. Rules:
+ *   - a shared prefix only counts when the earlier attempt essentially STOPPED
+ *     there (nothing left over), audibly broke off (AssemblyAI writes a
+ *     trailing em dash: "my—", "bundle—"), or its leftover is re-said in b;
+ *   - near-equal-length twins whose only difference is disjoint tail content
+ *     get their jaccard capped below threshold (the parallel-list veto). */
+export function retakeSimilarity(a: Chunk, b: Chunk): number {
+  const ta = a.norm.split(' ').filter(Boolean)
+  const tb = b.norm.split(' ').filter(Boolean)
+  if (!ta.length || !tb.length) return 0
+  const setA = new Set(ta)
+  const setB = new Set(tb)
+  let inter = 0
+  for (const t of setA) if (setB.has(t)) inter++
+  const jaccard = inter / (setA.size + setB.size - inter)
+  let p = 0
+  const minLen = Math.min(ta.length, tb.length)
+  while (p < minLen && ta[p] === tb[p]) p++
+  const restA = ta.slice(p)
+  const restB = tb.slice(p)
+  const abandoned = /[—–-]["')\]]?\s*$/.test(a.text.trim())
+  const leftoverCovered = restA.every((t) => setB.has(t))
+  const prefixQualifies =
+    p >= MIN_PREFIX_TOKENS && (restA.length === 0 || abandoned || (restA.length <= 2 && leftoverCovered))
+  const prefixRatio = prefixQualifies ? p / minLen : 0
+  const disjointTails =
+    restA.length > 0 && restB.length > 0 && !restA.some((t) => setB.has(t)) && !restB.some((t) => setA.has(t))
+  const listLike = disjointTails && Math.abs(ta.length - tb.length) <= 1 && !abandoned
+  return Math.max(listLike ? Math.min(jaccard, 0.4) : jaccard, prefixRatio)
+}
+
 export function findRetakeGroups(
   chunks: Chunk[],
   words: VerbatimWord[],
@@ -201,7 +238,7 @@ export function findRetakeGroups(
   for (let i = 0; i < chunks.length; i++) {
     for (let j = i + 1; j <= Math.min(i + RETAKE_MAX_LOOKAHEAD, chunks.length - 1); j++) {
       if (chunks[j].start - chunks[i].end > RETAKE_WINDOW_S) break
-      const sim = similarity(chunks[i].norm, chunks[j].norm)
+      const sim = retakeSimilarity(chunks[i], chunks[j])
       if (sim > 0.3) candidates.push({ a: chunks[i].id, b: chunks[j].id, similarity: Math.round(sim * 100) / 100 })
       const markerLinks =
         j === i + 1 && markerStarts.some((m) => m >= chunks[i].wordStart && m < chunks[j].wordStart)

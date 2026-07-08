@@ -119,6 +119,33 @@ function vt(phrases: string[]): VerbatimTranscript {
   }
 }
 
+// ---- parallel constructions are NOT retakes (real-video false positives) ----
+{
+  // deliberate list: same frame, substituted tail noun
+  const x = vt(['You get the cleansing foam,', 'You get the cleansing oil', 'and you get the mud mask.'])
+  const fillers = detectFillers(x.words)
+  const { groups } = findRetakeGroups(buildChunks(x), x.words, fillers)
+  check('parallel list (foam/oil/mask) is NOT a retake group', groups.length === 0, JSON.stringify(groups.map(g => g.attempts.map(a => a.text))))
+}
+{
+  // parallel sentence pair with substituted tails
+  const x = vt(["but most importantly it's gonna help strengthen.", "But most importantly it's gonna help restore your skin barrier."])
+  const fillers = detectFillers(x.words)
+  const { groups } = findRetakeGroups(buildChunks(x), x.words, fillers)
+  check('substituted-tail sentences are NOT a retake group', groups.length === 0)
+}
+{
+  // AssemblyAI-style broken-off attempt (trailing em dash) IS a retake
+  const x = vt(["So if you've been wanting to try this, I'll leave the link to this bundle—", "so if you've been wanting to try this, I'll leave the link to this exact bundle somewhere down here."])
+  const fillers = detectFillers(x.words)
+  const { groups } = findRetakeGroups(buildChunks(x), x.words, fillers)
+  check('dash-abandoned attempt IS grouped with its redo', groups.length === 1, `got ${groups.length}`)
+  if (groups.length === 1) {
+    const keeper = groups[0].attempts.find((a) => a.attempt_id === groups[0].keep_attempt)!
+    check('redo is kept, flub removed whole', keeper.text.includes('somewhere down here'), keeper.text)
+  }
+}
+
 // ---- 8. invalid LLM output falls back to rules ----
 {
   const warnings: string[] = []
