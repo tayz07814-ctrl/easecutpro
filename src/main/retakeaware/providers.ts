@@ -64,7 +64,7 @@ class AssemblyAIProvider implements TranscriptionProvider {
     onProgress?.(8, 'Uploading audio to AssemblyAI…')
     const audio = await readFile(audioFilePath)
     const up = await fetch(`${base}/upload`, { method: 'POST', headers, body: audio })
-    if (!up.ok) throw new Error(`AssemblyAI upload failed: HTTP ${up.status}`)
+    if (!up.ok) throw new Error(`AssemblyAI upload failed: HTTP ${up.status} ${(await up.text()).slice(0, 200)}`)
     const { upload_url } = (await up.json()) as { upload_url: string }
     onProgress?.(15, 'AssemblyAI is transcribing (verbatim)…')
     const start = await fetch(`${base}/transcript`, {
@@ -76,10 +76,13 @@ class AssemblyAIProvider implements TranscriptionProvider {
         disfluencies: true,
         format_text: false,
         punctuate: true,
-        speech_model: 'universal'
+        // Universal-3 Pro first, Universal-2 fallback. NOTE: the singular
+        // `speech_model` param is deprecated and 400s — it must be the
+        // `speech_models` ARRAY (verified against the live API 2026-07-08).
+        speech_models: ['universal-3-5-pro', 'universal-2']
       })
     })
-    if (!start.ok) throw new Error(`AssemblyAI transcript request failed: HTTP ${start.status}`)
+    if (!start.ok) throw new Error(`AssemblyAI transcript request failed: HTTP ${start.status} ${(await start.text()).slice(0, 200)}`)
     const { id } = (await start.json()) as { id: string }
     for (;;) {
       await new Promise((r) => setTimeout(r, 2500))
