@@ -15,6 +15,7 @@ import { suggestCutsAI } from './ai-cut'
 import { judgeCuts } from './ai-cut-judge'
 import { cutCutPro } from './cutcutpro'
 import { retakeAwareCut } from './retakeaware/engine'
+import type { RetakeBetaSilenceSettings } from '../shared/retakeaware/silence'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from './fast-cut'
 import { generateOverlayTimeline } from './overlay-rules'
 import { openaiAvailable } from './openai'
@@ -293,9 +294,9 @@ app.whenReady().then(() => {
   })
 
   // ---- Retake-Aware Cut Beta: separate experimental engine (cut_mode: retake_aware_beta) ----
-  ipcMain.handle(IPC.retakeAwareCut, async (_e, path: string) => {
+  ipcMain.handle(IPC.retakeAwareCut, async (_e, path: string, silenceSettings?: RetakeBetaSilenceSettings) => {
     const jobId = randomUUID()
-    return retakeAwareCut(path, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
+    return retakeAwareCut(path, (pct, msg) => emitProgress('transcribe', jobId, pct, msg), silenceSettings)
   })
 
   // ---- Smart Smooth Cut (beta): AI pause judge + debug dump ----

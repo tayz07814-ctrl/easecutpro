@@ -29,7 +29,7 @@ import {
   spansToWordIds,
   findMissedCutoffs
 } from '../../shared/retakeaware/analyze'
-import { detectBetaSilencesHybrid, retakeBetaVadSafetyOpts, type BetaSilenceResult } from '../../shared/retakeaware/silence'
+import { detectBetaSilencesHybrid, retakeBetaVadSafetyOpts, DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type BetaSilenceResult, type RetakeBetaSilenceSettings } from '../../shared/retakeaware/silence'
 import { transcribeVerbatim } from './providers'
 import { reviewRetakeGroups } from './llm'
 import { extractAudioWav, detectSilence } from '../ffmpeg'
@@ -55,7 +55,11 @@ function toAppTranscript(vt: VerbatimTranscript): Transcript {
   return { segments: segments.length ? segments : [{ id: 'rs0', start: 0, end: words[words.length - 1]?.end ?? 0, words }], words }
 }
 
-export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn): Promise<RetakeAwareResult> {
+export async function retakeAwareCut(
+  mediaPath: string,
+  onProgress?: ProgressFn,
+  silenceSettings: RetakeBetaSilenceSettings = DEFAULT_RETAKE_BETA_SILENCE_SETTINGS
+): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const errors: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
@@ -145,7 +149,8 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   } catch (e) {
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
-  const betaSilence: BetaSilenceResult = detectBetaSilencesHybrid(vt.words, cutSpans, vadSil)
+  const durS = vt.words.length ? vt.words[vt.words.length - 1].end : 0
+  const betaSilence: BetaSilenceResult = detectBetaSilencesHybrid(vt.words, cutSpans, vadSil, silenceSettings, durS)
   const silenceRegions = betaSilence.regions
 
   // cutoff-fragment debug buckets (E-spec): split the self-correction family by

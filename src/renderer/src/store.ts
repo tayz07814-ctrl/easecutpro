@@ -43,6 +43,11 @@ import {
   mergeStagedSilences,
   type CutLordSettings
 } from '@shared/cutlord'
+import {
+  DEFAULT_RETAKE_BETA_SILENCE_SETTINGS,
+  RETAKE_BETA_SILENCE_PRESETS,
+  type RetakeBetaSilenceSettings
+} from '@shared/retakeaware/silence'
 import { positionToBox } from '@shared/overlay'
 import { mediaSrc, IS_WEB } from './platform'
 import { createProject, saveProject, serializeProject } from './projectsApi'
@@ -465,6 +470,12 @@ interface AppState {
   /** ⚙ profile for FastCut/ProCut silence cleaning (persisted). */
   cutLordSettings: CutLordSettings
   setCutLordSettings: (patch: Partial<CutLordSettings>) => void
+  /** Retake β silence-detection settings (Retake β ONLY — never FastCut/ProCut). */
+  retakeBetaSilenceSettings: RetakeBetaSilenceSettings
+  setRetakeBetaSilenceSettings: (patch: Partial<RetakeBetaSilenceSettings>) => void
+  /** Retake β "Silence Settings" modal open? */
+  showSilenceSettings: boolean
+  setShowSilenceSettings: (v: boolean) => void
   /** silence cuts staged for review (highlighted chips — NOT applied yet). */
   stagedSilences: SilenceRegion[]
   /** staged silences currently enabled (chip highlighted). */
@@ -1515,6 +1526,31 @@ export const useStore = create<AppState>((set, get) => ({
     set({ cutLordSettings: next })
   },
 
+  retakeBetaSilenceSettings: ((): RetakeBetaSilenceSettings => {
+    try {
+      const raw = localStorage.getItem('ec.retakeBetaSilence')
+      if (raw) return { ...DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, ...JSON.parse(raw) }
+    } catch {
+      /* ignore */
+    }
+    return { ...DEFAULT_RETAKE_BETA_SILENCE_SETTINGS }
+  })(),
+  setRetakeBetaSilenceSettings: (patch) => {
+    let next: RetakeBetaSilenceSettings = { ...get().retakeBetaSilenceSettings, ...patch }
+    // Selecting a preset loads that preset's values; editing any numeric/toggle
+    // value flips the preset to 'custom'.
+    if (patch.preset && patch.preset !== 'custom') next = { preset: patch.preset, ...RETAKE_BETA_SILENCE_PRESETS[patch.preset] }
+    else if (patch.preset === undefined && Object.keys(patch).length) next.preset = 'custom'
+    try {
+      localStorage.setItem('ec.retakeBetaSilence', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+    set({ retakeBetaSilenceSettings: next })
+  },
+  showSilenceSettings: false,
+  setShowSilenceSettings: (v) => set({ showSilenceSettings: v }),
+
   stagedSilences: [],
   stagedSilenceSel: new Set<string>(),
   retakeSilenceStaged: false,
@@ -1618,7 +1654,7 @@ export const useStore = create<AppState>((set, get) => ({
       } else {
         path = p0.media!.path
       }
-      const res = await window.api.retakeAwareCut(path)
+      const res = await window.api.retakeAwareCut(path, get().retakeBetaSilenceSettings)
       const cur = get().project
       // REVIEW-STATE CONTRACT (the whole point of this fix):
       //  - ALWAYS show the beta's FULL raw/verbatim transcript. Its decisions

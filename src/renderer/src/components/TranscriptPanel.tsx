@@ -7,6 +7,7 @@ import { mainTrackId } from '@shared/timeline/model'
 import { secondsToFrames, framesToSeconds } from '@shared/timeline/time'
 import type { TimelineDocument } from '@shared/timeline/types'
 import OverlayPanel from './OverlayPanel'
+import SilenceSettingsModal from './SilenceSettingsModal'
 
 /**
  * A single-source doc timeline runs the store playhead in EDITED time, but the
@@ -91,6 +92,8 @@ function ClutterCleaner(): JSX.Element {
   const runFastCutLord = useStore((s) => s.runFastCutLord)
   const runProCut = useStore((s) => s.runProCut)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
+  const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
+  const showSilenceSettings = useStore((s) => s.showSilenceSettings)
   const executeCuts = useStore((s) => s.executeCuts)
   const stagedSilences = useStore((s) => s.stagedSilences)
   const stagedSel = useStore((s) => s.stagedSilenceSel)
@@ -191,9 +194,16 @@ function ClutterCleaner(): JSX.Element {
       <button
         onClick={() => void runRetakeCutBeta()}
         disabled={jobActive}
-        title="Retake-Aware Cut Beta — separate experimental engine: verbatim transcript (AssemblyAI/Deepgram, whisper fallback), whole-take retake removal (never splices takes), natural-vs-ugly filler triage. Highlights only; nothing is cut until Execute."
+        title="Retake-Aware Cut Beta — verbatim transcript (AssemblyAI/Deepgram), whole-take retake removal (never splices takes), filler triage, AND conservative transcript-gap silence tightening. Highlights + silence chips only; nothing is cut until Execute."
       >
-        🧪 Retake β
+        🧪 Find Retakes &amp; Silence
+      </button>
+      <button
+        onClick={() => setShowSilenceSettings(true)}
+        disabled={jobActive}
+        title="Retake β silence-detection settings (Retake β only — does not affect FastCut/ProCut)."
+      >
+        🔇 Silence Settings
       </button>
       <button className="cl-gear" onClick={() => setShowSettings((v) => !v)} title="FastCut / ProCut silence-cleaning profile">
         ⚙
@@ -207,6 +217,7 @@ function ClutterCleaner(): JSX.Element {
       >
         ▶ Execute cuts ({executable})
       </button>
+      {showSilenceSettings && <SilenceSettingsModal />}
     </div>
   )
 

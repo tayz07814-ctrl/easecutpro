@@ -452,7 +452,8 @@ app.post('/api/retake-cut', (req, res) => {
     const userId = uid(req)
     const p = assertAllowed(userId, String(req.body?.path || ''))
     console.log('[retake-aware-beta] job requested (cut_mode: retake_aware_beta)')
-    const jobId = runJob('transcribe', userId, (op) => retakeAwareCut(p, (pct, msg) => op(pct, msg)))
+    const silenceSettings = req.body?.silenceSettings
+    const jobId = runJob('transcribe', userId, (op) => retakeAwareCut(p, (pct, msg) => op(pct, msg), silenceSettings))
     res.json({ jobId, cut_mode: 'retake_aware_beta' })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })

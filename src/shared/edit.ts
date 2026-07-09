@@ -296,7 +296,18 @@ export function computeKeepRanges(
     }
     protKeeps = next
   }
-  return protKeeps.filter((k) => k.end - k.start > 0.001)
+  protKeeps = protKeeps.filter((k) => k.end - k.start > 0.001)
+  // ANTI-SLIVER: a silence cut adjacent to another cut (e.g. a retake word cut)
+  // can leave a tiny KEPT air slice that would render as a useless micro-clip on
+  // the timeline. Drop any keep < 0.5s that holds NO kept speech, so the timeline
+  // ripple-closes cleanly. NEVER drops a sliver that contains a real word, and
+  // never empties the timeline. Only runs when Retake β protected silence exists.
+  const ANTI_SLIVER_S = 0.5
+  const tw = project.transcript?.words ?? []
+  const holdsKeptWord = (a: number, b: number): boolean =>
+    tw.some((w) => !w.deleted && (w.start + w.end) / 2 > a + 0.001 && (w.start + w.end) / 2 < b - 0.001)
+  const kept = protKeeps.filter((k) => k.end - k.start >= ANTI_SLIVER_S || holdsKeptWord(k.start, k.end))
+  return kept.length ? kept : protKeeps
 }
 
 /** Total edited duration (sum of kept ranges). */
