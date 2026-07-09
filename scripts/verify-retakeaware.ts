@@ -16,6 +16,7 @@ import {
 } from '../src/shared/retakeaware/analyze'
 import { parseLlmDecisions } from '../src/main/retakeaware/llm'
 import { detectBetaSilencesHybrid, RETAKE_BETA_SILENCE_PRESETS, DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type RetakeBetaSilenceSettings } from '../src/shared/retakeaware/silence'
+import { detectArtifacts } from '../src/shared/retakeaware/artifacts'
 import { computeKeepRanges } from '../src/shared/edit'
 import type { VerbatimTranscript, VerbatimWord, CutSpan } from '../src/shared/retakeaware/types'
 import type { Project, SilenceRegion } from '../src/shared/types'
@@ -788,6 +789,102 @@ const AFT = 'results were great here today now'
   check('silence: dead air between a removed take and the next word is cut (clamped to the word cut, not dropped)',
     !!gapRec?.kept && !gapRec?.rejected_due_to_word_cut_overlap && !!reg && reg.start >= 2.5 - 0.01 && reg.end - reg.start > 1.5,
     `kept=${gapRec?.kept} rejWc=${gapRec?.rejected_due_to_word_cut_overlap} region=${reg ? `[${reg.start.toFixed(2)},${reg.end.toFixed(2)}]` : 'none'}`)
+}
+
+// ---- Retake β ASR-artifact cleanup (orphan fake words + stretched words) ----
+// synthetic VAD: speech = [start, min(end, start+0.35)] per word, silence elsewhere.
+function vadFor(ws: VerbatimWord[], dur: number): { start: number; end: number }[] {
+  const sp = ws.map((w) => ({ start: w.start, end: Math.min(w.end, w.start + 0.35) })).sort((a, b) => a.start - b.start)
+  const v: { start: number; end: number }[] = []; let cur = 0
+  for (const s of sp) { if (s.start - cur > 0.05) v.push({ start: cur, end: s.start }); cur = Math.max(cur, s.end) }
+  if (dur - cur > 0.05) v.push({ start: cur, end: dur })
+  return v
+}
+// end-to-end keeps for an artifact scene: transcript from REPAIRED words, orphan
+// cuts + the repaired-word silence pass, through the real computeKeepRanges.
+function artKeeps(ws: VerbatimWord[], cuts: CutSpan[], vad: { start: number; end: number }[], settings: RetakeBetaSilenceSettings) {
+  const art = detectArtifacts(ws, cuts, vad)
+  const allCuts = [...cuts, ...art.orphanCutSpans]
+  const bs = detectBetaSilencesHybrid(art.repairedWords, allCuts, vad, settings, ws[ws.length - 1].end + 1)
+  const sil: SilenceRegion[] = bs.regions.map((r, i) => ({ id: `s${i}`, start: r.start, end: r.end, action: 'remove', protect: true }))
+  const del = new Set<number>(); ws.forEach((w, i) => { const m = (w.start + w.end) / 2; if (allCuts.some((s) => m >= s.start && m <= s.end)) del.add(i) })
+  return { art, keeps: keepsFor(art.repairedWords, sil, del) }
+}
+const BAL = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced, maxCutsPerMinute: 60 })
+// A (BUG1). Record-button click AssemblyAI heard as a standalone low-conf "Do".
+{
+  const ws: VerbatimWord[] = [
+    { word: 'okay', start: 1.0, end: 1.4, confidence: 1.0 },
+    { word: 'Do', start: 5.0, end: 5.7, confidence: 0.69 }, // isolated, low-conf
+    { word: 'you', start: 9.0, end: 9.3, confidence: 1.0 }, { word: 'know', start: 9.4, end: 9.7, confidence: 1.0 }
+  ]
+  const art = detectArtifacts(ws, [], vadFor(ws, 11))
+  const o = art.debug.orphan_word_artifacts.find((x) => x.word === 'Do')
+  check('artifact: record-button click heard as isolated low-conf "Do" is removed',
+    !!o && o.decision === 'remove' && art.orphanCutSpans.some((s) => s.start <= 5.0 && s.end >= 5.7), `orphan=${JSON.stringify(o)}`)
+}
+// B. Isolated one-word clip adjacent to a removed take (high conf, but isolated).
+{
+  const ws: VerbatimWord[] = [
+    { word: 'because', start: 1.0, end: 1.5, confidence: 0.9 },
+    { word: 'Do', start: 4.0, end: 4.7, confidence: 0.99 },
+    { word: 'you', start: 8.0, end: 8.3, confidence: 1.0 }
+  ]
+  const cut: CutSpan = { start: 0.5, end: 1.6, type: 'failed_retake', source: 'retake_aware_beta', reason: 'x' }
+  const art = detectArtifacts(ws, [cut], vadFor(ws, 10))
+  const o = art.debug.orphan_word_artifacts.find((x) => x.word === 'Do')
+  check('artifact: isolated one-word clip adjacent to a removed take is removed', !!o && o.is_inside_or_adjacent_to_word_cut && art.orphanCutSpans.length === 1, `orphan=${JSON.stringify(o)}`)
+}
+// C. Real one-word connector in NORMAL connected flow is KEPT (not isolated).
+{
+  const ws: VerbatimWord[] = 'so the whole thing really works well'.split(' ').map((w, i) => ({ word: w, start: 1.0 + i * 0.32, end: 1.0 + i * 0.32 + 0.28, confidence: 1.0 }))
+  const art = detectArtifacts(ws, [], vadFor(ws, ws[ws.length - 1].end + 1))
+  check('artifact: connected "so" in normal sentence flow is KEPT (not flagged)', art.orphanCutSpans.length === 0 && art.debug.orphan_word_artifacts.length === 0)
+}
+// D (BUG2). Stretched "it's" (4.3s) repaired to its speech core; dead air removed,
+//   the real "it's" preserved, and the following word not clipped.
+{
+  const ws: VerbatimWord[] = [
+    { word: 'okay', start: 1.0, end: 1.4, confidence: 1.0 },
+    { word: "it's", start: 2.0, end: 6.3, confidence: 0.99 }, // 4.3s stretched
+    { word: 'answered', start: 6.5, end: 6.9, confidence: 1.0 }, { word: 'questions', start: 7.0, end: 7.5, confidence: 1.0 }
+  ]
+  const vad = vadFor(ws, 8.5)
+  const art = detectArtifacts(ws, [], vad)
+  const s = art.debug.stretched_word_artifacts.find((x) => x.word === "it's")
+  check('artifact: stretched "it\'s" (4.3s) is repaired to its speech core', !!s && s.decision === 'repair_boundary' && s.repaired_end < 2.6 && s.exposed_dead_air_s > 3.0, `stretched=${JSON.stringify(s)}`)
+  const { keeps } = artKeeps(ws, [], vad, BAL)
+  const deadAir = keeps.filter((k) => k.start >= 2.5 && k.end <= 6.4 && !ws.some((w) => (w.start + w.end) / 2 > k.start && (w.start + w.end) / 2 < k.end)).reduce((m, k) => Math.max(m, k.end - k.start), 0)
+  const itsKept = keeps.some((k) => k.start <= 2.05 && k.end >= 2.35) // the real "it's" core survives
+  const answeredKept = keeps.some((k) => k.start <= 6.5 + 1e-6 && k.end >= 6.9 - 1e-6) // next word not clipped
+  check('artifact: stretched "it\'s" leaves NO dead air, preserves "it\'s", does not clip "answered"',
+    deadAir < 0.6 && itsKept && answeredKept, `deadAir=${deadAir.toFixed(2)} itsKept=${itsKept} answeredKept=${answeredKept}`)
+}
+// E. Stretched "and" (2s, mostly silence) repaired.
+{
+  const ws: VerbatimWord[] = [
+    { word: 'well', start: 1.0, end: 1.4, confidence: 1.0 },
+    { word: 'and', start: 2.0, end: 4.0, confidence: 1.0 }, // 2s stretched
+    { word: 'then', start: 4.2, end: 4.6, confidence: 1.0 }, { word: 'this', start: 4.7, end: 5.1, confidence: 1.0 }
+  ]
+  const art = detectArtifacts(ws, [], vadFor(ws, 6))
+  const s = art.debug.stretched_word_artifacts.find((x) => x.word === 'and')
+  check('artifact: stretched "and" (2s) is repaired (boundary clamped, dead air exposed)', !!s && s.decision === 'repair_boundary' && s.exposed_dead_air_s > 1.0, `stretched=${JSON.stringify(s)}`)
+}
+// F. Self-correction "It's answered my— [it's …]" leaves no "my" residue / dead clip.
+{
+  const ws: VerbatimWord[] = [
+    { word: "It's", start: 1.0, end: 1.24, confidence: 1.0 }, { word: 'answered', start: 1.24, end: 1.48, confidence: 1.0 }, { word: 'my—', start: 1.48, end: 1.62, confidence: 0.99 },
+    { word: "it's", start: 1.62, end: 5.95, confidence: 0.99 }, // stretched 2nd attempt
+    { word: 'answered', start: 6.07, end: 6.4, confidence: 1.0 }, { word: 'my', start: 6.41, end: 6.6, confidence: 1.0 }, { word: 'questions', start: 6.65, end: 7.2, confidence: 1.0 }
+  ]
+  const selfCorr: CutSpan = { start: 0.95, end: 1.62, type: 'self_correction', source: 'retake_aware_beta', reason: 'x' }
+  const { keeps, art } = artKeeps(ws, [selfCorr], vadFor(ws, 8), BAL)
+  const residue = keeps.filter((k) => {
+    const inside = art.repairedWords.filter((w, i) => { const m = (w.start + w.end) / 2; return m > k.start && m < k.end && !(m >= selfCorr.start && m <= selfCorr.end) })
+    return k.start > 1.6 && k.end < 6.05 && k.end - k.start < 2.0 && (inside.length === 0 || (inside.length === 1 && (inside[0].word === 'my' || inside[0].word === 'my—')))
+  })
+  check('artifact: self-correction + stretched "it\'s" leaves no "my" residue / dead clip', residue.length === 0, `residue=${residue.map((k) => `[${k.start.toFixed(1)},${k.end.toFixed(1)}]`).join(' ')}`)
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall retake-aware checks green')

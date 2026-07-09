@@ -134,7 +134,7 @@ export interface RejectedCandidate {
 export interface CutSpan {
   start: number
   end: number
-  type: 'failed_retake' | 'filler' | 'retake_marker' | 'false_start' | 'self_correction' | 'repeated_setup' | 'orphan_connector'
+  type: 'failed_retake' | 'filler' | 'retake_marker' | 'false_start' | 'self_correction' | 'repeated_setup' | 'orphan_connector' | 'orphan_word_artifact'
   source: 'retake_aware_beta'
   reason: string
 }
@@ -202,6 +202,8 @@ export interface RetakeAwareDebug {
   final_cut_spans: CutSpan[]
   /** Retake β conservative, word-clamped silence path (provenance + guards). */
   retake_beta_silence: import('./silence').BetaSilenceResult['debug'] | null
+  /** Retake β ASR-artifact cleanup: isolated fake words removed, stretched words repaired. */
+  retake_beta_artifacts?: import('./artifacts').ArtifactResult['debug']
   warnings: string[]
   errors: string[]
 }

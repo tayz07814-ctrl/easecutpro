@@ -30,6 +30,7 @@ import {
   findMissedCutoffs
 } from '../../shared/retakeaware/analyze'
 import { detectBetaSilencesHybrid, retakeBetaVadSafetyOpts, DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type BetaSilenceResult, type RetakeBetaSilenceSettings } from '../../shared/retakeaware/silence'
+import { detectArtifacts, type ArtifactResult } from '../../shared/retakeaware/artifacts'
 import { transcribeVerbatim } from './providers'
 import { reviewRetakeGroups } from './llm'
 import { extractAudioWav, detectSilence } from '../ffmpeg'
@@ -132,9 +133,7 @@ export async function retakeAwareCut(
 
   // 11. cut spans (whole failed attempts + tails + corrections + fillers)
   op(85, 'Retake β: building cut spans…')
-  const cutSpans = buildCutSpans(vt, groups, fillerDecisions, falseStarts, selfCorrections, repeatedSetups, orphanConnectors)
-  const transcript = toAppTranscript(vt)
-  const deleteWordIds = spansToWordIds(cutSpans, transcript)
+  const baseCutSpans = buildCutSpans(vt, groups, fillerDecisions, falseStarts, selfCorrections, repeatedSetups, orphanConnectors)
 
   // 12. Retake β HYBRID silence: the pause SPAN comes from the TRANSCRIPT word
   // gaps (the full perceived pause), guarded off both words; VAD is only a safety
@@ -149,11 +148,29 @@ export async function retakeAwareCut(
   } catch (e) {
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
+
+  // 11b. ASR ARTIFACT cleanup (Retake β only): transcript words are usually
+  // protected, but an isolated fake word (a record-button click heard as "Do") is
+  // ADDED to the delete set, and an impossibly-stretched short word (a 4s "it's"
+  // that absorbed a pause) has its boundary REPAIRED — clamped to its real speech
+  // core — so the silence cutter can trim the dead-air tail instead of it hiding
+  // inside the word. Runs BEFORE final silence staging; feeds both stages.
+  const artifacts: ArtifactResult = detectArtifacts(vt.words, baseCutSpans, vadSil)
+  // Build the transcript from the REPAIRED words so a stretched word's shortened
+  // span is what the UI shows AND what computeKeepRanges sees — its midpoint then
+  // lands in the kept speech core (not the removed dead air), so the core survives
+  // the residue-drop instead of being cleaned away with the pause.
+  const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
+  const cutSpans = [...baseCutSpans, ...artifacts.orphanCutSpans].sort((a, b) => a.start - b.start)
+  const deleteWordIds = spansToWordIds(cutSpans, transcript)
+
   const lastWordEnd = vt.words.length ? vt.words[vt.words.length - 1].end : 0
   // Media duration (for trailing-edge silence): the audio extends to the last VAD
   // region or the last word, whichever is later.
   const mediaDurS = Math.max(lastWordEnd, ...(vadSil.length ? vadSil.map((r) => r.end) : [0]))
-  const betaSilence: BetaSilenceResult = detectBetaSilencesHybrid(vt.words, cutSpans, vadSil, silenceSettings, mediaDurS)
+  // repairedWords: stretched-word ends clamped to their speech core so their dead
+  // air becomes a real gap the silence cutter removes.
+  const betaSilence: BetaSilenceResult = detectBetaSilencesHybrid(artifacts.repairedWords, cutSpans, vadSil, silenceSettings, mediaDurS)
   const silenceRegions = betaSilence.regions
 
   // cutoff-fragment debug buckets (E-spec): split the self-correction family by
@@ -228,6 +245,7 @@ export async function retakeAwareCut(
     llm_decisions: decisions,
     final_cut_spans: cutSpans,
     retake_beta_silence: betaSilence?.debug ?? null,
+    retake_beta_artifacts: artifacts.debug,
     warnings,
     errors
   }
