@@ -169,7 +169,13 @@ export function computeKeepRanges(
   }
 
   const pad = Math.max(0, project.silencePadding ?? 0)
+  // Retake β word-clamped silence carries protect:true — its [start,end] is
+  // already safe (guarded off the transcript words), so it is applied VERBATIM
+  // at the very end (after snap/absorb/bridge), never here. Normal silence
+  // (FastCut/ProCut) is unaffected: it has no protect flag and flows as before.
+  const protectedSilences = project.silences.filter((s) => s.protect && s.action === 'remove' && s.end - s.start > 0.02)
   for (const s of project.silences) {
+    if (s.protect) continue
     if (s.action === 'remove') {
       const a = s.start + pad
       const b = s.end - pad
@@ -266,7 +272,7 @@ export function computeKeepRanges(
     if (last && k.start - last.end < MIN_CUT) last.end = Math.max(last.end, k.end)
     else cleaned.push({ ...k })
   }
-  return cleaned.filter((k) => {
+  const finalKeeps = cleaned.filter((k) => {
     const len = k.end - k.start
     if (len < MIN_KEEP) return false
     const island = k.start > 0.001 && k.end < dur - 0.001 // cut on BOTH sides
@@ -274,6 +280,21 @@ export function computeKeepRanges(
     if (island && len < MIN_ISLAND && cleaned.length > 1) return false
     return true
   })
+  if (!protectedSilences.length) return finalKeeps
+  // Retake β protected silence: subtract its EXACT [start,end] from the cleaned
+  // keeps, last of all — never snapped, absorbed, bridged, or island-cleaned, so
+  // the transcript-word guards on both sides are preserved to the frame.
+  let protKeeps = finalKeeps
+  for (const s of protectedSilences.sort((a, b) => a.start - b.start)) {
+    const next: KeepRange[] = []
+    for (const k of protKeeps) {
+      if (s.end <= k.start || s.start >= k.end) { next.push(k); continue } // no overlap
+      if (s.start > k.start) next.push({ start: k.start, end: s.start }) // left remainder
+      if (s.end < k.end) next.push({ start: s.end, end: k.end }) // right remainder
+    }
+    protKeeps = next
+  }
+  return protKeeps.filter((k) => k.end - k.start > 0.001)
 }
 
 /** Total edited duration (sum of kept ranges). */

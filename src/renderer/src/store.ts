@@ -469,6 +469,9 @@ interface AppState {
   stagedSilences: SilenceRegion[]
   /** staged silences currently enabled (chip highlighted). */
   stagedSilenceSel: Set<string>
+  /** the staged silences came from Retake β's OWN word-clamped VAD pass — Execute
+   *  cuts must NOT re-run the shared aggressive VAD over them (would clobber). */
+  retakeSilenceStaged: boolean
   toggleStagedSilence: (id: string) => void
   /** FastCut: word engine (flags repeats/fillers) + VAD silence staging. Review-only. */
   runFastCutLord: () => Promise<void>
@@ -1514,6 +1517,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   stagedSilences: [],
   stagedSilenceSel: new Set<string>(),
+  retakeSilenceStaged: false,
 
   toggleStagedSilence: (id) =>
     set((s) => {
@@ -1525,6 +1529,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   runFastCutLord: async () => {
     if (!get().requireServer('FastCut')) return
+    set({ retakeSilenceStaged: false }) // FastCut uses its own shared VAD, not Retake β's
     // FastCut auto-transcribes with our inbuilt Parakeet — no manual transcribe step.
     if (!get().project.transcript && !(await get()._parakeetTranscribe())) return
     await get().selectFastCuts() // word engine: flags repeats/retakes (review-only)
@@ -1541,6 +1546,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   runProCut: async () => {
     if (!get().requireServer('ProCut')) return
+    set({ retakeSilenceStaged: false }) // ProCut uses its own shared VAD, not Retake β's
     const s0 = get()
     const p0 = s0.project
     const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
@@ -1627,9 +1633,17 @@ export const useStore = create<AppState>((set, get) => ({
       const nextProject: typeof cur = { ...cur, transcript: res.transcript }
       const flagIds = res.deleteWordIds
       const wordsBefore = cur.transcript?.words.length ?? 0
+      // Retake β silence is its OWN conservative, word-clamped VAD path (engine),
+      // NOT the aggressive shared Cut Lord VAD. Stage the protected regions as
+      // review-first chips; the retakeSilenceStaged flag tells Execute cuts NOT
+      // to re-run the shared VAD pass over them (which would clobber the clamp).
+      const silenceRegions = res.silenceRegions ?? []
       set({
         project: nextProject,
-        selectedWordIds: new Set(flagIds)
+        selectedWordIds: new Set(flagIds),
+        stagedSilences: silenceRegions,
+        stagedSilenceSel: new Set(silenceRegions.map((r) => r.id)),
+        retakeSilenceStaged: true
       })
       // ---- REVIEW-STATE AUDIT (runs on the REAL post-update state) ----
       // Proves in the console, after every run, that the full raw provider
@@ -1666,16 +1680,14 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 100,
           message:
-            `${res.summary} — ${flagIds.length} word(s) highlighted, review then Execute cuts` +
+            `${res.summary} — ${flagIds.length} word(s) highlighted` +
+            (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
+            `, review then Execute cuts` +
             (res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
             (res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '') +
             (reviewBroken ? ' · ⚠ REVIEW-STATE ERROR — see console/debug' : '')
         }
       })
-      // Silence uses the SAME mechanism as FastCut/ProCut: the Silero-VAD scan,
-      // staged as review-first chips. When the ⚙ "VAD during analysis" switch is
-      // on we stage now; when off, Execute cuts runs the VAD pass (same as FastCut).
-      if (get().cutLordSettings.vadDuringAnalysis) await get()._stageVadSilences('Retake β')
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `Retake β failed: ${(e as Error).message}` } })
     }
@@ -1744,6 +1756,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({
         stagedSilences: staged,
         stagedSilenceSel: new Set(staged.map((r) => r.id)),
+        retakeSilenceStaged: false, // these are shared-VAD regions, not Retake β's clamped ones
         job: {
           active: false,
           percent: 100,
@@ -1759,7 +1772,13 @@ export const useStore = create<AppState>((set, get) => ({
   executeCuts: async () => {
     // VAD switch OFF: the Silero VAD silence pass was decoupled from FastCut/ProCut —
     // run + stage it now, at Execute, so silence is applied here (auto-selected).
-    if (!get().cutLordSettings.vadDuringAnalysis && (!!get().project.media || (get().project.baseSequence?.length ?? 0) > 0)) {
+    // BUT never for Retake β: it already staged its own word-clamped silence, and
+    // re-running the aggressive shared VAD here would clobber it.
+    if (
+      !get().retakeSilenceStaged &&
+      !get().cutLordSettings.vadDuringAnalysis &&
+      (!!get().project.media || (get().project.baseSequence?.length ?? 0) > 0)
+    ) {
       await get()._stageVadSilences('Execute')
     }
     const s = get()
@@ -1781,6 +1800,7 @@ export const useStore = create<AppState>((set, get) => ({
       },
       stagedSilences: [],
       stagedSilenceSel: new Set<string>(),
+      retakeSilenceStaged: false,
       job: {
         active: false,
         percent: 100,

@@ -198,9 +198,10 @@ export interface RetakeAwareDebug {
   orphan_connectors: TailCut[]
   attempt_scores: { attempt_id: string; score: number; reasons: string[] }[]
   llm_decisions: LlmDecisions | null
-  // ---- word cuts: delete spoken words, map to word ids, highlight blue.
-  //      (Silence is handled by the shared VAD pass in the store, not here.) ----
+  // ---- word cuts: delete spoken words, map to word ids, highlight blue ----
   final_cut_spans: CutSpan[]
+  /** Retake β conservative, word-clamped silence path (provenance + guards). */
+  retake_beta_silence: import('./silence').BetaSilenceResult['debug'] | null
   warnings: string[]
   errors: string[]
 }
@@ -217,6 +218,9 @@ export interface RetakeAwareResult {
    *  engine emits word cuts only.) */
   deleteWordIds: string[]
   cutSpans: CutSpan[]
+  /** Retake β word-clamped silence regions (protect:true, action:'remove').
+   *  Staged as review-first silence chips; NEVER touch word highlighting. */
+  silenceRegions: import('../types').SilenceRegion[]
   retakeGroups: RetakeGroup[]
   fillerDecisions: FillerDecision[]
   debugPath: string

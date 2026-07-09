@@ -38,6 +38,11 @@ export interface SilenceRegion {
   action: 'keep' | 'remove' | 'shorten'
   /** target duration (seconds) when action === 'shorten'. */
   shortenTo?: number
+  /** Retake β word-clamped silence: apply [start,end] VERBATIM in
+   *  computeKeepRanges — NO edgeTrim / valley-snap / blip-absorb / bridge. The
+   *  boundaries are already safe (guarded off the transcript words). FastCut /
+   *  ProCut never set this, so their silence behaviour is unchanged. */
+  protect?: boolean
 }
 
 export interface Waveform {
