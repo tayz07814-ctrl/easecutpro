@@ -536,6 +536,24 @@ const AFT = 'results were great here today now'
   check('silence: no timeline clip under 0.5s next to a word cut (anti-sliver)', slivers.length === 0, `slivers=${slivers.map((k) => `[${k.start.toFixed(2)},${k.end.toFixed(2)}]`).join(' ')}`)
   check('silence: kept "next sentence" survives (no speech eaten)', keeps.some((k) => k.start <= prevEnd + 1.8 && k.end >= prevEnd + 2.0))
 }
+// 4b. Dead air BETWEEN two removed retakes (or cut+silence) leaves NO residue
+//     clip, regardless of size (the ~00:30 residue-clip bug).
+{
+  const words: VerbatimWord[] = []
+  let t = 0.5
+  const push = (w: string) => { words.push({ word: w, start: t, end: t + 0.2 }); t += 0.26 }
+  ;['keep', 'this', 'part'].forEach(push)
+  const a1s = t; ['bad', 'take', 'one'].forEach(push); const a1e = words[words.length - 1].end
+  t += 1.2 // 1.2s of dead air between the two removed attempts (> BRIDGE_GAP)
+  const a2s = t; ['bad', 'take', 'two'].forEach(push); const a2e = words[words.length - 1].end
+  t += 0.5; ['then', 'more', 'content', 'here'].forEach(push)
+  const deleted = new Set<number>()
+  words.forEach((w, i) => { if ((w.start >= a1s - 0.01 && w.end <= a1e + 0.01) || (w.start >= a2s - 0.01 && w.end <= a2e + 0.01)) deleted.add(i) })
+  const sil: SilenceRegion[] = [{ id: 's', start: a2e + 0.6, end: a2e + 0.9, action: 'remove', protect: true }] // any protected silence triggers the pass
+  const keeps = keepsFor(words, sil, deleted)
+  const airInGap = keeps.some((k) => k.start >= a1e - 0.15 && k.end <= a2s + 0.15 && k.end - k.start > 0.1)
+  check('silence: dead air between two removed retakes leaves NO residue clip', !airInGap, `keeps=${keeps.map((k) => `[${k.start.toFixed(1)},${k.end.toFixed(1)}]`).join(' ')}`)
+}
 // 5. Settings change min pause + target remaining pause.
 {
   const sc = scene(BEF, 1.0, AFT) // 1.0s gap

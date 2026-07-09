@@ -297,16 +297,23 @@ export function computeKeepRanges(
     protKeeps = next
   }
   protKeeps = protKeeps.filter((k) => k.end - k.start > 0.001)
-  // ANTI-SLIVER: a silence cut adjacent to another cut (e.g. a retake word cut)
-  // can leave a tiny KEPT air slice that would render as a useless micro-clip on
-  // the timeline. Drop any keep < 0.5s that holds NO kept speech, so the timeline
-  // ripple-closes cleanly. NEVER drops a sliver that contains a real word, and
-  // never empties the timeline. Only runs when Retake β protected silence exists.
+  // ANTI-SLIVER / DEAD-AIR RESIDUE: cuts (retake word cuts + silence cuts) can
+  // leave a KEPT slice of pure AIR between them — a residue clip that plays silence
+  // and clutters the timeline. Drop any keep that holds NO kept speech when it is
+  // INTERIOR (a cut on BOTH sides) — regardless of size — or a tiny (<0.5s) edge
+  // sliver. Non-tiny leading/trailing air is left to the VAD-gated edge logic.
+  // NEVER drops a keep that contains a real word; never empties the timeline.
+  // Only runs when Retake β protected silence exists (FastCut/ProCut unchanged).
   const ANTI_SLIVER_S = 0.5
   const tw = project.transcript?.words ?? []
   const holdsKeptWord = (a: number, b: number): boolean =>
     tw.some((w) => !w.deleted && (w.start + w.end) / 2 > a + 0.001 && (w.start + w.end) / 2 < b - 0.001)
-  const kept = protKeeps.filter((k) => k.end - k.start >= ANTI_SLIVER_S || holdsKeptWord(k.start, k.end))
+  const kept = protKeeps.filter((k, i) => {
+    if (holdsKeptWord(k.start, k.end)) return true
+    const interior = i > 0 && i < protKeeps.length - 1 // dead air with a cut on both sides
+    const tiny = k.end - k.start < ANTI_SLIVER_S
+    return !(interior || tiny)
+  })
   return kept.length ? kept : protKeeps
 }
 
