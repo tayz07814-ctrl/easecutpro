@@ -52,16 +52,19 @@ export function retakeBetaVadSafetyOpts(): SilenceDetectOptions {
 
 export interface VadInterval { start: number; end: number }
 
-function largestInteriorSpeech(a: number, b: number, vad: VadInterval[]): number {
+/** All silence-bounded interior SPEECH islands within (a,b): the spans BETWEEN
+ *  consecutive VAD silence intervals (i.e. what VAD marks as voice), each strictly
+ *  interior (not touching a/b) and ≥ minLen. In a transcript GAP these are possible
+ *  transcript-missed words — we carve the removable silence AROUND them instead of
+ *  cutting straight through (or dropping the whole cut and leaving dead air). */
+function interiorSpeechIslands(a: number, b: number, vad: VadInterval[], minLen: number): VadInterval[] {
   const inside = vad.filter((s) => s.end > a && s.start < b).map((s) => ({ start: Math.max(a, s.start), end: Math.min(b, s.end) })).sort((x, y) => x.start - y.start)
-  if (inside.length < 2) return 0
-  let max = 0
+  const islands: VadInterval[] = []
   for (let i = 1; i < inside.length; i++) {
-    const gs = inside[i - 1].end
-    const ge = inside[i].start
-    if (ge - gs > 0 && gs > a + 0.03 && ge < b - 0.03) max = Math.max(max, ge - gs)
+    const gs = inside[i - 1].end, ge = inside[i].start
+    if (ge - gs >= minLen && gs > a + 0.03 && ge < b - 0.03) islands.push({ start: gs, end: ge })
   }
-  return max
+  return islands
 }
 function vadCoverage(a: number, b: number, vad: VadInterval[]): number {
   let cov = 0
@@ -135,6 +138,11 @@ export interface BetaSilenceDebugRegion {
   rejected_due_to_cut_density: boolean
   rejected_due_to_timeline_micro_clip: boolean
   dropped_under_min_gap: boolean
+  // Set when a VAD-flagged interior speech island (possible transcript-missed word)
+  // was found in the gap: the islands preserved, and (if the cut was split around
+  // them) the resulting sub-cuts. Absent on a normal single-span cut.
+  carved_around_speech_islands?: { start: number; end: number }[]
+  carve_cuts?: { start: number; end: number }[]
 }
 
 export interface BetaSilenceResult {
@@ -156,6 +164,7 @@ export interface BetaSilenceResult {
     kept: number
     dropped_under_min_gap: number
     rejected_due_to_min_removed: number
+    carved_around_speech_islands: number
     rejected_due_to_vad_speech_inside_center: number
     rejected_due_to_word_cut_overlap: number
     rejected_due_to_sliver: number
@@ -182,7 +191,7 @@ export function detectBetaSilencesHybrid(
 
   const per: BetaSilenceDebugRegion[] = []
   const kept: { rec: BetaSilenceDebugRegion; cutStart: number; cutEnd: number }[] = []
-  let considered = 0, dUnderMin = 0, dMinRemoved = 0, dVad = 0, dOverlap = 0, dSliver = 0, merged = 0
+  let considered = 0, dUnderMin = 0, dMinRemoved = 0, dVad = 0, dOverlap = 0, dSliver = 0, merged = 0, carvedCount = 0
 
   for (let i = 0; i < words.length - 1; i++) {
     const prev = words[i], next = words[i + 1]
@@ -225,37 +234,67 @@ export function detectBetaSilencesHybrid(
     // ASYMMETRIC residual: cut ends a tight lead-in (rg, ~100ms with VAD) before
     // the next word's onset; the rest of the residual stays as trailing air after
     // the previous word (which the user wants kept).
-    let cutEnd = g1
-    let cutStart = Math.max(g0, cutEnd - removed0)
+    const cutEnd = g1
+    const cutStart = Math.max(g0, cutEnd - removed0)
     rec.proposed_cut_start = Number(cutStart.toFixed(3))
     rec.proposed_cut_end = Number(cutEnd.toFixed(3))
 
-    // overlap with a word cut → drop (the pause is inside removed content).
-    if (overlapsWordCut(cutStart, cutEnd)) { rec.rejected_due_to_word_cut_overlap = true; dOverlap++; per.push(rec); continue }
-
-    // VAD SAFETY: a silence-bounded interior speech island → drop (missed word).
+    // VAD SAFETY → CARVE (not drop): a silence-bounded interior speech island is a
+    // possible transcript-missed word. DROPPING the whole cut (the old behaviour)
+    // left the entire long pause as dead air — a 4.7s gap with a ~1s mumble/breath
+    // in the middle survived intact ("just silence, not cut"). Instead CARVE the
+    // removable silence AROUND each island: cut the dead air on both sides, holding
+    // a small guard so the island's audio isn't clipped. In a transcript gap the
+    // island carries no word, so computeKeepRanges' wordless-residue drop rides over
+    // it — the dead air goes; a genuinely-real missed word would surface as two
+    // review chips hugging it. Full reject only if no side has enough silence left.
     rec.vad_silence_overlap = Number(vadCoverage(cutStart, cutEnd, vad).toFixed(3))
-    if (largestInteriorSpeech(cutStart, cutEnd, vad) >= VAD_INTERIOR_SPEECH_S) { rec.rejected_due_to_vad_speech_inside_center = true; dVad++; per.push(rec); continue }
-
-    // ANTI-SLIVER: if a word cut sits within <0.5s of this cut with only AIR
-    // between (no kept word), swallow that air so the timeline ripple-closes with
-    // no micro-clip; if the gap holds speech, keep the separation (never eat it).
-    if (settings.antiSliver) {
-      for (const c of wordCutSpans) {
-        if (c.end <= cutStart && cutStart - c.end < ANTI_SLIVER_S && !hasKeptWord(c.end, cutStart)) { cutStart = c.end; rec.merged_with_word_cut = true }
-        if (c.start >= cutEnd && c.start - cutEnd < ANTI_SLIVER_S && !hasKeptWord(cutEnd, c.start)) { cutEnd = c.start; rec.merged_with_word_cut = true }
+    const islands = interiorSpeechIslands(cutStart, cutEnd, vad, VAD_INTERIOR_SPEECH_S)
+    let intervals: { s: number; e: number }[]
+    if (islands.length) {
+      const islandGuard = Math.max(0.15, Math.min(lg, rgFull)) // don't clip the island's speech
+      intervals = []
+      let seg = cutStart
+      for (const isl of islands) {
+        if (isl.start - islandGuard - seg >= settings.minRemovedS) intervals.push({ s: seg, e: isl.start - islandGuard })
+        seg = isl.end + islandGuard
       }
-      if (rec.merged_with_word_cut) merged++
+      if (cutEnd - seg >= settings.minRemovedS) intervals.push({ s: seg, e: cutEnd })
+      rec.carved_around_speech_islands = islands.map((i) => ({ start: Number(i.start.toFixed(3)), end: Number(i.end.toFixed(3)) }))
+      if (!intervals.length) { rec.rejected_due_to_vad_speech_inside_center = true; dVad++; per.push(rec); continue }
+      carvedCount++
+    } else {
+      intervals = [{ s: cutStart, e: cutEnd }]
     }
 
-    rec.final_cut_start = Number(cutStart.toFixed(3))
-    rec.final_cut_end = Number(cutEnd.toFixed(3))
-    rec.removed_s = Number((cutEnd - cutStart).toFixed(3))
-    rec.remaining_pause_s = Number((gap - (cutEnd - cutStart)).toFixed(3))
-    rec.removal_ratio = Number(((cutEnd - cutStart) / gap).toFixed(3))
+    // ANTI-SLIVER + word-cut overlap, per resulting interval (a carve yields >1). A
+    // sub-span inside removed content is skipped; air within <0.5s of a word cut
+    // (no kept word between) is swallowed so the timeline ripple-closes clean.
+    const committed: { s: number; e: number }[] = []
+    for (const iv of intervals) {
+      let cs = iv.s, ce = iv.e
+      if (overlapsWordCut(cs, ce)) continue // the pause is inside removed content
+      if (settings.antiSliver) {
+        for (const c of wordCutSpans) {
+          if (c.end <= cs && cs - c.end < ANTI_SLIVER_S && !hasKeptWord(c.end, cs)) { cs = c.end; rec.merged_with_word_cut = true }
+          if (c.start >= ce && c.start - ce < ANTI_SLIVER_S && !hasKeptWord(ce, c.start)) { ce = c.start; rec.merged_with_word_cut = true }
+        }
+      }
+      committed.push({ s: cs, e: ce })
+    }
+    if (!committed.length) { rec.rejected_due_to_word_cut_overlap = true; dOverlap++; per.push(rec); continue }
+    if (rec.merged_with_word_cut) merged++
+
+    const removedTotal = committed.reduce((n, c) => n + (c.e - c.s), 0)
+    rec.final_cut_start = Number(committed[0].s.toFixed(3))
+    rec.final_cut_end = Number(committed[committed.length - 1].e.toFixed(3))
+    if (committed.length > 1) rec.carve_cuts = committed.map((c) => ({ start: Number(c.s.toFixed(3)), end: Number(c.e.toFixed(3)) }))
+    rec.removed_s = Number(removedTotal.toFixed(3))
+    rec.remaining_pause_s = Number((gap - removedTotal).toFixed(3))
+    rec.removal_ratio = Number((removedTotal / gap).toFixed(3))
     rec.kept = true
     per.push(rec)
-    kept.push({ rec, cutStart, cutEnd })
+    for (const c of committed) kept.push({ rec, cutStart: c.s, cutEnd: c.e })
   }
 
   // ---- LEADING / TRAILING edge silence (dead air before the first word / after
@@ -336,6 +375,7 @@ export function detectBetaSilencesHybrid(
       kept: regions.length,
       dropped_under_min_gap: dUnderMin,
       rejected_due_to_min_removed: dMinRemoved,
+      carved_around_speech_islands: carvedCount,
       rejected_due_to_vad_speech_inside_center: dVad,
       rejected_due_to_word_cut_overlap: dOverlap,
       rejected_due_to_sliver: dSliver,

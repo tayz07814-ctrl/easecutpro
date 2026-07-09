@@ -621,6 +621,48 @@ const AFT = 'results were great here today now'
   check('silence: lead-in before next word is tight (~100ms), trailing keeps the rest',
     !!r && leadIn <= 0.12 + 1e-6 && trailing > leadIn + 0.1, `leadIn=${leadIn.toFixed(3)} trailing=${trailing.toFixed(3)}`)
 }
+// 10c. VAD interior speech island → CARVE, not drop. A long pause with a VAD
+//      "speech" blob in the middle that has NO transcript word (a breath/noise, or
+//      a mumble AssemblyAI dropped) used to be REJECTED whole, leaving the ENTIRE
+//      gap as dead air ("0:13–0:17 just silence, not cut"). Now the silence is
+//      carved AROUND the island; computeKeepRanges' wordless-residue drop clears it.
+{
+  const words: VerbatimWord[] = [
+    { word: 'one', start: 10.0, end: 10.2 },
+    { word: 'but', start: 15.0, end: 15.2 },
+    { word: 'this', start: 15.3, end: 15.5 }
+  ]
+  const vad = [{ start: 10.2, end: 12.0 }, { start: 13.1, end: 15.0 }] // 1.1s speech island at [12.0,13.1]
+  const opt = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced, maxCutsPerMinute: 60 })
+  const res = detectBetaSilencesHybrid(words, [], vad, opt, 16.0)
+  const reg = res.regions
+  const clipsIsland = reg.some((r) => r.start < 13.1 - 0.05 && r.end > 12.0 + 0.05) // any region overlapping the island's core
+  const gapRec = res.debug.per_region.find((r) => r.previous_word === 'one' && r.next_word === 'but')
+  check('silence: interior speech island is CARVED around, not dropped whole',
+    reg.length >= 2 && !clipsIsland && !!gapRec?.kept && (gapRec?.carved_around_speech_islands?.length ?? 0) === 1 && !gapRec?.rejected_due_to_vad_speech_inside_center,
+    `regions=${reg.length} kept=${gapRec?.kept} islands=${gapRec?.carved_around_speech_islands?.length} rejGap=${gapRec?.rejected_due_to_vad_speech_inside_center} clips=${clipsIsland}`)
+  const removed = reg.reduce((n, r) => n + (r.end - r.start), 0)
+  check('silence: carve removes dead air on BOTH sides of the island', removed > 2.0, `removed=${removed.toFixed(2)}`)
+  const keeps = keepsFor(words, reg)
+  const worstDead = keeps.filter((k) => k.start >= 10.3 && k.end <= 14.95 && !words.some((w) => (w.start + w.end) / 2 > k.start && (w.start + w.end) / 2 < k.end))
+    .reduce((m, k) => Math.max(m, k.end - k.start), 0)
+  check('silence: carved gap leaves no long dead-air clip on the timeline (residue-dropped)', worstDead < 0.6, `worstDead=${worstDead.toFixed(2)}`)
+}
+// 10d. Island so large neither side has minRemovedS of silence left → full reject
+//      (never carve a not-worth-it sliver; preserve the old safety in that corner).
+{
+  const words: VerbatimWord[] = [
+    { word: 'alpha', start: 5.0, end: 5.3 },
+    { word: 'beta', start: 9.0, end: 9.3 }
+  ]
+  const vad = [{ start: 5.3, end: 6.0 }, { start: 8.3, end: 9.0 }] // 2.3s island [6.0,8.3], only ~0.3s silence each side after guards
+  const opt = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced })
+  const res = detectBetaSilencesHybrid(words, [], vad, opt, 10.0)
+  const gapRec = res.debug.per_region.find((r) => r.previous_word === 'alpha' && r.next_word === 'beta')
+  check('silence: oversized interior island with no worthwhile side-silence is rejected (no sliver carve)',
+    res.regions.length === 0 && !!gapRec?.rejected_due_to_vad_speech_inside_center && !gapRec?.kept && res.debug.carved_around_speech_islands === 0,
+    `regions=${res.regions.length} rejGap=${gapRec?.rejected_due_to_vad_speech_inside_center} kept=${gapRec?.kept} carved=${res.debug.carved_around_speech_islands}`)
+}
 // 11. Leading/trailing dead air is trimmed (edges have no bounding word).
 {
   const words: VerbatimWord[] = []
