@@ -147,5 +147,27 @@ const clipsMy = k9.some((k) => (k.start > 1.702 && k.start < 2.048) || (k.end > 
 check('word-onset guard: no cut edge lands inside kept "My"', !clipsMy)
 check('word-onset guard: "My" is fully kept (not clipped)', k9.some((k) => k.start <= 1.7 && k.end >= 2.05))
 
+console.log('8) montage residue-drop is CLIP-AWARE — a wordless b-roll clip is not dropped as dead air')
+// A[0,5] words · B[5,10] b-roll (no words) · C[10,15] words; protect silences at the
+// A|B and B|C seams isolate B as its own wordless interior keep — exactly the clip
+// that used to be residue-dropped, so it went missing on export.
+const p8 = createEmptyProject('t9')
+p8.media = undefined as never
+;(p8 as { baseSequence: unknown }).baseSequence = [
+  { id: 'A', sourcePath: 'a.mp4', sourceIn: 0, sourceOut: 5, hasAudio: true },
+  { id: 'B', sourcePath: 'b.mp4', sourceIn: 0, sourceOut: 5, hasAudio: true },
+  { id: 'C', sourcePath: 'c.mp4', sourceIn: 0, sourceOut: 5, hasAudio: true }
+]
+p8.transcript = { segments: [], words: [
+  { id: 'w0', text: 'hello', start: 0.6, end: 1.0 }, { id: 'w1', text: 'there', start: 1.1, end: 4.3 },
+  { id: 'w2', text: 'welcome', start: 10.6, end: 11.0 }, { id: 'w3', text: 'back', start: 11.1, end: 14.3 }
+] }
+p8.silences = [
+  { id: 's0', start: 4.5, end: 5.0, action: 'remove', protect: true },
+  { id: 's1', start: 10.0, end: 10.5, action: 'remove', protect: true }
+]
+const k10 = computeKeepRanges(p8)
+check('montage: wordless b-roll clip B [5,10] survives (not dropped as residue)', k10.some((k) => k.start >= 4.9 && k.end <= 10.1 && k.end - k.start > 3))
+
 console.log(ok ? '\nSMOOTHSEAMS OK' : '\nSMOOTHSEAMS FAILED')
 process.exit(ok ? 0 : 1)

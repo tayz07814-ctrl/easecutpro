@@ -4,7 +4,7 @@ import { tmpdir, homedir, cpus } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { mkdir, readdir, readFile, rm, writeFile } from 'fs/promises'
-import { existsSync } from 'fs'
+import { existsSync, writeFileSync } from 'fs'
 import { FFMPEG, FFPROBE, WHISPER_VAD_BIN, resolveVadModel } from './binaries'
 import { computeKeepRanges, virtualKeepsToClipSegments, stitchMontageWaveform, baseClipSpans } from '../shared/edit'
 import type {
@@ -20,6 +20,19 @@ import type {
 } from '../shared/types'
 
 const execFileP = promisify(execFile)
+
+/** Pass a filtergraph to ffmpeg SAFELY. A graph with hundreds of cut segments
+ *  (one trim per keep) overruns the OS command-line length limit passed inline —
+ *  `spawn` fails with ENAMETOOLONG before ffmpeg even starts (Windows ~32K). For a
+ *  large graph, write it to a temp file and use `-filter_complex_script`; short
+ *  graphs stay inline (byte-identical to before). Returns the args + the temp file
+ *  path to clean up afterwards ('' when inline). */
+async function filterComplexArgs(fc: string): Promise<{ args: string[]; file: string }> {
+  if (fc.length <= 6000) return { args: ['-filter_complex', fc], file: '' }
+  const file = join(tmpdir(), `easecut-fc-${randomUUID()}.txt`)
+  await writeFile(file, fc, 'utf8')
+  return { args: ['-filter_complex_script', file], file }
+}
 
 /** Probe a media file for duration / resolution / fps / streams. */
 export async function probe(path: string): Promise<MediaInfo> {
@@ -642,15 +655,20 @@ async function concatSegmentsToFile(
   }
   const fc = `${seg.join(';')};${order.join('')}concat=n=${segs.length}:v=1:a=1[outv][outa]`
   const out = outPath || join(tmpdir(), `ec-seq-${randomUUID()}.mp4`)
+  const { args: fca, file: fcFile } = await filterComplexArgs(fc)
   const args = [
     '-y', ...inArgs,
-    '-filter_complex', fc,
+    ...fca,
     '-map', '[outv]', '-map', '[outa]',
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
     out
   ]
-  await runFfmpegProgress(args, totalDur, onProgress)
+  try {
+    await runFfmpegProgress(args, totalDur, onProgress)
+  } finally {
+    if (fcFile) await rm(fcFile).catch(() => undefined)
+  }
   return out
 }
 
@@ -694,8 +712,13 @@ async function concatAudioToFile(
   })
   const fc = `${filt.join(';')};${order.join('')}concat=n=${segs.length}:v=0:a=1[outa]`
   const out = outPath || join(tmpdir(), `ec-seq-${randomUUID()}.wav`)
-  const args = ['-y', ...inArgs, '-filter_complex', fc, '-map', '[outa]', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', out]
-  await runFfmpegProgress(args, totalDur, onProgress)
+  const { args: fca, file: fcFile } = await filterComplexArgs(fc)
+  const args = ['-y', ...inArgs, ...fca, '-map', '[outa]', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', out]
+  try {
+    await runFfmpegProgress(args, totalDur, onProgress)
+  } finally {
+    if (fcFile) await rm(fcFile).catch(() => undefined)
+  }
   return out
 }
 
@@ -1168,10 +1191,23 @@ export async function exportProject(
         ? ['-b:v', `${mbps}M`, '-maxrate', `${(mbps * 1.45).toFixed(1)}M`, '-bufsize', `${(mbps * 2).toFixed(1)}M`]
         : ['-crf', '20']
 
+    // Many cuts -> a huge trim/concat graph. Inline `-filter_complex` overruns the
+    // OS command-line limit (spawn ENAMETOOLONG). Large graph -> write it to a temp
+    // file and use `-filter_complex_script`; short graphs stay inline. (Sync write —
+    // this runs inside a non-async Promise executor.)
+    const fcMain = parts.join(';')
+    let filterArg: string[] = ['-filter_complex', fcMain]
+    let fcFileMain = ''
+    if (fcMain.length > 6000) {
+      fcFileMain = join(tmpdir(), `easecut-fc-${randomUUID()}.txt`)
+      writeFileSync(fcFileMain, fcMain, 'utf8')
+      filterArg = ['-filter_complex_script', fcFileMain]
+    }
+    const cleanFc = (): void => { if (fcFileMain) void rm(fcFileMain).catch(() => undefined) }
     const args = [
       '-y',
       ...inputs,
-      '-filter_complex', parts.join(';'),
+      ...filterArg,
       ...maps,
       '-c:v', 'libx264',
       '-preset', 'veryfast',
@@ -1193,8 +1229,9 @@ export async function exportProject(
         onProgress(Math.min(99, Math.round((t / totalKept) * 100)))
       }
     })
-      proc.on('error', reject)
+      proc.on('error', (e) => { cleanFc(); reject(e) })
       proc.on('close', (code) => {
+        cleanFc()
         if (code === 0) {
           onProgress?.(100)
           resolve(outPath)

@@ -321,8 +321,17 @@ export function computeKeepRanges(
   const tw = project.transcript?.words ?? []
   const holdsKeptWord = (a: number, b: number): boolean =>
     tw.some((w) => !w.deleted && (w.start + w.end) / 2 > a + 0.001 && (w.start + w.end) / 2 < b - 0.001)
+  // A montage / base clip with NO transcript (b-roll, or a clip whose words were all
+  // cut) is REAL content, not dead-air residue — never drop a keep that covers most
+  // of a base clip. (Single-clip projects have no baseSequence, so this is a no-op
+  // and the dead-air drop is unchanged there.) Fixes "missing clips" on export where
+  // a wordless montage clip got dropped as if it were silence.
+  const clipSpans = project.baseSequence?.length ? baseClipSpans(project) : []
+  const coversWholeClip = (a: number, b: number): boolean =>
+    clipSpans.some((s) => Math.min(b, s.vEnd) - Math.max(a, s.vStart) > 0.7 * (s.vEnd - s.vStart))
   const kept = protKeeps.filter((k, i) => {
     if (holdsKeptWord(k.start, k.end)) return true
+    if (coversWholeClip(k.start, k.end)) return true // a whole base/montage clip (b-roll) — not residue
     const interior = i > 0 && i < protKeeps.length - 1 // dead air with a cut on both sides
     const tiny = k.end - k.start < ANTI_SLIVER_S
     return !(interior || tiny)
