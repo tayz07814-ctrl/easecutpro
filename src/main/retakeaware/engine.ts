@@ -149,8 +149,11 @@ export async function retakeAwareCut(
   } catch (e) {
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
-  const durS = vt.words.length ? vt.words[vt.words.length - 1].end : 0
-  const betaSilence: BetaSilenceResult = detectBetaSilencesHybrid(vt.words, cutSpans, vadSil, silenceSettings, durS)
+  const lastWordEnd = vt.words.length ? vt.words[vt.words.length - 1].end : 0
+  // Media duration (for trailing-edge silence): the audio extends to the last VAD
+  // region or the last word, whichever is later.
+  const mediaDurS = Math.max(lastWordEnd, ...(vadSil.length ? vadSil.map((r) => r.end) : [0]))
+  const betaSilence: BetaSilenceResult = detectBetaSilencesHybrid(vt.words, cutSpans, vadSil, silenceSettings, mediaDurS)
   const silenceRegions = betaSilence.regions
 
   // cutoff-fragment debug buckets (E-spec): split the self-correction family by

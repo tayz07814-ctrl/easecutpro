@@ -232,6 +232,51 @@ export function detectBetaSilencesHybrid(
     kept.push({ rec, cutStart, cutEnd })
   }
 
+  // ---- LEADING / TRAILING edge silence (dead air before the first word / after
+  // the last) — no bounding word on one side. Cut it down to a guard-sized lead-in
+  // / tail. VAD must confirm it's actually silent (protects a music/intro), unless
+  // no VAD is available. Edges use a slightly lower floor since they're clearly
+  // dead air. ----
+  const edgeMin = Math.min(settings.minPauseS, 0.7)
+  const vadSilentEnough = (a: number, b: number): boolean => b - a > 0.02 && (vad.length === 0 || vadCoverage(a, b, vad) >= 0.4 * (b - a))
+  const mkEdge = (prevW: string, nextW: string, gapStart: number, gapEnd: number, lg: number, rg: number): BetaSilenceDebugRegion => ({
+    source: 'transcript_gap_hybrid',
+    previous_word: prevW, previous_word_start: gapStart, previous_word_end: gapStart,
+    next_word: nextW, next_word_start: gapEnd, next_word_end: gapEnd,
+    transcript_gap_start: Number(gapStart.toFixed(3)), transcript_gap_end: Number(gapEnd.toFixed(3)), transcript_gap_duration: Number((gapEnd - gapStart).toFixed(3)),
+    vad_silence_overlap: Number(vadCoverage(gapStart, gapEnd, vad).toFixed(3)), proposed_cut_start: null, proposed_cut_end: null, final_cut_start: null, final_cut_end: null,
+    left_guard_ms: ms(lg), right_guard_ms: ms(rg), target_residual_s: settings.targetRemainingS, effective_residual_s: 0,
+    removed_s: 0, remaining_pause_s: Number((gapEnd - gapStart).toFixed(3)), removal_ratio: 0, kept: false,
+    merged_with_word_cut: false, rejected_due_to_sliver: false, rejected_due_to_min_removed: false,
+    rejected_due_to_word_guard: false, rejected_due_to_vad_speech_inside_center: false,
+    rejected_due_to_word_cut_overlap: false, rejected_due_to_cut_density: false,
+    rejected_due_to_timeline_micro_clip: false, dropped_under_min_gap: false
+  })
+  const tryEdge = (rec: BetaSilenceDebugRegion, cs: number, ce: number): void => {
+    considered++
+    const rem = ce - cs
+    if (rec.transcript_gap_duration < edgeMin) { rec.dropped_under_min_gap = true; dUnderMin++; per.push(rec); return }
+    rec.proposed_cut_start = Number(cs.toFixed(3)); rec.proposed_cut_end = Number(ce.toFixed(3))
+    if (rem < settings.minRemovedS) { rec.rejected_due_to_min_removed = true; dMinRemoved++; per.push(rec); return }
+    if (overlapsWordCut(cs, ce)) { rec.rejected_due_to_word_cut_overlap = true; dOverlap++; per.push(rec); return }
+    if (!vadSilentEnough(cs, ce)) { rec.rejected_due_to_vad_speech_inside_center = true; dVad++; per.push(rec); return }
+    rec.final_cut_start = Number(cs.toFixed(3)); rec.final_cut_end = Number(ce.toFixed(3))
+    rec.removed_s = Number(rem.toFixed(3)); rec.remaining_pause_s = Number((rec.transcript_gap_duration - rem).toFixed(3)); rec.removal_ratio = Number((rem / rec.transcript_gap_duration).toFixed(3))
+    rec.kept = true; per.push(rec); kept.push({ rec, cutStart: cs, cutEnd: ce })
+  }
+  if (words.length) {
+    // leading: [0, firstWord real speech start] → keep a right-guard lead-in.
+    const first = words[0]
+    const leadEnd = vadSpeechStart(first, vad)
+    const rgE = FRAGILE.has(normWord(first.word)) ? Math.max(settings.paddingAfterS, FRAGILE_RIGHT_FLOOR) : settings.paddingAfterS
+    if (leadEnd > 0) tryEdge(mkEdge('(video start)', first.word, 0, leadEnd, 0, rgE), 0, Math.max(0, leadEnd - rgE))
+    // trailing: [lastWord real speech end, media end] → keep a left-guard tail.
+    const last = words[words.length - 1]
+    const trailStart = vadSpeechEnd(last, vad)
+    const lgE = FRAGILE.has(normWord(last.word)) ? Math.max(settings.paddingBeforeS, FRAGILE_LEFT_FLOOR) : settings.paddingBeforeS
+    if (totalDurationS > trailStart) tryEdge(mkEdge(last.word, '(video end)', trailStart, totalDurationS, lgE, 0), trailStart + lgE, totalDurationS)
+  }
+
   // DENSITY CAP: if more cuts than maxCutsPerMinute allows, drop the weakest.
   let dDensity = 0
   const minutes = Math.max(1 / 60, totalDurationS / 60)

@@ -591,6 +591,24 @@ const AFT = 'results were great here today now'
     noVad.regions.length === 0 && withVad.regions.length === 1 && withVad.regions[0].end - withVad.regions[0].start > 2.0,
     `noVad=${noVad.regions.length} withVad=${withVad.regions.length}`)
 }
+// 11. Leading/trailing dead air is trimmed (edges have no bounding word).
+{
+  const words: VerbatimWord[] = []
+  let t = 2.0 // 2s leading silence
+  for (const w of 'this is the content here'.split(' ')) { words.push({ word: w, start: t, end: t + 0.2 }); t += 0.26 }
+  const lastEnd = words[words.length - 1].end
+  const mediaEnd = lastEnd + 3.0 // 3s trailing silence
+  const opt = S({ preset: 'aggressive', ...RETAKE_BETA_SILENCE_PRESETS.aggressive, maxCutsPerMinute: 30 })
+  const vad = [{ start: 0, end: 2.0 }, { start: lastEnd, end: mediaEnd }]
+  const res = detectBetaSilencesHybrid(words, [], vad, opt, mediaEnd)
+  const lead = res.debug.per_region.find((r) => r.previous_word === '(video start)')
+  const trail = res.debug.per_region.find((r) => r.next_word === '(video end)')
+  check('silence: leading dead air is trimmed from the very start', !!lead && lead.kept && lead.final_cut_start === 0)
+  check('silence: trailing dead air is trimmed to the media end', !!trail && trail.kept && Math.abs((trail.final_cut_end ?? 0) - mediaEnd) < 0.01)
+  // VAD safety: if the "leading" region is NOT actually silent, do not cut it (protects a music/intro).
+  const noisy = detectBetaSilencesHybrid(words, [], [{ start: 1.0, end: 1.5 }], opt, mediaEnd)
+  check('silence: leading not cut when VAD says it is not silent (protects intro)', !noisy.debug.per_region.some((r) => r.previous_word === '(video start)' && r.kept))
+}
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall retake-aware checks green')
 process.exit(failures ? 1 : 0)
