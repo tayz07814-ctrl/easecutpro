@@ -12,7 +12,8 @@ import {
   isNumberedProgressionPair,
   applyLlmDecisions,
   buildCutSpans,
-  spansToWordIds
+  spansToWordIds,
+  detectSilenceTrims
 } from '../src/shared/retakeaware/analyze'
 import { parseLlmDecisions } from '../src/main/retakeaware/llm'
 import type { VerbatimTranscript, VerbatimWord } from '../src/shared/retakeaware/types'
@@ -471,6 +472,81 @@ function vt(phrases: string[]): VerbatimTranscript {
   const { groups } = findRetakeGroups(buildChunks(x), x.words, fillers)
   const spans = buildCutSpans(x, groups, fillers)
   check('clean speech -> zero groups, zero spans', groups.length === 0 && spans.length === 0)
+}
+
+// ---- Smart Silence Cutter v2: next-word boundary safety ----
+// Build a transcript: `before` words, a `gap`-second pause, then `after` words.
+// The word right after the pause is the one that must never be clipped.
+function silenceVt(before: string, gap: number, after: string): VerbatimTranscript {
+  const words: VerbatimWord[] = []
+  let t = 0.5
+  for (const tok of before.split(/\s+/).filter(Boolean)) { words.push({ word: tok, start: t, end: t + 0.18, confidence: 0.95 }); t += 0.2 }
+  t = words[words.length - 1].end + gap // next word starts `gap` after prev word ends
+  for (const tok of after.split(/\s+/).filter(Boolean)) { words.push({ word: tok, start: t, end: t + 0.18, confidence: 0.95 }); t += 0.2 }
+  const raw = words.map((w) => w.word).join(' ')
+  return { provider: 'mock', mode: 'verbatim', words, segments: [], utterances: [], raw_text: raw, clean_text: raw }
+}
+const FRAGILE_PREROLL = 0.32, NORMAL_PREROLL = 0.22, CROSSFADE = 0.025
+// The next word after the pause is at index = (# before words). Its trim (if any).
+function trimBeforeNextWord(vtx: VerbatimTranscript, beforeCount: number, opts = {}): ReturnType<typeof detectSilenceTrims>['trims'][number] | undefined {
+  return detectSilenceTrims(vtx, [], opts).trims.find((tr) => tr.next_word_index === beforeCount)
+}
+
+// 1–3. A pause before a fragile short starter must never cut into that word.
+for (const w of ['it', 'I', 'and']) {
+  const vtx = silenceVt('my hair is so awesome due to this mask', 1.4, `${w} is a very good mask`)
+  const beforeCount = 'my hair is so awesome due to this mask'.split(' ').length
+  const nextStart = vtx.words[beforeCount].start
+  const tr = trimBeforeNextWord(vtx, beforeCount)
+  const guard = nextStart - FRAGILE_PREROLL - CROSSFADE
+  check(`silence: gap before "${w}" is trimmed but never clips "${w}"`,
+    !!tr && tr.cut_end_after_guard <= guard + 1e-6 && tr.end < nextStart,
+    tr ? `cut_end=${tr.cut_end_after_guard.toFixed(3)} guard=${guard.toFixed(3)} nextStart=${nextStart.toFixed(3)}` : 'no trim emitted')
+  check(`silence: "${w}" gets the fragile preroll (${FRAGILE_PREROLL * 1000}ms)`, !!tr && tr.next_word_preroll_ms === FRAGILE_PREROLL * 1000)
+}
+
+// 4. VAD detecting speech LATE must not let the cut end past transcript next_word.start.
+{
+  const vtx = silenceVt('this is a solid clean sentence here now', 1.4, 'it keeps going after the pause')
+  const beforeCount = 'this is a solid clean sentence here now'.split(' ').length
+  const nextStart = vtx.words[beforeCount].start
+  // VAD wrongly reports speech starting 0.5s AFTER the true onset (missed "it").
+  const tr = trimBeforeNextWord(vtx, beforeCount, { vadStart: (i: number) => (i === beforeCount ? nextStart + 0.5 : null) })
+  const guard = nextStart - FRAGILE_PREROLL - CROSSFADE
+  check('silence: late VAD never pushes cut_end past transcript next_word.start',
+    !!tr && tr.safe_next_speech_start === nextStart && tr.cut_end_after_guard <= guard + 1e-6,
+    tr ? `safe=${tr.safe_next_speech_start.toFixed(3)} cut_end=${tr.cut_end_after_guard.toFixed(3)} guard=${guard.toFixed(3)}` : 'no trim')
+}
+
+// 5. Right-edge valley snapping must not cross the next-word guard, even when the
+//    quietest valley sits INSIDE the protection zone (a low-energy word onset).
+{
+  const vtx = silenceVt('here is a nice long clean run of words', 1.4, 'it continues on after this')
+  const beforeCount = 'here is a nice long clean run of words'.split(' ').length
+  const nextStart = vtx.words[beforeCount].start
+  const guard = nextStart - FRAGILE_PREROLL - CROSSFADE
+  // Waveform: quiet everywhere, but the QUIETEST point is at nextStart-0.05 (inside
+  // the guard zone) — a naive snap would jump the cut there and clip "it".
+  const pps = 100
+  const total = Math.ceil((nextStart + 1) * pps)
+  const peaks = new Array(total).fill(0.2)
+  peaks[Math.floor((nextStart - 0.05) * pps)] = 0.0 // deepest valley, past the guard
+  const tr = trimBeforeNextWord(vtx, beforeCount, { waveform: { peaksPerSec: pps, peaks } })
+  check('silence: valley snapping never crosses the next-word guard',
+    !!tr && tr.cut_end_after_guard <= guard + 1e-6 && tr.end < nextStart,
+    tr ? `cut_end=${tr.cut_end_after_guard.toFixed(3)} guard=${guard.toFixed(3)}` : 'no trim')
+}
+
+// 6. The crossfade region must not overlap the next-word protection zone.
+{
+  const vtx = silenceVt('a perfectly ordinary sentence to set things up', 1.4, 'and then it keeps going')
+  const beforeCount = 'a perfectly ordinary sentence to set things up'.split(' ').length
+  const nextStart = vtx.words[beforeCount].start
+  const tr = trimBeforeNextWord(vtx, beforeCount)
+  // cut_end + crossfade must stay before the protection zone (nextStart - preroll).
+  check('silence: crossfade does not overlap the next-word guard',
+    !!tr && tr.cut_end_after_guard + CROSSFADE <= nextStart - FRAGILE_PREROLL + 1e-6,
+    tr ? `cut_end+xf=${(tr.cut_end_after_guard + CROSSFADE).toFixed(3)} zone=${(nextStart - FRAGILE_PREROLL).toFixed(3)}` : 'no trim')
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall retake-aware checks green')

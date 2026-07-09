@@ -150,7 +150,7 @@ export interface SilenceTrim {
   type: 'silence_trim'
   /** removed slice start (absolute seconds). */
   start: number
-  /** removed slice end (absolute seconds). */
+  /** removed slice end (absolute seconds) — the guarded cut boundary. */
   end: number
   /** index into VerbatimTranscript.words of the word BEFORE the gap. */
   previous_word_index: number
@@ -163,6 +163,20 @@ export interface SilenceTrim {
   /** coarse pause class the kept-duration target was chosen from. */
   pause_type: 'beat' | 'breath' | 'sentence' | 'long' | 'paragraph'
   reason: string
+  // ---- v2 next-word boundary safety (never clip the word after the pause) ----
+  /** the word AFTER the gap (the one we must not clip). */
+  next_word: string
+  next_word_start: number
+  /** protection zone before next_word.start (fragile starters get a bigger one). */
+  next_word_preroll_ms: number
+  /** VAD/RMS-detected speech onset if available, else null (rules-only run). */
+  vad_detected_start: number | null
+  /** min(vad_detected_start, next_word.start) — never trust VAD to be later. */
+  safe_next_speech_start: number
+  /** where the cut would end from pacing alone, before the next-word guard. */
+  cut_end_before_guard: number
+  /** the guarded cut end actually emitted (≤ safe_next_speech_start − preroll − crossfade). */
+  cut_end_after_guard: number
 }
 
 /** A pause the Smart Silence Cutter considered but did NOT shorten, with why. */
@@ -171,6 +185,9 @@ export interface DroppedSilence {
   next_word_index: number
   gap_ms: number
   reason: string
+  next_word?: string
+  /** true when the next-word protection zone left too little middle to cut. */
+  dropped_due_to_next_word_guard: boolean
 }
 
 export interface LlmRetakeDecision {
