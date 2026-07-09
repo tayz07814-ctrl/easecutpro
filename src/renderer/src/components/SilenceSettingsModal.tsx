@@ -95,7 +95,7 @@ export default function SilenceSettingsModal(): JSX.Element {
           <span>
             Aggressive VAD hard-cut <span style={{ color: '#e0a45a', fontSize: 11 }}>(bypasses the sliders above)</span>
             <div style={{ color: '#9aa', fontSize: 11, marginTop: 2 }}>
-              Removes <b>every</b> pause ≥100ms with a raw VAD pass (speech 60% · trim 0.08s · pad 0.02s · min-gap 0.1s) instead of the transcript-gap hybrid. Tight/fast — cuts all breathing room. Retake/repeat word cuts are unaffected.
+              Removes <b>every</b> pause ≥200ms with a raw VAD pass (speech 50% · trim 0.05s · pad 0.05s · min-gap 0.2s) instead of the transcript-gap hybrid. Tight/fast — cuts all breathing room. Retake/repeat word cuts are unaffected.
             </div>
           </span>
         </label>

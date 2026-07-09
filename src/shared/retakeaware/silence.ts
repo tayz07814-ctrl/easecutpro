@@ -124,10 +124,10 @@ export function retakeBetaVadSafetyOpts(): SilenceDetectOptions {
   return { mode: 'vad', noiseDb: -30, minDuration: 0.1, vadThreshold: 0.5, speechPadMs: 60, edgeTrimMs: 0, removeBreaths: false }
 }
 /** Aggressive VAD HARD-CUT opts (the `vadHardCut` toggle): remove EVERY VAD silence
- *  ≥ mingap. speech threshold 60% · trimcuts 0.08s · padding 0.02s · mingap 0.1s.
+ *  ≥ mingap. speech threshold 50% · trimcuts 0.05s · padding 0.05s · mingap 0.2s.
  *  Bypasses the transcript-gap hybrid — a tight/fast cut of all pauses. */
 export function retakeBetaVadHardCutOpts(): SilenceDetectOptions {
-  return { mode: 'vad', noiseDb: -30, minDuration: 0.1, vadThreshold: 0.6, speechPadMs: 20, edgeTrimMs: 80, removeBreaths: false }
+  return { mode: 'vad', noiseDb: -30, minDuration: 0.2, vadThreshold: 0.5, speechPadMs: 50, edgeTrimMs: 50, removeBreaths: false }
 }
 
 export interface VadInterval { start: number; end: number }

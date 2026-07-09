@@ -890,8 +890,8 @@ const BAL = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced, max
 // ---- Retake β aggressive VAD hard-cut toggle (opts + default OFF) ----
 {
   const o = retakeBetaVadHardCutOpts()
-  check('vad-hardcut: opts match the requested settings (threshold 0.6 / trim 0.08 / pad 0.02 / mingap 0.1)',
-    o.mode === 'vad' && o.vadThreshold === 0.6 && o.edgeTrimMs === 80 && o.speechPadMs === 20 && o.minDuration === 0.1, `opts=${JSON.stringify(o)}`)
+  check('vad-hardcut: opts match the requested settings (threshold 0.5 / trim 0.05 / pad 0.05 / mingap 0.2)',
+    o.mode === 'vad' && o.vadThreshold === 0.5 && o.edgeTrimMs === 50 && o.speechPadMs === 50 && o.minDuration === 0.2, `opts=${JSON.stringify(o)}`)
   check('vad-hardcut: toggle defaults OFF (hybrid stays the default silence engine)',
     DEFAULT_RETAKE_BETA_SILENCE_SETTINGS.vadHardCut === false &&
     (['conservative', 'balanced', 'aggressive'] as const).every((p) => RETAKE_BETA_SILENCE_PRESETS[p].vadHardCut === false))

@@ -127,5 +127,25 @@ p6.manualCuts = [{ start: 2.42, end: 4.0 }]
 const k8 = computeKeepRanges(p6, wf6)
 check('user-dragged edge kept verbatim (2.42, not pulled to the 2.5 valley)', near(k8[0].end, 2.42, 0.001))
 
+console.log('7) word-onset guard — a valley INSIDE a kept word never clips it ("My")')
+// A removed word's cut ends ~1.65; a valley sits INSIDE the next kept word "My"
+// (its soft "m" onset), so valley-snap would pull the cut edge into "My" and eat it.
+const peaks7 = Array.from({ length: 10 * PPS }, () => 0.6)
+for (let i = Math.round(1.73 * PPS); i <= Math.round(1.85 * PPS); i++) peaks7[i] = 0.02
+const wf7: Waveform = { peaksPerSec: PPS, peaks: peaks7 }
+const words7: Word[] = [
+  { id: 'w0', text: 'up', start: 1.0, end: 1.6, deleted: true },
+  { id: 'w1', text: 'My', start: 1.7, end: 2.05 },
+  { id: 'w2', text: 'parents', start: 2.05, end: 2.5 }
+]
+const p7 = createEmptyProject('t8')
+p7.media = { path: 'x', duration: 10, width: 1920, height: 1080, fps: 30, hasAudio: true, hasVideo: true }
+p7.transcript = { segments: [{ id: 's0', start: 0, end: 10, words: words7 }], words: words7 }
+const k9 = computeKeepRanges(p7, wf7)
+console.log('  keeps:', JSON.stringify(k9.map((k) => [Number(k.start.toFixed(3)), Number(k.end.toFixed(3))])))
+const clipsMy = k9.some((k) => (k.start > 1.702 && k.start < 2.048) || (k.end > 1.702 && k.end < 2.048))
+check('word-onset guard: no cut edge lands inside kept "My"', !clipsMy)
+check('word-onset guard: "My" is fully kept (not clipped)', k9.some((k) => k.start <= 1.7 && k.end >= 2.05))
+
 console.log(ok ? '\nSMOOTHSEAMS OK' : '\nSMOOTHSEAMS FAILED')
 process.exit(ok ? 0 : 1)

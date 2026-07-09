@@ -185,7 +185,21 @@ export async function retakeAwareCut(
     } catch (e) {
       warnings.push(`VAD hard-cut scan failed (${(e as Error).message}) — no silence removed this run.`)
     }
-    silenceRegions = hard.filter((r) => r.end - r.start > 0.02).map((r, i) => ({ id: `betasil-hardvad-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
+    // WORD-ONSET GUARD: the raw VAD doesn't know where transcript words are, so it
+    // clips a word's low-energy onset/offset (the soft "m" of "My"). Clamp every
+    // region off the KEPT words (deleted/retake words aren't protected) so no word is
+    // eaten — keep a ~30ms lead-in. Regions are protect:true, so this is their only
+    // guard (computeKeepRanges applies protect regions verbatim).
+    const keptHardWords = artifacts.repairedWords.filter((w) => { const m = (w.start + w.end) / 2; return !cutSpans.some((s) => m >= s.start && m <= s.end) })
+    const clampOffWords = (a: number, b: number): { start: number; end: number } => {
+      let cs = a, ce = b
+      for (const w of keptHardWords) {
+        if (cs <= w.start && ce > w.start + 0.002 && ce < w.end) ce = Math.max(cs, w.start - 0.03) // end clipped the onset
+        if (ce >= w.end && cs < w.end - 0.002 && cs > w.start) cs = Math.min(ce, w.end + 0.03) // start clipped the tail
+      }
+      return { start: cs, end: ce }
+    }
+    silenceRegions = hard.map((r) => clampOffWords(r.start, r.end)).filter((r) => r.end - r.start > 0.05).map((r, i) => ({ id: `betasil-hardvad-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
     const total = silenceRegions.reduce((n, r) => n + (r.end - r.start), 0)
     vadHardCutDebug = { source: 'vad_hard_cut', opts: retakeBetaVadHardCutOpts(), regions_count: silenceRegions.length, total_removed_s: Number(total.toFixed(3)) }
   } else {

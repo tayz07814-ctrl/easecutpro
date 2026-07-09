@@ -214,6 +214,19 @@ export function computeKeepRanges(
     // snap window. A <=350ms burst backed by >=120ms of genuine silence just
     // outside a cut edge belongs to the cut — swallow it.
     absorbEdgeBlips(auto, waveform, dur, words)
+    // WORD-ONSET GUARD: valley-snap + blip-absorb are ENERGY-based and can snap a cut
+    // edge INTO a kept word whose onset/offset is low-energy (the soft "m" of "My",
+    // "n"/"w"/"l"/"y", quiet vowels) — clipping real speech. Pull any edge that landed
+    // inside a kept word back off it (keeping a ~30ms lead-in). Only fires on an edge
+    // that overshot a word boundary — never on a cut that spans/deletes a word.
+    const keptWords = words.filter((w) => !w.deleted)
+    const WORD_EDGE_GUARD = 0.03
+    for (const c of auto) {
+      for (const w of keptWords) {
+        if (c.start <= w.start && c.end > w.start + 0.002 && c.end < w.end) c.end = Math.max(c.start + 0.02, w.start - WORD_EDGE_GUARD) // end clipped the onset
+        if (c.end >= w.end && c.start < w.end - 0.002 && c.start > w.start) c.start = Math.min(c.end - 0.02, w.end + WORD_EDGE_GUARD) // start clipped the tail
+      }
+    }
     cuts.length = 0
     cuts.push(...auto)
   }
