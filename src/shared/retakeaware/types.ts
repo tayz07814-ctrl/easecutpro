@@ -148,46 +148,54 @@ export interface CutSpan {
  *  already take. `start`/`end` describe the slice of gap that is removed. */
 export interface SilenceTrim {
   type: 'silence_trim'
-  /** removed slice start (absolute seconds). */
+  /** removed CENTER slice start (absolute seconds) — after the left runway. */
   start: number
-  /** removed slice end (absolute seconds) — the guarded cut boundary. */
+  /** removed CENTER slice end (absolute seconds) — before the right runway. */
   end: number
   /** index into VerbatimTranscript.words of the word BEFORE the gap. */
   previous_word_index: number
   /** index into VerbatimTranscript.words of the word AFTER the gap. */
   next_word_index: number
   original_gap_ms: number
-  /** pause left in place after shortening (never 0 — keeps natural pacing). */
+  /** total air left in place (both runways) — never 0. */
   kept_pause_ms: number
   removed_ms: number
-  /** coarse pause class the kept-duration target was chosen from. */
+  /** coarse pause class (label only). */
   pause_type: 'beat' | 'breath' | 'sentence' | 'long' | 'paragraph'
   reason: string
-  // ---- v2 next-word boundary safety (never clip the word after the pause) ----
-  /** the word AFTER the gap (the one we must not clip). */
+  // ---- v3 LEFT guard (never clip the previous word's tail) ----
+  previous_word: string
+  previous_word_end: number
+  previous_word_tail_guard_ms: number
+  /** VAD-detected speech END of the previous word, else null. */
+  vad_detected_prev_speech_end: number | null
+  /** max(vad_detected_prev_speech_end, previous_word.end) — VAD may only push later. */
+  safe_prev_speech_end: number
+  cut_start_before_guard: number
+  cut_start_after_guard: number
+  // ---- v3 RIGHT guard (never clip the next word's onset) ----
   next_word: string
   next_word_start: number
-  /** protection zone before next_word.start (fragile starters get a bigger one). */
-  next_word_preroll_ms: number
-  /** VAD/RMS-detected speech onset if available, else null (rules-only run). */
-  vad_detected_start: number | null
-  /** min(vad_detected_start, next_word.start) — never trust VAD to be later. */
+  next_word_preroll_guard_ms: number
+  /** VAD-detected speech START of the next word, else null. */
+  vad_detected_next_speech_start: number | null
+  /** min(vad_detected_next_speech_start, next_word.start) — VAD may only pull earlier. */
   safe_next_speech_start: number
-  /** where the cut would end from pacing alone, before the next-word guard. */
   cut_end_before_guard: number
-  /** the guarded cut end actually emitted (≤ safe_next_speech_start − preroll − crossfade). */
   cut_end_after_guard: number
 }
 
-/** A pause the Smart Silence Cutter considered but did NOT shorten, with why. */
+/** A pause the Smart Silence Cutter considered but did NOT trim, with why. */
 export interface DroppedSilence {
   previous_word_index: number
   next_word_index: number
   gap_ms: number
   reason: string
+  previous_word?: string
   next_word?: string
-  /** true when the next-word protection zone left too little middle to cut. */
-  dropped_due_to_next_word_guard: boolean
+  dropped_due_to_left_guard: boolean
+  dropped_due_to_right_guard: boolean
+  dropped_due_to_insufficient_center_silence: boolean
 }
 
 export interface LlmRetakeDecision {

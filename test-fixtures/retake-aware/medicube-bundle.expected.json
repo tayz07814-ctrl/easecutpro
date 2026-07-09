@@ -15,9 +15,10 @@
   ],
   "expectPatternTypes": ["failed_retake", "self_correction"],
   "maxSpanSeconds": 8,
+  "_silence_note": "v3 is conservative: a natural (non-dead-air) pause is capped at 60% removal, so a 9.3s pause keeps ~3.7s. Deep removal is reserved for retake/false-start dead air.",
   "silence": {
     "shortenAfter": [
-      { "text": "shocked", "minRemovedMs": 5000, "minKeptMs": 600, "maxKeptMs": 1200 },
+      { "text": "shocked", "minRemovedMs": 5000, "minKeptMs": 600, "maxKeptMs": 4000 },
       { "text": "mask", "minRemovedMs": 2000, "minKeptMs": 500 }
     ],
     "minTotalRemovedS": 10.0,

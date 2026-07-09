@@ -71,29 +71,38 @@ const SILENCE_KEEP_TABLE: { max: number; keep: number; type: 'beat' | 'breath' |
   { max: 6.0, keep: 0.7, type: 'long' }, // long deliberate pause
   { max: Infinity, keep: 0.9, type: 'paragraph' } // paragraph / dead-air gap
 ]
-// ---- v2 next-word boundary safety: NEVER clip the word after a pause ----
-// A word's transcript timestamp is often LATER than its audible onset (whisper /
-// AssemblyAI clip low-energy function words — "it", "I", "and"), and downstream
-// computeKeepRanges then valley-snaps (±120ms) and absorbs edge blips (reach
-// 0.45s). So every trim leaves a guaranteed protection zone before the next word
-// and never cuts into it. cut_end ≤ safe_next_speech_start − preroll − crossfade.
-const NEXT_WORD_PREROLL_S = 0.22 // normal starter word
-const FRAGILE_PREROLL_S = 0.32 // fragile / short low-energy starter (clips easily)
-const SILENCE_CROSSFADE_S = 0.025 // anti-click fade; must not overlap the next word
-// Assumed downstream silencePadding (edit.ts default 0.08) folded into the guard
-// so the applied cut stays inside the zone even after computeKeepRanges pads it.
-const SILENCE_DOWNSTREAM_PAD_S = 0.1
-// Short, low-energy starter words whose onset the transcript most often clips.
+// ---- v3 two-sided boundary safety: NEVER clip EITHER word around a pause ----
+// A word's transcript timestamp is often loose (whisper/AssemblyAI clip the tail
+// of soft words and the onset of low-energy starters — "it", "I", "and", "was"),
+// and downstream computeKeepRanges then valley-snaps (±120ms) and absorbs edge
+// blips (reach 0.45s). So a trim removes ONLY the CENTER of a gap, leaving a
+// guaranteed protected runway on BOTH sides:
+//   prev.end |‑‑ left runway ‑‑| cut_start …removable center… cut_end |‑‑ right runway ‑‑| next.start
+//   cut_start ≥ safe_prev_speech_end + prev_tail_guard + crossfade
+//   cut_end   ≤ safe_next_speech_start − next_preroll_guard − crossfade
+const PREV_TAIL_GUARD_S = 0.22 // normal previous word
+const PREV_TAIL_GUARD_FRAGILE_S = 0.32 // soft/short previous word (clips its tail)
+const NEXT_PREROLL_GUARD_S = 0.26 // normal starter word
+const NEXT_PREROLL_GUARD_FRAGILE_S = 0.38 // fragile/short starter (clips its onset)
+const SILENCE_CROSSFADE_S = 0.025 // anti-click fade — must stay INSIDE the center
+const SILENCE_MIN_CENTER_S = 0.3 // below this removable center, drop the trim
+// Global safe mode: never over-compress a natural pause.
+const SILENCE_MAX_COMPRESSION = 0.6 // normal: remove ≤ 60% of the gap
+const SILENCE_DEADAIR_COMPRESSION = 0.89 // retake/false-start dead air: up to 89%
+// Short, low-energy STARTER words whose ONSET the transcript most often clips.
 const FRAGILE_STARTERS = new Set([
   'i', 'it', 'a', 'an', 'and', 'but', 'so', 'the', 'to', 'is', 'in', 'on', 'of', 'or', 'uh', 'um'
 ])
-const fragileStarter = (w: string): boolean =>
-  FRAGILE_STARTERS.has(w.toLowerCase().replace(/[^a-z']/g, ''))
+// Soft/short PREVIOUS words whose TAIL the transcript most often clips (adds the
+// auxiliaries was/has/have that trail off quietly).
+const FRAGILE_PREV = new Set([
+  'i', 'it', 'a', 'an', 'and', 'but', 'so', 'the', 'to', 'is', 'was', 'has', 'have', 'in', 'on', 'of', 'or', 'uh', 'um'
+])
+const normWord = (w: string): string => w.toLowerCase().replace(/[^a-z']/g, '')
 
-/** Nearest low-energy valley to `t`, but NEVER past `maxT` (the next-word guard)
- *  and never earlier than `minT` (would make the trim too small) — right-edge
- *  snapping is allowed ONLY inside the safe zone. Without a waveform it just caps
- *  at the guard (the caller's removed-size check drops anything too small). */
+/** Snap `t` to the nearest low-energy valley, but CLAMPED to [minT, maxT] (the
+ *  safe zone) — snapping may never cross a boundary guard. Without a waveform it
+ *  just clamps; the caller's center-size check drops anything too small. */
 function snapValleyClamped(
   t: number,
   minT: number,
@@ -101,7 +110,8 @@ function snapValleyClamped(
   wf: { peaksPerSec: number; peaks: number[] } | null | undefined,
   win = 0.12
 ): number {
-  const cap = (x: number): number => Math.min(maxT, x)
+  const cap = (x: number): number => Math.max(minT, Math.min(maxT, x))
+  if (maxT <= minT) return maxT
   if (!wf || !wf.peaks.length || wf.peaksPerSec <= 0) return cap(t)
   const pps = wf.peaksPerSec
   const lo = Math.max(minT, t - win)
@@ -1105,12 +1115,15 @@ export function applyLlmDecisions(
 //
 // `wordCutSpans` are the already-decided WORD cuts: any gap sitting inside one is
 // dropped (that whole retake/false-start slice is being removed anyway).
-/** Optional refinements the pure detector can't derive from timestamps alone. */
+/** Optional refinements the pure detector can't derive from timestamps alone.
+ *  VAD/RMS may ONLY make the boundaries SAFER (push the guards outward); it can
+ *  never override a transcript guard to cut more aggressively. */
 export interface SilenceTrimOpts {
-  /** per-word-index VAD/RMS-detected speech onset (absolute s). Used ONLY to pull
-   *  the guard EARLIER, never later than next_word.start (VAD misses quiet words). */
-  vadStart?: (wordIndex: number) => number | null | undefined
-  /** waveform for right-edge valley snapping — clamped to the safe zone. */
+  /** detected speech END of word `i` — only used if LATER than word.end. */
+  vadPrevEnd?: (wordIndex: number) => number | null | undefined
+  /** detected speech START of word `i` — only used if EARLIER than word.start. */
+  vadNextStart?: (wordIndex: number) => number | null | undefined
+  /** waveform for edge valley-snapping — clamped to the safe zone. */
   waveform?: { peaksPerSec: number; peaks: number[] } | null
 }
 
@@ -1124,6 +1137,11 @@ export function detectSilenceTrims(
   const dropped: DroppedSilence[] = []
   const insideWordCut = (a: number, b: number): boolean =>
     wordCutSpans.some((s) => a < s.end && s.start < b)
+  // The gap abuts a removed retake/false-start take → its air is dead air, so
+  // deeper (up to 89%) compression is allowed; otherwise cap at 60%.
+  const bordersWordCut = (a: number, b: number): boolean =>
+    wordCutSpans.some((s) => s.end > a - 0.25 && s.start < b + 0.25)
+  const cf = SILENCE_CROSSFADE_S
   const ms = (s: number): number => Math.round(s * 1000)
   for (let i = 0; i < words.length - 1; i++) {
     const prev = words[i]
@@ -1131,53 +1149,66 @@ export function detectSilenceTrims(
     const gap = next.start - prev.end
     if (gap < SILENCE_FLOOR_S) continue // natural pause — leave it
     if (insideWordCut(prev.end, next.start)) {
-      dropped.push({ previous_word_index: i, next_word_index: i + 1, gap_ms: ms(gap), reason: 'gap sits inside a word cut (whole span already removed)', dropped_due_to_next_word_guard: false })
+      dropped.push({ previous_word_index: i, next_word_index: i + 1, gap_ms: ms(gap), reason: 'gap sits inside a word cut (whole span already removed)', dropped_due_to_left_guard: false, dropped_due_to_right_guard: false, dropped_due_to_insufficient_center_silence: false })
       continue
     }
 
-    // ---- next-word protection zone ----
-    const fragile = fragileStarter(next.word)
-    const preroll = fragile ? FRAGILE_PREROLL_S : NEXT_WORD_PREROLL_S
-    // VAD may only pull the guard EARLIER; never trust it to be later than the
-    // transcript onset (it misses low-energy words like "it"/"I"/"and").
-    const vad = opts.vadStart?.(i + 1)
-    const vadStart = typeof vad === 'number' ? vad : null
-    const safeNextSpeechStart = vadStart != null ? Math.min(vadStart, next.start) : next.start
-    // Hard boundary the cut may never cross (crossfade already reserved).
-    const cutEndGuard = safeNextSpeechStart - preroll - SILENCE_CROSSFADE_S
+    // ---- two-sided protection zones ----
+    const prevFragile = FRAGILE_PREV.has(normWord(prev.word))
+    const nextFragile = FRAGILE_STARTERS.has(normWord(next.word))
+    const leftGuard = prevFragile ? PREV_TAIL_GUARD_FRAGILE_S : PREV_TAIL_GUARD_S
+    const rightGuard = nextFragile ? NEXT_PREROLL_GUARD_FRAGILE_S : NEXT_PREROLL_GUARD_S
+    // VAD may only make the boundary SAFER: prev speech can only END later, next
+    // speech can only START earlier than the transcript says.
+    const vp = opts.vadPrevEnd?.(i)
+    const vn = opts.vadNextStart?.(i + 1)
+    const vadPrevEnd = typeof vp === 'number' ? vp : null
+    const vadNextStart = typeof vn === 'number' ? vn : null
+    const safePrevSpeechEnd = Math.max(vadPrevEnd ?? prev.end, prev.end)
+    const safeNextSpeechStart = Math.min(vadNextStart ?? next.start, next.start)
 
-    const bucket = SILENCE_KEEP_TABLE.find((b) => gap <= b.max)!
-    const classKeep = bucket.keep
-    // Minimum residual the guard demands (folds in the downstream pad so the
-    // APPLIED cut still lands inside the zone after computeKeepRanges pads it).
-    const guardKeep = (next.start - safeNextSpeechStart) + preroll + SILENCE_CROSSFADE_S + SILENCE_DOWNSTREAM_PAD_S
-    const keep = Math.max(classKeep, guardKeep)
+    const cutStartGuard = safePrevSpeechEnd + leftGuard + cf
+    const cutEndGuard = safeNextSpeechStart - rightGuard - cf
+    const cutStartBeforeGuard = prev.end
+    const cutEndBeforeGuard = next.start
 
-    const cutStart = prev.end + SILENCE_EDGE_KEEP_S
-    const cutEndBeforeGuard = next.start - classKeep
-    // The guarded cut end, optionally valley-snapped but NEVER past the guard.
-    let cutEnd = Math.min(next.start - keep, cutEndGuard)
-    cutEnd = snapValleyClamped(cutEnd, cutStart + SILENCE_MIN_REMOVE_S, cutEndGuard, opts.waveform)
-    const removed = cutEnd - cutStart
+    let cutStart = cutStartGuard
+    let cutEnd = cutEndGuard
 
-    if (removed < SILENCE_MIN_REMOVE_S) {
-      // Would the pause have been trimmable WITHOUT the next-word guard?
-      const removedNoGuard = (next.start - classKeep) - cutStart
+    // Global safe mode: cap how much of the gap we may remove (keep it centered).
+    const cap = bordersWordCut(prev.end, next.start) ? SILENCE_DEADAIR_COMPRESSION : SILENCE_MAX_COMPRESSION
+    const maxRemovable = cap * gap
+    if (cutEnd - cutStart > maxRemovable) {
+      const mid = (cutStart + cutEnd) / 2
+      cutStart = mid - maxRemovable / 2
+      cutEnd = mid + maxRemovable / 2
+    }
+
+    // Valley-snap each edge, clamped so neither can cross its guard (nor collapse
+    // the center). Snapping only ever makes the removal SMALLER here.
+    cutStart = snapValleyClamped(cutStart, cutStartGuard, cutEnd, opts.waveform)
+    cutEnd = snapValleyClamped(cutEnd, cutStart, cutEndGuard, opts.waveform)
+    const center = cutEnd - cutStart
+
+    // Conservative fallback: guards left too little middle → drop, with the reason.
+    if (cutEnd <= cutStart || center < SILENCE_MIN_CENTER_S) {
+      const centerNormalLeft = cutEndGuard - (safePrevSpeechEnd + PREV_TAIL_GUARD_S + cf)
+      const centerNormalRight = (safeNextSpeechStart - NEXT_PREROLL_GUARD_S - cf) - cutStartGuard
       dropped.push({
         previous_word_index: i,
         next_word_index: i + 1,
         gap_ms: ms(gap),
+        previous_word: prev.word,
         next_word: next.word,
-        dropped_due_to_next_word_guard: keep > classKeep && removedNoGuard >= SILENCE_MIN_REMOVE_S,
-        reason:
-          keep > classKeep
-            ? `next-word guard (${fragile ? 'fragile ' : ''}"${next.word}", ${ms(preroll)}ms preroll) leaves too little middle to cut`
-            : `already near a natural ${bucket.type} pause — not enough excess to shorten`
+        dropped_due_to_left_guard: prevFragile && centerNormalLeft >= SILENCE_MIN_CENTER_S,
+        dropped_due_to_right_guard: nextFragile && centerNormalRight >= SILENCE_MIN_CENTER_S,
+        dropped_due_to_insufficient_center_silence: true,
+        reason: `protected runways (${prevFragile ? 'fragile ' : ''}"${prev.word}" tail ${ms(leftGuard)}ms + ${nextFragile ? 'fragile ' : ''}"${next.word}" preroll ${ms(rightGuard)}ms) leave <${ms(SILENCE_MIN_CENTER_S)}ms center to cut`
       })
       continue
     }
 
-    const keptResidual = next.start - cutEnd // real air left before the next word
+    const pauseType = (SILENCE_KEEP_TABLE.find((b) => gap <= b.max)!).type
     trims.push({
       type: 'silence_trim',
       start: cutStart,
@@ -1185,14 +1216,21 @@ export function detectSilenceTrims(
       previous_word_index: i,
       next_word_index: i + 1,
       original_gap_ms: ms(gap),
-      kept_pause_ms: ms(keptResidual),
-      removed_ms: ms(removed),
-      pause_type: bucket.type,
-      reason: `${bucket.type} pause ${gap.toFixed(2)}s → kept ${keptResidual.toFixed(2)}s before "${next.word}" (removed ${removed.toFixed(2)}s${fragile ? ', fragile-guarded' : ''})`,
+      kept_pause_ms: ms(gap - center), // total air kept (both runways)
+      removed_ms: ms(center),
+      pause_type: pauseType,
+      reason: `${pauseType} pause ${gap.toFixed(2)}s → removed center ${center.toFixed(2)}s, kept ${(gap - center).toFixed(2)}s split across both runways${cap === SILENCE_DEADAIR_COMPRESSION ? ' (dead-air, deep)' : ''}`,
+      previous_word: prev.word,
+      previous_word_end: prev.end,
+      previous_word_tail_guard_ms: ms(leftGuard),
+      vad_detected_prev_speech_end: vadPrevEnd,
+      safe_prev_speech_end: safePrevSpeechEnd,
+      cut_start_before_guard: cutStartBeforeGuard,
+      cut_start_after_guard: cutStart,
       next_word: next.word,
       next_word_start: next.start,
-      next_word_preroll_ms: ms(preroll),
-      vad_detected_start: vadStart,
+      next_word_preroll_guard_ms: ms(rightGuard),
+      vad_detected_next_speech_start: vadNextStart,
       safe_next_speech_start: safeNextSpeechStart,
       cut_end_before_guard: cutEndBeforeGuard,
       cut_end_after_guard: cutEnd
@@ -1201,21 +1239,20 @@ export function detectSilenceTrims(
   return { trims, dropped }
 }
 
-/** Silence trims -> review-first, timeline-only SilenceRegions (action:'shorten').
- *  The region spans the WHOLE gap and carries the target kept duration; the edit
- *  engine removes only the excess (edit.ts computeKeepRanges). Never produces a
- *  word id — these are staged as silence chips, not word highlights. */
+/** Silence trims -> review-first, timeline-only SilenceRegions. v3 removes ONLY
+ *  the CENTER of the gap (keeps a protected runway on BOTH sides), so it must be
+ *  an explicit-range 'remove' — 'shorten' only keeps right-side air. Downstream
+ *  computeKeepRanges pads/valley-snaps this inward, keeping even MORE runway.
+ *  Never produces a word id — staged as silence chips, not word highlights. */
 export function buildSilenceRegions(
   trims: SilenceTrim[],
-  vt: VerbatimTranscript
+  _vt: VerbatimTranscript
 ): import('../types').SilenceRegion[] {
-  const words = vt.words
   return trims.map((t, i) => ({
     id: `sil-rt-${i}`,
-    start: words[t.previous_word_index].end,
-    end: words[t.next_word_index].start,
-    action: 'shorten' as const,
-    shortenTo: t.kept_pause_ms / 1000
+    start: t.start,
+    end: t.end,
+    action: 'remove' as const
   }))
 }
 
