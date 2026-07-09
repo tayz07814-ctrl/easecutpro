@@ -1,206 +1,154 @@
-# HANDOFF — EaseCutPro (2026-07-08 marathon session → next)
+# HANDOFF — EaseCutPro (2026-07-09 session → next)
 
 > Read this first. Companions: the auto-loaded memory files under
 > `~/.claude/projects/C--easecutpro/memory/` (esp. `easecutpro-retakeaware`,
-> `easecutpro-ondevice-export`, `easecutpro-web-mode`, `easecutpro-deploy-path`).
-> This file supersedes the 07-07 handoff (a6c584c).
+> `easecutpro-smoothseams`, `easecutpro-ondevice-export`, `easecutpro-web-mode`,
+> `easecutpro-deploy-path`, `easecutpro-multiclip-base`). This supersedes the
+> 07-08 handoff (1af3861).
 
-## 0. FIRST THING: the stack is DOWN — one command brings everything current live
+`main` = **ce06edf**, tree clean. Renderer build current (`out/renderer` →
+`index-Co9W2SZG.js`). **Engine (`src/main/**`) changes need an app RELAUNCH** to
+go live (Electron loads the main process at launch; the web server loads modules
+at start via `tsx`). The renderer picks up rebuilt `out/renderer` without a
+restart on web.
 
-Server + tunnel were dead at last check. Nothing is unmerged: `main` = **d272d19**,
-tree clean, `out/renderer` build is current (renderer hasn't changed since the
-last build — later commits only touched `src/main/` and `src/shared/retakeaware/`,
-which the server picks up straight from source via `tsx`, no rebuild needed).
-
+## 0. Stack up / deploy (unchanged)
 ```
 cd C:\easecutpro
-restart-server.bat        # one-click: kills anything on 8787 + cloudflared, starts fresh
+restart-server.bat        # kills 8787 + cloudflared, starts fresh, prints new URL + signup code
 ```
+Tunnel URL changes every restart (free quick-tunnel). Hand the user the new URL.
+`npm run selfhost` = permanent-domain path (SELFHOST.md). Renderer changes need
+`npm run build`; `src/main`+`src/shared` are picked up from source by `tsx`.
 
-or manually: `npm run remote` (prints the new `*.trycloudflare.com` URL + signup code).
+## 1. This session (07-09) — what shipped, newest first
 
-- Run from a shell where `EC_FASTCUT_PYTHON` is inherited (it's a system env var via
-  `setx`, so any fresh shell has it — a leftover `python.exe` process from the last
-  session is a dead fastcut sidecar, harmless, a fresh start replaces it).
-- **Hand the user the new URL** — the tunnel URL changes on every restart (free
-  quick-tunnel tradeoff; `npm run selfhost` is the permanent-domain path, see
-  `SELFHOST.md`).
-- Sanity: `curl -s localhost:8787/ | grep -oE 'index-[A-Za-z0-9_-]+\.js'` → should
-  print `index-B4Jh9XQJ.js`.
+The whole session was the **Retake β silence cutter** (rebuilt end to end from
+real-video bug reports) plus an earlier offline/Capacitor block. All Retake-β
+only; **FastCut/ProCut/Smart Smooth byte-identical** (verified every commit).
 
-## 1. Session log (07-08), newest first — what & where it lands
+| Commit | What |
+|---|---|
+| ce06edf | **Dead-air residue clips removed.** `computeKeepRanges` now drops any INTERIOR keep (cut on both sides) holding NO kept speech, any size (not just <0.5s) — dead air between two removed retakes / cut+silence no longer survives as a residue clip. Gated on `SilenceRegion.protect`. |
+| 5b83358 | **Tight ~100ms lead-in.** Residual split ASYMMETRICALLY: ~100ms before the next word's VAD-true onset, the rest as trailing air after the previous word. `vadOnset()` finds the real onset (may precede a late transcript start → never clips). Falls back to the right guard w/o VAD. |
+| 34fc2f7 | **Leading/trailing edge silence** trimmed (edges have no bounding word). VAD must confirm the region is silent (protects a music intro). engine passes the true media duration for trailing. |
+| 881906e | **Noise-as-voice fix.** AssemblyAI absorbs trailing silence into some word END timestamps ("it's" = 4.33s) → transcript gap reads ~0 → silence hidden INSIDE the clip. `vadSpeechEnd/Start()` refine the word's true speech boundary so the hidden silence is exposed and cut. |
+| 3db1525 | **Timeline sliver ripple-fix + Silence Settings UI.** (a) `computeKeepRanges` builds the timeline clips (`bridge.ts:130`) — protected-silence subtraction ran after island cleanup and left tiny air slivers; now they ripple-close. (b) Full Silence Settings modal + presets. |
+| 0683da0 | **Hybrid detector.** Transcript word GAPS are the primary span (VAD-only under-detected, left 0.7–1.2s); VAD is SAFETY only (drops a cut only for a genuine interior speech island). Word-cut carve keeps pauses adjacent to retakes. |
+| 0673ecc | (superseded) conservative word-clamped VAD profile. |
+| 2e0eba6 | (superseded) tried FastCut's VAD path for Retake β. |
+| 0746bd3, da97cd5, d98339d | (superseded) the v1→v3 bespoke transcript-gap cutter. |
+| 63a4b59 | **DocPreview seam pre-warm** — pre-seek the next source ~0.6s before a clip/cut boundary so crossing it doesn't stall ("slider sticks + video pauses"). NOT fixed: a same-file forward-skip cut (inherent `<video>` seek latency). |
+| 7ef830b | **Offline mode + Capacitor Android.** `probeServer()`, offline boot to editor, server-only buttons gated (`requireServer`); `capacitor.config.ts` (appId `com.easecutpro.tals`), `android/` project, built `app-debug.apk` (3.9MB). |
 
-| Commit | What | Needs rebuild? |
-|---|---|---|
-| d272d19 | **Retake β: 4 more generic vetoes/detectors** — `tail_fragment_continuation_veto` (a CHUNK_MAX_WORDS-forced mid-sentence split's tail is a completion, not an independent retake — was wrongly matched against an unrelated earlier short sentence), `numbered_progression_veto` (masks number words, detects a repeating `<frame> #` template — "not just gonna get one/two/three/four" is a countdown, not a retry), `detectRepeatedSetups` (dash-less mid-chunk abandoned setup that restarts a beat later with the same connective+opening, absorbs any short chunker-orphaned leftover), `detectOrphanConnectors` (standalone one-word connective before a stronger restart connective — "...same way. And [pause] But now..." cuts the orphan "And"). 3 new real-video fixtures. 10/10 fixtures + 80 unit checks green. | server-only |
-| 6fcf4ad | **Retake β: retry transient network failures** — `fetchRetry()` wraps every AssemblyAI/Deepgram call with backoff; retries on thrown `fetch failed` + 429/5xx, never on 4xx; poll loop tolerates up to 8 transient blips before giving up. Two real runs had silently fallen to whisper-1 on a bare connection blip — verified fixed with an injected-failure test. | server-only |
-| e6a0c78 | **Retake β: large progressive retakes across multiple chunks + global stutter fixes** — `extendProgressiveRetakes` widens a confirmed retake pair's anchor chunks forward through following chunks (a restarted PARAGRAPH rarely re-chunks identically) until a paragraph-level pause/next-anchor/length-guard, commits only if the widened texts stay similar. Stutter-restart detection moved from per-chunk to GLOBAL (the chunk-split pause often lands exactly on the stutter seam) + single-token stutters now fire for closed-class function words (I/because/and/but) with a sentence-boundary guard against false positives like "...literally it. It is that easy." | last renderer-touching commit before this (2c91643) — **build is current** |
-| b081f9c – cd3dcce | **Retake β core detection buildout** (5 commits): false-start/prefix-swap/self-correction/LLM-gated-ambiguity, parallel-list veto, in-chunk lead-in-orphan/corrected-word/stutter-restart, fixture-driven regression system (`test-fixtures/retake-aware/`), micro-cutoff-fragment + partial-word-restart. | server-only |
-| 2c91643, b999571 | **Retake β review-state fix** — the engine now ALWAYS shows its own full verbatim transcript (never a stale/mismatched prior one) and stages cuts ONLY as blue highlights; debug JSON gained a review-state audit block (`raw_words_count`, `visible_transcript_words_count`, `hidden_words_before_execute_count`, `auto_applied_before_review` — all provably 0/false every run). **Last commit that touches renderer** (store.ts) — this is why the current build is still valid. | renderer — **already built** |
-| ea1ee7b | AssemblyAI fix: `speech_model` (deprecated, 400s) → `speech_models` ARRAY (`['universal-3-5-pro','universal-2']`). | server-only |
-| c9e405b | **Retake-Aware Cut Beta ships** — brand-new isolated cut engine (🧪 Retake β button next to ProCut). Provider chain AssemblyAI→Deepgram→whisper-1 fallback; pure rule analyzer (chunking, filler triage, retake grouping, whole-attempt-only removal — NEVER splices words between takes); optional LLM judge (Claude Haiku) for ambiguous cases only. Standard engines (FastCut/ProCut) byte-identical, never touched by any of the above. | renderer — already built |
-| 137c8ce | `restart-server.bat` — one-click stop+restart, prints new URL. | n/a |
-| b513878, f4595d7 | **On-device export speed fix** — play-harvest source frames (one seek per SEGMENT not per FRAME) for near-realtime export on weak phones, with an exact-or-seek-per-frame fallback so a device that drops presented frames degrades to slow-but-correct, never freezes/stretches (the disease this was built to avoid in the first place). | renderer — already built |
-| 58c1f97 | **Job results survive WebSocket drops** — server buffers every finished job in a 30-min outbox (`GET /api/job-result`); client polls it alongside the WS wait. Fixes "FastCut/ProCut stuck busy forever" on tunnel/mobile WS drops. | server + renderer — already built |
-| 2b06d4c | **Web autosave is local-first** — autosave now sends ONLY the small project JSON to the PC; media bytes live in the browser's IndexedDB (written at import, restored on reopen). Explicit toolbar **Save** is now the full push (uploads media + record) — the durable cross-device copy. | renderer — already built |
-| ee27622 | **On-device export**: audio comes from `/api/export-audio` (server extracts just the AAC track, ~1.5MB/min) instead of re-fetching the full video through the tunnel — this is what was causing exports to have NO audio over cloudflare. Decode failures now FAIL the export loudly instead of shipping a silent file. | server + renderer — already built |
-| 9bd832f, 3601d14 | "Use as base" no longer trusts the stale legacy `project.media` field (deleting a clip from the timeline never cleared it, so reloading the same video was permanently blocked) — now reads the doc's main lane directly and builds the timeline synchronously so a same-video reload isn't a silent no-op. | renderer — already built |
+## 2. Retake β silence cutter — current architecture (the deliverable)
 
-## 2. Debugging & verification tooling (reach for these FIRST)
+Pure detector: **`src/shared/retakeaware/silence.ts`** → `detectBetaSilencesHybrid(words, wordCutSpans, vad, settings, mediaDurS)`.
+Called by **`src/main/retakeaware/engine.ts`** (after word-cut spans are known),
+which fetches a fine-grained VAD scan (`retakeBetaVadSafetyOpts` → `detectSilence`)
+and passes it in. Returns `SilenceRegion[]` (`action:'remove'`, **`protect:true`**)
++ a `retake_beta_silence` debug block.
 
-- **Retake β debug JSON**: `~/.easecutpro/retakeaware/debug-*.json` — one per run,
-  newest = latest. Toast after each run names the file. Contains raw words, chunks,
-  every retake group + score + reasoning, `rejected_retake_candidates` (why a
-  candidate did NOT become a cut — candidate_type/reason/similarity/prefix scores),
-  `false_starts`/`self_corrections`/`micro_cutoff_fragments`/`partial_word_restarts`/
-  `repeated_setups`/`orphan_connectors`, and the review-state audit block.
-- **Retake β harnesses** (both pure/offline, no API keys needed):
-  `npm run verify-retake-aware` (~80 synthetic unit checks) and
-  `npm run verify-retake-aware-fixtures` (10 real-video regression fixtures in
-  `test-fixtures/retake-aware/` — each is a raw-words JSON harvested from a real
-  debug file + an expected-cuts/keeps JSON). **When you find a new Retake β bug**:
-  harvest the failing run's debug JSON into a new fixture pair (see the README in
-  that folder), fix the GENERIC detector until the fixture passes, never
-  hardcode the specific phrase.
-- **Other harnesses** (all green @ d272d19): `npx tsx scripts/verify-{fast-cut,
-  retake-cuts,repeats,cutcutpro,timeline-exporttransform}.ts`.
-- **ProCut debug**: `~/.easecutpro/cutcutpro/debug-*.json`.
-- **FastCut debug**: `fastcut/last_run.json` + `.prev.json`.
-- **Browser E2E rig**: worktree `.claude/launch.json` → add an `ec-preview` config
-  pointing `cmd /c <scratchpad>/ec-preview.cmd` at `EC_PORT=8790 EC_WORK_DIR=<scratch>
-  npx tsx src/server/index.ts` (sandboxed server, own work dir, tests server changes
-  WITHOUT touching the live server/tunnel). Tricks: signup via fetch to
-  `/api/auth/signup` (code '' works on open signup); patch
-  `HTMLInputElement.prototype.click` with a DataTransfer to feed the file picker;
-  patch `URL.createObjectURL` to capture export blobs; push blobs via `/api/upload`
-  then ffprobe server-side. Always `git checkout -- .claude/launch.json` and stop
-  the preview server when done.
-- **Whisper vs AssemblyAI disagreement**: if ProCut shows a "repeat" that Retake β
-  doesn't, check the engine's temp WAV (`%TMP%/easecut-*.wav`, mtime = run time)
-  with `ffmpeg -af silencedetect`/`volumedetect` — whisper hallucinates entire
-  sentences across long silences (confirmed 2026-07-08); AssemblyAI's word-level
-  timestamps are the ground truth here.
+- **Primary source = transcript word gaps** (`nextOnset − prevSpeechEnd`), NOT
+  VAD (VAD-only under-detects). VAD is used ONLY to: (a) refine over-long word
+  boundaries (`vadSpeechEnd/Start`), (b) find the true onset (`vadOnset`), (c)
+  drop a cut if a genuine silence-bounded interior speech island ≥0.35s sits in
+  the centre (a transcript-missed word). VAD under-detection can NEVER cap removal.
+- **Settings-driven** (`RetakeBetaSilenceSettings`): minPause / targetRemaining /
+  paddingBefore / paddingAfter / minRemoved / removeBreaths / maxCutsPerMinute /
+  antiSliver. Presets Conservative/Balanced/Aggressive/Custom (exact values in
+  `RETAKE_BETA_SILENCE_PRESETS`). **Launch default = Balanced, safe.** Fragile
+  starters/prev words get a guard floor (0.32/0.38). UI: `SilenceSettingsModal.tsx`
+  + the "🔇 Silence Settings" button in `TranscriptPanel.tsx`; the 🧪 button is
+  relabelled "Find Retakes & Silence". Settings flow renderer→store
+  (`retakeBetaSilenceSettings`)→IPC(preload/webapi/main/server)→engine→detector,
+  and are recorded in the debug JSON (`retake_beta_silence_settings_used`).
+- **Asymmetric residual**: tight ~100ms lead-in before the next word (VAD onset),
+  the rest as trailing air (user explicitly wants tight starts, natural trailing).
+- **Leading/trailing edges** handled after the word-pair loop; VAD-gated.
+- **`SilenceRegion.protect`** (`src/shared/types.ts`) makes `computeKeepRanges`
+  (`src/shared/edit.ts`) apply the region VERBATIM (no edgeTrim/valley-snap/
+  blip-absorb/bridge) and, at the very end, drop interior dead-air residue keeps.
+  **FastCut/ProCut never set `protect` → their behaviour is unchanged** (this is
+  how we're allowed to touch the shared `edit.ts`).
 
-## 3. Next steps (rough priority)
+Debug JSON: `~/.easecutpro/retakeaware/debug-*.json`, `retake_beta_silence` block
+has `per_region` (transcript_gap, guards, target/effective residual, removed,
+remaining, drop/reject reasons, merged-with-word-cut) + aggregate counters +
+`retake_beta_silence_settings_used`.
 
-1. **Keep feeding Retake β real failures as fixtures.** The user has been sending
-   debug JSONs from real videos one at a time; each new miss becomes a fixture +
-   a generic detector fix. This is working well — don't regress it into
-   phrase-specific patches.
-2. **Deepgram path is still untested** (no key configured; AssemblyAI has been the
-   live provider all session). If the user adds `DEEPGRAM_API_KEY`, do a real
-   end-to-end check the way AssemblyAI's `speech_models` bug was caught.
-3. **Retake β mobile UI**: the 🧪 button lives in `TranscriptPanel.tsx`, shared by
-   desktop and the mobile sheet — confirm it actually renders/works on the phone
-   (desktop-verified only so far).
-4. **On-device export phase 2** (older item, still open): text + overlay
-   compositing in the worker; `whyNotLocal` gates render-side text/overlay
-   projects to the PC exporter for now.
-5. **Own-model path** (user interest, older item): log Retake β / ProCut review
-   decisions as labels, eventually train the dormant fastcut classifier.
+## 3. Open threads / next steps (rough priority)
 
-## 4. Environment gotchas
+1. **Verify the silence cutter on-device.** All fixes were verified by replaying
+   the user's real transcripts (debug JSON has `raw_words`) + pure harnesses; the
+   real VAD path only runs on-device. The user should relaunch and re-run **Find
+   Retakes & Silence**; if a specific spot still looks wrong, get that run's newest
+   debug JSON and trace `per_region`.
+2. **Silence cutter depends on on-device VAD** (`retakeBetaVadSafetyOpts` →
+   `detectSilence`, whisper-VAD bin or ffmpeg silencedetect fallback). If VAD is
+   unavailable it falls back to transcript-only (misses hidden-in-word silence +
+   won't trim edges). The user's machine has VAD.
+3. **EXPORT BUGS (diagnosed, not fixed — awaiting repro/green-light).** "Missing
+   clips" = two export paths with DIFFERENT sources of truth: browser on-device
+   (`localExport.ts planFromDoc` reads `doc.tracks`, silently `continue`s past a
+   clip whose media doesn't resolve, `:116`) vs PC (`ffmpeg.ts` uses
+   `computeKeepRanges`+`virtualKeepsToClipSegments` over the legacy model). Slowness
+   = software `libx264` only (no nvenc/qsv/amf) + re-encode-everything + montage
+   double-encode (`concatSegmentsToFile` then re-encode). Fix plan: (1) export-plan
+   debug dump, (2) fail-loud on unresolved clip, (3) unify both exporters on the
+   doc, (4) hardware encoder + single-pass montage. Do NOT blind-fix — it corrupts
+   outputs; get a repro (single-clip vs montage / PC vs browser / cut type) first.
+4. **Git remote for the Mac/iOS build.** User wants to push to a remote to build
+   iOS on a Mac. BLOCKER: verify secrets don't leak — `*.env` (assemblyai/claudeapi/
+   openaiapikey) must be gitignored; recommend a PRIVATE repo. iOS = Capacitor
+   (`npx cap add ios`) on the Mac + Xcode + CocoaPods; no rewrite. `android/` is
+   large — gitignore it (regenerate via `npx cap add`).
+5. **Local project persistence (offline).** Offline mode boots to a fresh editor
+   but projects don't persist across restarts (records are server-only; media is
+   already IndexedDB). Add a local IndexedDB project store.
+6. **WebCodecs thumbnails/waveform speedup.** On mobile/browser these take 10–20s
+   (`<video>` seeking + full `decodeAudioData`). Switch to WebCodecs + cache in
+   IndexedDB. (Do NOT embed ffmpeg.wasm — bigger AND slower for these tasks.)
 
-- **Keys are in project-root `*.env` files** (gitignored): `assemblyai.env`,
-  `claudeapi.env`, `openaiapikey.env`. `ASSEMBLYAI_API_KEY` was added 2026-07-08 and
-  works — provider order is AssemblyAI → Deepgram → whisper-1 fallback.
-- **LM Studio owns `OPENAI_BASE_URL`/`OPENAI_API_KEY` user env vars** — leave them;
-  the app pins its own baseURL and prefers the key files above.
-- `EC_FASTCUT_PYTHON` (setx) → system Python 3.12 (torch lives there).
-- whisper-1 hallucinates across long silences (confirmed again this session) —
-  never trust a ProCut-only "repeat" without cross-checking against AssemblyAI or
-  the raw audio.
-- Windows: pass real `C:/...` paths (no /tmp mangling).
+## 4. Debug & verification tooling
+- **Retake β silence**: `~/.easecutpro/retakeaware/debug-*.json` → `retake_beta_silence`.
+  Replay a run's transcript through the detector offline: read `raw_words` +
+  `final_cut_spans`, call `detectBetaSilencesHybrid(raw_words, final_cut_spans,
+  syntheticVAD, settings, dur)`. Build synthetic VAD as: silence in gaps + each
+  word's tail past `start+0.35`. To check residue: build a Project (mark deleted =
+  word midpoint in a `final_cut_span`; silences = kept `per_region`), run
+  `computeKeepRanges`, look for interior air keeps (no kept word).
+- **Harnesses** (pure, deterministic, no keys/network): `npm run verify-retake-aware`
+  (unit incl. silence/settings/ripple/edge tests), `npm run verify-retake-aware-fixtures`
+  (10 real-video retake fixtures), `npx tsx scripts/verify-{fast-cut,retake-cuts,
+  repeats,cutcutpro}.ts` (standard-engine regression — run these after ANY edit.ts
+  change to prove FastCut/ProCut unchanged).
+- `npm run typecheck` — pre-existing `MobileTimeline.tsx` errors (11, unrelated to
+  this session; `TimelineDocument` naming) are the only ones; filter them out.
 
-## 5. Working agreements (standing)
+## 5. Environment gotchas
+- Keys in project-root `*.env` (gitignored): `assemblyai.env`, `claudeapi.env`,
+  `openaiapikey.env`. AssemblyAI is the live provider; needs `speech_models` ARRAY.
+- Android toolchain installed: JDK 17 `C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot`
+  (JAVA_HOME), Android SDK `C:\Android\Sdk` (ANDROID_HOME, cmdline-tools/latest,
+  platform-tools, platforms;android-34, build-tools;34.0.0), Gradle 8.7 `C:\Gradle`.
+  Env vars persisted (User scope) — new terminals only.
+- Only ~10–13GB free on C: — do NOT install Android emulator system images.
+- whisper-1 hallucinates across long silences; AssemblyAI word timestamps are
+  ground truth (but see 881906e: AssemblyAI pads some word END times through
+  silence — VAD refinement handles it).
+- Windows: real `C:/...` paths (no /tmp mangling); the Bash tool resets cwd to the
+  worktree each call — use absolute paths / `cd /c/easecutpro &&`.
 
-- Don't restart the web server/tunnel unasked (§0 is pre-authorized: the stack is
-  already down).
-- Retake β is fully additive — never touch FastCut/ProCut/Smart Smooth Cut logic
-  to fix a Retake β bug. Verified after every change via `git status --short src/`
-  filtered for the standard-engine files.
-- Retake β must stay review-first: full raw transcript visible, proposed cuts
-  highlighted blue only, nothing hidden/auto-applied before the user presses
-  Execute cuts. The review-state audit block in the debug JSON is the proof.
-- Code silently, short wrap-up, decisions surfaced; ask before big/core-file edits.
-- Every cut engine stays review-first; the user tests from their phone — always
-  hand over the new tunnel URL after a restart.
-
-## 6. Immediate next task: Smart Silence Cutter for Retake Beta
-
-Scope discipline, read this before writing any code:
-
-- **We are NOT building a new retake decision engine.** Retake grouping, filler
-  triage, false-start/self-correction detection etc. are DONE and stay as-is.
-- We are adding a **Smart Silence Cutter** as one more stage INSIDE the existing
-  Retake β pipeline (`src/main/retakeaware/engine.ts` +
-  `src/shared/retakeaware/analyze.ts`) — not a parallel/competing system.
-- Pipeline position: it runs **AFTER** retake-group/filler/false-start/self-
-  correction detection and **BEFORE** `buildCutSpans` does its final merge pass —
-  i.e. it contributes its own candidate spans into the same merge step everything
-  else already goes through, it doesn't get its own separate merge/apply path.
-
-Detection approach:
-
-- **Word timestamp gaps first** — the transcript already has exact word
-  start/end times; a silence candidate is a gap between consecutive words above
-  some floor. This is the primary, cheap signal (matches how `silenceAfterMs`,
-  `CHUNK_GAP_S`, `RUN_GAP_S` etc. already work elsewhere in this file — reuse
-  that vocabulary, don't invent a parallel timing concept).
-- **Refine with audio energy/RMS if possible** — word-gap timestamps can be a
-  little loose at the edges; if there's a cheap way to snap the cut boundary to
-  actual low-energy audio (the existing ffmpeg pipeline has RMS/silencedetect
-  precedent — see `smoothseams`/`computeKeepRanges` waveform-snapping in the
-  standard engines for the established pattern, memory: `easecutpro-smoothseams`)
-  use it to tighten the boundary. Optional refinement, not a hard requirement —
-  timestamp gaps alone must work standalone.
-
-Cutting behavior — this is the part most likely to be gotten wrong:
-
-- **Shorten pauses, do NOT delete all pauses.** A long silence gets trimmed down
-  to a natural-feeling gap, not removed entirely. Removing every pause makes
-  speech sound rushed/robotic — that is an explicit non-goal.
-- **Preserve natural pacing.** The target shortened duration should read as a
-  normal conversational beat, not a hard minimum like 0ms.
-- **Support a small fade/crossfade at the edges** of a shortened silence so the
-  cut doesn't click/pop — mirrors the existing `≤12ms seam-only fades` approach
-  used by `computeKeepRanges` for standard-engine cuts (memory:
-  `easecutpro-smoothseams`); reuse that idea/scale here rather than inventing a
-  new fade constant.
-
-Hard requirements (do not ship without these):
-
-- **Review-first, no exceptions**: silence-shortening spans are staged as
-  proposed cuts the SAME way every other Retake β span is — full raw transcript
-  stays visible, proposed shortenings highlighted for review, nothing is
-  auto-applied before the user presses Execute cuts. This is not optional or
-  a special case; it goes through the exact same `deleteWordIds`/review-state
-  machinery as every other detector in this engine.
-- **Must NOT touch FastCut, ProCut, or Smart Smooth Cut.** All of this lives
-  inside `src/shared/retakeaware/` + `src/main/retakeaware/` only. Verify with
-  `git status --short src/` filtered for the standard-engine files before
-  committing, same as every other Retake β change this session.
-
-Debug output (add to `RetakeAwareDebug` / the engine's returned debug JSON,
-following the existing pattern of `false_starts`/`self_corrections`/etc.):
-
-- **silence candidates** — every detected gap considered, with its raw duration
-  and (if RMS refinement ran) the refined boundary.
-- **dropped candidates** — gaps that were considered but NOT shortened, with a
-  reason (e.g. already short enough, inside a kept retake attempt's natural
-  pacing, below the shortening floor).
-- **total silence removed** — a single summary number (seconds) for the whole
-  run, similar in spirit to the existing `mapped_word_ids_count`/
-  `final_cut_spans_count` summary fields.
-- **final spans with silence** — the actual silence-shortening spans that made
-  it into `final_cut_spans`, distinguishable from retake/filler/self-correction
-  spans (new `CutSpan.type`, e.g. `'silence_shorten'`, following the same
-  pattern as `'repeated_setup'`/`'orphan_connector'` added this session).
-
-Before implementing: add a fixture the same way every other Retake β feature
-was added this session (harvest a debug JSON with real pauses worth shortening
-into `test-fixtures/retake-aware/`, write the expected shortened-duration
-behavior, then build the generic detector against it — not the other way
-around). Run `npm run verify-retake-aware` and
-`npm run verify-retake-aware-fixtures` before considering this done, and
-confirm all existing fixtures still pass.
+## 6. Working agreements (standing)
+- Don't restart the web server/tunnel unasked (unless the stack is confirmed down).
+- Retake β is additive; NEVER change FastCut/ProCut/Smart Smooth to fix a Retake β
+  bug. The `edit.ts` changes are allowed ONLY because they're gated on
+  `SilenceRegion.protect` (FastCut/ProCut never set it) — verify with the standard
+  harnesses every time.
+- Silence cuts are TIME-ONLY: never `spansToWordIds`, never in `deleteWordIds`,
+  never mark a transcript word deleted. Review-first: full transcript visible,
+  word cuts blue, silence as chips, nothing applied before Execute cuts.
+- Code silently, short 3-4 line wrap-up, surface decisions, ask before big/core-file
+  edits. Commit only when asked. The user tests from their computer/phone — hand
+  over the new tunnel URL after any restart.
