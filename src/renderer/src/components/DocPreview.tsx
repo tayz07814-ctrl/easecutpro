@@ -47,6 +47,10 @@ function fmt(t: number): string {
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v))
 }
+// Warm the NEXT source's decoder this many seconds before a clip/cut seam so
+// crossing it doesn't stall on a cold seek (the "slider sticks + video pauses at
+// the seam" bug — a seek issued AT the boundary freezes the clock while it lands).
+const PREWARM_LEAD_S = 0.6
 function containRect(w: number, h: number, aspect: number): { left: number; top: number; width: number; height: number } {
   if (w <= 0 || h <= 0) return { left: 0, top: 0, width: 0, height: 0 }
   if (w / h > aspect) {
@@ -305,6 +309,22 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               const p = pendingRef.current.get(active.src)
               if (p) t = active.start + clamp((p.target - active.sourceStart) / active.speed, 0, active.len)
             }
+            // Pre-warm the NEXT source's decoder BEFORE the seam so crossing to a
+            // different file plays through instead of stalling on a cold seek.
+            {
+              const up = ss[covIdx + 1]
+              if (
+                up &&
+                up.src !== active.src &&
+                !badRef.current.has(up.src) &&
+                t >= active.start + active.len - PREWARM_LEAD_S
+              ) {
+                const uv = pool.get(up.src)
+                if (uv && settled(uv, up.src) && Math.abs(uv.currentTime - up.sourceStart) > 0.12) {
+                  seek(uv, up.src, up.sourceStart)
+                }
+              }
+            }
             // clip end -> next segment / gap / stop
             if (v.currentTime >= active.sourceEnd - 0.04 || t >= active.start + active.len - 0.005) {
               const ni = covIdx + 1
@@ -327,7 +347,12 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                     next.sourceStart - active.sourceEnd <= 0.12
                   if (!microSameFile) {
                     const nv = pool.get(next.src)
-                    if (nv) seek(nv, next.src, next.sourceStart)
+                    // Already pre-warmed at the seam? just play it — a redundant
+                    // re-seek would re-stall the freshly-decoded element.
+                    const warm =
+                      !!nv && settled(nv, next.src) && Math.abs(nv.currentTime - next.sourceStart) < 0.15
+                    if (nv && !warm) seek(nv, next.src, next.sourceStart)
+                    if (nv && warm && nv.paused) nv.play().catch(() => undefined)
                   }
                 }
               }
