@@ -202,6 +202,8 @@ export interface RetakeAwareDebug {
   final_cut_spans: CutSpan[]
   /** Retake β conservative, word-clamped silence path (provenance + guards). */
   retake_beta_silence: import('./silence').BetaSilenceResult['debug'] | null
+  /** Aggressive VAD hard-cut toggle path (bypasses the hybrid) when it ran, else null. */
+  retake_beta_vad_hardcut?: { source: 'vad_hard_cut'; opts: import('../types').SilenceDetectOptions; regions_count: number; total_removed_s: number } | null
   /** Retake β ASR-artifact cleanup: isolated fake words removed, stretched words repaired. */
   retake_beta_artifacts?: import('./artifacts').ArtifactResult['debug']
   warnings: string[]

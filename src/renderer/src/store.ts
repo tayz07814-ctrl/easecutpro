@@ -1539,7 +1539,7 @@ export const useStore = create<AppState>((set, get) => ({
     let next: RetakeBetaSilenceSettings = { ...get().retakeBetaSilenceSettings, ...patch }
     // Selecting a preset loads that preset's values; editing any numeric/toggle
     // value flips the preset to 'custom'.
-    if (patch.preset && patch.preset !== 'custom') next = { preset: patch.preset, ...RETAKE_BETA_SILENCE_PRESETS[patch.preset] }
+    if (patch.preset && patch.preset !== 'custom') next = { preset: patch.preset, ...RETAKE_BETA_SILENCE_PRESETS[patch.preset], vadHardCut: next.vadHardCut }
     else if (patch.preset === undefined && Object.keys(patch).length) next.preset = 'custom'
     try {
       localStorage.setItem('ec.retakeBetaSilence', JSON.stringify(next))

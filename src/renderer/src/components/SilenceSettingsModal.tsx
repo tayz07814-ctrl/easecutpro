@@ -89,6 +89,17 @@ export default function SilenceSettingsModal(): JSX.Element {
           Anti-sliver protection <span style={{ color: '#6c9', fontSize: 11 }}>(always on)</span>
         </label>
 
+        {/* Aggressive VAD hard-cut toggle — bypasses the hybrid above. */}
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 12, fontSize: 13, padding: '8px 10px', borderRadius: 6, border: `1px solid ${s.vadHardCut ? '#c98a3a' : '#3a3d44'}`, background: s.vadHardCut ? '#2c2418' : 'transparent' }}>
+          <input type="checkbox" checked={s.vadHardCut} onChange={(e) => setS({ vadHardCut: e.target.checked })} style={{ marginTop: 2 }} />
+          <span>
+            Aggressive VAD hard-cut <span style={{ color: '#e0a45a', fontSize: 11 }}>(bypasses the sliders above)</span>
+            <div style={{ color: '#9aa', fontSize: 11, marginTop: 2 }}>
+              Removes <b>every</b> pause ≥100ms with a raw VAD pass (speech 60% · trim 0.08s · pad 0.02s · min-gap 0.1s) instead of the transcript-gap hybrid. Tight/fast — cuts all breathing room. Retake/repeat word cuts are unaffected.
+            </div>
+          </span>
+        </label>
+
         <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
           <button onClick={() => setS({ preset: 'balanced' })} style={{ flex: 1, padding: '8px', borderRadius: 6, border: '1px solid #3a3d44', background: '#24262c', color: '#cfcfcf', cursor: 'pointer' }}>
             Reset to Balanced

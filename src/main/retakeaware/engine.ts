@@ -13,7 +13,7 @@
 import { mkdir, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
-import type { Transcript, Segment } from '../../shared/types'
+import type { Transcript, Segment, SilenceRegion } from '../../shared/types'
 import type { RetakeAwareResult, RetakeAwareDebug, VerbatimTranscript } from '../../shared/retakeaware/types'
 import {
   buildChunks,
@@ -29,7 +29,7 @@ import {
   spansToWordIds,
   findMissedCutoffs
 } from '../../shared/retakeaware/analyze'
-import { detectBetaSilencesHybrid, retakeBetaVadSafetyOpts, DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type BetaSilenceResult, type RetakeBetaSilenceSettings } from '../../shared/retakeaware/silence'
+import { detectBetaSilencesHybrid, retakeBetaVadSafetyOpts, retakeBetaVadHardCutOpts, DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type BetaSilenceResult, type RetakeBetaSilenceSettings } from '../../shared/retakeaware/silence'
 import { detectArtifacts, type ArtifactResult } from '../../shared/retakeaware/artifacts'
 import { transcribeVerbatim } from './providers'
 import { reviewRetakeGroups } from './llm'
@@ -168,10 +168,30 @@ export async function retakeAwareCut(
   // Media duration (for trailing-edge silence): the audio extends to the last VAD
   // region or the last word, whichever is later.
   const mediaDurS = Math.max(lastWordEnd, ...(vadSil.length ? vadSil.map((r) => r.end) : [0]))
-  // repairedWords: stretched-word ends clamped to their speech core so their dead
-  // air becomes a real gap the silence cutter removes.
-  const betaSilence: BetaSilenceResult = detectBetaSilencesHybrid(artifacts.repairedWords, cutSpans, vadSil, silenceSettings, mediaDurS)
-  const silenceRegions = betaSilence.regions
+  // SILENCE ENGINE — toggle picks which one runs (word cuts above are unaffected):
+  //  • vadHardCut OFF (default): the transcript-gap HYBRID. repairedWords have their
+  //    stretched-word ends clamped so the dead air becomes a real gap it removes.
+  //  • vadHardCut ON: an aggressive raw VAD pass removes EVERY silence ≥ mingap
+  //    (threshold 0.6 / trim 0.08 / pad 0.02 / mingap 0.1). Time-only + still staged
+  //    as reviewable chips; the hybrid is bypassed.
+  let betaSilence: BetaSilenceResult | null = null
+  let silenceRegions: SilenceRegion[]
+  let vadHardCutDebug: { source: 'vad_hard_cut'; opts: ReturnType<typeof retakeBetaVadHardCutOpts>; regions_count: number; total_removed_s: number } | null = null
+  if (silenceSettings.vadHardCut) {
+    op(90, 'Retake β: hard-cutting pauses (aggressive VAD)…')
+    let hard: { start: number; end: number }[] = []
+    try {
+      hard = (await detectSilence(audioPath, retakeBetaVadHardCutOpts())).map((r) => ({ start: r.start, end: r.end }))
+    } catch (e) {
+      warnings.push(`VAD hard-cut scan failed (${(e as Error).message}) — no silence removed this run.`)
+    }
+    silenceRegions = hard.filter((r) => r.end - r.start > 0.02).map((r, i) => ({ id: `betasil-hardvad-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
+    const total = silenceRegions.reduce((n, r) => n + (r.end - r.start), 0)
+    vadHardCutDebug = { source: 'vad_hard_cut', opts: retakeBetaVadHardCutOpts(), regions_count: silenceRegions.length, total_removed_s: Number(total.toFixed(3)) }
+  } else {
+    betaSilence = detectBetaSilencesHybrid(artifacts.repairedWords, cutSpans, vadSil, silenceSettings, mediaDurS)
+    silenceRegions = betaSilence.regions
+  }
 
   // cutoff-fragment debug buckets (E-spec): split the self-correction family by
   // detector kind, and surface any dash-terminated word NO span removed.
@@ -245,6 +265,7 @@ export async function retakeAwareCut(
     llm_decisions: decisions,
     final_cut_spans: cutSpans,
     retake_beta_silence: betaSilence?.debug ?? null,
+    retake_beta_vad_hardcut: vadHardCutDebug,
     retake_beta_artifacts: artifacts.debug,
     warnings,
     errors

@@ -21,11 +21,16 @@ export interface RetakeBetaSilenceSettings {
   removeBreaths: boolean // OFF for launch
   maxCutsPerMinute: number // density cap (drops weakest over the limit)
   antiSliver: boolean // ON: never leave a <0.5s isolated timeline clip
+  // TOGGLE (default OFF): bypass the transcript-gap hybrid and instead remove EVERY
+  // VAD silence ≥ mingap with a raw Silero pass (retakeBetaVadHardCutOpts). Tight /
+  // fast result — cuts all pauses, not just retake-adjacent ones. Word cuts
+  // (retakes/repeats/artifacts) are unaffected; only the silence engine changes.
+  vadHardCut: boolean
 }
 export const RETAKE_BETA_SILENCE_PRESETS: Record<Exclude<SilencePreset, 'custom'>, Omit<RetakeBetaSilenceSettings, 'preset'>> = {
-  conservative: { minPauseS: 1.5, targetRemainingS: 0.7, paddingBeforeS: 0.3, paddingAfterS: 0.38, minRemovedS: 0.8, removeBreaths: false, maxCutsPerMinute: 4, antiSliver: true },
-  balanced: { minPauseS: 1.2, targetRemainingS: 0.55, paddingBeforeS: 0.25, paddingAfterS: 0.32, minRemovedS: 0.65, removeBreaths: false, maxCutsPerMinute: 6, antiSliver: true },
-  aggressive: { minPauseS: 0.85, targetRemainingS: 0.4, paddingBeforeS: 0.2, paddingAfterS: 0.25, minRemovedS: 0.45, removeBreaths: false, maxCutsPerMinute: 10, antiSliver: true }
+  conservative: { minPauseS: 1.5, targetRemainingS: 0.7, paddingBeforeS: 0.3, paddingAfterS: 0.38, minRemovedS: 0.8, removeBreaths: false, maxCutsPerMinute: 4, antiSliver: true, vadHardCut: false },
+  balanced: { minPauseS: 1.2, targetRemainingS: 0.55, paddingBeforeS: 0.25, paddingAfterS: 0.32, minRemovedS: 0.65, removeBreaths: false, maxCutsPerMinute: 6, antiSliver: true, vadHardCut: false },
+  aggressive: { minPauseS: 0.85, targetRemainingS: 0.4, paddingBeforeS: 0.2, paddingAfterS: 0.25, minRemovedS: 0.45, removeBreaths: false, maxCutsPerMinute: 10, antiSliver: true, vadHardCut: false }
 }
 /** Launch default: Balanced, safe (no breath removal, anti-sliver ON). */
 export const DEFAULT_RETAKE_BETA_SILENCE_SETTINGS: RetakeBetaSilenceSettings = { preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced }
@@ -117,6 +122,12 @@ function nonSilenceBlobs(a: number, b: number, vad: VadInterval[]): VadInterval[
 
 export function retakeBetaVadSafetyOpts(): SilenceDetectOptions {
   return { mode: 'vad', noiseDb: -30, minDuration: 0.1, vadThreshold: 0.5, speechPadMs: 60, edgeTrimMs: 0, removeBreaths: false }
+}
+/** Aggressive VAD HARD-CUT opts (the `vadHardCut` toggle): remove EVERY VAD silence
+ *  ≥ mingap. speech threshold 60% · trimcuts 0.08s · padding 0.02s · mingap 0.1s.
+ *  Bypasses the transcript-gap hybrid — a tight/fast cut of all pauses. */
+export function retakeBetaVadHardCutOpts(): SilenceDetectOptions {
+  return { mode: 'vad', noiseDb: -30, minDuration: 0.1, vadThreshold: 0.6, speechPadMs: 20, edgeTrimMs: 80, removeBreaths: false }
 }
 
 export interface VadInterval { start: number; end: number }

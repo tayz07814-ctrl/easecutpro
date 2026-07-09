@@ -15,7 +15,7 @@ import {
   spansToWordIds,
 } from '../src/shared/retakeaware/analyze'
 import { parseLlmDecisions } from '../src/main/retakeaware/llm'
-import { detectBetaSilencesHybrid, RETAKE_BETA_SILENCE_PRESETS, DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type RetakeBetaSilenceSettings } from '../src/shared/retakeaware/silence'
+import { detectBetaSilencesHybrid, RETAKE_BETA_SILENCE_PRESETS, DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, retakeBetaVadHardCutOpts, type RetakeBetaSilenceSettings } from '../src/shared/retakeaware/silence'
 import { detectArtifacts } from '../src/shared/retakeaware/artifacts'
 import { computeKeepRanges } from '../src/shared/edit'
 import type { VerbatimTranscript, VerbatimWord, CutSpan } from '../src/shared/retakeaware/types'
@@ -885,6 +885,16 @@ const BAL = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced, max
     return k.start > 1.6 && k.end < 6.05 && k.end - k.start < 2.0 && (inside.length === 0 || (inside.length === 1 && (inside[0].word === 'my' || inside[0].word === 'my—')))
   })
   check('artifact: self-correction + stretched "it\'s" leaves no "my" residue / dead clip', residue.length === 0, `residue=${residue.map((k) => `[${k.start.toFixed(1)},${k.end.toFixed(1)}]`).join(' ')}`)
+}
+
+// ---- Retake β aggressive VAD hard-cut toggle (opts + default OFF) ----
+{
+  const o = retakeBetaVadHardCutOpts()
+  check('vad-hardcut: opts match the requested settings (threshold 0.6 / trim 0.08 / pad 0.02 / mingap 0.1)',
+    o.mode === 'vad' && o.vadThreshold === 0.6 && o.edgeTrimMs === 80 && o.speechPadMs === 20 && o.minDuration === 0.1, `opts=${JSON.stringify(o)}`)
+  check('vad-hardcut: toggle defaults OFF (hybrid stays the default silence engine)',
+    DEFAULT_RETAKE_BETA_SILENCE_SETTINGS.vadHardCut === false &&
+    (['conservative', 'balanced', 'aggressive'] as const).every((p) => RETAKE_BETA_SILENCE_PRESETS[p].vadHardCut === false))
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall retake-aware checks green')
