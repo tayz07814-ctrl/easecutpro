@@ -574,6 +574,23 @@ const AFT = 'results were great here today now'
 }
 // (9. FastCut/ProCut unchanged — asserted by the fast-cut/retake-cuts/repeats/cutcutpro
 //     harnesses + the fact edit.ts protected-silence code only runs when protect:true.)
+// 10. VAD refinement: silence AssemblyAI hid INSIDE an over-long word (its end
+//     padded through the pause) is exposed by VAD and cut — the "noise seen as
+//     voice" bug. Transcript-only misses it; hybrid+VAD catches it.
+{
+  const words: VerbatimWord[] = [
+    { word: 'hello', start: 0.5, end: 0.7 },
+    { word: "it's", start: 1.0, end: 4.5 }, // spoken ~1.0–1.25, then 3.25s of silence absorbed into the word
+    { word: 'world', start: 4.6, end: 4.8 }
+  ]
+  const opt = S({ minPauseS: 1.0, minRemovedS: 0.4, paddingBeforeS: 0.2, paddingAfterS: 0.2 })
+  const noVad = detectBetaSilencesHybrid(words, [], [], opt)
+  const vad = [{ start: 1.25, end: 4.55 }] // VAD: real speech ends at 1.25, silence to 4.55
+  const withVad = detectBetaSilencesHybrid(words, [], vad, opt)
+  check('silence: VAD exposes silence hidden inside an over-long word (noise-as-voice fix)',
+    noVad.regions.length === 0 && withVad.regions.length === 1 && withVad.regions[0].end - withVad.regions[0].start > 2.0,
+    `noVad=${noVad.regions.length} withVad=${withVad.regions.length}`)
+}
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall retake-aware checks green')
 process.exit(failures ? 1 : 0)

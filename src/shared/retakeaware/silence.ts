@@ -62,6 +62,26 @@ function vadCoverage(a: number, b: number, vad: VadInterval[]): number {
   for (const s of vad) cov += Math.max(0, Math.min(b, s.end) - Math.max(a, s.start))
   return cov
 }
+// AssemblyAI sometimes ABSORBS trailing silence into a word's end time (a "word"
+// spanning 2–4s) — the transcript gap then reads ~0 and the silence rides along
+// INSIDE the clip ("noise left in, seen as voice"). VAD tells us where the audio
+// actually goes quiet, so refine the word's true speech end/start. Only trims when
+// VAD silence covers the word's tail/head; a normal word (no trailing silence) is
+// unchanged. With no VAD, returns the raw boundary (transcript-only fallback).
+function vadSpeechEnd(w: { start: number; end: number }, vad: VadInterval[]): number {
+  let end = w.end
+  for (const s of vad) {
+    if (s.start > w.start + 0.05 && s.start < w.end - 0.02 && s.end >= w.end - 0.1) end = Math.min(end, s.start)
+  }
+  return end
+}
+function vadSpeechStart(w: { start: number; end: number }, vad: VadInterval[]): number {
+  let start = w.start
+  for (const s of vad) {
+    if (s.end < w.end - 0.05 && s.end > w.start + 0.02 && s.start <= w.start + 0.1) start = Math.max(start, s.end)
+  }
+  return start
+}
 
 export interface BetaSilenceDebugRegion {
   source: 'transcript_gap_hybrid'
@@ -147,7 +167,11 @@ export function detectBetaSilencesHybrid(
 
   for (let i = 0; i < words.length - 1; i++) {
     const prev = words[i], next = words[i + 1]
-    const gap = next.start - prev.end
+    // TRUE speech boundaries: VAD-refined so silence AssemblyAI hid inside an
+    // over-long word (its end padded through the pause) is exposed as real gap.
+    const pEnd = vadSpeechEnd(prev, vad)
+    const nStart = vadSpeechStart(next, vad)
+    const gap = nStart - pEnd
     if (gap <= 0) continue
     considered++
     const lg = FRAGILE.has(normWord(prev.word)) ? Math.max(settings.paddingBeforeS, FRAGILE_LEFT_FLOOR) : settings.paddingBeforeS
@@ -156,7 +180,7 @@ export function detectBetaSilencesHybrid(
       source: 'transcript_gap_hybrid',
       previous_word: prev.word, previous_word_start: prev.start, previous_word_end: prev.end,
       next_word: next.word, next_word_start: next.start, next_word_end: next.end,
-      transcript_gap_start: prev.end, transcript_gap_end: next.start, transcript_gap_duration: Number(gap.toFixed(3)),
+      transcript_gap_start: Number(pEnd.toFixed(3)), transcript_gap_end: Number(nStart.toFixed(3)), transcript_gap_duration: Number(gap.toFixed(3)),
       vad_silence_overlap: 0, proposed_cut_start: null, proposed_cut_end: null, final_cut_start: null, final_cut_end: null,
       left_guard_ms: ms(lg), right_guard_ms: ms(rg), target_residual_s: settings.targetRemainingS, effective_residual_s: 0,
       removed_s: 0, remaining_pause_s: Number(gap.toFixed(3)), removal_ratio: 0, kept: false,
@@ -167,8 +191,8 @@ export function detectBetaSilencesHybrid(
     }
     if (gap < settings.minPauseS) { rec.dropped_under_min_gap = true; dUnderMin++; per.push(rec); continue }
 
-    const g0 = prev.end + lg
-    const g1 = next.start - rg
+    const g0 = pEnd + lg
+    const g1 = nStart - rg
     if (g1 <= g0) { rec.rejected_due_to_word_guard = true; dOverlap++; per.push(rec); continue }
     const effResidual = Math.max(settings.targetRemainingS, lg + rg)
     rec.effective_residual_s = Number(effResidual.toFixed(3))
