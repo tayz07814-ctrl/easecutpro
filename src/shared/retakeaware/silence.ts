@@ -60,7 +60,7 @@ export interface NoTranscriptIslandDebug {
   start: number
   end: number
   duration: number
-  where: 'transcript_gap' | 'leading_edge' | 'trailing_edge'
+  where: 'transcript_gap' | 'leading_edge' | 'trailing_edge' | 'lead_guard' | 'trail_guard'
   nearest_previous_word: string
   nearest_previous_word_end: number
   nearest_next_word: string
@@ -101,6 +101,18 @@ function largestNonSilence(a: number, b: number, vad: VadInterval[]): number {
   for (const s of sils) { if (s.start - cursor > max) max = s.start - cursor; cursor = Math.max(cursor, s.end) }
   if (b - cursor > max) max = b - cursor
   return max
+}
+/** Non-silence (speech/noise) blobs within [a,b] — the complement of the VAD silence
+ *  intervals, edges included. Used to find a click sitting in a word's kept guard
+ *  air. Empty when there is no VAD or the window collapses. */
+function nonSilenceBlobs(a: number, b: number, vad: VadInterval[]): VadInterval[] {
+  if (vad.length === 0 || b - a <= 0.02) return []
+  const sils = vad.filter((s) => s.end > a && s.start < b).map((s) => ({ start: Math.max(a, s.start), end: Math.min(b, s.end) })).sort((x, y) => x.start - y.start)
+  const blobs: VadInterval[] = []
+  let cursor = a
+  for (const s of sils) { if (s.start - cursor > 0.02) blobs.push({ start: cursor, end: s.start }); cursor = Math.max(cursor, s.end) }
+  if (b - cursor > 0.02) blobs.push({ start: cursor, end: b })
+  return blobs
 }
 
 export function retakeBetaVadSafetyOpts(): SilenceDetectOptions {
@@ -308,8 +320,29 @@ export function detectBetaSilencesHybrid(
     // ASYMMETRIC residual: cut ends a tight lead-in (rg, ~100ms with VAD) before
     // the next word's onset; the rest of the residual stays as trailing air after
     // the previous word (which the user wants kept).
-    const cutEnd = g1
-    const cutStart = Math.max(g0, cutEnd - removed0)
+    let cutEnd = g1
+    let cutStart = Math.max(g0, cutEnd - removed0)
+    // VAD-SILENT GUARDS: a record-button click / tap can ride along in the kept
+    // guard air right beside a word — the word's speech already ended at pEnd /
+    // starts at nStart, so any NON-silence in the guard is noise, never the word.
+    // Swallow such a blob into the cut so it isn't left glued to an isolated word
+    // (e.g. a lone "Do"). Long non-silence (≥0.75s, possible missed speech) is
+    // protected — only a short click is trimmed.
+    if (vad.length) {
+      const trail = nonSilenceBlobs(pEnd, cutStart, vad)[0] // click right after the previous word
+      if (trail) {
+        const cls = classifyNoTranscriptIsland(trail.end - trail.start)
+        logIsland(trail.start, trail.end, 'trail_guard', prev.word, pEnd, next.word, nStart, cls)
+        if (cls.decision === 'remove') cutStart = Math.max(pEnd, trail.start)
+      }
+      const leadBlobs = nonSilenceBlobs(cutEnd, nStart, vad)
+      const lead = leadBlobs[leadBlobs.length - 1] // click right before the next word
+      if (lead) {
+        const cls = classifyNoTranscriptIsland(lead.end - lead.start)
+        logIsland(lead.start, lead.end, 'lead_guard', prev.word, pEnd, next.word, nStart, cls)
+        if (cls.decision === 'remove') cutEnd = Math.min(nStart, lead.end)
+      }
+    }
     rec.proposed_cut_start = Number(cutStart.toFixed(3))
     rec.proposed_cut_end = Number(cutEnd.toFixed(3))
 
@@ -422,8 +455,8 @@ export function detectBetaSilencesHybrid(
     const onsetV = vadOnset(first.start, vad)
     const leadEnd = onsetV != null ? onsetV : vadSpeechStart(first, vad)
     if (leadEnd > 0.02) {
-      const nsi = largestNonSilence(0, leadEnd, vad) // click/noise blob before the first word
-      if (nsi > 0.05) logIsland(0, leadEnd, 'leading_edge', '(video start)', 0, first.word, first.start, classifyNoTranscriptIsland(nsi))
+      const blob = nonSilenceBlobs(0, leadEnd, vad).slice(-1)[0] // click/noise closest to the first word
+      if (blob && blob.end - blob.start > 0.05) logIsland(blob.start, blob.end, 'leading_edge', '(video start)', 0, first.word, first.start, classifyNoTranscriptIsland(blob.end - blob.start))
       const preroll = Math.max(RIGHT_LEAD_S, EDGE_PREROLL_S)
       tryEdge(mkEdge('(video start)', first.word, 0, leadEnd, 0, preroll), 0, Math.max(0, leadEnd - preroll))
     }
@@ -433,8 +466,8 @@ export function detectBetaSilencesHybrid(
     const trailStart = vadSpeechEnd(last, vad)
     const lgE = FRAGILE.has(normWord(last.word)) ? Math.max(settings.paddingBeforeS, FRAGILE_LEFT_FLOOR) : settings.paddingBeforeS
     if (totalDurationS > trailStart + 0.02) {
-      const nsi = largestNonSilence(trailStart, totalDurationS, vad)
-      if (nsi > 0.05) logIsland(trailStart, totalDurationS, 'trailing_edge', last.word, last.end, '(video end)', totalDurationS, classifyNoTranscriptIsland(nsi))
+      const blob = nonSilenceBlobs(trailStart, totalDurationS, vad)[0] // click/noise closest to the last word
+      if (blob && blob.end - blob.start > 0.05) logIsland(blob.start, blob.end, 'trailing_edge', last.word, last.end, '(video end)', totalDurationS, classifyNoTranscriptIsland(blob.end - blob.start))
       tryEdge(mkEdge(last.word, '(video end)', trailStart, totalDurationS, lgE, 0), trailStart + lgE, totalDurationS)
     }
   }

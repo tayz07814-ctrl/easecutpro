@@ -755,5 +755,22 @@ const AFT = 'results were great here today now'
     `regions=${res.regions.length} removed=${removed.toFixed(2)} gapIslands=${gapIslands}`)
 }
 
+// 18. Click GLUED to a word's kept guard air (record-button click right after an
+//     isolated word like "Do") is trimmed out of the guard — not left on the
+//     timeline — without clipping the word. This is the "Do" case from the field.
+{
+  const words: VerbatimWord[] = [{ word: 'Do', start: 1.0, end: 1.8 }, { word: 'you', start: 6.0, end: 6.3 }]
+  const vad = [{ start: 2.1, end: 6.0 }] // 0.3s click at [1.8,2.1] right after "Do" (non-silence), then silence
+  const opt = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced, maxCutsPerMinute: 60 })
+  const res = detectBetaSilencesHybrid(words, [], vad, opt, 7.0)
+  const guard = res.debug.no_transcript_islands.find((x) => x.where === 'trail_guard')
+  const keeps = keepsFor(words, res.regions)
+  const clickKept = keeps.some((k) => k.start <= 1.95 && k.end >= 1.95) // the click's midpoint
+  const wordKept = keeps.some((k) => k.start <= 1.0 + 1e-6 && k.end >= 1.79) // "Do" not clipped
+  check('silence: a click in a word\'s kept guard air is trimmed out (the "Do" case)',
+    !!guard && guard.decision === 'remove' && !clickKept && wordKept,
+    `guard=${JSON.stringify(guard)} clickKept=${clickKept} wordKept=${wordKept}`)
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall retake-aware checks green')
 process.exit(failures ? 1 : 0)
