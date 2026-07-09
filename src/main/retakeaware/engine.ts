@@ -24,8 +24,6 @@ import {
   detectSelfCorrections,
   detectRepeatedSetups,
   detectOrphanConnectors,
-  detectSilenceTrims,
-  buildSilenceRegions,
   applyLlmDecisions,
   buildCutSpans,
   spansToWordIds,
@@ -133,15 +131,10 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   const transcript = toAppTranscript(vt)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
-  // 12. Smart Silence Cutter — TIME-ONLY pause shortening. Runs AFTER the word
-  // cuts are known (so it skips gaps already inside a removed attempt) and is
-  // kept as a SEPARATE stream: it removes gap air, never words, so it is never
-  // fed to spansToWordIds and never marks a transcript word. Staged for review
-  // as silence chips (SilenceRegion, action:'shorten'); applied by timestamp on
-  // the export timeline exactly like FastCut/ProCut silences.
-  const { trims: silenceTrims, dropped: droppedSilences } = detectSilenceTrims(vt, cutSpans)
-  const silenceRegions = buildSilenceRegions(silenceTrims, vt)
-  const totalSilenceRemovedS = silenceTrims.reduce((n, t) => n + t.removed_ms / 1000, 0)
+  // Silence is NOT handled here — Retake β stages it with the SAME Silero-VAD
+  // pass FastCut/ProCut use (store.runRetakeCutBeta → _stageVadSilences), so the
+  // engine emits ONLY word cuts. (History: the engine once ran a bespoke
+  // transcript-gap silence cutter; that was removed in favour of the shared VAD.)
   // cutoff-fragment debug buckets (E-spec): split the self-correction family by
   // detector kind, and surface any dash-terminated word NO span removed.
   const microCutoffs = selfCorrections.filter((s) => s.kind === 'micro_cutoff_fragment')
@@ -213,12 +206,6 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
     attempt_scores: groups.flatMap((g) => g.attempts.map((a) => ({ attempt_id: `${g.retake_group_id}/${a.attempt_id}`, score: a.score, reasons: a.reasons }))),
     llm_decisions: decisions,
     final_cut_spans: cutSpans,
-    word_cut_spans: cutSpans,
-    silence_candidates: silenceTrims,
-    dropped_silence_candidates: droppedSilences,
-    total_silence_removed_s: Number(totalSilenceRemovedS.toFixed(3)),
-    silence_cut_spans: silenceTrims,
-    final_timeline_cut_spans: [...cutSpans, ...silenceTrims],
     warnings,
     errors
   }
@@ -234,7 +221,6 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   if (selfCorrections.length) extras.push(`${selfCorrections.length} self-correction(s)`)
   const fillersFlagged = fillerDecisions.filter((f) => f.classification !== 'keep').length
   if (fillersFlagged) extras.push(`${fillersFlagged} filler(s)`)
-  if (silenceTrims.length) extras.push(`${silenceTrims.length} pause(s) shortened (−${totalSilenceRemovedS.toFixed(1)}s)`)
   return {
     cut_mode: 'retake_aware_beta',
     provider: vt.provider,
@@ -242,8 +228,6 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
     transcript,
     deleteWordIds,
     cutSpans,
-    silenceRegions,
-    silenceTrims,
     retakeGroups: groups,
     fillerDecisions,
     debugPath,

@@ -139,65 +139,6 @@ export interface CutSpan {
   reason: string
 }
 
-/** Smart Silence Cutter output — a TIME-ONLY cut that shortens (never deletes)
- *  an over-long pause BETWEEN two kept words. Fundamentally different from a
- *  CutSpan: it removes gap time, not spoken words, so it must NEVER be mapped to
- *  word ids / mark a transcript word deleted / go through spansToWordIds. It is
- *  applied purely by timestamp on the renderer/export timeline (via a
- *  SilenceRegion with action:'shorten'), the same path FastCut/ProCut silences
- *  already take. `start`/`end` describe the slice of gap that is removed. */
-export interface SilenceTrim {
-  type: 'silence_trim'
-  /** removed CENTER slice start (absolute seconds) — after the left runway. */
-  start: number
-  /** removed CENTER slice end (absolute seconds) — before the right runway. */
-  end: number
-  /** index into VerbatimTranscript.words of the word BEFORE the gap. */
-  previous_word_index: number
-  /** index into VerbatimTranscript.words of the word AFTER the gap. */
-  next_word_index: number
-  original_gap_ms: number
-  /** total air left in place (both runways) — never 0. */
-  kept_pause_ms: number
-  removed_ms: number
-  /** coarse pause class (label only). */
-  pause_type: 'beat' | 'breath' | 'sentence' | 'long' | 'paragraph'
-  reason: string
-  // ---- v3 LEFT guard (never clip the previous word's tail) ----
-  previous_word: string
-  previous_word_end: number
-  previous_word_tail_guard_ms: number
-  /** VAD-detected speech END of the previous word, else null. */
-  vad_detected_prev_speech_end: number | null
-  /** max(vad_detected_prev_speech_end, previous_word.end) — VAD may only push later. */
-  safe_prev_speech_end: number
-  cut_start_before_guard: number
-  cut_start_after_guard: number
-  // ---- v3 RIGHT guard (never clip the next word's onset) ----
-  next_word: string
-  next_word_start: number
-  next_word_preroll_guard_ms: number
-  /** VAD-detected speech START of the next word, else null. */
-  vad_detected_next_speech_start: number | null
-  /** min(vad_detected_next_speech_start, next_word.start) — VAD may only pull earlier. */
-  safe_next_speech_start: number
-  cut_end_before_guard: number
-  cut_end_after_guard: number
-}
-
-/** A pause the Smart Silence Cutter considered but did NOT trim, with why. */
-export interface DroppedSilence {
-  previous_word_index: number
-  next_word_index: number
-  gap_ms: number
-  reason: string
-  previous_word?: string
-  next_word?: string
-  dropped_due_to_left_guard: boolean
-  dropped_due_to_right_guard: boolean
-  dropped_due_to_insufficient_center_silence: boolean
-}
-
 export interface LlmRetakeDecision {
   retake_group_id: string
   keep_attempt: string
@@ -257,21 +198,9 @@ export interface RetakeAwareDebug {
   orphan_connectors: TailCut[]
   attempt_scores: { attempt_id: string; score: number; reasons: string[] }[]
   llm_decisions: LlmDecisions | null
-  // ---- word cuts: delete spoken words, map to word ids, highlight blue ----
-  /** alias of `word_cut_spans`; kept for older debug readers. */
+  // ---- word cuts: delete spoken words, map to word ids, highlight blue.
+  //      (Silence is handled by the shared VAD pass in the store, not here.) ----
   final_cut_spans: CutSpan[]
-  word_cut_spans: CutSpan[]
-  // ---- Smart Silence Cutter: time-only trims, NEVER mapped to word ids ----
-  /** every pause that WAS shortened (with raw + refined boundary data). */
-  silence_candidates: SilenceTrim[]
-  /** every pause considered but left alone, with a reason. */
-  dropped_silence_candidates: DroppedSilence[]
-  /** total gap time (seconds) the silence trims remove across the whole run. */
-  total_silence_removed_s: number
-  /** the silence trims that made it into the final timeline (== silence_candidates). */
-  silence_cut_spans: SilenceTrim[]
-  /** merged word cuts + silence trims — the full set the renderer executes. */
-  final_timeline_cut_spans: (CutSpan | SilenceTrim)[]
   warnings: string[]
   errors: string[]
 }
@@ -284,15 +213,10 @@ export interface RetakeAwareResult {
    *  when the project has no transcript yet (same pattern as ProCut). */
   transcript: import('../types').Transcript
   /** ids (into `transcript`) covered by the WORD cut spans → blue review flags.
-   *  Silence trims are deliberately NOT here — they delete no words. */
+   *  (Silence is staged separately by the store via the shared VAD pass — the
+   *  engine emits word cuts only.) */
   deleteWordIds: string[]
   cutSpans: CutSpan[]
-  /** Smart Silence Cutter output as review-first, timeline-only regions
-   *  (action:'shorten'). The store stages these as silence chips; Execute cuts
-   *  merges them into project.silences. They never touch word highlighting. */
-  silenceRegions: import('../types').SilenceRegion[]
-  /** the raw silence trims (debug/telemetry parity with silenceRegions). */
-  silenceTrims: SilenceTrim[]
   retakeGroups: RetakeGroup[]
   fillerDecisions: FillerDecision[]
   debugPath: string
