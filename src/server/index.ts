@@ -268,6 +268,13 @@ app.get('/api/auth/me', (req, res) => {
   else res.status(401).json({ error: 'not logged in', signupGated: !!SIGNUP_CODE })
 })
 
+// PUBLIC reachability ping (before requireUser): the client's offline probe hits
+// this to decide online/offline. Must be UNAUTHENTICATED (it runs before login) and
+// INSTANT — /api/toolStatus is auth-gated AND shells out to ffmpeg/whisper, so
+// probing it made every fresh session over the tunnel read as "offline" (straight
+// to the editor, no login, FastCut/ProCut gated).
+app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+
 // Everything else under /api requires a logged-in user.
 app.use('/api', requireUser)
 const uid = (req: Request): string => (req as AuthedRequest).userId
