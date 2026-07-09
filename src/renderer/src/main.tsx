@@ -6,6 +6,7 @@ import HomeScreen from './components/HomeScreen'
 import { useStore } from './store'
 import { IS_WEB } from './platform'
 import { installWebApi, authMe } from './webapi'
+import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
 import './styles.css'
 
@@ -21,10 +22,47 @@ if (IS_WEB) {
 function Root(): JSX.Element {
   const view = useStore((s) => s.view)
 
-  // Bootstrap auth (web): who's logged in?
+  // Bootstrap (web): probe the backend first. If it's unreachable (bundled
+  // Capacitor app with no server, PC asleep, no network) drop into OFFLINE mode —
+  // skip auth entirely and open a local editor session, because manual editing
+  // (import / split / trim / cut / preview) and on-device export need no server.
+  // Only when the backend answers do we run the normal auth → home/login flow.
   useEffect(() => {
     if (!IS_WEB) return
-    authMe().then(({ user }) => useStore.setState({ user, view: user ? 'home' : 'auth' }))
+    let cancelled = false
+    ;(async () => {
+      const online = await probeServer()
+      if (cancelled) return
+      useStore.getState().setServerAvailable(online)
+      if (!online) {
+        useStore.setState({
+          user: null,
+          currentProjectId: null,
+          project: useStore.getState().freshProject(),
+          library: [],
+          view: 'editor'
+        })
+        return
+      }
+      try {
+        const { user } = await authMe()
+        if (!cancelled) useStore.setState({ user, view: user ? 'home' : 'auth' })
+      } catch {
+        // Reachable at probe but auth failed to load — treat as offline session.
+        if (cancelled) return
+        useStore.getState().setServerAvailable(false)
+        useStore.setState({
+          user: null,
+          currentProjectId: null,
+          project: useStore.getState().freshProject(),
+          library: [],
+          view: 'editor'
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // Autosave the open project (desktop + web). On web this saves ONLY the small

@@ -350,6 +350,13 @@ interface AppState {
   transcribeBackend: TranscribeBackend
   /** whether an OpenAI key is configured on the backend (enables cloud options). */
   openaiAvailable: boolean
+  /** is the backend reachable? Manual edit + on-device export work offline;
+   *  transcription and the AI cut engines are gated off when this is false. */
+  serverAvailable: boolean
+  setServerAvailable: (v: boolean) => void
+  /** Guard for server-only actions: returns true if the backend is reachable;
+   *  otherwise posts a friendly "offline" status and returns false. */
+  requireServer: (feature: string) => boolean
   /** local whisper models available to pick from (empty until loaded). */
   whisperModels: WhisperModelInfo[]
   /** selected local whisper model name ('' = Auto / best available). */
@@ -613,6 +620,19 @@ export const useStore = create<AppState>((set, get) => ({
   silenceOpts: { noiseDb: -30, minDuration: 0.4, mode: 'vad', vadThreshold: 0.5, speechPadMs: 40, edgeTrimMs: 200 },
   transcribeBackend: loadBackend(),
   openaiAvailable: false,
+  serverAvailable: true, // assumed reachable until the boot probe says otherwise
+  setServerAvailable: (v) => set({ serverAvailable: v }),
+  requireServer: (feature) => {
+    if (get().serverAvailable) return true
+    set({
+      job: {
+        active: false,
+        percent: 0,
+        message: `⚡ Offline — ${feature} needs a connected server. Importing, splitting/trimming, cutting and exporting still work offline.`
+      }
+    })
+    return false
+  },
   whisperModels: [],
   whisperModel: (() => {
     try {
@@ -638,8 +658,14 @@ export const useStore = create<AppState>((set, get) => ({
   canRedo: false,
 
   init: async () => {
-    const tools = await window.api.toolStatus()
-    set({ tools })
+    // Offline (Capacitor bundle / no server): toolStatus is a server call and
+    // will throw — swallow it so the editor still boots and manual editing works.
+    try {
+      set({ tools: await window.api.toolStatus() })
+    } catch {
+      set({ serverAvailable: false })
+      return
+    }
     // Is a cloud (OpenAI) key configured? Enables the premium transcription +
     // AI-cut options; falls back silently to local-only if unavailable.
     window.api
@@ -1213,6 +1239,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   transcribe: async () => {
+    if (!get().requireServer('Transcribe')) return
     const p0 = get().project
     // Multi-clip base: transcribe across ALL clips WITHOUT flattening — combine the
     // audio to a temp file, transcribe once, then re-split the words back per clip
@@ -1310,6 +1337,7 @@ export const useStore = create<AppState>((set, get) => ({
     })),
 
   detectSilence: async () => {
+    if (!get().requireServer('Detect silence')) return
     const p0 = get().project
     // Multi-clip base: detect across all clips WITHOUT flattening — combine audio,
     // detect once, re-split silences back per clip.
@@ -1406,6 +1434,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   selectAICuts: async () => {
+    if (!get().requireServer('AI Smart Cut')) return
     const t = get().project.transcript
     if (!t) {
       set({ job: { active: false, percent: 0, message: 'Transcribe first to run AI cuts' } })
@@ -1495,6 +1524,7 @@ export const useStore = create<AppState>((set, get) => ({
     }),
 
   runFastCutLord: async () => {
+    if (!get().requireServer('FastCut')) return
     // FastCut auto-transcribes with our inbuilt Parakeet — no manual transcribe step.
     if (!get().project.transcript && !(await get()._parakeetTranscribe())) return
     await get().selectFastCuts() // word engine: flags repeats/retakes (review-only)
@@ -1510,6 +1540,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   runProCut: async () => {
+    if (!get().requireServer('ProCut')) return
     const s0 = get()
     const p0 = s0.project
     const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
@@ -1561,6 +1592,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   runRetakeCutBeta: async () => {
+    if (!get().requireServer('Retake β')) return
     // Retake-Aware Cut Beta — fully separate path (cut_mode: retake_aware_beta).
     // Same review-first contract as FastCut/ProCut: highlight + stage, apply on
     // Execute cuts. Deliberately does NOT call snapRetakeFlags or any standard-
@@ -1686,6 +1718,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   _stageVadSilences: async (label, extra) => {
+    // Server VAD (ffmpeg). Offline: silently skip — the caller (Execute cuts,
+    // FastCut/ProCut) still applies local word cuts + any already-staged silences.
+    if (!get().serverAvailable) return
     const s = get()
     const p = s.project
     try {
@@ -1784,6 +1819,7 @@ export const useStore = create<AppState>((set, get) => ({
   // (silence regions + flagged retake words) — so Standard cut paths, preview,
   // export and undo are completely unchanged.
   smartSmoothCut: async () => {
+    if (!get().requireServer('Smart Smooth Cut')) return
     const s0 = get()
     const t = s0.project.transcript
     if (!t) {
@@ -1944,6 +1980,7 @@ export const useStore = create<AppState>((set, get) => ({
     })),
 
   generateOverlays: async () => {
+    if (!get().requireServer('Auto overlays')) return
     const { project } = get()
     // Multi-clip base: the transcript is per-clip, not a single project.transcript.
     // Overlay matching over the whole montage is out of scope for now — guide the
