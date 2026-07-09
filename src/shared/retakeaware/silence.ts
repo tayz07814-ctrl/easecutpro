@@ -385,13 +385,22 @@ export function detectBetaSilencesHybrid(
       intervals = [{ s: cutStart, e: cutEnd }]
     }
 
-    // ANTI-SLIVER + word-cut overlap, per resulting interval (a carve yields >1). A
-    // sub-span inside removed content is skipped; air within <0.5s of a word cut
-    // (no kept word between) is swallowed so the timeline ripple-closes clean.
+    // WORD-CUT CLAMP + ANTI-SLIVER, per resulting interval (a carve yields >1). A
+    // bounding word may itself be a removed take, and its VAD-refined speech edge can
+    // sit INSIDE that take's word cut — so the silence cut starts/ends inside a word
+    // cut. CLAMP the edge to the word-cut boundary instead of dropping the whole cut
+    // (the old behaviour left the dead air + record-button click between a removed
+    // take and the next kept word — "the silence before the Do clip"). A transcript
+    // gap holds no kept word, so clamping never eats speech. Then anti-sliver
+    // swallows any remaining <0.5s air so the timeline ripple-closes clean.
     const committed: { s: number; e: number }[] = []
     for (const iv of intervals) {
       let cs = iv.s, ce = iv.e
-      if (overlapsWordCut(cs, ce)) continue // the pause is inside removed content
+      for (const c of wordCutSpans) {
+        if (c.start <= cs + 0.001 && cs < c.end) cs = c.end // cut starts inside a word cut → start after it
+        if (c.start < ce && ce <= c.end + 0.001) ce = c.start // cut ends inside a word cut → end before it
+      }
+      if (ce - cs < 0.02) continue // nothing left — fully inside removed content
       if (settings.antiSliver) {
         for (const c of wordCutSpans) {
           if (c.end <= cs && cs - c.end < ANTI_SLIVER_S && !hasKeptWord(c.end, cs)) { cs = c.end; rec.merged_with_word_cut = true }

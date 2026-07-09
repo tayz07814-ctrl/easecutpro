@@ -772,5 +772,23 @@ const AFT = 'results were great here today now'
     `guard=${JSON.stringify(guard)} clickKept=${clickKept} wordKept=${wordKept}`)
 }
 
+// 19. Dead air between a REMOVED take and the next kept word is cut, not dropped.
+//     The take's word cut can reach into the pause (its last word's VAD-refined edge
+//     sits inside the cut), so the silence cut overlapped it and was wrongly rejected
+//     — leaving 1.7s of dead air + a click "before the Do clip". Now it clamps to the
+//     word-cut boundary and removes the pause.
+{
+  const words: VerbatimWord[] = [{ word: 'end', start: 1.0, end: 1.5 }, { word: 'Do', start: 5.0, end: 5.5 }, { word: 'you', start: 5.7, end: 6.0 }]
+  const wordCut: CutSpan = { start: 0.5, end: 2.5, type: 'failed_retake', source: 'retake_aware_beta', reason: 'x' } // take cut reaches into the pause
+  const vad = [{ start: 1.5, end: 5.0 }] // dead air across the whole gap
+  const opt = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced })
+  const res = detectBetaSilencesHybrid(words, [wordCut], vad, opt, 6.5)
+  const gapRec = res.debug.per_region.find((r) => r.previous_word === 'end' && r.next_word === 'Do')
+  const reg = res.regions[0]
+  check('silence: dead air between a removed take and the next word is cut (clamped to the word cut, not dropped)',
+    !!gapRec?.kept && !gapRec?.rejected_due_to_word_cut_overlap && !!reg && reg.start >= 2.5 - 0.01 && reg.end - reg.start > 1.5,
+    `kept=${gapRec?.kept} rejWc=${gapRec?.rejected_due_to_word_cut_overlap} region=${reg ? `[${reg.start.toFixed(2)},${reg.end.toFixed(2)}]` : 'none'}`)
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall retake-aware checks green')
 process.exit(failures ? 1 : 0)
