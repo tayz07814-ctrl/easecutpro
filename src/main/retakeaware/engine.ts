@@ -29,7 +29,7 @@ import {
   spansToWordIds,
   findMissedCutoffs
 } from '../../shared/retakeaware/analyze'
-import { clampBetaSilences, retakeBetaVadOpts, type BetaSilenceResult } from '../../shared/retakeaware/silence'
+import { detectBetaSilencesHybrid, retakeBetaVadSafetyOpts, type BetaSilenceResult } from '../../shared/retakeaware/silence'
 import { transcribeVerbatim } from './providers'
 import { reviewRetakeGroups } from './llm'
 import { extractAudioWav, detectSilence } from '../ffmpeg'
@@ -132,20 +132,21 @@ export async function retakeAwareCut(mediaPath: string, onProgress?: ProgressFn)
   const transcript = toAppTranscript(vt)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
-  // 12. Retake β CONSERVATIVE, word-clamped silence. Its OWN gentle VAD profile
-  // (minGap 0.7s, no edgeTrim, breaths off) — NOT the aggressive shared Cut Lord
-  // settings — then clamp every region against the transcript words + word cuts
-  // so a cut can never touch the word before/after a pause. Regions are emitted
-  // protect:true so computeKeepRanges applies them verbatim.
-  op(90, 'Retake β: scanning for pauses (word-clamped)…')
-  let betaSilence: BetaSilenceResult | null = null
+  // 12. Retake β HYBRID silence: the pause SPAN comes from the TRANSCRIPT word
+  // gaps (the full perceived pause), guarded off both words; VAD is only a safety
+  // check (drops a cut if real speech sits inside the centre), never the span —
+  // so VAD under-detection can't leave 1–3s of silence. Regions are protect:true
+  // so computeKeepRanges applies them verbatim. If the VAD scan fails we still
+  // trim from the transcript gaps (VAD safety is optional).
+  op(90, 'Retake β: tightening pauses (transcript-gap hybrid)…')
+  let vadSil: { start: number; end: number }[] = []
   try {
-    const rawVad = await detectSilence(audioPath, retakeBetaVadOpts())
-    betaSilence = clampBetaSilences(rawVad.map((r) => ({ start: r.start, end: r.end })), vt.words, cutSpans)
+    vadSil = (await detectSilence(audioPath, retakeBetaVadSafetyOpts())).map((r) => ({ start: r.start, end: r.end }))
   } catch (e) {
-    warnings.push(`Silence scan failed (${(e as Error).message}) — no pauses shortened this run.`)
+    warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
-  const silenceRegions = betaSilence?.regions ?? []
+  const betaSilence: BetaSilenceResult = detectBetaSilencesHybrid(vt.words, cutSpans, vadSil)
+  const silenceRegions = betaSilence.regions
 
   // cutoff-fragment debug buckets (E-spec): split the self-correction family by
   // detector kind, and surface any dash-terminated word NO span removed.

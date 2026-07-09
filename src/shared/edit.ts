@@ -228,7 +228,9 @@ export function computeKeepRanges(
     .map((c) => ({ start: Math.max(0, Math.min(c.start, dur)), end: Math.max(0, Math.min(c.end, dur)) }))
     .filter((c) => c.end - c.start > 0.01)
 
-  if (clamped.length === 0) return [{ start: 0, end: dur }]
+  // No word/normal-silence cuts: the whole clip is kept — EXCEPT any protected
+  // Retake β silence, which is still subtracted verbatim below.
+  if (clamped.length === 0 && !protectedSilences.length) return [{ start: 0, end: dur }]
 
   clamped.sort((a, b) => a.start - b.start)
   const merged: KeepRange[] = []

@@ -15,7 +15,7 @@ import {
   spansToWordIds,
 } from '../src/shared/retakeaware/analyze'
 import { parseLlmDecisions } from '../src/main/retakeaware/llm'
-import { clampBetaSilences } from '../src/shared/retakeaware/silence'
+import { detectBetaSilencesHybrid } from '../src/shared/retakeaware/silence'
 import { computeKeepRanges } from '../src/shared/edit'
 import type { VerbatimTranscript, VerbatimWord, CutSpan } from '../src/shared/retakeaware/types'
 import type { Project, SilenceRegion } from '../src/shared/types'
@@ -476,11 +476,10 @@ function vt(phrases: string[]): VerbatimTranscript {
   check('clean speech -> zero groups, zero spans', groups.length === 0 && spans.length === 0)
 }
 
-// ---- Retake β conservative word-clamped silence (clampBetaSilences) ----
-// Build words: `before` phrase, a `gap`-second pause, then `after` phrase; the
-// VAD "detected silence" is the whole gap. clampBetaSilences must never let a cut
-// touch the word before or after, and must ignore breaths.
-function betaScene(before: string, gap: number, after: string): { words: VerbatimWord[]; prevEnd: number; nextStart: number; bc: number } {
+// ---- Retake β HYBRID silence (detectBetaSilencesHybrid) ----
+// Words: `before` phrase, a `gap`-second pause, then `after` phrase. Intra-phrase
+// gaps are tiny (<0.85s) so only the pause becomes a candidate.
+function betaScene(before: string, gap: number, after: string): { words: VerbatimWord[]; prevEnd: number; nextStart: number } {
   const words: VerbatimWord[] = []
   let t = 0.5
   for (const tok of before.split(/\s+/).filter(Boolean)) { words.push({ word: tok, start: t, end: t + 0.2 }); t += 0.26 }
@@ -488,89 +487,96 @@ function betaScene(before: string, gap: number, after: string): { words: Verbati
   t = prevEnd + gap
   const nextStart = t
   for (const tok of after.split(/\s+/).filter(Boolean)) { words.push({ word: tok, start: t, end: t + 0.2 }); t += 0.26 }
-  return { words, prevEnd, nextStart, bc: before.split(/\s+/).filter(Boolean).length }
+  return { words, prevEnd, nextStart }
 }
-const clampGap = (before: string, gap: number, after: string, cuts: CutSpan[] = []) => {
+const L = 0.22, LF = 0.32, R = 0.28, RF = 0.38
+const run = (before: string, gap: number, after: string, vad: { start: number; end: number }[] = [], cuts: CutSpan[] = []) => {
   const s = betaScene(before, gap, after)
-  const res = clampBetaSilences([{ start: s.prevEnd, end: s.nextStart }], s.words, cuts)
-  return { s, res, region: res.regions[0] }
+  const res = detectBetaSilencesHybrid(s.words, cuts, vad)
+  return { s, res, region: res.regions[0], rec: res.debug.per_region.find((r) => Math.abs(r.transcript_gap_duration - gap) < 0.01) }
 }
-const NORMAL_L = 0.22, FRAGILE_L = 0.32, NORMAL_R = 0.28, FRAGILE_R = 0.38
+const BEFORE = 'this is a perfectly normal clean sentence'
+const AFTER = 'results were great here today'
 
-// 1 & 2. Tiny natural breaths (0.2s, 0.5s) are ignored (under the 0.7s floor).
+// 1 & 2. Breaths (0.2s, 0.5s) ignored (under 0.85s min gap).
 for (const g of [0.2, 0.5]) {
-  const { res } = clampGap('this is a perfectly normal clean sentence', g, 'results were great here today')
-  check(`silence: ${g}s breath is ignored (no region, under min gap)`, res.regions.length === 0 && res.debug.per_region.some((r) => r.drop_reason === 'under_min_gap'))
+  const { res, rec } = run(BEFORE, g, AFTER)
+  check(`hybrid silence: ${g}s breath ignored (under min gap)`, res.regions.length === 0 && !!rec && rec.dropped_under_min_gap)
 }
-// 3. A 0.7s+ pause is trimmed but conservatively (residual >= both guards, not near-zero).
+// 3. 1.4s gap → residual ~0.5–0.7s.
 {
-  const { s, region } = clampGap('this is a perfectly normal clean sentence', 2.0, 'results were great here today')
-  const residual = 2.0 - (region ? region.end - region.start : 0)
-  check('silence: 0.7s+ pause trimmed conservatively (keeps both runways, not near-zero)',
-    !!region && region.start > s.prevEnd + 1e-6 && region.end < s.nextStart - 1e-6 && residual >= NORMAL_L + NORMAL_R - 1e-6,
-    region ? `residual=${residual.toFixed(3)}` : 'no region')
+  const { region, s } = run(BEFORE, 1.4, AFTER)
+  const residual = region ? 1.4 - (region.end - region.start) : 0
+  check('hybrid silence: 1.4s gap tightens to ~0.5–0.7s residual', !!region && residual >= 0.5 - 1e-6 && residual <= 0.7 + 1e-6 && region.start > s.prevEnd && region.end < s.nextStart, `residual=${residual.toFixed(3)}`)
 }
-// 4. Last word before the pause is not clipped.
+// 4. 2s gap → residual ~0.5–0.7s.
 {
-  const { s, region } = clampGap('this is a perfectly normal clean sentence', 2.0, 'results were great here today')
-  check('silence: last word before pause not clipped', !!region && region.start >= s.prevEnd + NORMAL_L - 1e-6, region ? `start=${region.start.toFixed(3)} prevEnd=${s.prevEnd.toFixed(3)}` : 'no region')
+  const { region } = run(BEFORE, 2.0, AFTER)
+  const residual = region ? 2.0 - (region.end - region.start) : 0
+  check('hybrid silence: 2s gap tightens to ~0.5–0.7s residual', !!region && residual >= 0.5 - 1e-6 && residual <= 0.7 + 1e-6, `residual=${residual.toFixed(3)}`)
 }
-// 5. First word after the pause is not clipped.
+// 5. 5s dead air → trimmed, natural residual (~0.7–0.9s).
 {
-  const { s, region } = clampGap('this is a perfectly normal clean sentence', 2.0, 'results were great here today')
-  check('silence: first word after pause not clipped', !!region && region.end <= s.nextStart - NORMAL_R + 1e-6, region ? `end=${region.end.toFixed(3)} nextStart=${s.nextStart.toFixed(3)}` : 'no region')
+  const { region } = run(BEFORE, 5.0, AFTER)
+  const residual = region ? 5.0 - (region.end - region.start) : 0
+  check('hybrid silence: 5s dead air leaves a natural ~0.7–0.9s residual', !!region && residual >= 0.7 - 1e-6 && residual <= 0.9 + 1e-6, `residual=${residual.toFixed(3)}`)
 }
-// 6. Fragile next starter word ("it") gets the larger right guard.
+// 6. Last word before pause not clipped.
 {
-  const { s, region, res } = clampGap('everything turned out really nicely here today', 2.0, 'it is a very good result')
-  check('silence: fragile next word "it" gets 380ms guard, not clipped',
-    !!region && res.debug.per_region[0].next_word_guard_ms === FRAGILE_R * 1000 && region.end <= s.nextStart - FRAGILE_R + 1e-6)
+  const { region, s } = run(BEFORE, 2.0, AFTER)
+  check('hybrid silence: last word before pause not clipped', !!region && region.start >= s.prevEnd + L - 1e-6)
 }
-// 7. Fragile previous word ("was") gets the larger left guard.
+// 7. First word after pause not clipped.
 {
-  const { s, region, res } = clampGap('the one product i really truly was', 2.0, 'amazing for my whole routine', [])
-  check('silence: fragile previous word "was" gets 320ms guard, not clipped',
-    !!region && res.debug.per_region[0].previous_word_guard_ms === FRAGILE_L * 1000 && region.start >= s.prevEnd + FRAGILE_L - 1e-6)
+  const { region, s } = run(BEFORE, 2.0, AFTER)
+  check('hybrid silence: first word after pause not clipped', !!region && region.end <= s.nextStart - R + 1e-6)
 }
-// 8. A VAD silence overlapping a word cut span is dropped.
+// 8. Fragile next starter "it" gets the larger right guard.
 {
-  const s = betaScene('this is a perfectly normal clean sentence', 2.0, 'results were great here today')
+  const { region, s, rec } = run('everything turned out really nicely here today', 2.0, 'it is a very good result')
+  check('hybrid silence: fragile next word "it" protected (380ms)', !!region && rec!.right_guard_ms === RF * 1000 && region.end <= s.nextStart - RF + 1e-6)
+}
+// 9. VAD UNDER-detection (no silence found) must NOT cause 1–3s leftover.
+{
+  const { region } = run(BEFORE, 3.0, AFTER, []) // VAD found nothing → transcript gap still drives removal
+  const residual = region ? 3.0 - (region.end - region.start) : 99
+  check('hybrid silence: VAD under-detection does NOT leave 1–3s (transcript gap drives removal)', !!region && residual < 1.0, `residual=${residual.toFixed(3)}`)
+}
+// 10. Real speech island INSIDE the proposed centre → drop.
+{
+  const first = run(BEFORE, 3.0, AFTER, []) // get the proposed cut with no VAD
+  const c = first.region!
+  // VAD silence covers the centre EXCEPT a 0.4s speech island in its middle.
+  const mid = (c.start + c.end) / 2
+  const vad = [{ start: 0, end: mid - 0.2 }, { start: mid + 0.2, end: 1000 }]
+  const { res, rec } = run(BEFORE, 3.0, AFTER, vad)
+  check('hybrid silence: real speech island inside centre → dropped', res.regions.length === 0 && !!rec && rec.dropped_due_to_vad_speech_inside_center)
+}
+// 11. Candidate overlapping a word cut is dropped.
+{
+  const s = betaScene(BEFORE, 2.0, AFTER)
   const wordCut: CutSpan = { start: s.prevEnd - 0.1, end: s.prevEnd + 1.0, type: 'failed_retake', source: 'retake_aware_beta', reason: 'x' }
-  const res = clampBetaSilences([{ start: s.prevEnd, end: s.nextStart }], s.words, [wordCut])
-  check('silence: VAD region overlapping a word cut is dropped', res.regions.length === 0 && res.debug.per_region[0].drop_reason === 'overlap_word_cut')
+  const res = detectBetaSilencesHybrid(s.words, [wordCut], [])
+  check('hybrid silence: candidate overlapping a word cut is dropped', res.regions.length === 0 && res.debug.per_region.some((r) => r.dropped_due_to_word_cut_overlap))
 }
-// 9 & 10. computeKeepRanges applies a protected region VERBATIM (no snap/absorb/
-//         bridge) and keeps the guarded speech between a nearby word cut + silence.
+// 12. computeKeepRanges applies the protected region verbatim (no snap/absorb).
 {
-  const s = betaScene('this is a perfectly normal clean sentence', 2.5, 'results were great here today')
-  const { regions } = clampBetaSilences([{ start: s.prevEnd, end: s.nextStart }], s.words, [])
-  const region = regions[0]!
-  const dur = s.words[s.words.length - 1].end + 0.5
-  // A waveform whose quietest points are INSIDE the guard zones (would tempt a
-  // naive snap to eat the words) + a nearby word cut just before the pause.
+  const { region, s } = run(BEFORE, 2.5, AFTER)
+  const dur = s.nextStart + 2.0
   const pps = 200
   const peaks = new Array(Math.ceil(dur * pps)).fill(0.02)
   for (const w of s.words) for (let i = Math.floor(w.start * pps); i < Math.ceil(w.end * pps); i++) peaks[i] = 0.4
-  const prevW = s.words[s.bc - 1], nextW = s.words[s.bc]
-  peaks[Math.floor((prevW.end + 0.02) * pps)] = 0.0 // valley just after prev word (inside left guard)
-  peaks[Math.floor((nextW.start - 0.02) * pps)] = 0.0 // valley just before next word (inside right guard)
-  // word cut on an earlier word, ending ~0.5s before the pause region.
-  const cutWord = s.words[1]
+  peaks[Math.floor((s.prevEnd + 0.05) * pps)] = 0.0 // valley inside left guard (would tempt a snap)
+  peaks[Math.floor((s.nextStart - 0.05) * pps)] = 0.0
   const project = {
     version: 1, name: 't', media: { path: 'x', duration: dur } as any,
-    transcript: { words: s.words.map((w, i) => ({ id: `w${i}`, text: w.word, start: w.start, end: w.end, deleted: w === cutWord })), segments: [] },
+    transcript: { words: s.words.map((w, i) => ({ id: `w${i}`, text: w.word, start: w.start, end: w.end, deleted: false })), segments: [] },
     silences: [region] as SilenceRegion[], tracks: [], playhead: 0, pxPerSec: 80, magnet: false, trackHeight: 90,
-    baseSplits: [], manualCuts: [], keepOverrides: [], silencePadding: 0.08, showThumbnails: true,
-    texts: [], aspectW: 0, aspectH: 0
+    baseSplits: [], manualCuts: [], keepOverrides: [], silencePadding: 0.08, showThumbnails: true, texts: [], aspectW: 0, aspectH: 0
   } as unknown as Project
   const keeps = computeKeepRanges(project, { peaksPerSec: pps, peaks })
-  const inKeep = (a: number, b: number) => keeps.some((k) => k.start <= a + 1e-6 && k.end >= b - 1e-6)
-  // 10. protected boundary preserved to the frame (no snap/absorb past guards)
-  const boundaryExact = keeps.some((k) => Math.abs(k.end - region.start) < 0.01) && keeps.some((k) => Math.abs(k.start - region.end) < 0.01)
-  check('silence: computeKeepRanges applies protected region verbatim (no snap/absorb past guards)', boundaryExact,
-    `keeps=${keeps.map((k) => `[${k.start.toFixed(2)},${k.end.toFixed(2)}]`).join(' ')} region=[${region.start.toFixed(2)},${region.end.toFixed(2)}]`)
-  // 9. the words bounding the pause survive (not bridged/eaten with the word cut)
-  check('silence: words around the pause survive (no bridge into speech)', inKeep(prevW.start, prevW.end) && inKeep(nextW.start, nextW.end))
+  const exact = keeps.some((k) => Math.abs(k.end - region!.start) < 0.01) && keeps.some((k) => Math.abs(k.start - region!.end) < 0.01)
+  check('hybrid silence: computeKeepRanges preserves protected boundary verbatim', exact, `keeps=${keeps.map((k) => `[${k.start.toFixed(2)},${k.end.toFixed(2)}]`).join(' ')}`)
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall retake-aware checks green')
