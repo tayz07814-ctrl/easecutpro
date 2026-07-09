@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto'
 import { mkdir, readdir, readFile, rm, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { FFMPEG, FFPROBE, WHISPER_VAD_BIN, resolveVadModel } from './binaries'
-import { computeKeepRanges, virtualKeepsToClipSegments, stitchMontageWaveform } from '../shared/edit'
+import { computeKeepRanges, virtualKeepsToClipSegments, stitchMontageWaveform, baseClipSpans } from '../shared/edit'
 import type {
   MediaInfo,
   SilenceRegion,
@@ -743,6 +743,48 @@ export async function combineClips(
   return concatSegmentsToFile(segs, target, onProgress, out)
 }
 
+/** EXPORT-PLAN DEBUG DUMP (non-destructive) — writes ~/.easecutpro/export/debug-*.json
+ *  capturing which base clips survive the cut→segment mapping and, for any that
+ *  don't, whether their span held transcript words. Confirms/refutes the residue-drop
+ *  (wordless-keep removal) eating real clips. Never throws, never alters the export. */
+async function writeExportDebug(
+  pathChosen: 'montage' | 'single',
+  project: Project,
+  keeps: { start: number; end: number }[],
+  spans: ReturnType<typeof baseClipSpans>,
+  coveredClipIds: Set<string>
+): Promise<void> {
+  try {
+    const tw = project.transcript?.words ?? []
+    const wordsIn = (a: number, b: number): number => tw.filter((w) => !w.deleted && (w.start + w.end) / 2 > a && (w.start + w.end) / 2 < b).length
+    const clips = spans.map((s) => ({
+      id: s.clip.id, sourcePath: s.clip.sourcePath, vStart: Number(s.vStart.toFixed(3)), vEnd: Number(s.vEnd.toFixed(3)),
+      covered: coveredClipIds.has(s.clip.id), transcript_words_in_span: wordsIn(s.vStart, s.vEnd)
+    }))
+    const missing = clips.filter((c) => !c.covered)
+    const dump = {
+      mode: 'export_plan', path_chosen: pathChosen, created: new Date().toISOString(),
+      project_media_set: !!project.media, base_sequence_count: project.baseSequence?.length ?? 0,
+      protect_silences: (project.silences ?? []).filter((s) => s.protect && s.action === 'remove').length,
+      total_transcript_words: tw.length, deleted_words: tw.filter((w) => w.deleted).length,
+      keeps_count: keeps.length, total_kept_s: Number(keeps.reduce((n, k) => n + (k.end - k.start), 0).toFixed(3)),
+      keeps: keeps.map((k) => ({ start: Number(k.start.toFixed(3)), end: Number(k.end.toFixed(3)) })),
+      clips, missing_clips: missing,
+      likely_cause: !missing.length
+        ? 'no base clips missing at this stage'
+        : missing.every((c) => c.transcript_words_in_span === 0)
+          ? 'RESIDUE-DROP: every missing clip has ZERO transcript words in its span — the wordless-keep drop removed real clips'
+          : 'some missing clips HAVE words — NOT the residue-drop; keep/segment mapping issue'
+    }
+    const dir = join(homedir(), '.easecutpro', 'export')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, `debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), JSON.stringify(dump, null, 2), 'utf8')
+    console.log(`[export-debug] ${pathChosen}: keeps=${keeps.length} clips=${clips.length} missing=${missing.length}`)
+  } catch (e) {
+    console.warn('[export-debug] dump failed:', (e as Error).message)
+  }
+}
+
 export async function exportProject(
   project: Project,
   outPath: string,
@@ -757,7 +799,9 @@ export async function exportProject(
   // (baseSequence still non-empty) and export must write that single clip, not the
   // whole montage. Iterate sequenceLayout order so reordered/free-moved clips
   // export exactly as arranged on the timeline.
+  let cameFromMontage = false
   if (project.baseSequence && project.baseSequence.length > 0 && !project.media) {
+    cameFromMontage = true
     const seq = project.baseSequence
     const target = { w: seq[0].srcW || 1920, h: seq[0].srcH || 1080 }
     // Virtual montage: apply the project-level cuts (transcript words + silences)
@@ -780,7 +824,8 @@ export async function exportProject(
     // ride into the concat. Undefined for legacy montage clips (no doc transform)
     // -> identity, so those exports are unchanged.
     const byId = new Map<string, SequenceClip>(seq.map((c) => [c.id, c]))
-    const segs = virtualKeepsToClipSegments(project, keeps).map((s) => {
+    const rawSegs = virtualKeepsToClipSegments(project, keeps)
+    const segs = rawSegs.map((s) => {
       const c = byId.get(s.clipId)
       return {
         sourcePath: s.sourcePath,
@@ -797,6 +842,11 @@ export async function exportProject(
         panY: c?.panY
       }
     })
+    // EXPORT-PLAN DUMP (non-destructive): which base clips survived into the render
+    // and, for any that DIDN'T, whether their span held transcript words — so a
+    // "missing clips" export can be diagnosed server-side (esp. residue-drop eating
+    // a wordless montage clip). Never throws; never alters the export.
+    await writeExportDebug('montage', project, keeps, baseClipSpans(project), new Set(rawSegs.map((s) => s.clipId)))
     if (!segs.length) throw new Error('Nothing to export (all montage clips cut)')
     const seqTemp = await concatSegmentsToFile(segs, target, (p) => onProgress?.(Math.round(p * 0.45)))
     const info = await probe(seqTemp)
@@ -834,6 +884,7 @@ export async function exportProject(
     baseWave = null
   }
   const keeps = computeKeepRanges(project, baseWave)
+  if (!cameFromMontage) await writeExportDebug('single', project, keeps, baseClipSpans(project), new Set())
   if (keeps.length === 0) throw new Error('Nothing to export (all cut)')
 
   const totalKept = keeps.reduce((s, k) => s + (k.end - k.start), 0)
