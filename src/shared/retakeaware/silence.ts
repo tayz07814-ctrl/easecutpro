@@ -38,6 +38,12 @@ const FRAGILE = new Set(['i', 'it', 'a', 'an', 'and', 'but', 'so', 'the', 'to', 
 const FRAGILE_LEFT_FLOOR = 0.32
 const FRAGILE_RIGHT_FLOOR = 0.38
 const VAD_INTERIOR_SPEECH_S = 0.35
+// Lead-in kept BEFORE the next word's true onset. The residual is split
+// asymmetrically: a small tight lead-in here (a clip should start ~immediately),
+// and the rest as trailing air after the previous word. Only this tight when VAD
+// pins the true onset; without VAD we fall back to the full right guard so a
+// late transcript onset can't clip the word.
+const RIGHT_LEAD_S = 0.1
 const normWord = (w: string): string => w.toLowerCase().replace(/[^a-z']/g, '')
 
 export function retakeBetaVadSafetyOpts(): SilenceDetectOptions {
@@ -81,6 +87,19 @@ function vadSpeechStart(w: { start: number; end: number }, vad: VadInterval[]): 
     if (s.end < w.end - 0.05 && s.end > w.start + 0.02 && s.start <= w.start + 0.1) start = Math.max(start, s.end)
   }
   return start
+}
+/** TRUE onset of speech before `nextStart`: the end of the VAD silence region
+ *  that runs up to (near) the next word. May be EARLIER than nextStart when the
+ *  transcript onset is late — so cutting to (onset − 100ms) never clips. null if
+ *  VAD gives no clear silence there → caller keeps the safe guard instead. */
+function vadOnset(nextStart: number, vad: VadInterval[]): number | null {
+  let onset: number | null = null
+  for (const s of vad) {
+    if (s.end - s.start >= 0.1 && s.end <= nextStart + 0.05 && s.end >= nextStart - 0.6) {
+      onset = onset == null ? s.end : Math.max(onset, s.end)
+    }
+  }
+  return onset
 }
 
 export interface BetaSilenceDebugRegion {
@@ -170,12 +189,17 @@ export function detectBetaSilencesHybrid(
     // TRUE speech boundaries: VAD-refined so silence AssemblyAI hid inside an
     // over-long word (its end padded through the pause) is exposed as real gap.
     const pEnd = vadSpeechEnd(prev, vad)
-    const nStart = vadSpeechStart(next, vad)
+    const onsetVad = vadOnset(next.start, vad)
+    const nStart = onsetVad != null ? onsetVad : vadSpeechStart(next, vad) // true onset (may precede transcript start)
     const gap = nStart - pEnd
     if (gap <= 0) continue
     considered++
     const lg = FRAGILE.has(normWord(prev.word)) ? Math.max(settings.paddingBeforeS, FRAGILE_LEFT_FLOOR) : settings.paddingBeforeS
-    const rg = FRAGILE.has(normWord(next.word)) ? Math.max(settings.paddingAfterS, FRAGILE_RIGHT_FLOOR) : settings.paddingAfterS
+    const rgFull = FRAGILE.has(normWord(next.word)) ? Math.max(settings.paddingAfterS, FRAGILE_RIGHT_FLOOR) : settings.paddingAfterS
+    // Lead-in (residual before the next word): tight 100ms when VAD pins the onset,
+    // else the full guard (so a late transcript onset can't clip). Trailing air
+    // after the previous word keeps the rest of the residual (user likes trailing).
+    const rg = onsetVad != null ? Math.min(RIGHT_LEAD_S, rgFull) : rgFull
     const rec: BetaSilenceDebugRegion = {
       source: 'transcript_gap_hybrid',
       previous_word: prev.word, previous_word_start: prev.start, previous_word_end: prev.end,
@@ -198,9 +222,11 @@ export function detectBetaSilencesHybrid(
     rec.effective_residual_s = Number(effResidual.toFixed(3))
     const removed0 = Math.min(gap - effResidual, g1 - g0)
     if (removed0 < settings.minRemovedS) { rec.rejected_due_to_min_removed = true; dMinRemoved++; per.push(rec); continue }
-    const zoneMid = (g0 + g1) / 2
-    let cutStart = Math.max(g0, zoneMid - removed0 / 2)
-    let cutEnd = Math.min(g1, zoneMid + removed0 / 2)
+    // ASYMMETRIC residual: cut ends a tight lead-in (rg, ~100ms with VAD) before
+    // the next word's onset; the rest of the residual stays as trailing air after
+    // the previous word (which the user wants kept).
+    let cutEnd = g1
+    let cutStart = Math.max(g0, cutEnd - removed0)
     rec.proposed_cut_start = Number(cutStart.toFixed(3))
     rec.proposed_cut_end = Number(cutEnd.toFixed(3))
 
@@ -265,10 +291,13 @@ export function detectBetaSilencesHybrid(
     rec.kept = true; per.push(rec); kept.push({ rec, cutStart: cs, cutEnd: ce })
   }
   if (words.length) {
-    // leading: [0, firstWord real speech start] → keep a right-guard lead-in.
+    // leading: [0, firstWord true onset] → keep only a tight lead-in (~100ms with
+    // VAD; a clip should start ~immediately), else the full guard.
     const first = words[0]
-    const leadEnd = vadSpeechStart(first, vad)
-    const rgE = FRAGILE.has(normWord(first.word)) ? Math.max(settings.paddingAfterS, FRAGILE_RIGHT_FLOOR) : settings.paddingAfterS
+    const onsetV = vadOnset(first.start, vad)
+    const leadEnd = onsetV != null ? onsetV : vadSpeechStart(first, vad)
+    const rgFullE = FRAGILE.has(normWord(first.word)) ? Math.max(settings.paddingAfterS, FRAGILE_RIGHT_FLOOR) : settings.paddingAfterS
+    const rgE = onsetV != null ? Math.min(RIGHT_LEAD_S, rgFullE) : rgFullE
     if (leadEnd > 0) tryEdge(mkEdge('(video start)', first.word, 0, leadEnd, 0, rgE), 0, Math.max(0, leadEnd - rgE))
     // trailing: [lastWord real speech end, media end] → keep a left-guard tail.
     const last = words[words.length - 1]

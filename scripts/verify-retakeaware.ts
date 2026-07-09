@@ -591,6 +591,18 @@ const AFT = 'results were great here today now'
     noVad.regions.length === 0 && withVad.regions.length === 1 && withVad.regions[0].end - withVad.regions[0].start > 2.0,
     `noVad=${noVad.regions.length} withVad=${withVad.regions.length}`)
 }
+// 10b. Asymmetric residual: with VAD onset, the lead-in BEFORE the next word is
+//      tight (~100ms); the trailing air AFTER the previous word keeps the rest.
+{
+  const sc = scene(BEF, 2.0, AFT)
+  const vad = [{ start: sc.prevEnd, end: sc.nextStart }] // gap is real silence
+  const { regions } = detectBetaSilencesHybrid(sc.words, [], vad, S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced }))
+  const r = regions[0]
+  const leadIn = r ? sc.nextStart - r.end : 9
+  const trailing = r ? r.start - sc.prevEnd : 0
+  check('silence: lead-in before next word is tight (~100ms), trailing keeps the rest',
+    !!r && leadIn <= 0.12 + 1e-6 && trailing > leadIn + 0.1, `leadIn=${leadIn.toFixed(3)} trailing=${trailing.toFixed(3)}`)
+}
 // 11. Leading/trailing dead air is trimmed (edges have no bounding word).
 {
   const words: VerbatimWord[] = []
