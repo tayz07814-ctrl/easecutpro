@@ -4,14 +4,18 @@ import App from './App'
 import AuthScreen from './components/AuthScreen'
 import HomeScreen from './components/HomeScreen'
 import { useStore } from './store'
-import { IS_WEB } from './platform'
+import { IS_WEB, IS_CLOUD } from './platform'
 import { installWebApi, authMe } from './webapi'
+import { installCloudApi } from './cloud/api'
+import { cloudAuthMe } from './cloud/auth'
+import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
 import './styles.css'
 
 if (IS_WEB) {
-  installWebApi()
+  if (IS_CLOUD) installCloudApi()
+  else installWebApi()
   // Surface failed async ops in the status bar (and clear a stuck spinner).
   window.addEventListener('unhandledrejection', (e) => {
     const msg = (e.reason && (e.reason.message || String(e.reason))) || 'Unknown error'
@@ -31,6 +35,27 @@ function Root(): JSX.Element {
     if (!IS_WEB) return
     let cancelled = false
     ;(async () => {
+      // Cloud build: the "backend" is Supabase, not the PC — reachability is
+      // config + network. Unconfigured/offline still opens a local editor
+      // session (manual editing + on-device export need no backend at all).
+      if (IS_CLOUD) {
+        const online = supabaseConfigured() && navigator.onLine !== false
+        if (cancelled) return
+        useStore.getState().setServerAvailable(online)
+        if (!online) {
+          useStore.setState({
+            user: null,
+            currentProjectId: null,
+            project: useStore.getState().freshProject(),
+            library: [],
+            view: 'editor'
+          })
+          return
+        }
+        const { user } = await cloudAuthMe()
+        if (!cancelled) useStore.setState({ user, view: user ? 'home' : 'auth' })
+        return
+      }
       const online = await probeServer()
       if (cancelled) return
       useStore.getState().setServerAvailable(online)

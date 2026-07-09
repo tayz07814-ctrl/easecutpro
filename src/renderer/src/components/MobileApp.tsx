@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useStore } from '../store'
+import { IS_CLOUD } from '../platform'
 import { canEncodeOnDevice, whyNotLocal } from '../export/localExport'
 import { useSmoothProgress } from '../useSmoothProgress'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
@@ -462,13 +463,21 @@ function MobileExport({ onClose }: { onClose: () => void }): JSX.Element {
               )}
             </>
           )}
-          <button
-            className="m-export-big"
-            disabled={(!media && !hasBase) || job.active}
-            onClick={() => exportVideo({ width: W, height: H, bitrateMbps: bitrate })}
-          >
-            ⬆ Export {RES[resIdx].label}
-          </button>
+          {/* Cloud build: no server renderer — on-device export is the only path. */}
+          {IS_CLOUD && !deviceOk && (
+            <p className="muted small" style={{ textAlign: 'center' }}>
+              This browser can't encode video — use Chrome on desktop or Android.
+            </p>
+          )}
+          {!IS_CLOUD && (
+            <button
+              className="m-export-big"
+              disabled={(!media && !hasBase) || job.active}
+              onClick={() => exportVideo({ width: W, height: H, bitrateMbps: bitrate })}
+            >
+              ⬆ Export {RES[resIdx].label}
+            </button>
+          )}
         </div>
       </div>
     </div>

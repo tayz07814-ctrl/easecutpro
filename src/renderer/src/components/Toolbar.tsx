@@ -1,5 +1,5 @@
 import { useStore } from '../store'
-import { IS_WEB } from '../platform'
+import { IS_WEB, IS_CLOUD } from '../platform'
 import ProjectTitle from './ProjectTitle'
 
 export default function Toolbar(): JSX.Element {
@@ -128,12 +128,17 @@ export default function Toolbar(): JSX.Element {
       <div className="spacer" />
 
       <div className="group">
-        <span className={`badge ${tools?.whisper && tools?.whisperModel ? 'ok' : 'warn'}`}>
-          {tools?.whisper && tools?.whisperModel ? 'Whisper ✓' : 'Whisper: stub'}
-        </span>
-        <span className={`badge ${tools?.ffmpeg ? 'ok' : 'err'}`}>
-          {tools?.ffmpeg ? 'ffmpeg ✓' : 'ffmpeg ✗'}
-        </span>
+        {/* PC-binary badges mean nothing in the cloud build (no PC at all). */}
+        {!IS_CLOUD && (
+          <>
+            <span className={`badge ${tools?.whisper && tools?.whisperModel ? 'ok' : 'warn'}`}>
+              {tools?.whisper && tools?.whisperModel ? 'Whisper ✓' : 'Whisper: stub'}
+            </span>
+            <span className={`badge ${tools?.ffmpeg ? 'ok' : 'err'}`}>
+              {tools?.ffmpeg ? 'ffmpeg ✓' : 'ffmpeg ✗'}
+            </span>
+          </>
+        )}
         <button onClick={() => s.setShowSettings(true)} title="Settings & shortcuts">⚙</button>
         <button className="primary" onClick={() => s.setShowExportModal(true)} disabled={!hasBase || s.job.active}>
           ⬆ Export

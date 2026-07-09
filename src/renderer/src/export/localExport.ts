@@ -8,10 +8,12 @@
 // A slow or hanging device makes the export take longer; it cannot change the
 // output — duration and frame count are exact by construction.
 //
-// Phase 1 scope: main lane (multi-clip, cuts, speed, gain, mute, Ken Burns),
-// audio lanes (detached voice), background music. Text + overlay compositing
-// stays on the PC exporter for now — `whyNotLocal` reports the reason and the
-// UI falls back to server export.
+// Scope: main lane (multi-clip, cuts, speed, gain, mute, Ken Burns, image
+// clips), overlay lanes (image + video b-roll with crop/Ken Burns), baked text
+// overlays, audio lanes (detached voice), background music. Compositing math
+// mirrors the preview (OverlayLayer/TextLayer) and the PC text bake — see
+// export/overlays.ts. `whyNotLocal` refuses only timelines whose source files
+// are genuinely missing in this browser.
 
 import { getSharedEngine } from '../timelineEngine'
 import { mainTrackId } from '@shared/timeline/model'
@@ -20,6 +22,15 @@ import { resolveMedia } from '../media/resolver'
 import { isWebMediaId, getFile } from '../webmedia'
 import { IS_WEB } from '../platform'
 import { easeInOut } from '../clock'
+import {
+  planOverlays,
+  planTexts,
+  overlayRect,
+  fullFrameRect,
+  bakeTextBitmap,
+  loadImageBitmap
+} from './overlays'
+import type { OverlayClipSpec, OverlayRect } from './overlays'
 import type { Project } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 
@@ -38,6 +49,8 @@ interface Seg {
   gain: number
   muted: boolean
   hasAudio: boolean
+  /** image clip on the main lane — rendered from a decoded bitmap, no <video>. */
+  isImage: boolean
   size: number
   zs: number
   ze: number
@@ -91,16 +104,14 @@ export function whyNotLocal(project: Project): string {
   if (!doc) return 'timeline not ready'
   const main = doc.tracks.find((t) => t.isMain)
   if (!main || !main.clips.length) return 'nothing on the main track'
-  // The document is authoritative for texts too — project.texts is only folded
-  // at export time and can be stale in both directions.
-  const hasTexts = doc.tracks.some((t) => t.kind === 'text' && t.clips.some((c) => !!c.text))
-  if (hasTexts) return 'text overlays render on the PC for now'
-  const hasOverlays = doc.tracks.some(
-    (t) => !t.isMain && (t.kind === 'video' || t.kind === 'overlay') && t.clips.length > 0
-  )
-  if (hasOverlays) return 'overlay clips render on the PC for now'
-  for (const c of main.clips) {
-    if (c.sourcePath && resolveMedia(c.sourcePath).missing) return 'a source file is missing in this browser'
+  // Text and overlay lanes composite here now; the only honest refusal left is
+  // a source whose file this browser can't reach (main + visible overlay
+  // lanes — text clips have no source, audio lanes fail loudly at decode time).
+  for (const t of doc.tracks) {
+    if (t.hidden || !(t.isMain || t.kind === 'video')) continue
+    for (const c of t.clips) {
+      if (c.sourcePath && resolveMedia(c.sourcePath).missing) return 'a source file is missing in this browser'
+    }
   }
   return ''
 }
@@ -126,6 +137,7 @@ function planFromDoc(doc: TimelineDocument, project: Project): { segs: Seg[]; au
       gain: typeof c.gain === 'number' ? c.gain : 1,
       muted: c.audioDetached === true || c.muted === true,
       hasAudio: c.kind !== 'image' && c.hasAudio !== false,
+      isImage: c.kind === 'image',
       size: num(c.metadata?.ovScale, 1),
       zs: num(c.metadata?.ovZoomStart, 1),
       ze: num(c.metadata?.ovZoomEnd, 1),
@@ -370,9 +382,18 @@ export async function exportOnDevice(
   }
 
   dbg('audio streamed')
-  // 4) video pool (one hidden element per unique source)
+  // 4) compositing plan + source pools. Baked bitmaps (text, image overlays,
+  //    main-lane images) are TRANSFERRED to the worker once and drawn there on
+  //    every frame of their window; the worker closes each when its window
+  //    ends. Video overlays keep a hidden element here and ship one VideoFrame
+  //    per output frame instead. (Pools fill inside the try so a source that
+  //    refuses to open still tears everything down.)
+  const texts = planTexts(doc)
+  const overlays = planOverlays(doc)
+  const ovVideos: Array<{ spec: OverlayClipSpec; v: HTMLVideoElement; rect: OverlayRect }> = []
+  const mainImages = new Map<string, { id: number; w: number; h: number }>()
   const pool = new Map<string, HTMLVideoElement>()
-  for (const url of new Set(segs.map((s) => s.url))) {
+  const openVideo = async (url: string): Promise<HTMLVideoElement> => {
     const v = document.createElement('video')
     v.src = url
     v.muted = true
@@ -387,7 +408,7 @@ export async function exportOnDevice(
       v.onerror = () => rej(new Error('cannot open a source in this browser'))
       if (v.readyState >= 2) res()
     })
-    pool.set(url, v)
+    return v
   }
   const seekTo = (v: HTMLVideoElement, t: number): Promise<void> =>
     new Promise((res) => {
@@ -404,7 +425,6 @@ export async function exportOnDevice(
       v.currentTime = t
     })
 
-  dbg('pool ready')
   // 5) frame loop — offline, sequential, index-timestamped. Source frames come
   //    from PLAY-HARVEST by default: each segment plays ONCE (muted, at the
   //    clip's speed) while requestVideoFrameCallback captures presented frames
@@ -504,14 +524,134 @@ export async function exportOnDevice(
     }
     return best
   }
+  // contain-fit + eased Ken Burns (same math as the preview + PC export);
+  // vw/vh = the source's natural size (video element or decoded image bitmap).
+  const fitFor = (
+    seg: Seg,
+    vw: number,
+    vh: number,
+    t: number
+  ): { dx: number; dy: number; dw: number; dh: number; scale: number; ox: number; oy: number } => {
+    const s = Math.min(W / vw, H / vh)
+    const dw = vw * s
+    const dh = vh * s
+    const prog = seg.len > 0 ? Math.min(1, Math.max(0, (t - seg.start) / seg.len)) : 0
+    return {
+      dx: (W - dw) / 2,
+      dy: (H - dh) / 2,
+      dw,
+      dh,
+      scale: seg.size * (seg.zs + (seg.ze - seg.zs) * easeInOut(prog)),
+      ox: W * (0.5 + seg.ox),
+      oy: H * (0.5 + seg.oy)
+    }
+  }
   const tExport0 = performance.now()
   try {
+    // sprites: image overlays first (z = plan order) …
+    let spriteId = 0
+    for (const o of overlays) {
+      if (!o.isImage) continue
+      let bmp: ImageBitmap
+      try {
+        bmp = await loadImageBitmap(o.url)
+      } catch {
+        throw new Error('cannot open an overlay image in this browser')
+      }
+      const zoom =
+        Math.abs(o.zs - 1) > 0.001 || Math.abs(o.ze - 1) > 0.001
+          ? { zs: o.zs, ze: o.ze, start: o.start, len: o.rampLen }
+          : null
+      worker.postMessage(
+        { type: 'sprite', id: spriteId++, bitmap: bmp, z: o.z, start: o.start, end: o.end, rect: overlayRect(W, H, o), clip: true, zoom },
+        [bmp]
+      )
+    }
+    // … then text bakes, stacked ABOVE every overlay (preview order: TextLayer
+    // renders after OverlayLayer) via a large z offset.
+    for (const tc of texts) {
+      const bmp = await bakeTextBitmap(tc, W, H)
+      worker.postMessage(
+        { type: 'sprite', id: spriteId, bitmap: bmp, z: 1e6 + spriteId, start: tc.start, end: tc.end, rect: fullFrameRect(W, H), clip: false, zoom: null },
+        [bmp]
+      )
+      spriteId++
+    }
+    // main-lane image clips: a <video> can't open them — decode once per unique
+    // source; the frame loop draws the asset with the same contain-fit + Ken
+    // Burns a video frame gets.
+    let assetId = 0
+    for (const url of new Set(segs.filter((s) => s.isImage).map((s) => s.url))) {
+      let bmp: ImageBitmap
+      try {
+        bmp = await loadImageBitmap(url)
+      } catch {
+        throw new Error('cannot open an image in this browser')
+      }
+      const rec = { id: assetId++, w: bmp.width, h: bmp.height } // size read BEFORE the transfer detaches it
+      mainImages.set(url, rec)
+      worker.postMessage({ type: 'asset', id: rec.id, bitmap: bmp }, [bmp])
+    }
+    // hidden elements: one per unique main-lane video source; one per VIDEO
+    // overlay CLIP (an overlay can reuse a main source at a different time, so
+    // overlay elements are never shared by URL).
+    for (const url of new Set(segs.filter((s) => !s.isImage).map((s) => s.url))) pool.set(url, await openVideo(url))
+    for (const o of overlays) {
+      if (o.isImage) continue
+      ovVideos.push({ spec: o, v: await openVideo(o.url), rect: overlayRect(W, H, o) })
+    }
+    dbg('pool ready', { sprites: spriteId, images: mainImages.size, videoOverlays: ovVideos.length })
     for (let n = 0; n < totalFrames; n++) {
       if (workerError) fail(workerError)
       const t = (n + 0.0001) / FPS
+      // video-overlay harvests for THIS output frame — plain per-frame seek
+      // (b-roll windows are short; the main lane's play-harvest speed machinery
+      // isn't worth its complexity here, and exactness is identical).
+      const ovs: Array<{ frame: VideoFrame; z: number; rect: OverlayRect; scale: number }> = []
+      for (const o of ovVideos) {
+        const sp = o.spec
+        if (t < sp.start || t >= sp.end) continue
+        const owant = Math.min(sp.sourceIn + sp.rampLen - 0.001, sp.sourceIn + (t - sp.start))
+        if (Math.abs(o.v.currentTime - owant) > 1 / (FPS * 2)) await seekTo(o.v, owant)
+        if (o.v.readyState < 2) {
+          await new Promise<void>((res) => {
+            const to = setTimeout(res, 2000)
+            o.v.onloadeddata = () => {
+              clearTimeout(to)
+              res()
+            }
+          })
+        }
+        try {
+          ovs.push({
+            frame: new VideoFrame(o.v, { timestamp: 0 }),
+            z: sp.z,
+            rect: o.rect,
+            // eased Ken Burns for this frame (preview twin: OverlayBox zoomFromProg)
+            scale: sp.zs + (sp.ze - sp.zs) * easeInOut((t - sp.start) / sp.rampLen)
+          })
+        } catch {
+          /* decoder hiccup — drop this overlay for one frame, not the export */
+        }
+      }
+      const ovT = ovs.map((g) => g.frame as unknown as Transferable)
       const seg = segs.find((s) => t >= s.start && t < s.start + s.len)
       if (!seg) {
-        worker.postMessage({ type: 'frame', n, frame: null })
+        worker.postMessage({ type: 'frame', n, frame: null, ovs }, ovT)
+      } else if (seg.isImage) {
+        // main-lane image: the decoded asset stands in for the video frame —
+        // no harvest machinery, the worker draws it by id with the same fit.
+        if (seg !== curSeg) {
+          harvest.stop?.()
+          closeBuf()
+          curSeg = seg
+          segHarvesting = false
+        }
+        const a = mainImages.get(seg.url)!
+        worker.postMessage(
+          { type: 'frame', n, frame: null, imageId: a.id, fit: fitFor(seg, a.w || W, a.h || H, t), ovs },
+          ovT
+        )
       } else {
         const v = pool.get(seg.url)!
         const want = Math.min(seg.sourceEnd - 0.001, seg.sourceStart + (t - seg.start) * seg.speed)
@@ -589,30 +729,9 @@ export async function exportOnDevice(
             }
           }
         }
-        // contain-fit + eased Ken Burns (same math as the preview + PC export)
-        const vw = v.videoWidth || W
-        const vh = v.videoHeight || H
-        const s = Math.min(W / vw, H / vh)
-        const dw = vw * s
-        const dh = vh * s
-        const prog = seg.len > 0 ? Math.min(1, Math.max(0, (t - seg.start) / seg.len)) : 0
-        const scale = seg.size * (seg.zs + (seg.ze - seg.zs) * easeInOut(prog))
         worker.postMessage(
-          {
-            type: 'frame',
-            n,
-            frame,
-            fit: {
-              dx: (W - dw) / 2,
-              dy: (H - dh) / 2,
-              dw,
-              dh,
-              scale,
-              ox: W * (0.5 + seg.ox),
-              oy: H * (0.5 + seg.oy)
-            }
-          },
-          [frame as unknown as Transferable]
+          { type: 'frame', n, frame, fit: fitFor(seg, v.videoWidth || W, v.videoHeight || H, t), ovs },
+          [frame as unknown as Transferable, ...ovT]
         )
       }
       // backpressure: never let the encoder queue run away
@@ -631,7 +750,7 @@ export async function exportOnDevice(
   } finally {
     harvest.stop?.()
     closeBuf()
-    for (const v of pool.values()) {
+    for (const v of [...pool.values(), ...ovVideos.map((o) => o.v)]) {
       try {
         v.pause()
       } catch {

@@ -1,5 +1,5 @@
 import { useStore } from '../store'
-import { mediaSrc } from '../platform'
+import { mediaSrc, IS_CLOUD } from '../platform'
 import type { OverlayAnimation, OverlayPosition } from '@shared/types'
 
 const POSITIONS: OverlayPosition[] = [
@@ -112,9 +112,16 @@ export default function OverlayPanel(): JSX.Element {
 
       {assets.length > 0 && (
         <div className="ov-actions">
-          <button className="primary" disabled={job.active} onClick={() => void generateOverlays()}>
-            ✨ Generate overlays
-          </button>
+          {/* AI placement runs on the PC server; manual overlay clips still work in cloud. */}
+          {IS_CLOUD ? (
+            <span className="muted small">
+              AI overlay placement isn't in the cloud version yet — drag images onto the timeline instead.
+            </span>
+          ) : (
+            <button className="primary" disabled={job.active} onClick={() => void generateOverlays()}>
+              ✨ Generate overlays
+            </button>
+          )}
           <button disabled={job.active} onClick={() => clearGeneratedOverlays()}>
             Clear placed
           </button>

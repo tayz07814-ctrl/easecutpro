@@ -19,6 +19,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite", "--config", "vite.config.timeline.mts"],
       "port": 5199
+    },
+    {
+      "name": "cloud-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "preview", "--config", "vite.config.cloud.ts", "--port", "4173", "--strictPort"],
+      "port": 4173
     }
   ]
 }

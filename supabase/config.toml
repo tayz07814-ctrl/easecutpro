@@ -1,0 +1,10 @@
+# Supabase CLI project config (see CLOUD.md for the deploy steps).
+project_id = "easecutpro"
+
+# Both functions require a signed-in user; the gateway rejects anonymous calls
+# before our code runs.
+[functions.stt]
+verify_jwt = true
+
+[functions.llm-judge]
+verify_jwt = true

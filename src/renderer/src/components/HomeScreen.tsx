@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useStore, type BatchJob } from '../store'
-import { IS_WEB } from '../platform'
+import { IS_WEB, IS_CLOUD } from '../platform'
 import { authLogout } from '../webapi'
+import { cloudLogout } from '../cloud/auth'
 import { listProjects, createProject, getProject, deleteProject, saveProject, type ProjectMeta } from '../projectsApi'
 
 function fmtDate(t: number): string {
@@ -87,7 +88,8 @@ export default function HomeScreen(): JSX.Element {
   }
 
   async function logout(): Promise<void> {
-    await authLogout()
+    if (IS_CLOUD) await cloudLogout()
+    else await authLogout()
     setUser(null)
     setView('auth')
   }

@@ -12,7 +12,7 @@ import { WaveformCanvas } from './WaveformCanvas'
 import { Filmstrip } from './Filmstrip'
 import { frameToPx, pxToFrame, TRACK_COLOR, laneHeight } from './geometry'
 import { formatTimecode, secondsToFrames, type Timebase } from '@shared/timeline/time'
-import type { Clip } from '@shared/timeline/types'
+import type { Clip, TimelineDocument } from '@shared/timeline/types'
 import { useStore } from '../../store'
 import { playClock } from '../../clock'
 

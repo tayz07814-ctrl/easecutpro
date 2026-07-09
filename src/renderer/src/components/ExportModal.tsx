@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { canEncodeOnDevice, whyNotLocal } from '../export/localExport'
 import { useSharedEngineSnapshot } from '../timelineEngine'
-import { IS_WEB } from '../platform'
+import { IS_WEB, IS_CLOUD } from '../platform'
 import { useStore } from '../store'
 
 interface Preset {
@@ -124,6 +124,7 @@ export default function ExportModal(): JSX.Element {
           <button onClick={() => close(false)}>Cancel</button>
           {IS_WEB && deviceOk && (
             <button
+              className={IS_CLOUD ? 'primary' : ''}
               disabled={!canExport || w < 16 || h < 16 || !!localGate}
               title={
                 localGate
@@ -132,16 +133,24 @@ export default function ExportModal(): JSX.Element {
               }
               onClick={() => void exportVideoOnDevice({ width: w, height: h, bitrateMbps: bitrate })}
             >
-              📱 Export on this device <span className="muted small">beta</span>
+              📱 Export on this device {!IS_CLOUD && <span className="muted small">beta</span>}
             </button>
           )}
-          <button
-            className="primary"
-            disabled={!canExport || w < 16 || h < 16}
-            onClick={() => exportVideo({ width: w, height: h, bitrateMbps: bitrate })}
-          >
-            ⬆ Export
-          </button>
+          {/* Cloud build has no server renderer — on-device export IS the export. */}
+          {IS_CLOUD && !deviceOk && (
+            <span className="muted small">
+              This browser can't encode video — use Chrome/Edge on desktop or Android.
+            </span>
+          )}
+          {!IS_CLOUD && (
+            <button
+              className="primary"
+              disabled={!canExport || w < 16 || h < 16}
+              onClick={() => exportVideo({ width: w, height: h, bitrateMbps: bitrate })}
+            >
+              ⬆ Export
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -5,6 +5,7 @@ dist/
 .env
 .env.*
 *.env
+!.env.example
 *.key
 *.log
 .eltest/
@@ -28,3 +29,8 @@ fastcut/last_run.json
 fastcut/last_run.prev.json
 tsconfig*.tsbuildinfo
 .ecweb-preview/
+
+# Cloud build (Vercel + Supabase)
+dist-cloud/
+.cloud-public/
+.vercel/

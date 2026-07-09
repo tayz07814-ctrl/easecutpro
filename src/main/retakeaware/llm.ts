@@ -8,20 +8,19 @@
 // none (RETAKE_LLM=off disables; RETAKE_LLM=mock returns canned approvals for
 // offline testing).
 
-import type { RetakeGroup, FillerDecision, LlmDecisions } from '../../shared/retakeaware/types'
+import type { LlmDecisions, ReviewPayload } from '../../shared/retakeaware/types'
+import { parseLlmDecisions } from '../../shared/retakeaware/engine'
 import { resolveAnthropicKey, getAnthropic } from '../claude'
 import { openaiAvailable, getOpenAI } from '../openai'
+
+// ReviewPayload lives in shared types and parseLlmDecisions in the shared
+// engine core — one copy each, used by this judge AND the browser cloud twin.
+export type { ReviewPayload }
+export { parseLlmDecisions }
 
 export interface LlmJudge {
   name: string
   review(payload: ReviewPayload): Promise<string> // raw model text (JSON expected)
-}
-
-export interface ReviewPayload {
-  transcriptContext: string
-  retakeGroups: RetakeGroup[]
-  fillerCandidates: FillerDecision[]
-  editingStyle: string
 }
 
 const SYSTEM = `You review video-editing candidates for a talking-head editor. You get retake groups (repeated attempts at the same line) and filler-word candidates.
@@ -86,23 +85,6 @@ export function pickJudge(): LlmJudge | null {
   if (resolveAnthropicKey()) return new AnthropicJudge()
   if (openaiAvailable()) return new OpenAIJudge()
   return null
-}
-
-/** Extract + validate the model's JSON; null on ANY problem (rules stand). */
-export function parseLlmDecisions(raw: string, warnings: string[]): LlmDecisions | null {
-  try {
-    const m = raw.match(/\{[\s\S]*\}/)
-    if (!m) throw new Error('no JSON object in reply')
-    const j = JSON.parse(m[0]) as LlmDecisions
-    if (!Array.isArray(j.retake_group_decisions ?? []) || !Array.isArray(j.filler_decisions ?? [])) {
-      throw new Error('wrong shape')
-    }
-    return { retake_group_decisions: j.retake_group_decisions ?? [], filler_decisions: j.filler_decisions ?? [] }
-  } catch (e) {
-    warnings.push(`LLM returned unusable JSON — using rule-based decisions (${(e as Error).message})`)
-    console.warn('[retake-aware-beta] LLM JSON invalid, rules stand:', (e as Error).message)
-    return null
-  }
 }
 
 /** Run the optional review; never throws — the job completes on rules alone. */

@@ -463,7 +463,7 @@ export async function ensureAudioUploaded(id: string, onProgress?: (pct: number)
 }
 
 /** Decode a media file's audio in the browser → 16 kHz mono WAV Blob (null if it can't). */
-async function extractAudioWavBlob(id: string, onProgress?: (pct: number) => void): Promise<Blob | null> {
+export async function extractAudioWavBlob(id: string, onProgress?: (pct: number) => void): Promise<Blob | null> {
   const rec = registry.get(id)
   if (!rec) return null
   // Very large files risk OOM on decode; let the caller fall back to full upload.

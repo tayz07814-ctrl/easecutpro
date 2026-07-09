@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { IS_CLOUD } from '../platform'
 import { buildSilenceChips, CUTLORD_PRESETS, type CutLordMode } from '@shared/cutlord'
 import type { Word } from '@shared/types'
 import { useSharedEngineSnapshot } from '../timelineEngine'
@@ -65,9 +66,12 @@ export default function TranscriptPanel(): JSX.Element {
           <button className={clTab === 'clutter' ? 'on' : ''} onClick={() => setClTab('clutter')}>
             🧹 ClutterCleaner
           </button>
-          <button className={clTab === 'zoom' ? 'on' : ''} onClick={() => setClTab('zoom')}>
-            🎬 Auto Zoom & B-roll
-          </button>
+          {/* AI zoom/B-roll generation runs on the PC engines — desktop/self-host only. */}
+          {!IS_CLOUD && (
+            <button className={clTab === 'zoom' ? 'on' : ''} onClick={() => setClTab('zoom')}>
+              🎬 Auto Zoom & B-roll
+            </button>
+          )}
         </div>
       </div>
       {clTab === 'clutter' ? <ClutterCleaner /> : <ZoomBroll />}
@@ -175,23 +179,30 @@ function ClutterCleaner(): JSX.Element {
   // creates it. Shared between the empty state and the full panel.
   const engineActions = (
     <div className="row cl-actions">
+      {/* FastCut/ProCut need the PC engines — hidden in the cloud build, where
+          Retake β (fully in-browser + edge functions) is the one cut engine. */}
+      {!IS_CLOUD && (
+        <>
+          <button
+            className="primary"
+            onClick={() => void runFastCutLord()}
+            disabled={jobActive}
+            title="FastCut — offline repeat/retake engine + VAD silence scan (⚙ profile). Highlights only; nothing is cut until Execute."
+          >
+            ⚡ FastCut
+          </button>
+          <button
+            className="primary"
+            onClick={() => void runProCut()}
+            disabled={jobActive}
+            title="ProCut — premium 4-phase AI pipeline (whisper+Parakeet map → Claude → OpenAI listens) + VAD silence scan. Highlights only; nothing is cut until Execute."
+          >
+            ✂ ProCut
+          </button>
+        </>
+      )}
       <button
-        className="primary"
-        onClick={() => void runFastCutLord()}
-        disabled={jobActive}
-        title="FastCut — offline repeat/retake engine + VAD silence scan (⚙ profile). Highlights only; nothing is cut until Execute."
-      >
-        ⚡ FastCut
-      </button>
-      <button
-        className="primary"
-        onClick={() => void runProCut()}
-        disabled={jobActive}
-        title="ProCut — premium 4-phase AI pipeline (whisper+Parakeet map → Claude → OpenAI listens) + VAD silence scan. Highlights only; nothing is cut until Execute."
-      >
-        ✂ ProCut
-      </button>
-      <button
+        className={IS_CLOUD ? 'primary' : ''}
         onClick={() => void runRetakeCutBeta()}
         disabled={jobActive}
         title="Retake-Aware Cut Beta — verbatim transcript (AssemblyAI/Deepgram), whole-take retake removal (never splices takes), filler triage, AND conservative transcript-gap silence tightening. Highlights + silence chips only; nothing is cut until Execute."
@@ -205,9 +216,11 @@ function ClutterCleaner(): JSX.Element {
       >
         🔇 Silence Settings
       </button>
-      <button className="cl-gear" onClick={() => setShowSettings((v) => !v)} title="FastCut / ProCut silence-cleaning profile">
-        ⚙
-      </button>
+      {!IS_CLOUD && (
+        <button className="cl-gear" onClick={() => setShowSettings((v) => !v)} title="FastCut / ProCut silence-cleaning profile">
+          ⚙
+        </button>
+      )}
       <span className="spacer" />
       <button
         className="danger"
@@ -230,8 +243,17 @@ function ClutterCleaner(): JSX.Element {
           <ScriptSection />
         </div>
         <div className="transcript empty muted">
-          No transcript yet. Click <b>⚡ FastCut</b> or <b>✂ ProCut</b> — they transcribe automatically
-          (FastCut with Parakeet, ProCut with OpenAI) and highlight fillers, repeats and silences here for review.
+          {IS_CLOUD ? (
+            <>
+              No transcript yet. Click <b>🧪 Find Retakes & Silence</b> — it transcribes automatically
+              (AssemblyAI/Deepgram) and highlights retakes, fillers and silences here for review.
+            </>
+          ) : (
+            <>
+              No transcript yet. Click <b>⚡ FastCut</b> or <b>✂ ProCut</b> — they transcribe automatically
+              (FastCut with Parakeet, ProCut with OpenAI) and highlight fillers, repeats and silences here for review.
+            </>
+          )}
         </div>
       </>
     )
@@ -271,18 +293,23 @@ function ClutterCleaner(): JSX.Element {
             {openaiAvailable && (
               <button onClick={() => void selectAICuts()} title="AI review (OpenAI)">✨ Smart cut (AI)</button>
             )}
-            <button onClick={() => void smartSmoothCut()} disabled={jobActive} title="Experimental pause editor">
-              🪄 Smooth Cut β
-            </button>
-            <select
-              value={smartCutPreset}
-              onChange={(e) => setSmartCutPreset(e.target.value as 'natural' | 'tiktok_smooth' | 'aggressive')}
-              title="Smooth Cut style"
-            >
-              <option value="natural">natural</option>
-              <option value="tiktok_smooth">tiktok smooth</option>
-              <option value="aggressive">aggressive</option>
-            </select>
+            {/* Smart Smooth's judge runs on the PC server — desktop/self-host only. */}
+            {!IS_CLOUD && (
+              <>
+                <button onClick={() => void smartSmoothCut()} disabled={jobActive} title="Experimental pause editor">
+                  🪄 Smooth Cut β
+                </button>
+                <select
+                  value={smartCutPreset}
+                  onChange={(e) => setSmartCutPreset(e.target.value as 'natural' | 'tiktok_smooth' | 'aggressive')}
+                  title="Smooth Cut style"
+                >
+                  <option value="natural">natural</option>
+                  <option value="tiktok_smooth">tiktok smooth</option>
+                  <option value="aggressive">aggressive</option>
+                </select>
+              </>
+            )}
           </div>
         )}
         <div className="hint muted">

@@ -12,6 +12,11 @@ import { isWebMediaId, localUrl } from './webmedia'
 export const IS_WEB =
   typeof window !== 'undefined' && !(window as { api?: unknown }).api
 
+// Cloud build (Vercel static + Supabase, no PC server at all). Baked in at
+// build time by vite.config.cloud.ts; always false in Electron and in the
+// self-hosted web build.
+export const IS_CLOUD = IS_WEB && import.meta.env.VITE_CLOUD === '1'
+
 /** Build a playable/streamable URL for a server- or local-side media path. */
 export function mediaSrc(p: string): string {
   if (!p) return ''

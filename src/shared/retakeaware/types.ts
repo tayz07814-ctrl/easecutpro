@@ -157,6 +157,17 @@ export interface LlmDecisions {
   filler_decisions: LlmFillerDecision[]
 }
 
+/** Structured payload the optional LLM judge reviews (transcript context +
+ *  candidate groups + ambiguous fillers). Shared so the Node judge
+ *  (src/main/retakeaware/llm.ts) and the cloud llm-judge edge-function client
+ *  send the exact same shape. */
+export interface ReviewPayload {
+  transcriptContext: string
+  retakeGroups: RetakeGroup[]
+  fillerCandidates: FillerDecision[]
+  editingStyle: string
+}
+
 export interface RepetitionCandidate {
   a: string
   b: string
@@ -227,7 +238,9 @@ export interface RetakeAwareResult {
   silenceRegions: import('../types').SilenceRegion[]
   retakeGroups: RetakeGroup[]
   fillerDecisions: FillerDecision[]
-  debugPath: string
+  /** per-run debug JSON on disk (Electron/server); null when the platform can't
+   *  persist it (browser cloud build — the JSON is console-only there). */
+  debugPath: string | null
   warnings: string[]
   summary: string
 }

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { authLogin, authSignup, authMe } from '../webapi'
+import { cloudLogin, cloudSignup } from '../cloud/auth'
+import { IS_CLOUD } from '../platform'
 
 export default function AuthScreen(): JSX.Element {
   const setUser = useStore((s) => s.setUser)
@@ -14,6 +16,8 @@ export default function AuthScreen(): JSX.Element {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
+    // Cloud (Supabase) has no invite code — gating is a dashboard switch there.
+    if (IS_CLOUD) return
     authMe().then(({ signupGated }) => setGated(signupGated))
   }, [])
 
@@ -22,7 +26,13 @@ export default function AuthScreen(): JSX.Element {
     setBusy(true)
     setErr('')
     try {
-      const user = mode === 'signup' ? await authSignup(email, password, code) : await authLogin(email, password)
+      const user = IS_CLOUD
+        ? mode === 'signup'
+          ? await cloudSignup(email, password)
+          : await cloudLogin(email, password)
+        : mode === 'signup'
+          ? await authSignup(email, password, code)
+          : await authLogin(email, password)
       setUser(user)
       setView('home')
     } catch (e) {
