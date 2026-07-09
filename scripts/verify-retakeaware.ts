@@ -682,5 +682,78 @@ const AFT = 'results were great here today now'
   check('silence: leading not cut when VAD says it is not silent (protects intro)', !noisy.debug.per_region.some((r) => r.previous_word === '(video start)' && r.kept))
 }
 
+// ---- no-transcript noise-island classifier (record-button clicks etc.) ----
+// 12 + 15. Record-button click BEFORE the first word is removed; the real first
+//          word is NOT clipped (transcript words are the source of truth for speech).
+{
+  const words: VerbatimWord[] = [
+    { word: 'hello', start: 3.0, end: 3.2 }, { word: 'there', start: 3.3, end: 3.5 }, { word: 'friend', start: 3.6, end: 3.9 }
+  ]
+  const vad = [{ start: 0, end: 2.0 }, { start: 2.3, end: 3.0 }] // a 0.3s click (non-silence) at [2.0,2.3] before speech
+  const opt = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced, maxCutsPerMinute: 60 })
+  const res = detectBetaSilencesHybrid(words, [], vad, opt, 4.5)
+  const island = res.debug.no_transcript_islands.find((x) => x.where === 'leading_edge')
+  check('silence: record-button click before speech is classified noise & removed',
+    !!island && island.decision === 'remove' && (island.classification === 'likely_noise_click' || island.classification === 'likely_breath_noise') && res.debug.noise_islands_removed >= 1,
+    `island=${JSON.stringify(island)}`)
+  const keeps = keepsFor(words, res.regions)
+  const clickKept = keeps.some((k) => k.start <= 2.15 && k.end >= 2.15) // the click's midpoint
+  const firstWordKept = keeps.some((k) => k.start <= 3.0 + 1e-6 && k.end >= 3.2 - 1e-6)
+  check('silence: the click clip is gone from the timeline', !clickKept, `keeps=${keeps.map((k) => `[${k.start.toFixed(2)},${k.end.toFixed(2)}]`).join(' ')}`)
+  check('silence: the real first word after the click is NOT clipped', firstWordKept)
+}
+// 13. Short tap/click INSIDE a transcript gap is removed (cut through, not protected).
+{
+  const words: VerbatimWord[] = [{ word: 'done', start: 1.0, end: 1.5 }, { word: 'okay', start: 5.0, end: 5.3 }]
+  const vad = [{ start: 1.5, end: 3.0 }, { start: 3.5, end: 5.0 }] // 0.5s click island at [3.0,3.5]
+  const opt = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced })
+  const res = detectBetaSilencesHybrid(words, [], vad, opt, 6.0)
+  const island = res.debug.no_transcript_islands.find((x) => x.where === 'transcript_gap')
+  const keeps = keepsFor(words, res.regions)
+  const clickKept = keeps.some((k) => k.start <= 3.25 && k.end >= 3.25)
+  check('silence: short click inside a transcript gap is classified noise & cut through',
+    !!island && island.decision === 'remove' && island.classification === 'likely_noise_click' && !clickKept,
+    `island=${JSON.stringify(island)} clickKept=${clickKept}`)
+}
+// 14. A no-transcript clip in the uncertain band (0.6–0.75s) is removed as a standalone wordless clip.
+{
+  const words: VerbatimWord[] = [{ word: 'first', start: 1.0, end: 1.4 }, { word: 'second', start: 5.0, end: 5.4 }]
+  const vad = [{ start: 1.4, end: 3.0 }, { start: 3.7, end: 5.0 }] // 0.7s island [3.0,3.7] (uncertain)
+  const opt = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced })
+  const res = detectBetaSilencesHybrid(words, [], vad, opt, 6.0)
+  const island = res.debug.no_transcript_islands.find((x) => x.where === 'transcript_gap')
+  const keeps = keepsFor(words, res.regions)
+  const kept = keeps.some((k) => k.start <= 3.35 && k.end >= 3.35)
+  check('silence: uncertain no-transcript clip under 2s is removed',
+    !!island && island.classification === 'uncertain' && island.decision === 'remove' && !kept,
+    `island=${JSON.stringify(island)} kept=${kept}`)
+}
+// 16. A real speech-like island ≥0.75s CAN be protected (carved AROUND, not cut through).
+{
+  const words: VerbatimWord[] = [{ word: 'end', start: 1.0, end: 1.3 }, { word: 'so', start: 6.0, end: 6.3 }]
+  const vad = [{ start: 1.3, end: 3.0 }, { start: 4.0, end: 6.0 }] // 1.0s island [3.0,4.0] = possible missed speech
+  const opt = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced, maxCutsPerMinute: 60 })
+  const res = detectBetaSilencesHybrid(words, [], vad, opt, 7.0)
+  const island = res.debug.no_transcript_islands.find((x) => x.where === 'transcript_gap')
+  const coversIsland = res.regions.some((r) => r.start < 4.0 - 0.05 && r.end > 3.0 + 0.05)
+  check('silence: real speech-like island ≥0.75s is protected (carved around, not cut through)',
+    !!island && island.classification === 'protected_speech' && island.decision === 'keep' && !coversIsland && res.debug.speech_islands_protected >= 1,
+    `island=${JSON.stringify(island)} coversIsland=${coversIsland} protected=${res.debug.speech_islands_protected}`)
+}
+// 17. A long (>2s) silent transcript GAP is still shortened normally (rule: a long
+//     section IS removable when it is a transcript-gap silence — only NOISE-island
+//     classification is new; normal pause-shortening is unchanged).
+{
+  const words: VerbatimWord[] = [{ word: 'alpha', start: 1.0, end: 1.4 }, { word: 'omega', start: 4.5, end: 4.9 }]
+  const vad = [{ start: 1.4, end: 4.5 }] // whole 3.1s gap is genuine silence (no island)
+  const opt = S({ preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced })
+  const res = detectBetaSilencesHybrid(words, [], vad, opt, 6.0)
+  const removed = res.regions.reduce((n, r) => n + (r.end - r.start), 0)
+  const gapIslands = res.debug.no_transcript_islands.filter((x) => x.where === 'transcript_gap').length
+  check('silence: a long (>2s) silent transcript gap is still shortened (not noise-classified)',
+    res.regions.length === 1 && removed > 2.0 && gapIslands === 0,
+    `regions=${res.regions.length} removed=${removed.toFixed(2)} gapIslands=${gapIslands}`)
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall retake-aware checks green')
 process.exit(failures ? 1 : 0)
