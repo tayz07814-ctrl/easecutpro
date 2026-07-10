@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useStore } from '../store'
-import { mediaSrc } from '../platform'
+import { mediaSrc, IS_CLOUD } from '../platform'
 import { insertLibraryItemAtPlayhead } from '../timelineInsert'
 import type { LibraryItem } from '@shared/types'
 
@@ -112,9 +112,13 @@ export default function MediaLibrary(): JSX.Element {
             <button onClick={clearSequence} title="Remove all clips">Clear</button>
           </div>
           <div className="row" style={{ marginBottom: 5 }}>
-            <button onClick={combineSequence} disabled={busy} title="Optional: flatten the clips into ONE video (you don't need this — edit directly on the timeline)">
-              🔗 Flatten to one video
-            </button>
+            {!IS_CLOUD && (
+              // Flatten needs the desktop/self-host encoder; in cloud you edit the
+              // montage directly (Cut Lord + export are already montage-native).
+              <button onClick={combineSequence} disabled={busy} title="Optional: flatten the clips into ONE video (you don't need this — edit directly on the timeline)">
+                🔗 Flatten to one video
+              </button>
+            )}
             <button onClick={() => setShowExportModal(true)} disabled={busy} title="Export the clips concatenated">
               ⬇ Export
             </button>

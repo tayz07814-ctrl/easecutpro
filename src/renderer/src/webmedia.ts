@@ -109,11 +109,13 @@ export function isWebMediaId(p: string | undefined): boolean {
   return !!p && p.startsWith('webmedia:')
 }
 
-/** Keep a picked File locally; return an id used as its "path" in the model. */
-export function registerLocalFile(file: File): string {
+/** Keep a picked File locally; return an id used as its "path" in the model.
+ *  `persist` false skips the IndexedDB copy — used for transient artifacts (e.g.
+ *  a combined-montage audio) that would otherwise bloat storage on every run. */
+export function registerLocalFile(file: File, persist = true): string {
   const id = `webmedia:${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
   registry.set(id, { file, url: URL.createObjectURL(file) })
-  void idbPut(id, file) // survive reloads on this device (best effort)
+  if (persist) void idbPut(id, file) // survive reloads on this device (best effort)
   return id
 }
 
@@ -708,4 +710,75 @@ function encodeWav(pcm: Int16Array, rate: number): Blob {
   view.setUint32(40, dataLen, true)
   new Int16Array(out, 44).set(pcm)
   return new Blob([out], { type: 'audio/wav' })
+}
+
+/** Extract the video-time [inSec,outSec] slice of a decoded buffer as mono 16-bit
+ *  PCM at `rate`, gain-scaled (linear resample). `lead` (from an MP4 edit list) is
+ *  the audio's delay relative to video, so a video-time sample reads decoded-time
+ *  `t - lead` (silence before the audio actually starts). */
+function sliceMonoInt16(audio: AudioBuffer, inSec: number, outSec: number, rate: number, gain: number, lead: number): Int16Array {
+  const nOut = Math.max(0, Math.round((outSec - inSec) * rate))
+  const out = new Int16Array(nOut)
+  const chans: Float32Array[] = []
+  for (let c = 0; c < audio.numberOfChannels; c++) chans.push(audio.getChannelData(c))
+  const nch = chans.length || 1
+  const sr = audio.sampleRate
+  for (let i = 0; i < nOut; i++) {
+    const at = inSec + i / rate - lead
+    if (at < 0) continue // before the audio starts → leave silent (0)
+    const pos = at * sr
+    const i0 = Math.floor(pos)
+    const frac = pos - i0
+    let s = 0
+    for (const ch of chans) {
+      const a = ch[i0] ?? 0
+      const b = ch[i0 + 1] ?? a
+      s += a + (b - a) * frac
+    }
+    s = (s / nch) * gain
+    s = s < -1 ? -1 : s > 1 ? 1 : s
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+  }
+  return out
+}
+
+/** Cloud replacement for the desktop ffmpeg `combineClips(audioOnly)`: concatenate
+ *  the montage clips' audio — each trimmed to [sourceIn,sourceOut], in order — into
+ *  ONE 16 kHz mono WAV. Image / silent clips contribute silence for their natural
+ *  length, so the WAV's timeline equals the montage's virtual time (cumulative
+ *  sourceOut-sourceIn) — exactly where the transcript / silence / retake results
+ *  are stored, so the existing single-file pipeline runs unchanged. Speed is NOT
+ *  applied (the virtual domain is un-sped; speed is applied later at preview/export). */
+export async function combineSequenceAudioWav(
+  clips: { sourcePath: string; sourceIn: number; sourceOut: number; isImage?: boolean; hasAudio?: boolean; gain?: number }[],
+  onProgress?: (pct: number) => void
+): Promise<Blob> {
+  const TARGET = 16000
+  const parts: Int16Array[] = []
+  for (let i = 0; i < clips.length; i++) {
+    const c = clips[i]
+    const nOut = Math.max(0, Math.round((c.sourceOut - c.sourceIn) * TARGET))
+    const rec = registry.get(c.sourcePath)
+    if (c.isImage || c.hasAudio === false || !rec) {
+      parts.push(new Int16Array(nOut)) // still / silent / missing → silence, stays aligned
+    } else {
+      try {
+        const buf = await rec.file.arrayBuffer()
+        const lead = mp4AudioStartOffset(buf) // parse BEFORE decode (it detaches buf)
+        const audio = await decodeAudioAtRate(buf, TARGET)
+        parts.push(sliceMonoInt16(audio, c.sourceIn, c.sourceOut, TARGET, c.gain ?? 1, lead))
+      } catch {
+        parts.push(new Int16Array(nOut)) // decode failed → silence (keep time alignment)
+      }
+    }
+    onProgress?.(Math.round(((i + 1) / clips.length) * 100))
+  }
+  const total = parts.reduce((n, a) => n + a.length, 0)
+  const pcm = new Int16Array(total)
+  let o = 0
+  for (const a of parts) {
+    pcm.set(a, o)
+    o += a.length
+  }
+  return encodeWav(pcm, TARGET)
 }

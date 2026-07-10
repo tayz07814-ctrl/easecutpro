@@ -11,6 +11,7 @@ import {
   localProbe,
   localWaveform,
   localThumbnails,
+  combineSequenceAudioWav,
   requestPersistentStorage
 } from '../webmedia'
 import { retakeAwareCutCloud, transcribeCloud } from './retakeEngine'
@@ -100,8 +101,22 @@ const cloudApi: Window['api'] = {
     return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
   },
 
-  combineClips: async () =>
-    desktopOnly('Combining clips (multi-clip Retake β / montage)'),
+  // Montage: the Cut Lord flows all pass audioOnly=true and only need the base
+  // sequence's AUDIO, which we concatenate in-browser (no server ffmpeg) so the
+  // normal single-file transcribe / silence / Retake β pipeline runs unchanged.
+  // The video "Flatten to one file" (audioOnly=false) is IS_CLOUD-hidden; export
+  // and preview are already montage-native, so it isn't needed here.
+  combineClips: async (clips, audioOnly) => {
+    if (!audioOnly) desktopOnly('Flatten to one video')
+    clips.forEach((c) => needLocal(c.sourcePath))
+    const wav = await combineSequenceAudioWav(clips, (pct) =>
+      emit('transcribe', Math.round(pct * 0.4), 'Cut Lord is combining clips…')
+    )
+    const file = new File([wav], 'montage.ecaudio.wav', { type: 'audio/wav' })
+    const path = registerLocalFile(file, false) // transient analysis artifact
+    const duration = clips.reduce((s, c) => s + Math.max(0, c.sourceOut - c.sourceIn), 0)
+    return { path, duration, width: 0, height: 0, fps: 0, hasAudio: true, hasVideo: false }
+  },
 
   probe: (path) => localProbe(needLocal(path)),
   waveform: (path) => localWaveform(needLocal(path)),
