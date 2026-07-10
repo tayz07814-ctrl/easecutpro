@@ -34,10 +34,10 @@ import type { OverlayClipSpec, OverlayRect } from './overlays'
 import type { Project } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 
-const FPS = 30
+export const FPS = 30
 const AUDIO_RATE = 48000
 
-interface Seg {
+export interface Seg {
   url: string
   /** the clip's original source path/id — the audio decoder keys off this. */
   src: string
@@ -58,7 +58,7 @@ interface Seg {
   oy: number
 }
 
-interface AudioClipSched {
+export interface AudioClipSched {
   url: string
   src: string
   start: number
@@ -155,7 +155,7 @@ export function whyNotLocal(project: Project): string {
 }
 
 // ---- doc -> plan ----
-function planFromDoc(doc: TimelineDocument, project: Project): { segs: Seg[]; audio: AudioClipSched[]; total: number } {
+export function planFromDoc(doc: TimelineDocument, project: Project): { segs: Seg[]; audio: AudioClipSched[]; total: number } {
   const main = doc.tracks.find((t) => t.isMain)
   const tb = doc.timebase
   const segs: Seg[] = []
@@ -228,7 +228,7 @@ function num(v: unknown, d: number): number {
 }
 
 // ---- audio (offline mix -> AudioData chunks) ----
-async function renderAudio(
+export async function renderAudio(
   segs: Seg[],
   extra: AudioClipSched[],
   total: number,
@@ -331,6 +331,14 @@ export async function exportOnDevice(
   if (gate) throw new Error(gate)
   const caps = await probeEncodeCaps()
   if (!caps.video) throw new Error('this browser can’t encode video on-device')
+  // iOS/iPadOS Safari < 26 ships WebCodecs video-only (no AudioEncoder). Route to
+  // the Mediabunny exporter, which polyfills AAC with a WASM encoder so the export
+  // keeps its audio. Everything below stays the proven mp4-muxer path used by every
+  // other browser (Android/desktop/iOS 26+), unchanged.
+  if (!caps.audio) {
+    const { exportOnDeviceMB } = await import('./localExportMB')
+    return exportOnDeviceMB(project, opts, onProgress)
+  }
   const { segs, audio, total } = planFromDoc(doc, project)
   if (!segs.length || total <= 0) throw new Error('nothing to export')
 
@@ -341,13 +349,9 @@ export async function exportOnDevice(
   onProgress(1, 'Preparing on-device export…')
   dbg('plan', { segs: segs.length, audio: audio.length, total, W, H, totalFrames })
 
-  // 1) audio first (fast, and the encoder drains it while frames trickle in).
-  //    Skipped when the browser can't AAC-encode (iOS Safari < 26) — the export
-  //    goes out video-only; the UI warns about this before the user taps export.
-  dbg('renderAudio: start', { audioCapable: caps.audio })
-  const audioBuf = caps.audio
-    ? await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing audio…'))
-    : null
+  // 1) audio first (fast, and the encoder drains it while frames trickle in)
+  dbg('renderAudio: start')
+  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing audio…'))
   dbg('renderAudio: done', !!audioBuf)
 
   // 2) worker

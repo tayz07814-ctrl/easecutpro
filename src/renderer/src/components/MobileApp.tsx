@@ -466,8 +466,8 @@ function MobileExport({ onClose }: { onClose: () => void }): JSX.Element {
                 </p>
               )}
               {audioMissing && !localGate && (
-                <p className="muted small" style={{ textAlign: 'center', margin: '0 0 8px', color: '#e0a341' }}>
-                  ⚠ Video-only on iPhone/iPad — this browser can’t add audio yet. For sound, use desktop/Android or iOS&nbsp;26.
+                <p className="muted small" style={{ textAlign: 'center', margin: '0 0 8px' }}>
+                  Audio is encoded in-browser on iPhone/iPad (beta) — the first export may take a little longer.
                 </p>
               )}
             </>

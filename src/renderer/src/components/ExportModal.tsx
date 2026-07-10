@@ -125,9 +125,9 @@ export default function ExportModal(): JSX.Element {
         <p className="muted small">~{estMbPerMin} MB per minute · content is letterboxed to fit the chosen resolution.</p>
 
         {audioMissing && (
-          <p className="muted small" style={{ color: '#e0a341' }}>
-            ⚠ This browser (iPhone/iPad Safari) can’t add audio to exports yet — the file will be
-            {' '}<b>video-only</b>. For sound, export from Chrome/Edge on desktop or Android, or update to iOS&nbsp;26.
+          <p className="muted small">
+            On iPhone/iPad this browser has no built-in audio encoder, so sound is encoded in-browser
+            {' '}(beta) — the first export may take a little longer. The file includes full video + audio.
           </p>
         )}
 
