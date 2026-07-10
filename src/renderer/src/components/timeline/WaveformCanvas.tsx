@@ -23,14 +23,6 @@ function paint(canvas: HTMLCanvasElement, peaks: number[]): void {
   const mid = h / 2
   const amp = h - 2
 
-  // Per-clip AUTO-GAIN: scale to THIS slice's loudest peak so the waveform uses the
-  // full height — a quiet clip no longer draws as a flat, unreadable line, and its
-  // valleys (silence) vs heights (speech) become easy to pick out. The max(…, 0.15)
-  // caps the gain so a near-silent clip isn't blown up into noise (it stays low).
-  let pmax = 0
-  for (let i = 0; i < n; i++) if (peaks[i] > pmax) pmax = peaks[i]
-  const norm = 1 / Math.max(pmax, 0.15)
-
   // Bright-teal vertical gradient so the bar tops read as a glowing ridge line.
   const grad = ctx.createLinearGradient(0, 0, 0, h)
   grad.addColorStop(0, 'rgba(122, 248, 232, 0.95)')
@@ -46,9 +38,8 @@ function paint(canvas: HTMLCanvasElement, peaks: number[]): void {
     const to = Math.max(from + 1, Math.floor(((x + step) / w) * n))
     let p = 0
     for (let j = from; j < to && j < n; j++) if (peaks[j] > p) p = peaks[j]
-    // Normalize, then a mild exponent (>1) deepens the valleys so pauses read as
-    // clear dips instead of a soft ripple — sharper contrast between quiet & loud.
-    p = Math.min(1, p * norm)
+    // Peaks arrive already source-normalized (see clipPeaks); a mild exponent
+    // (>1) deepens the valleys so pauses read as clear dips, not a soft ripple.
     p = Math.pow(p, 1.15)
     const bh = Math.max(1.5, p * amp)
     ctx.fillRect(x, mid - bh / 2, barW, bh)
