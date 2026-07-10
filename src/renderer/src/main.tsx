@@ -63,6 +63,45 @@ if (IS_WEB) {
     useStore.setState({ job: { active: false, percent: 0, message: `Error: ${msg}` } })
     showErr('Async error', e.reason)
   })
+
+  // ---- Crash breadcrumb ----
+  // An iOS out-of-memory kill RELOADS the tab with no error event, so a long op
+  // (Cut Lord / export) just vanishes — nothing above can catch it. Persist the
+  // active job; if a reload finds one still "running", the previous run died
+  // mid-way (on iPhone that's almost always OOM). Report which STAGE it reached.
+  try {
+    const prev = sessionStorage.getItem('ec.activeJob')
+    if (prev) {
+      const j = JSON.parse(prev) as { kind?: string; percent?: number; message?: string; active?: boolean }
+      if (j && j.active) {
+        showErr(
+          'Last run crashed — likely out of memory',
+          new Error(
+            `${j.kind || 'Job'} reached ${j.percent ?? 0}% ("${j.message || ''}") and the tab reloaded itself. ` +
+              `On iPhone that almost always means it ran out of memory on this clip.`
+          )
+        )
+      }
+    }
+    sessionStorage.removeItem('ec.activeJob')
+  } catch {
+    /* sessionStorage unavailable — skip the breadcrumb */
+  }
+  let lastJob: unknown = null
+  useStore.subscribe((s) => {
+    if (s.job === lastJob) return
+    lastJob = s.job
+    try {
+      if (s.job?.active)
+        sessionStorage.setItem(
+          'ec.activeJob',
+          JSON.stringify({ kind: s.job.kind, percent: s.job.percent, message: s.job.message, active: true })
+        )
+      else sessionStorage.removeItem('ec.activeJob')
+    } catch {
+      /* ignore */
+    }
+  })
 }
 
 function Root(): JSX.Element {

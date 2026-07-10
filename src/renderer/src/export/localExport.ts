@@ -242,6 +242,17 @@ export async function renderAudio(
 ): Promise<AudioBuffer | null> {
   const frames = Math.max(1, Math.ceil(total * AUDIO_RATE))
   const off = new OfflineAudioContext(2, frames, AUDIO_RATE)
+  // Decode on a LIVE AudioContext, NOT `off`: iOS's OfflineAudioContext.decodeAudioData
+  // silently yields SILENCE (the same bug that blanked the waveform), which shipped
+  // audio-less exports on iPhone. Each decoded buffer auto-resamples into `off`'s rate
+  // when it's played through a BufferSource, so the mix stays correct everywhere.
+  const LiveAC: typeof AudioContext =
+    window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+  const dec: { ctx: AudioContext | null } = { ctx: null }
+  const decodeCtx = (): AudioContext => {
+    if (!dec.ctx) dec.ctx = new LiveAC()
+    return dec.ctx
+  }
   const cache = new Map<string, AudioBuffer | null>()
   // Get the source's audio bytes the CHEAPEST reliable way:
   //  1. a browser-local File → read it directly (no fetch; blob-URL fetch is
@@ -268,7 +279,7 @@ export async function renderAudio(
         }
       }
       if (!ab) ab = await (await fetch(url)).arrayBuffer()
-      buf = await off.decodeAudioData(ab)
+      buf = await decodeCtx().decodeAudioData(ab)
     } catch {
       buf = null // undecodable container, dead URL, or decode OOM
     }
@@ -312,6 +323,13 @@ export async function renderAudio(
       node.stop(Math.min(total, a.start + a.dur))
     } else {
       node.start(a.start, a.sourceIn, a.dur)
+    }
+  }
+  if (dec.ctx) {
+    try {
+      dec.ctx.close() // decoding is done; free the live context (iOS caps how many exist)
+    } catch {
+      /* already closed */
     }
   }
   // HONEST failure: never silently ship a video without its sound. If a source
