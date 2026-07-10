@@ -1,0 +1,13 @@
+{
+  "description": "position-bonus safety — content that merely OPENS with \"Let's start with…\" or CLOSES with \"…a nice shot every time\" must never be cut by the head/tail bonus (audience-directed veto holds)",
+  "patterns": [
+    "production chatter",
+    "edge-position false-positive guard"
+  ],
+  "expectCut": [],
+  "expectKeep": [
+    "let's start with the basics",
+    "cleanser serum and sunscreen",
+    "how you get a nice shot every time"
+  ]
+}

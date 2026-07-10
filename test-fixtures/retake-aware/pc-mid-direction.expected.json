@@ -1,0 +1,12 @@
+{
+  "description": "mid-roll talking-through-lines (\"you did that part right, but I'll say this and you say this\") — audience tokens ('you') veto a rules cut, so it stages needs_review for the LLM; rules-only must cut NOTHING here",
+  "patterns": [
+    "production chatter",
+    "talking through the lines"
+  ],
+  "expectCut": [],
+  "expectKeep": [
+    "daily yoga at sunrise",
+    "the food was incredible"
+  ]
+}

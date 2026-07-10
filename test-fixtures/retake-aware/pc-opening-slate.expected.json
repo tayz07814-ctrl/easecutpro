@@ -1,0 +1,20 @@
+{
+  "description": "opening slate — \"Script ten, take one.\" is cut by rules (slate + head bonus); \"Okay, let's start.\" is LLM-tier (needs_review), so rules-only keeps it; the content line is untouched",
+  "patterns": [
+    "production chatter",
+    "opening slate / count-in"
+  ],
+  "expectCut": [
+    {
+      "text": "script ten take one",
+      "type": "production_chatter"
+    }
+  ],
+  "expectPatternTypes": [
+    "production_chatter"
+  ],
+  "expectKeep": [
+    "okay let's start",
+    "this serum saved my skin"
+  ]
+}

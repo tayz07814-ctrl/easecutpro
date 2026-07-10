@@ -1,0 +1,19 @@
+{
+  "description": "closing crew chatter — \"Okay guys, nice shot.\" at the tail is cut by rules (closing phrase + tail bonus); the audience-facing content line is kept",
+  "patterns": [
+    "production chatter",
+    "closing chatter"
+  ],
+  "expectCut": [
+    {
+      "text": "nice shot",
+      "type": "production_chatter"
+    }
+  ],
+  "expectPatternTypes": [
+    "production_chatter"
+  ],
+  "expectKeep": [
+    "this cream works on any skin type"
+  ]
+}

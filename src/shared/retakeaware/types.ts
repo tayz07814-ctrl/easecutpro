@@ -154,6 +154,12 @@ export interface ProductionChatterCandidate {
   production_chatter_score: number
   self_talk_score: number
   off_camera_instruction_score: number
+  /** opening slate / count-in hits ("script 10, take 1", "three two one"). */
+  slate_score?: number
+  /** closing-chatter hits ("that's a wrap", "nice shot", "we got it"). */
+  closing_score?: number
+  /** talking-through-lines hits ("I'll say this and you say this"). */
+  direction_score?: number
   confidence_score: number
   risk_score: number
   decision: ProductionChatterDecision

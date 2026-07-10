@@ -1118,13 +1118,49 @@ const AUDIENCE_PHRASES = [ // spoken TO the viewer / customer
   'your skin', 'your hair', 'changed my skin', 'helps with'
 ]
 const AUDIENCE_TOKENS = new Set(['you', 'your', 'youre', 'youll', 'youve', 'yourself', 'yours'])
+const PC_SLATE = [ // opening slate / count-in / rehearsal markers ("script 10, take 1")
+  'three two one', 'in three two one', 'and action', 'okay action', 'were rolling', 'camera rolling',
+  'cameras rolling', 'camera is rolling', 'okay recording', 'okay were recording', 'now recording',
+  'its recording', 'okay its recording', 'that was the rehearsal', 'thats the rehearsal',
+  'rehearsal first', 'just rehearsing', 'that was rehearsal'
+]
+// "script 10" / "scene 2" are unambiguous slates; "take one" doubles as content
+// ("take one every morning") so SLATE_TAKE_RE only counts alongside other evidence.
+const SLATE_SCENE_RE = /\b(?:script|scene) (?:number )?(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b/g
+const SLATE_TAKE_RE = /\btake (?:number )?(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\b/g
+const PC_CLOSING = [ // crew-facing wrap-up at the end of a recording
+  'thats a wrap', 'its a wrap', 'and thats a wrap', 'nice shot', 'good shot', 'great shot',
+  'got the shot', 'we got it', 'i think we got it', 'we got that', 'good take', 'great take',
+  'nice take', 'perfect take', 'and cut', 'okay cut', 'cut there', 'stop recording',
+  'stop the recording', 'turn off the camera', 'turn the camera off', 'nailed it',
+  'good job', 'great job', 'nice job', 'nice work', 'good work', 'well done'
+]
+const PC_CLOSING_WEAK = [ // wrap-up-ish praise that real content also uses — review tier only
+  'that was good', 'that was great', 'that was perfect', 'that was clean', 'that works',
+  'that should work', 'were done', 'we are done', 'okay done', 'okay were good',
+  'i like that one', 'use that one', 'keep that one', 'watch it back', 'play it back'
+]
+const PC_DIRECTION = [ // two people talking THROUGH the lines ("I'll say this and you say this")
+  'you say', 'you say this', 'then you say', 'and you say', 'ill say this', 'i say this', 'ill say',
+  'you go first', 'ill go first', 'your line', 'my line', 'the line is', 'say this part',
+  'do that part', 'you did that part', 'that part again', 'that part right', 'read the line',
+  'read your line', 'say your line', 'when i point', 'after i say', 'when i nod'
+]
 const PC_MAX_WORDS = 18 // production chatter is short; a long chunk is likely content
+const PC_EDGE_S = 10 // "start/end of recording" window for the position bonus
 
 /** How many of `phrases` occur as whole word-sequences in the space-padded `norm`. */
 function countPhrases(norm: string, phrases: string[]): number {
   let n = 0
   for (const p of phrases) if (norm.includes(` ${p} `)) n++
   return n
+}
+
+/** Human reason for the DOMINANT signal category (first entry wins ties). */
+function pcReason(scored: [number, string][]): string {
+  let best = scored[0]
+  for (const s of scored) if (s[0] > best[0]) best = s
+  return best[1]
 }
 
 export function detectProductionChatter(chunks: Chunk[], words: VerbatimWord[], groups: RetakeGroup[]): ProductionChatterCandidate[] {
@@ -1135,19 +1171,43 @@ export function detectProductionChatter(chunks: Chunk[], words: VerbatimWord[], 
     for (const a of g.attempts) for (let i = a.word_start_index; i <= a.word_end_index; i++) grouped.add(i)
   }
   const out: ProductionChatterCandidate[] = []
+  const t0 = chunks.length ? chunks[0].start : 0
+  const tEnd = chunks.length ? chunks[chunks.length - 1].end : 0
   for (let ci = 0; ci < chunks.length; ci++) {
     const c = chunks[ci]
     if (grouped.has(c.wordStart) || grouped.has(c.wordEnd)) continue
     const wordCount = c.wordEnd - c.wordStart + 1
-    const norm = ' ' + c.text.toLowerCase().replace(/[^\p{L}\p{N}'\s]/gu, ' ').replace(/\s+/g, ' ').trim() + ' '
+    // Apostrophes are stripped BEFORE phrase matching so spoken contractions
+    // match the lists ("let's start" → "lets start", "that's a wrap" → "thats").
+    const norm = ' ' + c.text.toLowerCase().replace(/['’]/gu, '').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim() + ' '
     const tokenSet = new Set<string>()
-    for (let i = c.wordStart; i <= c.wordEnd; i++) { const t = normToken(words[i].word); if (t) tokenSet.add(t) }
+    for (let i = c.wordStart; i <= c.wordEnd; i++) { const t = normToken(words[i].word).replace(/'/g, ''); if (t) tokenSet.add(t) }
 
     const metaHits = countPhrases(norm, PC_META)
     const selfHits = countPhrases(norm, PC_SELF_TALK)
     let offHits = countPhrases(norm, PC_OFF_CAMERA)
     for (const t of PC_OFF_CAMERA_TOKENS) if (tokenSet.has(t)) offHits++
-    const production_chatter_score = metaHits + selfHits + offHits
+    const directionHits = countPhrases(norm, PC_DIRECTION)
+
+    const sceneSlate = (norm.match(SLATE_SCENE_RE) ?? []).length
+    let slateHits = countPhrases(norm, PC_SLATE) + sceneSlate
+    // Position: slates/count-ins live at the very START, wrap-up at the very END.
+    const head = ci <= 1 || c.start - t0 <= PC_EDGE_S
+    const tail = ci >= chunks.length - 2 || tEnd - c.end <= PC_EDGE_S
+    // "take N" counts only next to other slate/meta evidence ("take one every
+    // morning" is content; "script ten, take one" is a slate).
+    const takeSlate = (norm.match(SLATE_TAKE_RE) ?? []).length
+    if (takeSlate && (slateHits || (head && metaHits))) slateHits += takeSlate
+
+    const closingStrong = countPhrases(norm, PC_CLOSING)
+    const closingHits = closingStrong + countPhrases(norm, PC_CLOSING_WEAK)
+
+    // The edge bonus only AMPLIFIES an explicit slate/closing phrase — position
+    // alone never scores, so content that merely opens/closes the video is safe.
+    const edgeBonus = (head && slateHits ? 1 : 0) + (tail && closingStrong ? 1 : 0)
+
+    const production_chatter_score =
+      metaHits + selfHits + offHits + directionHits + slateHits + closingHits + edgeBonus
 
     let audience = countPhrases(norm, AUDIENCE_PHRASES)
     for (const t of AUDIENCE_TOKENS) if (tokenSet.has(t)) audience++
@@ -1163,9 +1223,22 @@ export function detectProductionChatter(chunks: Chunk[], words: VerbatimWord[], 
       decision = production_chatter_score >= 2 && !long ? 'needs_review' : 'keep'
       reason = decision === 'keep' ? 'audience-directed content' : 'production signals mixed with audience-directed content'
     } else if (production_chatter_score >= 2 && !long) {
-      decision = 'cut'
-      reason = selfHits >= metaHits && selfHits >= offHits ? 'creator self-talk / self-correction'
-        : offHits >= metaHits ? 'off-camera direction' : 'meta-talk about filming'
+      // Direction phrases ("I'll say this…") also occur in real narration — on
+      // their own they only ever STAGE for review; rules-cut needs a second signal.
+      if (production_chatter_score - directionHits >= 2) {
+        decision = 'cut'
+        reason = pcReason([
+          [slateHits + (head && slateHits ? 1 : 0), 'opening slate / count-in'],
+          [closingHits + (tail && closingStrong ? 1 : 0), 'closing chatter'],
+          [selfHits, 'creator self-talk / self-correction'],
+          [directionHits, 'talking through the lines / direction'],
+          [offHits, 'off-camera direction'],
+          [metaHits, 'meta-talk about filming']
+        ])
+      } else {
+        decision = 'needs_review'
+        reason = 'talking through the lines / direction'
+      }
     } else if (production_chatter_score >= 1 && !long) {
       decision = 'needs_review'
       reason = 'weak production-chatter signal'
@@ -1194,6 +1267,9 @@ export function detectProductionChatter(chunks: Chunk[], words: VerbatimWord[], 
       production_chatter_score,
       self_talk_score: selfHits,
       off_camera_instruction_score: offHits,
+      slate_score: slateHits,
+      closing_score: closingHits,
+      direction_score: directionHits,
       confidence_score: Number(confidence_score.toFixed(2)),
       risk_score: Number(risk_score.toFixed(2)),
       decision
