@@ -72,7 +72,7 @@ async function assemblyAiTranscribe(path: string, onProgress?: ProgressFn): Prom
       continue
     }
     pollFailures = 0
-    if (t.status === 'error') throw new Error('Transcription failed — please try again.')
+    if (t.status === 'error') throw new Error(t.error ? `AssemblyAI: ${t.error}` : 'Transcription failed — please try again.')
     if (t.status === 'completed') {
       const words: VerbatimWord[] = (t.words ?? []).map((w) => ({
         word: w.text,

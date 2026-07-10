@@ -89,8 +89,19 @@ async function encodeAacM4a(float32: Float32Array<ArrayBuffer>): Promise<Blob | 
       fastStart: 'in-memory'
     })
     const encErr: { e: Error | null } = { e: null }
+    // iOS Safari's AAC encoder runs and emits chunks but often never delivers a
+    // decoder description (AudioSpecificConfig). The muxed mp4 then LOOKS valid —
+    // AssemblyAI accepts it at start (HTTP 200) — but carries no esds the server
+    // can decode, so the job fails during transcode ("All transcription providers
+    // failed"). Only trust the m4a when a real config arrives; otherwise the
+    // caller falls back to the always-decodable WAV.
+    let haveConfig = false
     const enc = new AudioEncoder({
-      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+      output: (chunk, meta) => {
+        const d = meta?.decoderConfig?.description as { byteLength: number } | undefined
+        if (d && d.byteLength > 0) haveConfig = true
+        muxer.addAudioChunk(chunk, meta)
+      },
       error: (e) => { encErr.e = e as Error }
     })
     enc.configure(cfgFor(rate))
@@ -110,7 +121,7 @@ async function encodeAacM4a(float32: Float32Array<ArrayBuffer>): Promise<Blob | 
     }
     await enc.flush()
     enc.close()
-    if (encErr.e) return null
+    if (encErr.e || !haveConfig) return null
     muxer.finalize()
     return new Blob([muxer.target.buffer], { type: 'audio/mp4' })
   } catch {
