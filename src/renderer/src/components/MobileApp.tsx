@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react'
 import { useStore } from '../store'
 import { IS_CLOUD } from '../platform'
 import { probeEncodeCaps, whyNotLocal, type EncodeCaps } from '../export/localExport'
@@ -41,24 +41,36 @@ export default function MobileApp(): JSX.Element {
     return v >= 22 && v <= 58 ? v : 46
   })
   useEffect(() => localStorage.setItem('ec.mStageVh', String(stageVh)), [stageVh])
-  // ONE unified pointer gesture (not separate touch + mouse). iOS fires simulated
-  // mouse events after touch, and the old dual handlers started two competing
-  // drags — the "grip glitches / can't be moved" bug.
-  function startStageDrag(clientY0: number): void {
+  // ONE pointer gesture WITH pointer capture: capture routes every move/up for
+  // this finger to the grip element even as it slides over the preview/timeline,
+  // which is what makes the drag reliable on iOS (window listeners without
+  // capture were being starved — the "grip is frozen / can't be moved" bug).
+  function startStageDrag(e: ReactPointerEvent<HTMLDivElement>): void {
+    const el = e.currentTarget
     const vh0 = stageVh
+    const y0 = e.clientY
+    try {
+      el.setPointerCapture(e.pointerId)
+    } catch {
+      /* unsupported — falls back to bubbling */
+    }
     const onMove = (ev: PointerEvent): void => {
-      const dvh = ((ev.clientY - clientY0) / window.innerHeight) * 100
+      const dvh = ((ev.clientY - y0) / window.innerHeight) * 100
       setStageVh(Math.min(58, Math.max(22, vh0 + dvh)))
-      ev.preventDefault()
     }
-    const onUp = (): void => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
+    const onUp = (ev: PointerEvent): void => {
+      try {
+        el.releasePointerCapture(ev.pointerId)
+      } catch {
+        /* ignore */
+      }
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      el.removeEventListener('pointercancel', onUp)
     }
-    window.addEventListener('pointermove', onMove, { passive: false })
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+    el.addEventListener('pointercancel', onUp)
   }
   const [pendingTranscript, setPendingTranscript] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
@@ -171,7 +183,7 @@ export default function MobileApp(): JSX.Element {
       </div>
       <div
         className="m-stage-grip"
-        onPointerDown={(e) => startStageDrag(e.clientY)}
+        onPointerDown={startStageDrag}
       >
         <span />
       </div>

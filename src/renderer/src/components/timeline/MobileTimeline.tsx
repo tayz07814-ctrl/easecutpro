@@ -16,6 +16,30 @@ import type { Clip, TimelineDocument } from '@shared/timeline/types'
 import { useStore } from '../../store'
 import { playClock } from '../../clock'
 
+/** Timecode readout that ticks off the shared play clock during playback — the
+ *  engine playhead only advances on the video's ~4Hz timeupdate and freezes on
+ *  iOS, so the counter would stall even while the timeline scrolls. Isolated so
+ *  only this element re-renders (~10Hz), not the whole timeline. */
+function MobileTimecode({ playing, staticFrame, tb }: { playing: boolean; staticFrame: number; tb: Timebase }): JSX.Element {
+  const [, force] = useState(0)
+  useEffect(() => {
+    if (!playing) return
+    let raf = 0
+    let last = 0
+    const loop = (t: number): void => {
+      if (t - last > 100) {
+        force((n) => n + 1)
+        last = t
+      }
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [playing])
+  const frame = playing ? secondsToFrames(playClock.t, tb) : staticFrame
+  return <div className="ec-mtl-tc">{formatTimecode(frame, tb)}</div>
+}
+
 function MobileClip({
   clip,
   zoom,
@@ -227,7 +251,7 @@ export default function MobileTimeline(): JSX.Element {
 
   return (
     <div className="ec-mtl">
-      <div className="ec-mtl-tc">{formatTimecode(session.playhead, tb)}</div>
+      <MobileTimecode playing={playing} staticFrame={session.playhead} tb={tb} />
       <div
         className="ec-mtl-scroll"
         ref={scrollRef}
