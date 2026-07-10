@@ -249,7 +249,16 @@ export async function localWaveform(id: string, peaksPerSec = 60): Promise<Wavef
     const leadPeaks = Math.round(mp4AudioStartOffset(buf) * peaksPerSec) // parse BEFORE decode (it detaches buf)
     const AC: typeof AudioContext =
       window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-    const ac = new AC()
+    // A waveform only needs the amplitude envelope, so decode/resample to a LOW
+    // rate: ~6x less PCM to scan and far less memory (a multi-minute file at full
+    // 48kHz can GC-thrash or OOM a phone). Fall back to the native rate if the
+    // context rejects 8kHz.
+    let ac: AudioContext
+    try {
+      ac = new AC({ sampleRate: 8000 })
+    } catch {
+      ac = new AC()
+    }
     const audio = await ac.decodeAudioData(buf)
     ac.close()
     // Use ALL channels (max across them): voice is often recorded on only one
@@ -293,7 +302,8 @@ export async function localWaveform(id: string, peaksPerSec = 60): Promise<Wavef
  *  wedging the whole strip. */
 export async function localThumbnails(
   id: string,
-  intervalSec = 2
+  intervalSec = 2,
+  onPartial?: (frames: { time: number; url: string }[]) => void
 ): Promise<{ time: number; url: string }[]> {
   const rec = registry.get(id)
   if (!rec) return []
@@ -348,7 +358,7 @@ export async function localThumbnails(
 
     const vw = video.videoWidth || 16
     const vh = video.videoHeight || 9
-    const W = 160
+    const W = 128
     const H = Math.max(2, Math.round((W * vh) / vw))
     const canvas = document.createElement('canvas')
     canvas.width = W
@@ -379,14 +389,17 @@ export async function localThumbnails(
       return withTimeout(presented, 2000)
     }
 
-    // Cap the count (~50 frames) so long videos don't seek forever.
-    const step = Math.max(intervalSec || 1, dur / 50)
+    // ~24 frames is plenty for a filmstrip — fewer seeks than the old ~50, and
+    // each frame is handed to `onPartial` the moment it's drawn so the strip
+    // fills in LIVE instead of appearing all at once after a blocking pass.
+    const step = Math.max(intervalSec || 1, dur / 24)
     const out: { time: number; url: string }[] = []
     for (let t = 0; t < dur - 0.05; t += step) {
       await seek(t)
       try {
         ctx.drawImage(video, 0, 0, W, H)
-        out.push({ time: t, url: canvas.toDataURL('image/jpeg', 0.6) })
+        out.push({ time: t, url: canvas.toDataURL('image/jpeg', 0.55) })
+        onPartial?.(out.slice())
       } catch {
         /* one frame refused to draw — keep going; a partial strip still helps */
       }

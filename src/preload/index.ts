@@ -64,7 +64,10 @@ const api = {
   detectSilence: (path: string, opts: SilenceDetectOptions): Promise<SilenceRegion[]> =>
     ipcRenderer.invoke(IPC.detectSilence, path, opts),
   waveform: (path: string): Promise<Waveform> => ipcRenderer.invoke(IPC.waveform, path),
-  thumbnails: (path: string, intervalSec?: number): Promise<Thumb[]> =>
+  // `onPartial` streams thumbnails as they generate on the web build; Electron
+  // returns the whole strip over IPC at once (callbacks can't cross IPC), so it
+  // is accepted for a shared signature but ignored here.
+  thumbnails: (path: string, intervalSec?: number, _onPartial?: (frames: Thumb[]) => void): Promise<Thumb[]> =>
     ipcRenderer.invoke(IPC.thumbnails, path, intervalSec),
   exportProject: (
     project: Project,

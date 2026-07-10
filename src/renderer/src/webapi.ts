@@ -235,8 +235,8 @@ const webApi: Window['api'] = {
   },
   probe: (path) => (isWebMediaId(path) ? localProbe(path) : call('/api/probe', { path })),
   waveform: (path) => (isWebMediaId(path) ? localWaveform(path) : call('/api/waveform', { path })),
-  thumbnails: (path, intervalSec) =>
-    isWebMediaId(path) ? localThumbnails(path, intervalSec) : call('/api/thumbnails', { path, intervalSec }),
+  thumbnails: (path, intervalSec, onPartial) =>
+    isWebMediaId(path) ? localThumbnails(path, intervalSec, onPartial) : call('/api/thumbnails', { path, intervalSec }),
   transcribe: async (path, backend, modelName) => {
     // Only the AUDIO is needed — extract it in the browser and upload just that
     // (~15x smaller than the video) instead of the whole file.

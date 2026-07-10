@@ -10,7 +10,7 @@ import { mediaSrc } from '../../platform'
 
 interface Fetcher {
   waveform(path: string): Promise<ClipWaveform>
-  thumbnails(path: string): Promise<ClipFrame[]>
+  thumbnails(path: string, onPartial?: (frames: ClipFrame[]) => void): Promise<ClipFrame[]>
 }
 
 export interface MediaManager extends MediaData {
@@ -23,7 +23,7 @@ export function createMediaManager(fetcher?: Fetcher): MediaManager {
   const fx: Fetcher =
     fetcher ?? {
       waveform: (p) => window.api.waveform(p),
-      thumbnails: (p) => window.api.thumbnails(p)
+      thumbnails: (p, onPartial) => window.api.thumbnails(p, undefined, onPartial)
     }
 
   const waves = new Map<string, ClipWaveform>()
@@ -59,7 +59,13 @@ export function createMediaManager(fetcher?: Fetcher): MediaManager {
     const key = 't:' + path
     if (frames.has(path) || inflight.has(key)) return
     inflight.add(key)
-    fx.thumbnails(path)
+    // Render the filmstrip PROGRESSIVELY: each frame that lands updates the cache
+    // and re-renders, so a long clip shows thumbnails as they generate instead of
+    // staying blank until the whole strip is done.
+    fx.thumbnails(path, (partial) => {
+      frames.set(path, partial)
+      notify()
+    })
       .then((th) => {
         frames.set(path, th)
         inflight.delete(key)
