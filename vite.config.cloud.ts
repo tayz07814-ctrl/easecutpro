@@ -57,6 +57,9 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: resolve(__dirname, 'dist-cloud'),
       emptyOutDir: true,
+      // Emit source maps so a minified on-device stack (mobile Safari) can be
+      // decoded back to the real source line while we stabilize the iOS path.
+      sourcemap: true,
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/renderer/index.html') }
       }

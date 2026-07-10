@@ -25,7 +25,11 @@ if (IS_WEB) {
   const showErr = (label: string, err: unknown): void => {
     try {
       const e = err as Error | undefined
-      const msg = (e && (e.stack || e.message)) || String(err)
+      // Safari's Error.stack lists frames but OMITS the message line, so always
+      // show the message FIRST — otherwise we see where it threw, not WHAT failed.
+      const message = (e && e.message) || String(err)
+      const stack = (e && e.stack) || ''
+      const msg = stack && !stack.startsWith(message) ? `${message}\n${stack}` : stack || message
       if (seenErr.has(msg)) return
       seenErr.add(msg)
       let box = document.getElementById('ec-err')
