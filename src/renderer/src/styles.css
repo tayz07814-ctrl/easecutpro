@@ -141,6 +141,12 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .overlay-layer { position: absolute; pointer-events: none; }
 .ov-box { position: absolute; overflow: hidden; cursor: move; pointer-events: auto; outline: 1px dashed rgba(255,255,255,0.45); }
 .ov-box.selected { outline: 2px solid var(--accent); }
+
+/* Centre-line snap guides shown while dragging an overlay/text to the middle. */
+.snap-guide-v, .snap-guide-h { position: absolute; background: var(--yellow, #ffc83d);
+  box-shadow: 0 0 6px rgba(255,200,61,0.7); pointer-events: none; z-index: 30; }
+.snap-guide-v { left: 50%; top: 0; bottom: 0; width: 1px; transform: translateX(-50%); }
+.snap-guide-h { top: 50%; left: 0; right: 0; height: 1px; transform: translateY(-50%); }
 /* No CSS transition here: the Ken Burns zoom is driven per-frame by rAF; a
    transition would fight it and make the motion lag/stutter. */
 .ov-box video, .ov-box img { display: block; position: absolute; left: 0; top: 0; will-change: transform; backface-visibility: hidden; }

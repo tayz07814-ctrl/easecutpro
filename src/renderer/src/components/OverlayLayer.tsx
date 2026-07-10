@@ -6,6 +6,7 @@ import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
 import { framesToSeconds, secondsToFrames } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
 import * as C from '@shared/timeline/commands'
+import { usePinchDrag } from '../usePinchDrag'
 import type { Clip } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 
@@ -139,12 +140,15 @@ export default function OverlayLayer({ frame }: { frame: Rect }): JSX.Element {
     else selectClip(id)
   }
   const selId = docMode ? snap!.interaction.selection[0] ?? null : selectedClipId
+  const [guide, setGuide] = useState<{ v: boolean; h: boolean }>({ v: false, h: false })
 
   return (
     <div className="overlay-layer" style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }}>
       {active.map((c) => (
-        <OverlayBox key={c.id} view={c} frame={frame} selected={selId === c.id} onCommit={commit} onSelect={select} />
+        <OverlayBox key={c.id} view={c} frame={frame} selected={selId === c.id} onCommit={commit} onSelect={select} onSnap={setGuide} />
       ))}
+      {guide.v && <div className="snap-guide-v" />}
+      {guide.h && <div className="snap-guide-h" />}
     </div>
   )
 }
@@ -154,13 +158,15 @@ function OverlayBox({
   frame,
   selected,
   onCommit,
-  onSelect
+  onSelect,
+  onSnap
 }: {
   view: OverlayView
   frame: Rect
   selected: boolean
   onCommit: (id: string, patch: { x?: number; y?: number; scale?: number }) => void
   onSelect: (id: string) => void
+  onSnap: (s: { v: boolean; h: boolean }) => void
 }): JSX.Element {
   const ref = useRef<HTMLVideoElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
@@ -228,29 +234,23 @@ function OverlayBox({
     return undefined
   }, [playing, playhead, view.start, view.sourceIn, len, zs, ze, isImage])
 
-  function startMove(e: React.MouseEvent): void {
-    e.stopPropagation()
-    onSelect(view.id)
-    const sx = e.clientX
-    const sy = e.clientY
-    const x0 = view.x
-    const y0 = view.y
-    let nx = x0
-    let ny = y0
-    function onMove(ev: MouseEvent): void {
-      nx = clamp(x0 + (ev.clientX - sx) / frame.width, -0.3, 1)
-      ny = clamp(y0 + (ev.clientY - sy) / frame.height, -0.3, 1)
-      setLive({ x: nx, y: ny })
-    }
-    function onUp(): void {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+  // One finger = move (centre snaps to the frame's centre lines); two fingers =
+  // pinch-resize. Both commit to the doc, so the export matches what you place.
+  const onPointerDown = usePinchDrag({
+    frame,
+    start: () => ({ x: view.x, y: view.y, scale: view.scale }),
+    half: (s) => ({ hw: s / 2, hh: (s * frame.width) / croppedAspect / 2 / frame.height }),
+    scaleRange: [0.05, 1.6],
+    xRange: [-0.3, 1],
+    yRange: [-0.3, 1],
+    onSelect: () => onSelect(view.id),
+    onLive: (p) => setLive(p),
+    onCommit: (p) => {
       setLive(null)
-      onCommit(view.id, { x: nx, y: ny })
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }
+      onCommit(view.id, p)
+    },
+    onSnap
+  })
 
   function startResize(e: React.MouseEvent): void {
     e.stopPropagation()
@@ -275,8 +275,8 @@ function OverlayBox({
   return (
     <div
       className={'ov-box' + (selected ? ' selected' : '')}
-      style={{ left: x * frame.width, top: y * frame.height, width: boxW, height: boxH }}
-      onPointerDown={startMove}
+      style={{ left: x * frame.width, top: y * frame.height, width: boxW, height: boxH, touchAction: 'none' }}
+      onPointerDown={onPointerDown}
     >
       {isImage ? (
         <img

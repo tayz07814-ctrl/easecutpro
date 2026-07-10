@@ -196,10 +196,16 @@ export default function TextPanel(): JSX.Element {
             <button className={'mini' + (clip.italic ? ' on toggle' : '')} onClick={() => set({ italic: !clip.italic })}><i>I</i></button>
           </div>
 
+          <div className="slider-grid">
+            <label className="slider-row">
+              <span className="slabel">Size</span>
+              <input type="range" min={2} max={40} step={0.5}
+                value={Number((clip.fontSize * 100).toFixed(1))}
+                onChange={(e) => set({ fontSize: Math.max(0.02, Math.min(0.6, Number(e.target.value) / 100)) })} />
+              <span className="val">{Math.round(clip.fontSize * 100)}%</span>
+            </label>
+          </div>
           <div className="field-grid">
-            <label>Size<input type="number" min={2} max={40} step={0.5}
-              value={Number((clip.fontSize * 100).toFixed(1))}
-              onChange={(e) => set({ fontSize: Math.max(0.02, Math.min(0.6, Number(e.target.value) / 100)) })} />%</label>
             <label>Color<input type="color" value={clip.color} onChange={(e) => set({ color: e.target.value })} /></label>
           </div>
           <div className="row" style={{ gap: 6, margin: '6px 0' }}>

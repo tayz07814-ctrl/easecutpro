@@ -66,13 +66,19 @@ export default function BasicPanel(): JSX.Element {
     return (
       <div className="tool-content">
         <h4>Overlay clip</h4>
+        <div className="slider-grid">
+          <label className="slider-row">
+            <span className="slabel">Size</span>
+            <input type="range" min={5} max={160} step={1}
+              value={Math.round(mnum(m.ovScale, 0.45) * 100)} onChange={(e) => place({ ovScale: clampN(Number(e.target.value) / 100, 0.05, 1.6) })} />
+            <span className="val">{Math.round(mnum(m.ovScale, 0.45) * 100)}%</span>
+          </label>
+        </div>
         <div className="field-grid">
           <label>Position X<input type="number" min={-30} max={130} step={1}
             value={Math.round(mnum(m.ovX, 0) * 100)} onChange={(e) => place({ ovX: Number(e.target.value) / 100 })} />%</label>
           <label>Position Y<input type="number" min={-30} max={130} step={1}
             value={Math.round(mnum(m.ovY, 0) * 100)} onChange={(e) => place({ ovY: Number(e.target.value) / 100 })} />%</label>
-          <label>Size<input type="number" min={5} max={160} step={1}
-            value={Math.round(mnum(m.ovScale, 0.45) * 100)} onChange={(e) => place({ ovScale: clampN(Number(e.target.value) / 100, 0.05, 1.6) })} />%</label>
         </div>
         <h4>Crop</h4>
         <div className="slider-grid">
@@ -116,10 +122,16 @@ export default function BasicPanel(): JSX.Element {
         </p>
 
         <h4>Size &amp; Zoom</h4>
+        <div className="slider-grid">
+          <label className="slider-row">
+            <span className="slabel">Size</span>
+            <input type="range" min={10} max={300} step={5}
+              value={Math.round(mnum(m.ovScale, 1) * 100)}
+              onChange={(e) => place({ ovScale: clampN(Number(e.target.value) / 100, 0.1, 3) })} />
+            <span className="val">{Math.round(mnum(m.ovScale, 1) * 100)}%</span>
+          </label>
+        </div>
         <div className="field-grid">
-          <label>Size<input type="number" min={10} max={300} step={5}
-            value={Math.round(mnum(m.ovScale, 1) * 100)}
-            onChange={(e) => place({ ovScale: clampN(Number(e.target.value) / 100, 0.1, 3) })} />%</label>
           <label>Zoom start<input type="number" min={100} max={400} step={5}
             value={Math.round(mnum(m.ovZoomStart, 1) * 100)}
             onChange={(e) => place({ ovZoomStart: clampN(Number(e.target.value) / 100, 1, 4) })} />%</label>
@@ -170,13 +182,19 @@ export default function BasicPanel(): JSX.Element {
       <div className="tool-content">
         <h4>Overlay clip</h4>
 
+        <div className="slider-grid">
+          <label className="slider-row">
+            <span className="slabel">Size</span>
+            <input type="range" min={5} max={160} step={1}
+              value={Math.round(clip.scale * 100)} onChange={(e) => set({ scale: Math.max(0.05, Math.min(1.6, Number(e.target.value) / 100)) })} />
+            <span className="val">{Math.round(clip.scale * 100)}%</span>
+          </label>
+        </div>
         <div className="field-grid">
           <label>Position X<input type="number" min={-30} max={130} step={1}
             value={Math.round(clip.x * 100)} onChange={(e) => set({ x: Number(e.target.value) / 100 })} />%</label>
           <label>Position Y<input type="number" min={-30} max={130} step={1}
             value={Math.round(clip.y * 100)} onChange={(e) => set({ y: Number(e.target.value) / 100 })} />%</label>
-          <label>Size<input type="number" min={5} max={160} step={1}
-            value={Math.round(clip.scale * 100)} onChange={(e) => set({ scale: Math.max(0.05, Math.min(1.6, Number(e.target.value) / 100)) })} />%</label>
         </div>
 
         <h4>Crop</h4>

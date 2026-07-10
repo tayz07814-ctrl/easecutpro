@@ -4,6 +4,7 @@ import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
 import { secondsToFrames } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
 import * as C from '@shared/timeline/commands'
+import { usePinchDrag } from '../usePinchDrag'
 import type { TextClip } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 
@@ -94,21 +95,29 @@ export default function TextLayer({ frame }: { frame: Rect }): JSX.Element {
     ? docTexts(snap!.doc, playhead)
     : (project.texts ?? []).filter((t) => playhead >= t.start && playhead < t.end).map(fromLegacy)
 
-  const commit = (id: string, patch: { x: number; y: number }): void => {
-    if (docMode) getSharedEngine()?.dispatch(C.setClipTransform(id, { x: patch.x - 0.5, y: patch.y - 0.5 }))
-    else updateText(id, patch)
+  const commit = (id: string, patch: { x?: number; y?: number; fontSize?: number }): void => {
+    if (docMode) {
+      const e = getSharedEngine()
+      if (patch.x !== undefined && patch.y !== undefined) e?.dispatch(C.setClipTransform(id, { x: patch.x - 0.5, y: patch.y - 0.5 }))
+      if (patch.fontSize !== undefined) e?.dispatch(C.setClipText(id, { fontSize: patch.fontSize }))
+    } else {
+      updateText(id, patch)
+    }
   }
   const select = (id: string): void => {
     if (docMode) getSharedEngine()?.select([id])
     else selectText(id)
   }
   const selId = docMode ? snap!.interaction.selection[0] ?? null : selectedTextId
+  const [guide, setGuide] = useState<{ v: boolean; h: boolean }>({ v: false, h: false })
 
   return (
     <div className="text-layer" style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }}>
       {active.map((t) => (
-        <TextItem key={t.id} view={t} frame={frame} selected={selId === t.id} onCommit={commit} onSelect={select} />
+        <TextItem key={t.id} view={t} frame={frame} selected={selId === t.id} onCommit={commit} onSelect={select} onSnap={setGuide} />
       ))}
+      {guide.v && <div className="snap-guide-v" />}
+      {guide.h && <div className="snap-guide-h" />}
     </div>
   )
 }
@@ -118,54 +127,57 @@ function TextItem({
   frame,
   selected,
   onCommit,
-  onSelect
+  onSelect,
+  onSnap
 }: {
   view: TextView
   frame: Rect
   selected: boolean
-  onCommit: (id: string, patch: { x: number; y: number }) => void
+  onCommit: (id: string, patch: { x?: number; y?: number; fontSize?: number }) => void
   onSelect: (id: string) => void
+  onSnap: (s: { v: boolean; h: boolean }) => void
 }): JSX.Element {
-  const [live, setLive] = useState<{ x: number; y: number } | null>(null)
+  const [live, setLive] = useState<{ x?: number; y?: number; fontSize?: number } | null>(null)
   const x = live?.x ?? view.x
   const y = live?.y ?? view.y
+  const fontSize = live?.fontSize ?? view.fontSize
 
-  const fontPx = view.fontSize * frame.height
+  const fontPx = fontSize * frame.height
   const strokePx = view.strokeWidth * fontPx
   const padX = view.bgPadding * fontPx
   const padY = view.bgPadding * fontPx * 0.7
   const radius = view.bgRadius * fontPx
   const lineHeight = view.bgEnabled ? 1 + 1.4 * view.bgPadding : 1.3
 
-  function startMove(e: React.MouseEvent): void {
-    e.stopPropagation()
-    onSelect(view.id)
-    const sx = e.clientX
-    const sy = e.clientY
-    const x0 = view.x
-    const y0 = view.y
-    let nx = x0
-    let ny = y0
-    function onMove(ev: MouseEvent): void {
-      nx = Math.min(1.1, Math.max(-0.1, x0 + (ev.clientX - sx) / frame.width))
-      ny = Math.min(1.1, Math.max(-0.1, y0 + (ev.clientY - sy) / frame.height))
-      setLive({ x: nx, y: ny })
-    }
-    function onUp(): void {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+  // One finger = move (centre snaps to the frame's centre lines); two fingers =
+  // pinch to resize the font. Text is centre-anchored, so its half-size is 0.
+  const onPointerDown = usePinchDrag({
+    frame,
+    start: () => ({ x: view.x, y: view.y, scale: view.fontSize }),
+    half: () => ({ hw: 0, hh: 0 }),
+    scaleRange: [0.02, 0.6],
+    xRange: [-0.1, 1.1],
+    yRange: [-0.1, 1.1],
+    onSelect: () => onSelect(view.id),
+    onLive: (p) => setLive({ x: p.x, y: p.y, fontSize: p.scale }),
+    onCommit: (p) => {
       setLive(null)
-      onCommit(view.id, { x: nx, y: ny })
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }
+      const patch: { x?: number; y?: number; fontSize?: number } = {}
+      if (Math.abs(p.x - view.x) > 1e-4 || Math.abs(p.y - view.y) > 1e-4) {
+        patch.x = p.x
+        patch.y = p.y
+      }
+      if (Math.abs(p.scale - view.fontSize) > 1e-4) patch.fontSize = p.scale
+      if (patch.x !== undefined || patch.fontSize !== undefined) onCommit(view.id, patch)
+    },
+    onSnap
+  })
 
   return (
     <div
       className={'text-item' + (selected ? ' selected' : '')}
-      style={{ left: x * frame.width, top: y * frame.height, transform: 'translate(-50%, -50%)', textAlign: view.align }}
-      onPointerDown={startMove}
+      style={{ left: x * frame.width, top: y * frame.height, transform: 'translate(-50%, -50%)', textAlign: view.align, touchAction: 'none' }}
+      onPointerDown={onPointerDown}
     >
       <span
         style={{
