@@ -41,36 +41,26 @@ export default function MobileApp(): JSX.Element {
     return v >= 22 && v <= 58 ? v : 46
   })
   useEffect(() => localStorage.setItem('ec.mStageVh', String(stageVh)), [stageVh])
-  // ONE pointer gesture WITH pointer capture: capture routes every move/up for
-  // this finger to the grip element even as it slides over the preview/timeline,
-  // which is what makes the drag reliable on iOS (window listeners without
-  // capture were being starved — the "grip is frozen / can't be moved" bug).
+  // ONE unified pointer gesture on WINDOW listeners (not element capture): this is
+  // the version that dragged reliably on Android. `touch-action: none` on the grip
+  // keeps the browser from stealing it as a scroll; pointer events (not touch+mouse)
+  // avoid the iOS double-drag from simulated mouse events after touch.
   function startStageDrag(e: ReactPointerEvent<HTMLDivElement>): void {
-    const el = e.currentTarget
     const vh0 = stageVh
     const y0 = e.clientY
-    try {
-      el.setPointerCapture(e.pointerId)
-    } catch {
-      /* unsupported — falls back to bubbling */
-    }
     const onMove = (ev: PointerEvent): void => {
       const dvh = ((ev.clientY - y0) / window.innerHeight) * 100
       setStageVh(Math.min(58, Math.max(22, vh0 + dvh)))
+      ev.preventDefault()
     }
-    const onUp = (ev: PointerEvent): void => {
-      try {
-        el.releasePointerCapture(ev.pointerId)
-      } catch {
-        /* ignore */
-      }
-      el.removeEventListener('pointermove', onMove)
-      el.removeEventListener('pointerup', onUp)
-      el.removeEventListener('pointercancel', onUp)
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
-    el.addEventListener('pointermove', onMove)
-    el.addEventListener('pointerup', onUp)
-    el.addEventListener('pointercancel', onUp)
+    window.addEventListener('pointermove', onMove, { passive: false })
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
   const [pendingTranscript, setPendingTranscript] = useState(false)
   const [toast, setToast] = useState<string | null>(null)

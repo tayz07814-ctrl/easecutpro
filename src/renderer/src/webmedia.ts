@@ -5,9 +5,6 @@
 // bytes (transcribe / silence / export) do we upload, lazily and in chunks
 // (chunks dodge the ~100 MB request limit that tunnels like Cloudflare impose).
 import type { MediaInfo, Waveform } from '@shared/types'
-// Type-only — erased at build time, so it never pulls mediabunny into the main
-// bundle. The runtime import is dynamic (inside the fast thumbnail path).
-import type { Input as MBInput } from 'mediabunny'
 
 interface MediaRec {
   file: File
@@ -243,24 +240,13 @@ function mp4AudioStartOffset(buf: ArrayBuffer): number {
   }
 }
 
-/** Decode a file's audio to an AudioBuffer at (near) `targetRate`. Uses an
- *  OfflineAudioContext so iOS actually HONOURS the low rate — a live AudioContext
- *  on iOS is locked to the 44.1/48kHz hardware rate and silently ignores the
- *  `sampleRate` option, so a long clip was decoding at ~6x the CPU/RAM it needed.
- *  Falls back to a live AudioContext where OfflineAudioContext isn't available. */
+/** Decode a file's audio to an AudioBuffer at (near) `targetRate`, then ALWAYS
+ *  release the context. iOS caps the number of live AudioContexts, so leaking one
+ *  per clip eventually breaks all audio (waveform + Cut Lord). A hard timeout
+ *  stops a stuck decode from hanging the media pipeline forever. NOTE: iOS ignores
+ *  the sampleRate hint on a live context (locked to hardware rate) — that's fine,
+ *  the waveform/WAV resample handles any input rate; correctness over speed. */
 async function decodeAudioAtRate(buf: ArrayBuffer, targetRate: number): Promise<AudioBuffer> {
-  const OAC: typeof OfflineAudioContext | undefined =
-    window.OfflineAudioContext ||
-    (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext
-  if (OAC) {
-    try {
-      // length is irrelevant for decodeAudioData (it sizes to the actual audio);
-      // the context's sampleRate is what drives the resample.
-      return await new OAC(1, 1, targetRate).decodeAudioData(buf)
-    } catch {
-      /* rate rejected or no offline decode — fall back to a live context */
-    }
-  }
   const AC: typeof AudioContext =
     window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
   let ac: AudioContext
@@ -269,9 +255,27 @@ async function decodeAudioAtRate(buf: ArrayBuffer, targetRate: number): Promise<
   } catch {
     ac = new AC()
   }
-  const audio = await ac.decodeAudioData(buf)
-  ac.close()
-  return audio
+  try {
+    return await new Promise<AudioBuffer>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('decode timeout')), 25000)
+      ac.decodeAudioData(buf).then(
+        (a) => {
+          clearTimeout(timer)
+          resolve(a)
+        },
+        (e) => {
+          clearTimeout(timer)
+          reject(e)
+        }
+      )
+    })
+  } finally {
+    try {
+      ac.close()
+    } catch {
+      /* already closed */
+    }
+  }
 }
 
 /** Compute a waveform in the browser via WebAudio (best effort; skipped if huge). */
@@ -312,9 +316,17 @@ export async function localWaveform(id: string, peaksPerSec = 60): Promise<Wavef
   }
 }
 
-/** Generate filmstrip thumbnails in the browser — the web server never gets the
- *  full video, so this is the only way to show base-track thumbnails on the web.
- *  Tries a fast WebCodecs pass first, then falls back to seeking a <video>. */
+/** Generate filmstrip thumbnails in the browser by seeking a <video> + drawing to
+ *  a canvas — the web server never gets the full video, so this is the only way to
+ *  show base-track thumbnails on the web. Best-effort + async + progressive.
+ *
+ *  iOS/iPadOS is the fussy target (every browser there is WebKit, incl. Chrome):
+ *  a muted <video> that has NEVER played paints NOTHING to a canvas, and a
+ *  `currentTime` set before the media is buffered may never fire `seeked`. So we
+ *  (a) prime the decoder with a muted inline play→pause, (b) wait for a frame that
+ *  is actually PRESENTED via requestVideoFrameCallback (fallback: `seeked`), and
+ *  (c) time-bound every wait so a stalled seek skips one frame instead of wedging
+ *  the whole strip. */
 export async function localThumbnails(
   id: string,
   intervalSec = 2,
@@ -325,72 +337,9 @@ export async function localThumbnails(
   if (IMAGE_RE.test(rec.file.name) || rec.file.type.startsWith('image/')) {
     return [{ time: 0, url: rec.url }]
   }
-  // Fast path: WebCodecs-decode only the needed frames in one forward pass (no
-  // per-frame <video> seek). Falls back to the seek path when the codec can't be
-  // hardware-decoded on this device (e.g. some HEVC on iOS).
-  const fast = await localThumbnailsFast(rec, intervalSec, onPartial).catch(() => null)
-  if (fast && fast.length) return fast
   return localThumbnailsSeek(rec, intervalSec, onPartial)
 }
 
-/** WebCodecs filmstrip via mediabunny: decodes each needed frame at most once in
- *  one monotonic pass — dramatically faster than seeking a <video> per frame,
- *  and applies the file's rotation metadata so thumbnails come out upright.
- *  Returns null (→ seek fallback) when the track can't be WebCodecs-decoded. */
-async function localThumbnailsFast(
-  rec: MediaRec,
-  intervalSec: number,
-  onPartial?: (frames: { time: number; url: string }[]) => void
-): Promise<{ time: number; url: string }[] | null> {
-  let input: MBInput | null = null
-  try {
-    const { Input, BlobSource, ALL_FORMATS, CanvasSink } = await import('mediabunny')
-    input = new Input({ source: new BlobSource(rec.file), formats: ALL_FORMATS })
-    const track = await input.getPrimaryVideoTrack()
-    if (!track || !(await track.canDecode())) return null
-    const dur = (await track.getDurationFromMetadata().catch(() => null)) || (await track.computeDuration())
-    if (!dur || !isFinite(dur)) return null
-    // ~24 frames, width 128 — matches the seek path; height auto-derives by aspect.
-    const sink = new CanvasSink(track, { width: 128 })
-    const step = Math.max(intervalSec || 1, dur / 24)
-    const times: number[] = []
-    for (let t = 0; t < dur - 0.05; t += step) times.push(t)
-    if (!times.length) times.push(0)
-    const outCanvas = document.createElement('canvas')
-    const octx = outCanvas.getContext('2d')
-    if (!octx) return null
-    const out: { time: number; url: string }[] = []
-    for await (const wrapped of sink.canvasesAtTimestamps(times)) {
-      if (!wrapped) continue
-      const c = wrapped.canvas
-      if (outCanvas.width !== c.width || outCanvas.height !== c.height) {
-        outCanvas.width = c.width
-        outCanvas.height = c.height
-      }
-      octx.drawImage(c as CanvasImageSource, 0, 0)
-      out.push({ time: wrapped.timestamp, url: outCanvas.toDataURL('image/jpeg', 0.55) })
-      onPartial?.(out.slice()) // fill the strip in live, same as the seek path
-    }
-    return out.length ? out : null
-  } catch {
-    return null // codec unsupported by WebCodecs here, or read failed — use seek
-  } finally {
-    try {
-      input?.dispose()
-    } catch {
-      /* already disposed */
-    }
-  }
-}
-
-/** Seek-based filmstrip fallback. iOS/iPadOS is the fussy target (every browser
- *  there is WebKit, incl. Chrome): a muted <video> that has NEVER played paints
- *  NOTHING to a canvas, and a `currentTime` set before the media is buffered may
- *  never fire `seeked` — the old code hung on that await and the strip stayed
- *  blank forever. So we now (a) prime the decoder with a muted inline play→pause,
- *  (b) wait for a frame that is actually PRESENTED via requestVideoFrameCallback
- *  (fallback: `seeked`), and (c) time-bound every wait so a stalled seek skips
- *  one frame instead of wedging the whole strip. */
 async function localThumbnailsSeek(
   rec: MediaRec,
   intervalSec: number,
