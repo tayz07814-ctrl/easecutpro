@@ -656,7 +656,9 @@ export async function extractAudioWavBlob(id: string, onProgress?: (pct: number)
     const wav = audioBufferTo16kMonoWav(audio, lead)
     onProgress?.(100)
     return wav
-  } catch {
+  } catch (e) {
+    // Surface the REAL decode error (Cut Lord's "Could not decode…" hides the cause).
+    ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Audio decode failed (Cut Lord)', e)
     return null // unsupported container/codec, or decode OOM
   }
 }

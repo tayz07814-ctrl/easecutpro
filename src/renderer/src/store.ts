@@ -1727,6 +1727,8 @@ export const useStore = create<AppState>((set, get) => ({
         }
       })
     } catch (e) {
+      // Show the REAL error on-screen (the vanishing job message hid it on mobile).
+      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Retake β) failed', e)
       set({ job: { active: false, percent: 0, message: `Retake β failed: ${(e as Error).message}` } })
     }
   },
