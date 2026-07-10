@@ -6,22 +6,22 @@
 // and the SAME samples become the upload blob — so transcription timestamps
 // and the VAD silence map are guaranteed to describe identical audio.
 //
-// Upload size: a WAV minute is ~1.9 MB; AAC at 64 kbps is ~0.5 MB. When the
-// browser has WebCodecs AudioEncoder we mux an audio-only m4a (mp4-muxer, the
-// same dependency the on-device exporter uses); otherwise the plain WAV goes
-// up. Both providers accept either container.
+// Upload payload: the 16 kHz mono WAV goes up as-is. We used to mux a smaller
+// WebCodecs AAC/m4a first, but iOS Safari's encoder produces an mp4 that both
+// STT providers ACCEPT then fail to transcode ("Transcoding failed") — and it
+// reports a decoder config, so a capability check can't tell the good encoder
+// from the bad one. The WAV is decoded natively and reliably by AssemblyAI and
+// Deepgram alike, so it's the only upload path now.
 
-import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
 import { extractAudioWavBlob } from '../webmedia'
 
 /** Sample rate of webmedia's extracted WAV — the timebase for STT + VAD. */
 const STT_RATE = 16000
-const AAC_BITRATE = 64_000
 
 export interface SttAudio {
-  /** upload payload (audio-only m4a when AAC encoding worked, else the WAV). */
+  /** upload payload — the 16 kHz mono WAV. */
   blob: Blob
-  /** audio container extension for the stt sign-upload action: 'm4a' | 'wav'. */
+  /** audio container extension for the stt sign-upload action (always 'wav'). */
   ext: string
   /** the decoded samples themselves (16 kHz mono, lead-aligned) — feed the VAD
    *  with THESE so silence and words share one clock. */
@@ -42,93 +42,6 @@ function wavToFloat32(buf: ArrayBuffer): Float32Array<ArrayBuffer> {
   return out
 }
 
-/** Resample mono Float32 via OfflineAudioContext (only used when the AAC
- *  encoder rejects 16 kHz and needs a mainstream rate). */
-async function resampleFloat32(f32: Float32Array<ArrayBuffer>, from: number, to: number): Promise<Float32Array<ArrayBuffer>> {
-  const frames = Math.max(1, Math.ceil((f32.length / from) * to))
-  const oc = new OfflineAudioContext(1, frames, to)
-  const buf = oc.createBuffer(1, Math.max(1, f32.length), from)
-  buf.copyToChannel(f32, 0)
-  const src = oc.createBufferSource()
-  src.buffer = buf
-  src.connect(oc.destination)
-  src.start()
-  const rendered = await oc.startRendering()
-  return rendered.getChannelData(0)
-}
-
-/** Encode mono Float32 → audio-only AAC m4a. null when WebCodecs AAC is
- *  unavailable/unsupported (caller falls back to the WAV). */
-async function encodeAacM4a(float32: Float32Array<ArrayBuffer>): Promise<Blob | null> {
-  if (typeof AudioEncoder === 'undefined' || typeof AudioData === 'undefined') return null
-  try {
-    const cfgFor = (r: number): AudioEncoderConfig => ({ codec: 'mp4a.40.2', sampleRate: r, numberOfChannels: 1, bitrate: AAC_BITRATE })
-    // 16 kHz mono AAC first (smallest); some encoders only take mainstream
-    // rates — resample to 48 kHz and retry before giving up.
-    let rate = STT_RATE
-    let samples = float32
-    let ok = false
-    try {
-      ok = !!(await AudioEncoder.isConfigSupported(cfgFor(rate))).supported
-    } catch {
-      ok = false
-    }
-    if (!ok) {
-      rate = 48000
-      try {
-        ok = !!(await AudioEncoder.isConfigSupported(cfgFor(rate))).supported
-      } catch {
-        ok = false
-      }
-      if (!ok) return null
-      samples = await resampleFloat32(float32, STT_RATE, rate)
-    }
-    const muxer = new Muxer({
-      target: new ArrayBufferTarget(),
-      audio: { codec: 'aac', sampleRate: rate, numberOfChannels: 1 },
-      fastStart: 'in-memory'
-    })
-    const encErr: { e: Error | null } = { e: null }
-    // iOS Safari's AAC encoder runs and emits chunks but often never delivers a
-    // decoder description (AudioSpecificConfig). The muxed mp4 then LOOKS valid —
-    // AssemblyAI accepts it at start (HTTP 200) — but carries no esds the server
-    // can decode, so the job fails during transcode ("All transcription providers
-    // failed"). Only trust the m4a when a real config arrives; otherwise the
-    // caller falls back to the always-decodable WAV.
-    let haveConfig = false
-    const enc = new AudioEncoder({
-      output: (chunk, meta) => {
-        const d = meta?.decoderConfig?.description as { byteLength: number } | undefined
-        if (d && d.byteLength > 0) haveConfig = true
-        muxer.addAudioChunk(chunk, meta)
-      },
-      error: (e) => { encErr.e = e as Error }
-    })
-    enc.configure(cfgFor(rate))
-    const CHUNK = 16384 // frames per AudioData (~1s at 16 kHz)
-    for (let off = 0; off < samples.length; off += CHUNK) {
-      const n = Math.min(CHUNK, samples.length - off)
-      const data = new AudioData({
-        format: 'f32-planar',
-        sampleRate: rate,
-        numberOfFrames: n,
-        numberOfChannels: 1,
-        timestamp: Math.round((off / rate) * 1e6), // µs
-        data: samples.subarray(off, off + n)
-      })
-      enc.encode(data)
-      data.close()
-    }
-    await enc.flush()
-    enc.close()
-    if (encErr.e || !haveConfig) return null
-    muxer.finalize()
-    return new Blob([muxer.target.buffer], { type: 'audio/mp4' })
-  } catch {
-    return null // encoder quirk — the WAV path always works
-  }
-}
-
 /** Decode a `webmedia:` id's audio → 16 kHz mono Float32 (lead-aligned), for
  *  standalone VAD use. Throws an honest error when the browser can't decode. */
 export async function decodeAudioFloat32(
@@ -143,18 +56,14 @@ export async function decodeAudioFloat32(
   return { float32, sampleRate: STT_RATE, durationS: float32.length / STT_RATE }
 }
 
-/** Produce the STT audio for a `webmedia:` id: decode once, return the upload
- *  blob (AAC m4a when possible, else WAV) + the decoded samples for the VAD. */
+/** Produce the STT audio for a `webmedia:` id: decode once, return the 16 kHz
+ *  mono WAV upload blob + the decoded samples for the VAD (one shared clock). */
 export async function extractSttAudio(mediaId: string, onProgress?: (pct: number) => void): Promise<SttAudio> {
-  const wav = await extractAudioWavBlob(mediaId, (p) => onProgress?.(Math.round(p * 0.8)))
+  const wav = await extractAudioWavBlob(mediaId, (p) => onProgress?.(Math.round(p * 0.9)))
   if (!wav) {
     throw new Error('Could not decode this media’s audio in the browser (unsupported codec or the file is too large).')
   }
   const float32 = wavToFloat32(await wav.arrayBuffer())
-  const durationS = float32.length / STT_RATE
-  const m4a = await encodeAacM4a(float32)
   onProgress?.(100)
-  return m4a
-    ? { blob: m4a, ext: 'm4a', float32, sampleRate: STT_RATE, durationS }
-    : { blob: wav, ext: 'wav', float32, sampleRate: STT_RATE, durationS }
+  return { blob: wav, ext: 'wav', float32, sampleRate: STT_RATE, durationS: float32.length / STT_RATE }
 }
