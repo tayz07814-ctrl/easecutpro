@@ -186,6 +186,20 @@ export default function MobileTimeline(): JSX.Element {
     return () => cancelAnimationFrame(raf)
   }, [playing, zoom, tb])
 
+  // iOS fallback: also follow the STORE playhead (updated by the video's
+  // timeupdate) so the timeline still tracks if the 60fps rAF above is starved
+  // during inline video playback on Safari.
+  useEffect(() => {
+    if (!playing) return
+    const el = scrollRef.current
+    if (!el) return
+    const target = frameToPx(session.playhead, zoom, tb)
+    if (Math.abs(el.scrollLeft - target) > 0.5) {
+      programmatic.current = true
+      el.scrollLeft = target
+    }
+  }, [playing, session.playhead, zoom, tb])
+
   // Re-anchor scroll to the playhead ONLY when zoom changes (keeps the centred
   // frame put across a pinch). Never fires from a plain scroll.
   useLayoutEffect(() => {

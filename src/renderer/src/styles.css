@@ -670,7 +670,12 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 /* CapCut scrub: drag the timeline horizontally; the centred playhead = current time.
    Native horizontal scroll on the container; the ruler/segments/lanes allow pan-x
    (they were touch-action:none for desktop drag). Clips/trim handles stay draggable. */
-.timeline.mobile .timeline-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+/* NOTE: -webkit-overflow-scrolling stays `auto` (not `touch`) on purpose: iOS's
+   momentum layer ("touch") is GPU-composited and IGNORES the programmatic
+   scrollLeft writes we use to follow the playhead during playback, so the
+   timeline froze on iPhone. `auto` keeps native touch scrolling but lets the
+   auto-scroll take effect. */
+.timeline.mobile .timeline-scroll { overflow-x: auto; -webkit-overflow-scrolling: auto; scrollbar-width: none; }
 .timeline.mobile .timeline-scroll::-webkit-scrollbar { height: 0; width: 0; }
 .timeline.mobile .ruler,
 .timeline.mobile .seg,
