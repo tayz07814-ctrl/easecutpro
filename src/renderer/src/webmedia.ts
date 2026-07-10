@@ -250,18 +250,18 @@ function mp4AudioStartOffset(buf: ArrayBuffer): number {
  *  stops a stuck decode from hanging the media pipeline forever. NOTE: iOS ignores
  *  the sampleRate hint on a live context (locked to hardware rate) — that's fine,
  *  the waveform/WAV resample handles any input rate; correctness over speed. */
-async function decodeAudioAtRate(buf: ArrayBuffer, targetRate: number): Promise<AudioBuffer> {
+async function decodeAudioAtRate(buf: ArrayBuffer, _targetRate: number): Promise<AudioBuffer> {
   const AC: typeof AudioContext =
     window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-  let ac: AudioContext
-  try {
-    ac = new AC({ sampleRate: targetRate })
-  } catch {
-    ac = new AC()
-  }
+  // Decode at the browser's NATIVE rate — its fast, well-tested path. Forcing a low
+  // context rate (8k/16k) makes decodeAudioData resample ~6:1 DURING decode, which on
+  // some phones is glacially slow and blew past the timeout ("decode timeout" → blank
+  // waveform + "couldn't decode audio" in Cut Lord). Every caller already resamples the
+  // result in JS (peaks / WAV / montage mix), so native-rate output is equivalent.
+  const ac = new AC()
   try {
     return await new Promise<AudioBuffer>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('decode timeout')), 25000)
+      const timer = setTimeout(() => reject(new Error('decode timeout')), 60000)
       ac.decodeAudioData(buf).then(
         (a) => {
           clearTimeout(timer)
