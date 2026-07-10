@@ -86,6 +86,31 @@ function die(err: string): void {
   ;(self as unknown as Worker).postMessage({ type: 'error', error: err })
 }
 
+/** The caps probe negotiates the H.264 PROFILE at 1080p and hands us a level-4.0
+ *  codec string (…0028). Level 4.0 tops out at ~2.1 MP (1080p), so a 4K or
+ *  portrait-4K timeline (e.g. 2160×3840 = 8.3 MP) overflows it and configure()
+ *  throws "exceeds the maximum coded area … for AVC level (4.0)". Keep the
+ *  negotiated profile but raise the LEVEL to the lowest the browser actually
+ *  accepts at the real width×height×fps×bitrate (4K needs 5.1+). */
+async function pickVideoCodec(base: string, w: number, h: number, bitrate: number, fps: number): Promise<string> {
+  const m = /^avc1\.([0-9a-fA-F]{4})([0-9a-fA-F]{2})$/.exec(base)
+  const prefix = m ? m[1] : '6400' // profile_idc + constraint flags (default High)
+  const baseLevel = m ? parseInt(m[2], 16) : 0x28
+  // AVC levels 3.1, 3.2, 4.0, 4.1, 4.2, 5.0, 5.1, 5.2, 6.0, 6.1, 6.2 (ascending).
+  const LEVELS = [0x1f, 0x20, 0x28, 0x29, 0x2a, 0x32, 0x33, 0x34, 0x3c, 0x3d, 0x3e]
+  for (const lvl of LEVELS) {
+    if (lvl < baseLevel) continue // never drop below the negotiated level
+    const codec = `avc1.${prefix}${lvl.toString(16).padStart(2, '0')}`
+    try {
+      const s = await VideoEncoder.isConfigSupported({ codec, width: w, height: h, bitrate, framerate: fps })
+      if (s.supported === true) return codec
+    } catch {
+      /* this level can't hold w×h here — try a higher one */
+    }
+  }
+  return base // nothing matched (unusual) — let configure() surface the real error
+}
+
 /** Composite a bitmap/frame into its overlay rect: clip to the box (the
  *  preview's overflow-hidden .ov-box), Ken Burns scale about the inner centre
  *  (transform-origin: center center), source stretched to the inner rect. */
@@ -124,8 +149,11 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
         output: (chunk, meta) => muxer!.addVideoChunk(chunk, meta),
         error: (e) => die(`video encoder: ${e.message}`)
       })
+      // Raise the AVC level to fit the real resolution — the probe only picks the
+      // profile (at level 4.0), which overflows on 4K/portrait-4K timelines.
+      const videoCodec = await pickVideoCodec(msg.videoCodec, W, H, msg.bitrate, FPS)
       videoEncoder.configure({
-        codec: msg.videoCodec,
+        codec: videoCodec,
         width: W,
         height: H,
         bitrate: msg.bitrate,
