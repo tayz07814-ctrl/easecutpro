@@ -21,7 +21,9 @@ import type {
   TailCut,
   MissedCutoff,
   CutSpan,
-  LlmDecisions
+  LlmDecisions,
+  ProductionChatterCandidate,
+  ProductionChatterDecision
 } from './types'
 
 // ---- tuning ----
@@ -1084,6 +1086,141 @@ export function applyLlmDecisions(
 }
 
 // ---- 5. cut spans: whole attempts + false starts + corrections + fillers ----
+// ---- 5b. audience-speech vs production-chatter ----
+// Content spoken TO the viewer/customer (KEEP) vs "production chatter": the
+// creator talking ABOUT the shoot, to themselves, or an off-camera person
+// directing them (CUT). Whole-chunk only (a cut never splits a sentence); an
+// audience-directed signal VETOES a cut; only ambiguous chunks reach the LLM.
+const PC_META = [ // talking about the recording itself
+  'recording', 're record', 'rerecord', 'on camera', 'the camera', 'take two', 'take it again',
+  'the retake', 'this clip', 'the clip', 'this take', 'the take', 'the footage', 'the shot',
+  'start over', 'start again', 'from the top', 'one more time', 'do it again', 'do that again',
+  'cut that', 'delete that', 'scratch that', 'that was bad', 'that sucked', 'messed that up',
+  'are we recording', 'is it recording', 'is this recording', 'we recording', 'okay start', 'ok start',
+  'let me start', 'lets start', 'keep it rolling', 'leave it rolling'
+]
+const PC_SELF_TALK = [ // creator self-correcting / thinking out loud
+  'wait no', 'no wait', 'hold on', 'hold up', 'let me redo', 'let me try again', 'let me say that again',
+  'say that again', 'what do i say', 'how do i say', 'what was i', 'where was i', 'let me think',
+  'give me a sec', 'give me a second', 'that was wrong', 'let me do that again'
+]
+const PC_OFF_CAMERA = [ // an off-camera person directing the creator
+  'say it again', 'say that again', 'say the', 'say your', 'the line again', 'again but', 'again and',
+  'mention the', 'mention that', 'talk about the', 'look here', 'look at the camera', 'look at me',
+  'hold the', 'hold it up', 'move closer', 'move back', 'come closer', 'stand here', 'a bit slower',
+  'go slower', 'go faster', 'from the top', 'one more', 'again from the'
+]
+const PC_OFF_CAMERA_TOKENS = new Set(['slower', 'faster'])
+const AUDIENCE_PHRASES = [ // spoken TO the viewer / customer
+  'if you', 'if your', 'you can', 'you need', 'you should', 'you have to', 'you guys', 'for you',
+  'this is for you', 'i used', 'i use this', 'i tried', 'check out', 'link in', 'swipe up', 'try this',
+  'make sure you', 'trust me', 'let me show you', 'perfect for', 'is perfect', 'good for your',
+  'your skin', 'your hair', 'changed my skin', 'helps with'
+]
+const AUDIENCE_TOKENS = new Set(['you', 'your', 'youre', 'youll', 'youve', 'yourself', 'yours'])
+const PC_MAX_WORDS = 18 // production chatter is short; a long chunk is likely content
+
+/** How many of `phrases` occur as whole word-sequences in the space-padded `norm`. */
+function countPhrases(norm: string, phrases: string[]): number {
+  let n = 0
+  for (const p of phrases) if (norm.includes(` ${p} `)) n++
+  return n
+}
+
+export function detectProductionChatter(chunks: Chunk[], words: VerbatimWord[], groups: RetakeGroup[]): ProductionChatterCandidate[] {
+  // words a (non-rejected) retake group already owns are handled as retakes.
+  const grouped = new Set<number>()
+  for (const g of groups) {
+    if (g.llm_rejected) continue
+    for (const a of g.attempts) for (let i = a.word_start_index; i <= a.word_end_index; i++) grouped.add(i)
+  }
+  const out: ProductionChatterCandidate[] = []
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const c = chunks[ci]
+    if (grouped.has(c.wordStart) || grouped.has(c.wordEnd)) continue
+    const wordCount = c.wordEnd - c.wordStart + 1
+    const norm = ' ' + c.text.toLowerCase().replace(/[^\p{L}\p{N}'\s]/gu, ' ').replace(/\s+/g, ' ').trim() + ' '
+    const tokenSet = new Set<string>()
+    for (let i = c.wordStart; i <= c.wordEnd; i++) { const t = normToken(words[i].word); if (t) tokenSet.add(t) }
+
+    const metaHits = countPhrases(norm, PC_META)
+    const selfHits = countPhrases(norm, PC_SELF_TALK)
+    let offHits = countPhrases(norm, PC_OFF_CAMERA)
+    for (const t of PC_OFF_CAMERA_TOKENS) if (tokenSet.has(t)) offHits++
+    const production_chatter_score = metaHits + selfHits + offHits
+
+    let audience = countPhrases(norm, AUDIENCE_PHRASES)
+    for (const t of AUDIENCE_TOKENS) if (tokenSet.has(t)) audience++
+
+    const long = wordCount > PC_MAX_WORDS
+    const risk_score = Math.min(1, audience * 0.5 + (long ? 0.5 : 0))
+
+    let decision: ProductionChatterDecision
+    let reason: string
+    if (audience >= 1) {
+      // SAFETY: audience-directed content present → never auto-cut. If ALSO strong
+      // production signals, it's genuinely ambiguous → defer to the LLM judge.
+      decision = production_chatter_score >= 2 && !long ? 'needs_review' : 'keep'
+      reason = decision === 'keep' ? 'audience-directed content' : 'production signals mixed with audience-directed content'
+    } else if (production_chatter_score >= 2 && !long) {
+      decision = 'cut'
+      reason = selfHits >= metaHits && selfHits >= offHits ? 'creator self-talk / self-correction'
+        : offHits >= metaHits ? 'off-camera direction' : 'meta-talk about filming'
+    } else if (production_chatter_score >= 1 && !long) {
+      decision = 'needs_review'
+      reason = 'weak production-chatter signal'
+    } else {
+      decision = 'keep'
+      reason = 'content / audience-directed speech'
+    }
+
+    // Only surface chunks that carry SOME production signal (a pure-content chunk
+    // is trivially kept — no need to flood the debug/LLM payload with it).
+    if (production_chatter_score === 0) continue
+
+    const confidence_score = Math.max(0, Math.min(1, production_chatter_score / 3 - audience * 0.3))
+    out.push({
+      candidate_id: `pc-${c.id}`,
+      chunk_id: c.id,
+      word_start_index: c.wordStart,
+      word_end_index: c.wordEnd,
+      text: words.slice(c.wordStart, c.wordEnd + 1).map((w) => w.word).join(' '),
+      start: c.start,
+      end: c.end,
+      previous_context: ci > 0 ? chunks[ci - 1].text : '',
+      next_context: ci + 1 < chunks.length ? chunks[ci + 1].text : '',
+      possible_reason: reason,
+      audience_directed_score: audience,
+      production_chatter_score,
+      self_talk_score: selfHits,
+      off_camera_instruction_score: offHits,
+      confidence_score: Number(confidence_score.toFixed(2)),
+      risk_score: Number(risk_score.toFixed(2)),
+      decision
+    })
+  }
+  return out
+}
+
+/** Production-chatter candidates that become cuts (as TailCuts for buildCutSpans):
+ *  confident 'cut' plus any 'needs_review' the LLM approved (empty set = rules-only). */
+export function productionChatterCuts(candidates: ProductionChatterCandidate[], llmApproved: Set<string>): TailCut[] {
+  const out: TailCut[] = []
+  for (const c of candidates) {
+    if (c.decision === 'cut' || (c.decision === 'needs_review' && llmApproved.has(c.candidate_id))) {
+      out.push({
+        chunk_id: c.chunk_id,
+        word_start_index: c.word_start_index,
+        word_end_index: c.word_end_index,
+        text: c.text,
+        reason: c.possible_reason,
+        kind: 'production_chatter'
+      })
+    }
+  }
+  return out
+}
+
 export function buildCutSpans(
   vt: VerbatimTranscript,
   groups: RetakeGroup[],
@@ -1091,7 +1228,8 @@ export function buildCutSpans(
   falseStarts: TailCut[] = [],
   selfCorrections: TailCut[] = [],
   repeatedSetups: TailCut[] = [],
-  orphanConnectors: TailCut[] = []
+  orphanConnectors: TailCut[] = [],
+  productionChatter: TailCut[] = []
 ): CutSpan[] {
   const words = vt.words
   const spans: CutSpan[] = []
@@ -1146,6 +1284,14 @@ export function buildCutSpans(
     spans.push({
       ...spanFor(t.word_start_index, t.word_end_index),
       type: 'orphan_connector',
+      source: 'retake_aware_beta',
+      reason: `${t.reason} ("${t.text}")`
+    })
+  }
+  for (const t of productionChatter) {
+    spans.push({
+      ...spanFor(t.word_start_index, t.word_end_index),
+      type: 'production_chatter',
       source: 'retake_aware_beta',
       reason: `${t.reason} ("${t.text}")`
     })

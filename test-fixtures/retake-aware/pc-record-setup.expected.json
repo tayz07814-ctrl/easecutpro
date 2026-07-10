@@ -1,0 +1,17 @@
+{
+  "description": "record/setup chatter — \"are we recording okay start\"",
+  "patterns": [
+    "production chatter",
+    "meta filming"
+  ],
+  "expectCut": [
+    {
+      "text": "are we recording",
+      "type": "production_chatter"
+    }
+  ],
+  "expectPatternTypes": [
+    "production_chatter"
+  ],
+  "expectKeep": []
+}

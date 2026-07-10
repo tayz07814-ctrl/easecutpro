@@ -1,0 +1,12 @@
+{
+  "description": "two-person CONTENT dialogue (testimonial Q&A) — must KEEP",
+  "patterns": [
+    "audience directed",
+    "two-person content"
+  ],
+  "expectCut": [],
+  "expectKeep": [
+    "what changed your skin",
+    "this mask did"
+  ]
+}

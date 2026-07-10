@@ -28,6 +28,8 @@ import {
   detectSelfCorrections,
   detectRepeatedSetups,
   detectOrphanConnectors,
+  detectProductionChatter,
+  productionChatterCuts,
   buildCutSpans
 } from '../src/shared/retakeaware/analyze'
 import type { VerbatimTranscript, CutSpan } from '../src/shared/retakeaware/types'
@@ -97,7 +99,10 @@ function runFixture(name: string, vt: VerbatimTranscript, exp: ExpectedSpec): Fi
   const selfCorrections = detectSelfCorrections(chunks, vt.words)
   const repeatedSetups = detectRepeatedSetups(chunks, vt.words)
   const orphanConnectors = detectOrphanConnectors(chunks, vt.words)
-  const spans = buildCutSpans(vt, groups, fillers, falseStarts, selfCorrections, repeatedSetups, orphanConnectors)
+  // Rules-only (no LLM here): only CONFIDENT production-chatter cuts fire; ambiguous
+  // (needs_review) candidates would need the judge, so the empty set drops them.
+  const chatterCuts = productionChatterCuts(detectProductionChatter(chunks, vt.words, active), new Set<string>())
+  const spans = buildCutSpans(vt, groups, fillers, falseStarts, selfCorrections, repeatedSetups, orphanConnectors, chatterCuts)
 
   const coveredNorm = spans.map((s) => ({ s, text: norm(coveredText(s, vt)) }))
   const allCoveredWords = coveredNorm.reduce((n, c) => n + c.text.split(' ').filter(Boolean).length, 0)

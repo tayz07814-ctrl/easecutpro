@@ -1,0 +1,10 @@
+{
+  "description": "ambiguous lead-in — \"okay, so this is what I did\" — keep/needs_review, never auto-cut",
+  "patterns": [
+    "ambiguous"
+  ],
+  "expectCut": [],
+  "expectKeep": [
+    "this is what i did"
+  ]
+}

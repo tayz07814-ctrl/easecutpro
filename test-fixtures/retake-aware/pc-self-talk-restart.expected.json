@@ -1,0 +1,13 @@
+{
+  "description": "creator self-talk restart — \"wait no, let me say that again\" (production chatter)",
+  "patterns": [
+    "production chatter",
+    "self talk"
+  ],
+  "expectCut": [
+    {
+      "text": "let me say that again"
+    }
+  ],
+  "expectKeep": []
+}

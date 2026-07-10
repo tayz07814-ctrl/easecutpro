@@ -1,0 +1,13 @@
+{
+  "description": "two-person production DIRECTION — the direction line is cut (the spoken retake-marker path claims this chunk; a direction WITHOUT a marker is cut as production_chatter — see pc-off-camera-instruction)",
+  "patterns": [
+    "production chatter",
+    "off-camera instruction"
+  ],
+  "expectCut": [
+    {
+      "text": "mention the price"
+    }
+  ],
+  "expectKeep": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "real audience-facing speech — must KEEP",
+  "patterns": [
+    "audience directed"
+  ],
+  "expectCut": [],
+  "expectKeep": [
+    "this mask is perfect"
+  ]
+}

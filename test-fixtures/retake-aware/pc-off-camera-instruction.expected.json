@@ -1,0 +1,17 @@
+{
+  "description": "off-camera instruction — \"say the mask line again but slower\"",
+  "patterns": [
+    "production chatter",
+    "off-camera instruction"
+  ],
+  "expectCut": [
+    {
+      "text": "say the mask line",
+      "type": "production_chatter"
+    }
+  ],
+  "expectPatternTypes": [
+    "production_chatter"
+  ],
+  "expectKeep": []
+}

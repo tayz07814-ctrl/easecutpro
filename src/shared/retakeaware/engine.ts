@@ -25,6 +25,8 @@ import {
   detectSelfCorrections,
   detectRepeatedSetups,
   detectOrphanConnectors,
+  detectProductionChatter,
+  productionChatterCuts,
   applyLlmDecisions,
   buildCutSpans,
   spansToWordIds,
@@ -80,7 +82,13 @@ export function parseLlmDecisions(raw: string, warnings: string[]): LlmDecisions
     if (!Array.isArray(j.retake_group_decisions ?? []) || !Array.isArray(j.filler_decisions ?? [])) {
       throw new Error('wrong shape')
     }
-    return { retake_group_decisions: j.retake_group_decisions ?? [], filler_decisions: j.filler_decisions ?? [] }
+    return {
+      retake_group_decisions: j.retake_group_decisions ?? [],
+      filler_decisions: j.filler_decisions ?? [],
+      // additive: preserve production-chatter verdicts (parseLlmDecisions rebuilds
+      // the object, so an un-copied key would be silently dropped).
+      production_chatter_decisions: Array.isArray(j.production_chatter_decisions) ? j.production_chatter_decisions : []
+    }
   } catch (e) {
     warnings.push(`LLM returned unusable JSON — using rule-based decisions (${(e as Error).message})`)
     console.warn('[retake-aware-beta] LLM JSON invalid, rules stand:', (e as Error).message)
@@ -113,6 +121,13 @@ export async function runRetakeAwareCut(
   // its full retried passage before the LLM sees it (better context either way).
   extendProgressiveRetakes(chunks, groups, vt.words, fillerDecisions)
 
+  // 9b. Audience-speech vs production-chatter (whole-chunk). Rules decide the
+  // confident cuts/keeps; only the AMBIGUOUS (needs_review) chunks are sent to the
+  // LLM below (with the retake groups). Nothing auto-deletes — the resulting cuts
+  // are staged as review flags exactly like every other span.
+  const chatterCandidates = detectProductionChatter(chunks, vt.words, groups)
+  const ambiguousChatter = chatterCandidates.filter((c) => c.decision === 'needs_review')
+
   // 10. optional LLM review of the STRUCTURED candidates only. Provisional
   // groups (ambiguous detections) cut ONLY if the judge affirms them.
   op(70, 'Trimming retakes…')
@@ -120,10 +135,22 @@ export async function runRetakeAwareCut(
   const ambiguousFillers = fillerDecisions.filter((f) => f.classification === 'keep' || f.classification === 'shorten')
   const provisionalCount = groups.filter((g) => g.provisional).length
   const { decisions, judge } = await deps.reviewRetakeGroups(
-    { transcriptContext: context, retakeGroups: groups, fillerCandidates: ambiguousFillers, editingStyle: 'natural talking-head; keep conversational fillers unless ugly' },
+    {
+      transcriptContext: context,
+      retakeGroups: groups,
+      fillerCandidates: ambiguousFillers,
+      editingStyle: 'natural talking-head; keep conversational fillers unless ugly',
+      productionChatterCandidates: ambiguousChatter
+    },
     warnings
   )
   applyLlmDecisions(groups, fillerDecisions, decisions, warnings)
+  // Production-chatter verdicts: only the needs_review candidates were sent, so
+  // cut the confident 'cut' rules-decisions PLUS any ambiguous ones the judge OK'd.
+  const chatterApproved = new Set(
+    (decisions?.production_chatter_decisions ?? []).filter((d) => d.decision === 'cut').map((d) => d.candidate_id)
+  )
+  const chatterCutTails = productionChatterCuts(chatterCandidates, chatterApproved)
   // Every provisional group's fate becomes a rejection-debug entry (E-spec).
   for (const g of groups) {
     if (!g.provisional && !g.llm_rejected) continue
@@ -159,7 +186,7 @@ export async function runRetakeAwareCut(
 
   // 11. cut spans (whole failed attempts + tails + corrections + fillers)
   op(86, 'Cleaning silence…')
-  const baseCutSpans = buildCutSpans(vt, groups, fillerDecisions, allFalseStarts, selfCorrections, repeatedSetups, orphanConnectors)
+  const baseCutSpans = buildCutSpans(vt, groups, fillerDecisions, allFalseStarts, selfCorrections, repeatedSetups, orphanConnectors, chatterCutTails)
 
   // 12. Retake β HYBRID silence: the pause SPAN comes from the TRANSCRIPT word
   // gaps (the full perceived pause), guarded off both words; VAD is only a safety
@@ -304,6 +331,16 @@ export async function runRetakeAwareCut(
     attempt_scores: groups.flatMap((g) => g.attempts.map((a) => ({ attempt_id: `${g.retake_group_id}/${a.attempt_id}`, score: a.score, reasons: a.reasons }))),
     llm_decisions: decisions,
     final_cut_spans: cutSpans,
+    production_chatter_candidates: chatterCandidates,
+    self_talk_candidates: chatterCandidates.filter((c) => c.self_talk_score > 0),
+    off_camera_instruction_candidates: chatterCandidates.filter((c) => c.off_camera_instruction_score > 0),
+    audience_directed_scores: chatterCandidates.map((c) => ({ candidate_id: c.candidate_id, text: c.text, score: c.audience_directed_score })),
+    production_chatter_scores: chatterCandidates.map((c) => ({ candidate_id: c.candidate_id, text: c.text, score: c.production_chatter_score })),
+    llm_production_chatter_decisions: decisions?.production_chatter_decisions ?? [],
+    rejected_production_chatter_candidates: chatterCandidates
+      .filter((c) => !(c.decision === 'cut' || (c.decision === 'needs_review' && chatterApproved.has(c.candidate_id))))
+      .map((c) => ({ candidate_id: c.candidate_id, text: c.text, decision: c.decision, reason: c.possible_reason })),
+    final_production_chatter_cut_spans: cutSpans.filter((s) => s.type === 'production_chatter'),
     retake_beta_silence: betaSilence?.debug ?? null,
     retake_beta_vad_hardcut: vadHardCutDebug,
     retake_beta_artifacts: artifacts.debug,

@@ -131,10 +131,46 @@ export interface RejectedCandidate {
   llm_decision_if_any: string | null
 }
 
+export type ProductionChatterDecision = 'cut' | 'keep' | 'needs_review'
+
+/** A whole chunk classified as AUDIENCE-directed content (keep) vs PRODUCTION
+ *  chatter (talking about the shoot / to oneself / off-camera direction — cut).
+ *  Whole-chunk only, so a cut never splits a sentence. Ambiguous ones (needs_review)
+ *  are the only ones sent to the LLM judge. */
+export interface ProductionChatterCandidate {
+  candidate_id: string
+  chunk_id: string
+  word_start_index: number
+  word_end_index: number // inclusive
+  text: string
+  start: number
+  end: number
+  /** speaker label when the provider supplies diarization; else undefined. */
+  speaker?: string
+  previous_context: string
+  next_context: string
+  possible_reason: string
+  audience_directed_score: number
+  production_chatter_score: number
+  self_talk_score: number
+  off_camera_instruction_score: number
+  confidence_score: number
+  risk_score: number
+  decision: ProductionChatterDecision
+}
+
+/** The LLM judge's verdict on ONE ambiguous production-chatter candidate. */
+export interface LlmProductionChatterDecision {
+  candidate_id: string
+  decision: ProductionChatterDecision
+  confidence: number
+  reason: string
+}
+
 export interface CutSpan {
   start: number
   end: number
-  type: 'failed_retake' | 'filler' | 'retake_marker' | 'false_start' | 'self_correction' | 'repeated_setup' | 'orphan_connector' | 'orphan_word_artifact'
+  type: 'failed_retake' | 'filler' | 'retake_marker' | 'false_start' | 'self_correction' | 'repeated_setup' | 'orphan_connector' | 'orphan_word_artifact' | 'production_chatter'
   source: 'retake_aware_beta'
   reason: string
 }
@@ -155,6 +191,8 @@ export interface LlmFillerDecision {
 export interface LlmDecisions {
   retake_group_decisions: LlmRetakeDecision[]
   filler_decisions: LlmFillerDecision[]
+  /** verdicts on the ambiguous production-chatter candidates (optional/additive). */
+  production_chatter_decisions?: LlmProductionChatterDecision[]
 }
 
 /** Structured payload the optional LLM judge reviews (transcript context +
@@ -166,6 +204,9 @@ export interface ReviewPayload {
   retakeGroups: RetakeGroup[]
   fillerCandidates: FillerDecision[]
   editingStyle: string
+  /** Only the AMBIGUOUS (needs_review) production-chatter phrases — sent so the
+   *  judge rules cut/keep on them. Confident cuts/keeps never reach the LLM. */
+  productionChatterCandidates?: ProductionChatterCandidate[]
 }
 
 export interface RepetitionCandidate {
@@ -211,6 +252,15 @@ export interface RetakeAwareDebug {
   llm_decisions: LlmDecisions | null
   // ---- word cuts: delete spoken words, map to word ids, highlight blue ----
   final_cut_spans: CutSpan[]
+  // ---- audience-speech vs production-chatter detector (additive) ----
+  production_chatter_candidates: ProductionChatterCandidate[]
+  self_talk_candidates: ProductionChatterCandidate[]
+  off_camera_instruction_candidates: ProductionChatterCandidate[]
+  audience_directed_scores: { candidate_id: string; text: string; score: number }[]
+  production_chatter_scores: { candidate_id: string; text: string; score: number }[]
+  llm_production_chatter_decisions: LlmProductionChatterDecision[]
+  rejected_production_chatter_candidates: { candidate_id: string; text: string; decision: ProductionChatterDecision; reason: string }[]
+  final_production_chatter_cut_spans: CutSpan[]
   /** Retake β conservative, word-clamped silence path (provenance + guards). */
   retake_beta_silence: import('./silence').BetaSilenceResult['debug'] | null
   /** Aggressive VAD hard-cut toggle path (bypasses the hybrid) when it ran, else null. */
