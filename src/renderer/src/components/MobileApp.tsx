@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useStore } from '../store'
 import { IS_CLOUD } from '../platform'
-import { canEncodeOnDevice, whyNotLocal } from '../export/localExport'
+import { probeEncodeCaps, whyNotLocal, type EncodeCaps } from '../export/localExport'
 import { useSmoothProgress } from '../useSmoothProgress'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
 import * as C from '@shared/timeline/commands'
@@ -342,14 +342,18 @@ function MobileExport({ onClose }: { onClose: () => void }): JSX.Element {
   const exportVideo = useStore((s) => s.exportVideo)
   const exportVideoOnDevice = useStore((s) => s.exportVideoOnDevice)
   const project = useStore((s) => s.project)
-  const [deviceOk, setDeviceOk] = useState(false)
+  const [caps, setCaps] = useState<EncodeCaps | null>(null)
   useEffect(() => {
     let alive = true
-    void canEncodeOnDevice().then((ok) => alive && setDeviceOk(ok))
+    void probeEncodeCaps().then((c) => alive && setCaps(c))
     return () => {
       alive = false
     }
   }, [])
+  // Video-capable is the real on-device gate; audio may still be missing on
+  // iOS Safari < 26, where we export video-only and warn instead of refusing.
+  const deviceOk = !!caps?.video
+  const audioMissing = !!caps?.video && !caps.audio
   const localGate = deviceOk ? whyNotLocal(project) : ''
   const setAspect = useStore((s) => s.setAspect)
   const aspectW = useStore((s) => s.project.aspectW)
@@ -461,10 +465,15 @@ function MobileExport({ onClose }: { onClose: () => void }): JSX.Element {
                   Not available yet: {localGate}
                 </p>
               )}
+              {audioMissing && !localGate && (
+                <p className="muted small" style={{ textAlign: 'center', margin: '0 0 8px', color: '#e0a341' }}>
+                  ⚠ Video-only on iPhone/iPad — this browser can’t add audio yet. For sound, use desktop/Android or iOS&nbsp;26.
+                </p>
+              )}
             </>
           )}
           {/* Cloud build: no server renderer — on-device export is the only path. */}
-          {IS_CLOUD && !deviceOk && (
+          {IS_CLOUD && caps && !caps.video && (
             <p className="muted small" style={{ textAlign: 'center' }}>
               This browser can't encode video — use Chrome on desktop or Android.
             </p>

@@ -281,7 +281,16 @@ export async function localWaveform(id: string, peaksPerSec = 60): Promise<Wavef
 
 /** Generate filmstrip thumbnails in the browser by seeking a <video> + drawing
  *  to a canvas — the web server never gets the full video, so this is the only
- *  way to show base-track thumbnails on mobile/web. Best-effort + async. */
+ *  way to show base-track thumbnails on mobile/web. Best-effort + async.
+ *
+ *  iOS/iPadOS is the fussy target (every browser there is WebKit, incl. Chrome):
+ *  a muted <video> that has NEVER played paints NOTHING to a canvas, and a
+ *  `currentTime` set before the media is buffered may never fire `seeked` — the
+ *  old code hung on that await and the strip stayed blank forever. So we now
+ *  (a) prime the decoder with a muted inline play→pause, (b) wait for a frame
+ *  that is actually PRESENTED via requestVideoFrameCallback (fallback: `seeked`),
+ *  and (c) time-bound every wait so a stalled seek skips one frame instead of
+ *  wedging the whole strip. */
 export async function localThumbnails(
   id: string,
   intervalSec = 2
@@ -296,13 +305,47 @@ export async function localThumbnails(
   video.muted = true
   video.preload = 'auto'
   ;(video as unknown as { playsInline: boolean }).playsInline = true
-  try {
-    await new Promise<void>((res, rej) => {
-      video.onloadedmetadata = () => res()
-      video.onerror = () => rej(new Error('thumb: cannot load'))
+
+  // Resolve when `p` settles OR after `ms` — never rejects, never hangs.
+  const withTimeout = (p: Promise<unknown>, ms: number): Promise<void> =>
+    new Promise((res) => {
+      let done = false
+      const finish = (): void => {
+        if (done) return
+        done = true
+        res()
+      }
+      const timer = setTimeout(finish, ms)
+      const clear = (): void => {
+        clearTimeout(timer)
+        finish()
+      }
+      void Promise.resolve(p).then(clear, clear)
     })
+  const rvfcOK =
+    typeof (HTMLVideoElement.prototype as { requestVideoFrameCallback?: unknown }).requestVideoFrameCallback === 'function'
+
+  try {
+    // loadeddata (readyState >= 2) means a frame is actually decodable — unlike
+    // loadedmetadata, which only gives dimensions/duration and draws blank.
+    await withTimeout(
+      new Promise<void>((res, rej) => {
+        video.onloadeddata = () => res()
+        video.onerror = () => rej(new Error('thumb: cannot load'))
+      }),
+      8000
+    )
     const dur = video.duration
     if (!dur || !isFinite(dur)) return []
+
+    // Prime the decoder — iOS won't draw a never-played muted <video> to canvas.
+    try {
+      await video.play()
+      video.pause()
+    } catch {
+      /* autoplay refused — the seek below may still present a frame */
+    }
+
     const vw = video.videoWidth || 16
     const vh = video.videoHeight || 9
     const W = 160
@@ -312,22 +355,41 @@ export async function localThumbnails(
     canvas.height = H
     const ctx = canvas.getContext('2d')
     if (!ctx) return []
+
+    // Seek + wait for the frame to be PRESENTED (rVFC), not merely for `seeked`.
+    const seek = (t: number): Promise<void> => {
+      const presented = new Promise<void>((res) => {
+        if (rvfcOK) {
+          ;(video as unknown as { requestVideoFrameCallback: (cb: () => void) => void }).requestVideoFrameCallback(
+            () => res()
+          )
+        } else {
+          const onSeeked = (): void => {
+            video.removeEventListener('seeked', onSeeked)
+            res()
+          }
+          video.addEventListener('seeked', onSeeked)
+        }
+      })
+      try {
+        video.currentTime = Math.min(t, dur - 0.05)
+      } catch {
+        return Promise.resolve()
+      }
+      return withTimeout(presented, 2000)
+    }
+
     // Cap the count (~50 frames) so long videos don't seek forever.
     const step = Math.max(intervalSec || 1, dur / 50)
-    const seek = (t: number): Promise<void> =>
-      new Promise((res) => {
-        const onSeeked = (): void => {
-          video.removeEventListener('seeked', onSeeked)
-          res()
-        }
-        video.addEventListener('seeked', onSeeked)
-        video.currentTime = Math.min(t, dur - 0.05)
-      })
     const out: { time: number; url: string }[] = []
     for (let t = 0; t < dur - 0.05; t += step) {
       await seek(t)
-      ctx.drawImage(video, 0, 0, W, H)
-      out.push({ time: t, url: canvas.toDataURL('image/jpeg', 0.6) })
+      try {
+        ctx.drawImage(video, 0, 0, W, H)
+        out.push({ time: t, url: canvas.toDataURL('image/jpeg', 0.6) })
+      } catch {
+        /* one frame refused to draw — keep going; a partial strip still helps */
+      }
     }
     return out
   } catch {

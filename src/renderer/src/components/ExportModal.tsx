@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { canEncodeOnDevice, whyNotLocal } from '../export/localExport'
+import { probeEncodeCaps, whyNotLocal, type EncodeCaps } from '../export/localExport'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { IS_WEB, IS_CLOUD } from '../platform'
 import { useStore } from '../store'
@@ -33,15 +33,19 @@ export default function ExportModal(): JSX.Element {
   // H.264+AAC and the timeline only uses phase-1 features.
   const project = useStore((s) => s.project)
   const exportVideoOnDevice = useStore((s) => s.exportVideoOnDevice)
-  const [deviceOk, setDeviceOk] = useState(false)
+  const [caps, setCaps] = useState<EncodeCaps | null>(null)
   useEffect(() => {
     if (!IS_WEB) return
     let alive = true
-    void canEncodeOnDevice().then((ok) => alive && setDeviceOk(ok))
+    void probeEncodeCaps().then((c) => alive && setCaps(c))
     return () => {
       alive = false
     }
   }, [])
+  // Video-capable is the real "can export on device" gate; audio may still be
+  // missing (iOS Safari < 26), in which case we export video-only + warn.
+  const deviceOk = !!caps?.video
+  const audioMissing = !!caps?.video && !caps.audio
   const localGate = IS_WEB && deviceOk ? whyNotLocal(project) : ''
   const media = useStore((s) => s.project.media)
   const sequence = useStore((s) => s.project.baseSequence)
@@ -120,6 +124,13 @@ export default function ExportModal(): JSX.Element {
         </div>
         <p className="muted small">~{estMbPerMin} MB per minute · content is letterboxed to fit the chosen resolution.</p>
 
+        {audioMissing && (
+          <p className="muted small" style={{ color: '#e0a341' }}>
+            ⚠ This browser (iPhone/iPad Safari) can’t add audio to exports yet — the file will be
+            {' '}<b>video-only</b>. For sound, export from Chrome/Edge on desktop or Android, or update to iOS&nbsp;26.
+          </p>
+        )}
+
         <div className="row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
           <button onClick={() => close(false)}>Cancel</button>
           {IS_WEB && deviceOk && (
@@ -137,7 +148,7 @@ export default function ExportModal(): JSX.Element {
             </button>
           )}
           {/* Cloud build has no server renderer — on-device export IS the export. */}
-          {IS_CLOUD && !deviceOk && (
+          {IS_CLOUD && caps && !caps.video && (
             <span className="muted small">
               This browser can't encode video — use Chrome/Edge on desktop or Android.
             </span>

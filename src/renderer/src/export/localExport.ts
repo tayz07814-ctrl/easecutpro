@@ -70,32 +70,70 @@ interface AudioClipSched {
 }
 
 // ---- capability ----
-let capCache: Promise<boolean> | null = null
-/** Can this browser hardware-encode H.264 + AAC? (cached probe) */
-export function canEncodeOnDevice(): Promise<boolean> {
-  if (capCache) return capCache
-  capCache = (async () => {
-    try {
-      if (typeof VideoEncoder === 'undefined' || typeof AudioEncoder === 'undefined') return false
-      const v = await VideoEncoder.isConfigSupported({
-        codec: 'avc1.640028',
-        width: 1920,
-        height: 1080,
-        bitrate: 8_000_000,
-        framerate: FPS
-      })
-      const a = await AudioEncoder.isConfigSupported({
-        codec: 'mp4a.40.2',
-        sampleRate: AUDIO_RATE,
-        numberOfChannels: 2,
-        bitrate: 192_000
-      })
-      return v.supported === true && a.supported === true
-    } catch {
-      return false
+export interface EncodeCaps {
+  /** this browser can H.264-encode video on-device */
+  video: boolean
+  /** this browser can AAC-encode audio on-device. FALSE on iOS/iPadOS Safari
+   *  (and every iOS browser — all WebKit) before v26: WebCodecs shipped there
+   *  VIDEO-ONLY, so AudioEncoder/AudioData are `undefined`. When false we export
+   *  video-only instead of refusing the whole export. */
+  audio: boolean
+  /** the H.264 profile string that probed supported (High → Main → Baseline). */
+  videoCodec: string
+}
+
+// High@4.0, Main@4.0, Constrained-Baseline@4.0, Baseline@3.1. Safari REJECTS
+// (throws) an unsupported config instead of returning {supported:false}, and
+// some iOS builds only advertise the lower profiles — so we walk the list and
+// take the first that sticks rather than hard-coding High.
+const H264_PROFILES = ['avc1.640028', 'avc1.4d0028', 'avc1.42e028', 'avc1.42001f']
+
+let capsCache: Promise<EncodeCaps> | null = null
+/** What can this browser encode on-device? (cached probe) */
+export function probeEncodeCaps(): Promise<EncodeCaps> {
+  if (capsCache) return capsCache
+  capsCache = (async (): Promise<EncodeCaps> => {
+    let video = false
+    let videoCodec = H264_PROFILES[0]
+    if (typeof VideoEncoder !== 'undefined') {
+      for (const codec of H264_PROFILES) {
+        try {
+          const v = await VideoEncoder.isConfigSupported({
+            codec,
+            width: 1920,
+            height: 1080,
+            bitrate: 8_000_000,
+            framerate: FPS
+          })
+          if (v.supported === true) {
+            video = true
+            videoCodec = codec
+            break
+          }
+        } catch {
+          /* Safari throws on an unsupported config — try the next profile */
+        }
+      }
     }
+    // AudioData must exist too: the main thread builds `new AudioData(...)` to
+    // feed the encoder, and it's undefined exactly where AudioEncoder is.
+    let audio = false
+    if (typeof AudioEncoder !== 'undefined' && typeof AudioData !== 'undefined') {
+      try {
+        const a = await AudioEncoder.isConfigSupported({
+          codec: 'mp4a.40.2',
+          sampleRate: AUDIO_RATE,
+          numberOfChannels: 2,
+          bitrate: 192_000
+        })
+        audio = a.supported === true
+      } catch {
+        audio = false
+      }
+    }
+    return { video, audio, videoCodec }
   })()
-  return capCache
+  return capsCache
 }
 
 /** '' when the current timeline can export on-device; else the human reason. */
@@ -291,6 +329,8 @@ export async function exportOnDevice(
   if (!doc) throw new Error('timeline not ready')
   const gate = whyNotLocal(project)
   if (gate) throw new Error(gate)
+  const caps = await probeEncodeCaps()
+  if (!caps.video) throw new Error('this browser can’t encode video on-device')
   const { segs, audio, total } = planFromDoc(doc, project)
   if (!segs.length || total <= 0) throw new Error('nothing to export')
 
@@ -301,9 +341,13 @@ export async function exportOnDevice(
   onProgress(1, 'Preparing on-device export…')
   dbg('plan', { segs: segs.length, audio: audio.length, total, W, H, totalFrames })
 
-  // 1) audio first (fast, and the encoder drains it while frames trickle in)
-  dbg('renderAudio: start')
-  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing audio…'))
+  // 1) audio first (fast, and the encoder drains it while frames trickle in).
+  //    Skipped when the browser can't AAC-encode (iOS Safari < 26) — the export
+  //    goes out video-only; the UI warns about this before the user taps export.
+  dbg('renderAudio: start', { audioCapable: caps.audio })
+  const audioBuf = caps.audio
+    ? await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing audio…'))
+    : null
   dbg('renderAudio: done', !!audioBuf)
 
   // 2) worker
@@ -350,7 +394,7 @@ export async function exportOnDevice(
     width: W,
     height: H,
     fps: FPS,
-    videoCodec: 'avc1.640028',
+    videoCodec: caps.videoCodec,
     bitrate: Math.round(opts.bitrateMbps * 1_000_000),
     audio: audioBuf ? { codec: 'mp4a.40.2', sampleRate: AUDIO_RATE, channels: 2, bitrate: 192_000 } : null
   })
