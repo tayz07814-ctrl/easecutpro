@@ -41,24 +41,24 @@ export default function MobileApp(): JSX.Element {
     return v >= 22 && v <= 58 ? v : 46
   })
   useEffect(() => localStorage.setItem('ec.mStageVh', String(stageVh)), [stageVh])
+  // ONE unified pointer gesture (not separate touch + mouse). iOS fires simulated
+  // mouse events after touch, and the old dual handlers started two competing
+  // drags — the "grip glitches / can't be moved" bug.
   function startStageDrag(clientY0: number): void {
     const vh0 = stageVh
-    const onMove = (ev: TouchEvent | MouseEvent): void => {
-      const y = 'touches' in ev ? (ev.touches[0]?.clientY ?? clientY0) : ev.clientY
-      const dvh = ((y - clientY0) / window.innerHeight) * 100
+    const onMove = (ev: PointerEvent): void => {
+      const dvh = ((ev.clientY - clientY0) / window.innerHeight) * 100
       setStageVh(Math.min(58, Math.max(22, vh0 + dvh)))
       ev.preventDefault()
     }
     const onUp = (): void => {
-      window.removeEventListener('touchmove', onMove)
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('touchend', onUp)
-      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
-    window.addEventListener('touchmove', onMove, { passive: false })
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('touchend', onUp)
-    window.addEventListener('mouseup', onUp)
+    window.addEventListener('pointermove', onMove, { passive: false })
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
   const [pendingTranscript, setPendingTranscript] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
@@ -171,8 +171,7 @@ export default function MobileApp(): JSX.Element {
       </div>
       <div
         className="m-stage-grip"
-        onTouchStart={(e) => startStageDrag(e.touches[0].clientY)}
-        onMouseDown={(e) => startStageDrag(e.clientY)}
+        onPointerDown={(e) => startStageDrag(e.clientY)}
       >
         <span />
       </div>

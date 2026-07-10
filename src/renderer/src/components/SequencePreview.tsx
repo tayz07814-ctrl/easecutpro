@@ -707,6 +707,7 @@ export default function SequencePreview(): JSX.Element {
             <video
               key={shownSrc}
               ref={ref}
+              playsInline
               src={mediaSrc(shownSrc)}
               onLoadedMetadata={onLoaded}
               onLoadedData={onLoaded}

@@ -250,6 +250,7 @@ export default function VideoPreview(): JSX.Element {
               <video
                 key={mediaUrl}
                 ref={ref}
+                playsInline
                 src={mediaUrl}
                 onTimeUpdate={onTimeUpdate}
                 onClick={() => setPlaying(!playing)}

@@ -288,6 +288,7 @@ function OverlayBox({
       ) : (
         <video
           ref={ref}
+          playsInline
           src={ecurl(view.sourcePath)}
           style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center' }}
         />
