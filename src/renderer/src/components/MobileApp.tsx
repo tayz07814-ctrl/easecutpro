@@ -41,24 +41,26 @@ export default function MobileApp(): JSX.Element {
     return v >= 22 && v <= 58 ? v : 46
   })
   useEffect(() => localStorage.setItem('ec.mStageVh', String(stageVh)), [stageVh])
-  // ONE unified pointer gesture on WINDOW listeners (not element capture): this is
-  // the version that dragged reliably on Android. `touch-action: none` on the grip
-  // keeps the browser from stealing it as a scroll; pointer events (not touch+mouse)
-  // avoid the iOS double-drag from simulated mouse events after touch.
+  // Mirrors the clip-TRIM drag (which works on iOS + Android): preventDefault +
+  // stopPropagation on the pointer-DOWN so iOS doesn't hijack the touch as a page
+  // scroll before the drag starts (that was the "grip is frozen" bug — the down
+  // event wasn't consumed), then window listeners drive the move. Pointer events
+  // only (not touch+mouse) avoid the iOS double-drag from simulated mouse events.
   function startStageDrag(e: ReactPointerEvent<HTMLDivElement>): void {
+    e.preventDefault()
+    e.stopPropagation()
     const vh0 = stageVh
     const y0 = e.clientY
     const onMove = (ev: PointerEvent): void => {
       const dvh = ((ev.clientY - y0) / window.innerHeight) * 100
       setStageVh(Math.min(58, Math.max(22, vh0 + dvh)))
-      ev.preventDefault()
     }
     const onUp = (): void => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
     }
-    window.addEventListener('pointermove', onMove, { passive: false })
+    window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onUp)
   }

@@ -315,7 +315,9 @@ export async function localWaveform(id: string, peaksPerSec = 60): Promise<Wavef
     // the video timeline (matches the desktop extraction fix).
     if (leadPeaks > 0) return { peaksPerSec, peaks: new Array(leadPeaks).fill(0).concat(peaks) }
     return { peaksPerSec, peaks }
-  } catch {
+  } catch (e) {
+    // Surface WHY the waveform is missing (iOS audio-decode failures are silent otherwise).
+    ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Waveform decode failed', e)
     return { peaksPerSec, peaks: [] }
   }
 }

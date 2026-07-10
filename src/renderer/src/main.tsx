@@ -16,10 +16,52 @@ import './styles.css'
 if (IS_WEB) {
   if (IS_CLOUD) installCloudApi()
   else installWebApi()
-  // Surface failed async ops in the status bar (and clear a stuck spinner).
+  // ---- Visible error surface (mobile Safari has no console you can open) ----
+  // A dismissible on-screen box showing the message + stack, so a crash in Cut
+  // Lord, export, or waveform decode SHOWS what failed instead of silently dying.
+  // Built in vanilla DOM so it works even if React itself has thrown. Deduped so
+  // the same error doesn't stack. Reachable from anywhere via window.__ecError.
+  const seenErr = new Set<string>()
+  const showErr = (label: string, err: unknown): void => {
+    try {
+      const e = err as Error | undefined
+      const msg = (e && (e.stack || e.message)) || String(err)
+      if (seenErr.has(msg)) return
+      seenErr.add(msg)
+      let box = document.getElementById('ec-err')
+      if (!box) {
+        box = document.createElement('div')
+        box.id = 'ec-err'
+        box.style.cssText =
+          'position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;max-height:45vh;overflow:auto;' +
+          'background:#2a0d12;color:#ffdada;border:1px solid #ff5b6e;border-radius:10px;padding:10px 12px;' +
+          'font:12px/1.45 ui-monospace,Menlo,monospace;box-shadow:0 8px 30px rgba(0,0,0,.55)'
+        document.body.appendChild(box)
+      }
+      const row = document.createElement('div')
+      row.style.cssText = 'display:flex;justify-content:space-between;gap:8px;font-weight:700;margin-bottom:4px'
+      const h = document.createElement('span')
+      h.textContent = '⚠︎ ' + label
+      const x = document.createElement('button')
+      x.textContent = 'dismiss'
+      x.style.cssText = 'background:none;border:1px solid #ff5b6e;color:#ffdada;border-radius:6px;padding:2px 8px'
+      x.onclick = () => box && box.remove()
+      row.append(h, x)
+      const pre = document.createElement('pre')
+      pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;margin:0'
+      pre.textContent = msg
+      box.append(row, pre)
+    } catch {
+      /* never let the reporter itself throw */
+    }
+  }
+  ;(window as unknown as { __ecError?: typeof showErr }).__ecError = showErr
+  window.addEventListener('error', (e) => showErr('Error', e.error || e.message))
+  // Surface failed async ops in the status bar (clear a stuck spinner) AND on-screen.
   window.addEventListener('unhandledrejection', (e) => {
     const msg = (e.reason && (e.reason.message || String(e.reason))) || 'Unknown error'
     useStore.setState({ job: { active: false, percent: 0, message: `Error: ${msg}` } })
+    showErr('Async error', e.reason)
   })
 }
 

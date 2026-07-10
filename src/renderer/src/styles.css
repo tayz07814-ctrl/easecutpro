@@ -573,7 +573,7 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 
 /* Preview — smaller, with VideoPreview's own desktop transport hidden */
 .m-stage { flex: 0 0 auto; height: 46vh; min-height: 0; display: flex; background: #000; }
-.m-stage-grip { flex: 0 0 auto; height: 16px; display: flex; align-items: center; justify-content: center;
+.m-stage-grip { flex: 0 0 auto; height: 22px; display: flex; align-items: center; justify-content: center;
   cursor: row-resize; touch-action: none; background: var(--bg2); }
 .m-stage-grip span { width: 44px; height: 4px; border-radius: 2px; background: var(--border); }
 /* Mobile: no visible scrollbars anywhere — touch scrolling only (CapCut-style). */
