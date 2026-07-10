@@ -5,6 +5,8 @@
 // bytes (transcribe / silence / export) do we upload, lazily and in chunks
 // (chunks dodge the ~100 MB request limit that tunnels like Cloudflare impose).
 import type { MediaInfo, Waveform } from '@shared/types'
+// Type-only — erased at build; the runtime import is dynamic (fast thumbnail path).
+import type { Input as MBInput } from 'mediabunny'
 
 interface MediaRec {
   file: File
@@ -316,17 +318,11 @@ export async function localWaveform(id: string, peaksPerSec = 60): Promise<Wavef
   }
 }
 
-/** Generate filmstrip thumbnails in the browser by seeking a <video> + drawing to
- *  a canvas — the web server never gets the full video, so this is the only way to
- *  show base-track thumbnails on the web. Best-effort + async + progressive.
- *
- *  iOS/iPadOS is the fussy target (every browser there is WebKit, incl. Chrome):
- *  a muted <video> that has NEVER played paints NOTHING to a canvas, and a
- *  `currentTime` set before the media is buffered may never fire `seeked`. So we
- *  (a) prime the decoder with a muted inline play→pause, (b) wait for a frame that
- *  is actually PRESENTED via requestVideoFrameCallback (fallback: `seeked`), and
- *  (c) time-bound every wait so a stalled seek skips one frame instead of wedging
- *  the whole strip. */
+/** Generate filmstrip thumbnails in the browser — the web server never gets the
+ *  full video, so this is the only way to show base-track thumbnails on the web.
+ *  Tries a hardware WebCodecs pass (mediabunny) first, then falls back to seeking
+ *  a <video>. The fast pass is bounded by an abort timeout so a stuck decoder can
+ *  never wedge the strip — worst case it drops to the (slower) seek path. */
 export async function localThumbnails(
   id: string,
   intervalSec = 2,
@@ -337,7 +333,75 @@ export async function localThumbnails(
   if (IMAGE_RE.test(rec.file.name) || rec.file.type.startsWith('image/')) {
     return [{ time: 0, url: rec.url }]
   }
+  // Hardware WebCodecs pass, hard-bounded: if it produces no frame within the
+  // budget we abort it (disposing the decoder) and fall back to seeking.
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 15000)
+  let fast: { time: number; url: string }[] | null = null
+  try {
+    fast = await localThumbnailsFast(rec, intervalSec, onPartial, ctrl.signal)
+  } catch {
+    fast = null
+  } finally {
+    clearTimeout(timer)
+  }
+  if (fast && fast.length) return fast
   return localThumbnailsSeek(rec, intervalSec, onPartial)
+}
+
+/** Hardware filmstrip via mediabunny: WebCodecs-decodes each needed frame at most
+ *  once in one monotonic pass — far faster than seeking a <video> per frame, and
+ *  applies the file's rotation metadata so frames come out upright. Fully guarded:
+ *  returns null (→ seek fallback) on any error, abort, or undecodable track. The
+ *  `for await` yields to the event loop at every frame, so the main thread stays
+ *  responsive (the decode itself runs off-thread on the platform codec). */
+async function localThumbnailsFast(
+  rec: MediaRec,
+  intervalSec: number,
+  onPartial: ((frames: { time: number; url: string }[]) => void) | undefined,
+  signal: AbortSignal
+): Promise<{ time: number; url: string }[] | null> {
+  let input: MBInput | null = null
+  try {
+    const { Input, BlobSource, ALL_FORMATS, CanvasSink } = await import('mediabunny')
+    input = new Input({ source: new BlobSource(rec.file), formats: ALL_FORMATS })
+    const track = await input.getPrimaryVideoTrack()
+    if (!track || signal.aborted || !(await track.canDecode())) return null
+    const dur = (await track.getDurationFromMetadata().catch(() => null)) || (await track.computeDuration())
+    if (!dur || !isFinite(dur)) return null
+    // ~24 frames, width 128 — matches the seek path; height auto-derives by aspect.
+    const sink = new CanvasSink(track, { width: 128 })
+    const step = Math.max(intervalSec || 1, dur / 24)
+    const times: number[] = []
+    for (let t = 0; t < dur - 0.05; t += step) times.push(t)
+    if (!times.length) times.push(0)
+    const outCanvas = document.createElement('canvas')
+    const octx = outCanvas.getContext('2d')
+    if (!octx) return null
+    const out: { time: number; url: string }[] = []
+    for await (const wrapped of sink.canvasesAtTimestamps(times)) {
+      if (signal.aborted) break
+      if (!wrapped) continue
+      const c = wrapped.canvas
+      if (outCanvas.width !== c.width || outCanvas.height !== c.height) {
+        outCanvas.width = c.width
+        outCanvas.height = c.height
+      }
+      // Copy off the (possibly pooled) sink canvas before encoding.
+      octx.drawImage(c as CanvasImageSource, 0, 0)
+      out.push({ time: wrapped.timestamp, url: outCanvas.toDataURL('image/jpeg', 0.55) })
+      onPartial?.(out.slice()) // fill the strip in live, same as the seek path
+    }
+    return out.length ? out : null
+  } catch {
+    return null // codec undecodable here, read failed, or aborted — use seek
+  } finally {
+    try {
+      input?.dispose()
+    } catch {
+      /* already disposed */
+    }
+  }
 }
 
 async function localThumbnailsSeek(
