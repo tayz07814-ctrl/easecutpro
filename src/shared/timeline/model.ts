@@ -69,10 +69,10 @@ export function defaultCache(): CacheRefs {
 const TRACK_KIND_HEIGHT: Record<TrackKind, number> = {
   // Main video lane is TALL by default: the waveform + filmstrip need vertical
   // room to be readable. Users can still drag any track's height (28-360).
-  video: 112,
-  audio: 48,
-  text: 36,
-  overlay: 56,
+  video: 96,
+  audio: 44,
+  text: 34,
+  overlay: 52,
   subtitle: 32,
   effect: 30,
   adjustment: 30

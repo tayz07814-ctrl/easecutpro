@@ -205,7 +205,7 @@ function ClutterCleaner(): JSX.Element {
         className={IS_CLOUD ? 'primary' : ''}
         onClick={() => void runRetakeCutBeta()}
         disabled={jobActive}
-        title="Retake-Aware Cut Beta — verbatim transcript (AssemblyAI/Deepgram), whole-take retake removal (never splices takes), filler triage, AND conservative transcript-gap silence tightening. Highlights + silence chips only; nothing is cut until Execute."
+        title="Cut Lord — verbatim transcript, whole-take retake removal (never splices takes), filler triage, AND conservative transcript-gap silence tightening. Highlights + silence chips only; nothing is cut until Execute."
       >
         🧪 Find Retakes &amp; Silence
       </button>
@@ -246,7 +246,7 @@ function ClutterCleaner(): JSX.Element {
           {IS_CLOUD ? (
             <>
               No transcript yet. Click <b>🧪 Find Retakes & Silence</b> — it transcribes automatically
-              (AssemblyAI/Deepgram) and highlights retakes, fillers and silences here for review.
+              and highlights retakes, fillers and silences here for review.
             </>
           ) : (
             <>

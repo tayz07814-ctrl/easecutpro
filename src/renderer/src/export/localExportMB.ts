@@ -23,7 +23,7 @@
 
 import { getSharedEngine } from '../timelineEngine'
 import { easeInOut } from '../clock'
-import { planFromDoc, renderAudio, FPS, type Seg } from './localExport'
+import { planFromDoc, renderAudio, FPS, exportMsg, type Seg } from './localExport'
 import {
   planOverlays,
   planTexts,
@@ -70,7 +70,7 @@ export async function exportOnDeviceMB(
   const W = Math.max(16, Math.round(opts.width / 2) * 2)
   const H = Math.max(16, Math.round(opts.height / 2) * 2)
   const totalFrames = Math.max(1, Math.round(total * FPS))
-  onProgress(1, 'Preparing on-device export…')
+  onProgress(1, 'Getting ready to export…')
 
   // Mediabunny + the AAC polyfill are code-split — only an iOS<26 export loads them.
   const { Output, Mp4OutputFormat, BufferTarget, CanvasSource, AudioBufferSource, canEncodeAudio } =
@@ -83,7 +83,7 @@ export async function exportOnDeviceMB(
 
   // Offline audio mix — same honest-failure semantics as the native path
   // (renderAudio throws if a source that should contribute sound can't decode).
-  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing audio…'))
+  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing your audio…'))
 
   const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() })
   const canvas = document.createElement('canvas')
@@ -301,11 +301,11 @@ export async function exportOnDeviceMB(
       // await = encoder/writer backpressure (never runs the queue away)
       await videoSource.add(n / FPS, 1 / FPS)
       if (n % 15 === 0)
-        onProgress(5 + Math.round((n / totalFrames) * 90), `Encoding on this device… ${Math.round((n / totalFrames) * 100)}%`)
+        onProgress(5 + Math.round((n / totalFrames) * 90), exportMsg(n / totalFrames))
     }
     dbg('frames done', `${Math.round(performance.now() - tExport0)}ms for ${totalFrames} frames`)
 
-    onProgress(96, 'Finishing the file…')
+    onProgress(96, 'Polishing video…')
     await output.finalize()
     const buffer = output.target.buffer
     if (!buffer) throw new Error('export produced no data')

@@ -1529,11 +1529,13 @@ export const useStore = create<AppState>((set, get) => ({
   retakeBetaSilenceSettings: ((): RetakeBetaSilenceSettings => {
     try {
       const raw = localStorage.getItem('ec.retakeBetaSilence')
-      if (raw) return { ...DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, ...JSON.parse(raw) }
+      // Hardened (aggressive VAD hard-cut) is ON by default; an explicit stored
+      // choice still wins over it.
+      if (raw) return { ...DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, vadHardCut: true, ...JSON.parse(raw) }
     } catch {
       /* ignore */
     }
-    return { ...DEFAULT_RETAKE_BETA_SILENCE_SETTINGS }
+    return { ...DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, vadHardCut: true }
   })(),
   setRetakeBetaSilenceSettings: (patch) => {
     let next: RetakeBetaSilenceSettings = { ...get().retakeBetaSilenceSettings, ...patch }
@@ -1645,7 +1647,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Import a video first' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Retake β is working…' } })
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Cut Lord…' } })
     try {
       let path: string
       if (isMultiBase(p0)) {
@@ -2615,7 +2617,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   exportVideoOnDevice: async (settings) => {
-    set({ showExportModal: false, job: { active: true, kind: 'export', percent: 1, message: 'Exporting on this device…' } })
+    set({ showExportModal: false, job: { active: true, kind: 'export', percent: 1, message: 'Getting ready to export…' } })
     try {
       const { blob, name } = await exportOnDevice(
         get().project,

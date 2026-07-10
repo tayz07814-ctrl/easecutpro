@@ -64,7 +64,7 @@ export async function retakeAwareCutCloud(
 
   // 1. audio — decoded ONCE in the browser; the upload blob, the VAD samples
   // and the transcription all come from this single decode (shared clock).
-  op(3, 'Retake β: extracting audio…')
+  op(3, 'Getting your audio ready…')
   const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
 
   const deps: RetakeEngineDeps = {

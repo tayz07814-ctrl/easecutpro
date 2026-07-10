@@ -68,6 +68,17 @@ export default function MobileApp(): JSX.Element {
     const t = setTimeout(() => setToast(null), 1800)
     return () => clearTimeout(t)
   }, [toast])
+  // Portrait-only: best-effort native orientation lock (works when installed /
+  // in fullscreen; a harmless no-op in normal mobile Safari/Chrome). The CSS
+  // rotate overlay below covers the browsers that can't lock.
+  useEffect(() => {
+    const so = (screen as unknown as { orientation?: { lock?: (o: string) => Promise<void> } }).orientation
+    try {
+      so?.lock?.('portrait')?.catch(() => undefined)
+    } catch {
+      /* lock needs fullscreen/PWA — the CSS overlay handles the rest */
+    }
+  }, [])
   const soon = (what: string): void => setToast(`${what} — coming soon`)
 
   const selClip = s.selectedClipId
@@ -129,6 +140,14 @@ export default function MobileApp(): JSX.Element {
 
   return (
     <div className="m-app">
+      {/* Portrait-only guard: shows over everything when a phone is turned landscape */}
+      <div className="m-rotate-notice">
+        <div className="m-rotate-inner">
+          <div className="m-rotate-ic">📱</div>
+          Please rotate your phone to <b>portrait</b> to keep editing.
+        </div>
+      </div>
+
       {/* Top bar */}
       <header className="m-top">
         <button className="m-top-btn" onClick={() => s.goHome()} title="Projects">‹</button>

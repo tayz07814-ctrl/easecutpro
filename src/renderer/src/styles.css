@@ -567,7 +567,7 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 
 /* Preview — smaller, with VideoPreview's own desktop transport hidden */
 .m-stage { flex: 0 0 auto; height: 46vh; min-height: 0; display: flex; background: #000; }
-.m-stage-grip { flex: 0 0 auto; height: 14px; display: flex; align-items: center; justify-content: center;
+.m-stage-grip { flex: 0 0 auto; height: 9px; display: flex; align-items: center; justify-content: center;
   cursor: row-resize; touch-action: none; background: var(--bg2); }
 .m-stage-grip span { width: 44px; height: 4px; border-radius: 2px; background: var(--border); }
 /* Mobile: no visible scrollbars anywhere — touch scrolling only (CapCut-style). */
@@ -580,6 +580,20 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .m-zoom { font-size: 17px; font-weight: 700; }
 .m-stage .preview { flex: 1; min-height: 0; background: #000; }
 .m-stage .transport { display: none; }
+
+/* Portrait-only: on a phone turned to landscape (short viewport height), cover
+   the whole UI with a rotate prompt. Desktop + tablets (tall in landscape) and
+   portrait phones are unaffected. */
+.m-rotate-notice { display: none; }
+@media (orientation: landscape) and (max-height: 560px) {
+  .m-rotate-notice {
+    display: flex; position: fixed; inset: 0; z-index: 9999;
+    align-items: center; justify-content: center; text-align: center;
+    background: var(--bg, #0c0d12); color: var(--text, #e6e6e6); padding: 24px;
+  }
+  .m-rotate-inner { max-width: 340px; font-size: 15px; line-height: 1.5; }
+  .m-rotate-ic { font-size: 46px; margin-bottom: 12px; }
+}
 
 /* Transport row: a 3-column grid (left · centre · right). Grid tracks never
    overlap, so the Magnet (left) and Undo/Redo (right) can't collide, and the
@@ -614,7 +628,7 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .m-del.all { color: #ffd27a; border-color: #6b5a2c; background: #2a2515; }
 
 /* Timeline fills the remaining space; tracks themselves are compact */
-.m-tl { flex: 1 1 auto; min-height: 132px; min-width: 0; display: flex; border-top: 1px solid var(--border); }
+.m-tl { flex: 1 1 auto; min-height: 112px; min-width: 0; display: flex; border-top: 1px solid var(--border); }
 .m-tl > .timeline { flex: 1; min-width: 0; height: 100%; }
 .timeline.mobile { background: var(--bg); }
 .timeline.mobile .ruler { background: var(--bg2); color: var(--muted); }
@@ -760,7 +774,7 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
    phone they shrink instead of overflowing the screen edge. */
 .m-transport {
   display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center; gap: clamp(2px, 1.5vw, 8px); padding: 7px clamp(6px, 3vw, 12px); flex-shrink: 0;
+  align-items: center; gap: clamp(2px, 1.5vw, 8px); padding: 3px clamp(6px, 3vw, 12px); flex-shrink: 0;
   background: linear-gradient(180deg, var(--bg2), var(--bg)); border-top: 1px solid var(--border);
 }
 .m-tp-side { display: flex; align-items: center; gap: clamp(0px, 0.6vw, 3px); min-width: 0; }

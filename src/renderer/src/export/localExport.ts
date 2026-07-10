@@ -37,6 +37,12 @@ import type { TimelineDocument } from '@shared/timeline/types'
 export const FPS = 30
 const AUDIO_RATE = 48000
 
+/** Friendly, rotating export status lines (the % is shown separately in the UI). */
+export const EXPORT_MSGS = ['Compiling your video…', 'Rendering frames…', 'Polishing video…', 'Almost there…']
+export function exportMsg(frac: number): string {
+  return EXPORT_MSGS[Math.min(EXPORT_MSGS.length - 1, Math.max(0, Math.floor(frac * EXPORT_MSGS.length)))]
+}
+
 export interface Seg {
   url: string
   /** the clip's original source path/id — the audio decoder keys off this. */
@@ -346,12 +352,12 @@ export async function exportOnDevice(
   const H = Math.max(16, Math.round(opts.height / 2) * 2)
   const totalFrames = Math.max(1, Math.round(total * FPS))
 
-  onProgress(1, 'Preparing on-device export…')
+  onProgress(1, 'Getting ready to export…')
   dbg('plan', { segs: segs.length, audio: audio.length, total, W, H, totalFrames })
 
   // 1) audio first (fast, and the encoder drains it while frames trickle in)
   dbg('renderAudio: start')
-  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing audio…'))
+  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing your audio…'))
   dbg('renderAudio: done', !!audioBuf)
 
   // 2) worker
@@ -784,11 +790,11 @@ export async function exportOnDevice(
       }
       // backpressure: never let the encoder queue run away
       if (lastQueue > 8) await new Promise<void>((res) => (ackResolve = res))
-      if (n % 15 === 0) onProgress(5 + Math.round((n / totalFrames) * 90), `Encoding on this device… ${Math.round((n / totalFrames) * 100)}%`)
+      if (n % 15 === 0) onProgress(5 + Math.round((n / totalFrames) * 90), exportMsg(n / totalFrames))
     }
     dbg('frames done', `${Math.round(performance.now() - tExport0)}ms for ${totalFrames} frames (${rvfcOK ? 'play-harvest' : 'seek'})`)
     worker.postMessage({ type: 'finish' })
-    onProgress(96, 'Finishing the file…')
+    onProgress(96, 'Polishing video…')
     const buffer = await done
     const name = `${(project.name || 'export').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '')}-ondevice.mp4`
     return { blob: new Blob([buffer], { type: 'video/mp4' }), name }

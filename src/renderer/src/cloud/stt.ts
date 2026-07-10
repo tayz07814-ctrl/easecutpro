@@ -27,6 +27,16 @@ type ProgressFn = (pct: number, msg?: string) => void
 const POLL_MS = 2500
 const POLL_TOLERATED_FAILURES = 8
 
+// Friendly, backend-agnostic lines shown while transcribing (the long, opaque
+// phase). The STT provider is NEVER named in the UI.
+const TRANSCRIBE_MSGS = [
+  'Listening to your video…',
+  'Transcribing every word…',
+  'Finding pauses…',
+  'Spotting retakes…',
+  'Mapping the silences…'
+]
+
 function sttEdge<T>(body: SttReq): Promise<T> {
   return invokeEdge<T>('stt', body)
 }
@@ -45,9 +55,10 @@ function finish(vt: Omit<VerbatimTranscript, 'raw_text' | 'clean_text'>): Verbat
 
 // ---- AssemblyAI (primary): started + polled through the edge function ----
 async function assemblyAiTranscribe(path: string, onProgress?: ProgressFn): Promise<VerbatimTranscript> {
-  onProgress?.(15, 'AssemblyAI is transcribing (verbatim)…')
+  onProgress?.(14, TRANSCRIBE_MSGS[0])
   const { id } = await sttEdge<SttAaiStartRes>({ action: 'aai-start', path })
   let pollFailures = 0
+  let polls = 0
   for (;;) {
     await new Promise((r) => setTimeout(r, POLL_MS))
     let t: SttAaiPollRes
@@ -61,7 +72,7 @@ async function assemblyAiTranscribe(path: string, onProgress?: ProgressFn): Prom
       continue
     }
     pollFailures = 0
-    if (t.status === 'error') throw new Error(`AssemblyAI: ${t.error}`)
+    if (t.status === 'error') throw new Error('Transcription failed — please try again.')
     if (t.status === 'completed') {
       const words: VerbatimWord[] = (t.words ?? []).map((w) => ({
         word: w.text,
@@ -76,13 +87,16 @@ async function assemblyAiTranscribe(path: string, onProgress?: ProgressFn): Prom
       }))
       return finish({ provider: 'assemblyai', mode: 'verbatim', words, segments: utterances, utterances })
     }
-    onProgress?.(20, 'AssemblyAI is transcribing (verbatim)…')
+    polls++
+    // Transcription owns the 0–50 band; climb gently so the bar keeps moving
+    // through the long, opaque STT phase instead of stalling at one number.
+    onProgress?.(Math.min(49, 16 + polls * 2.5), TRANSCRIBE_MSGS[polls % TRANSCRIBE_MSGS.length])
   }
 }
 
 // ---- Deepgram (alternative): one edge call, seconds already ----
 async function deepgramTranscribe(path: string, onProgress?: ProgressFn): Promise<VerbatimTranscript> {
-  onProgress?.(10, 'Deepgram is transcribing (verbatim)…')
+  onProgress?.(16, TRANSCRIBE_MSGS[0])
   const j = await sttEdge<SttDeepgramRes>({ action: 'deepgram', path })
   const words: VerbatimWord[] = (j.words ?? []).map((w) => ({
     word: w.punctuated_word || w.word,
@@ -112,12 +126,10 @@ export async function transcribeVerbatimCloud(
   if (status.assemblyai) chain.push('assemblyai')
   if (status.deepgram) chain.push('deepgram')
   if (!chain.length) {
-    throw new Error(
-      'Retake-Aware Cut Beta needs a transcription provider. Set ASSEMBLYAI_API_KEY or DEEPGRAM_API_KEY as Supabase Edge Function secrets (the cloud build has no whisper-1 fallback).'
-    )
+    throw new Error('Cut Lord can’t transcribe yet — no transcription provider is configured on the server.')
   }
   // ONE upload feeds both providers (they transcribe from a signed download URL).
-  onProgress?.(8, 'Uploading audio…')
+  onProgress?.(8, 'Preparing your video…')
   const { path, token } = await sttEdge<SttSignUploadRes>({ action: 'sign-upload', ext: audio.ext })
   try {
     const up = await getSupabase().storage.from('stt-audio').uploadToSignedUrl(path, token, audio.blob)

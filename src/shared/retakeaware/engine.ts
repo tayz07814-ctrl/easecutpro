@@ -100,7 +100,7 @@ export async function runRetakeAwareCut(
   // 2. verbatim transcription (platform provider chain)
   const { vt, warnings: provWarnings } = await deps.transcribeVerbatim(op)
   warnings.push(...provWarnings)
-  op(45, `Retake β: analyzing ${vt.words.length} words…`)
+  op(52, `Reading ${vt.words.length} words…`)
 
   // 3-9. pure rule analysis
   const chunks = buildChunks(vt)
@@ -114,7 +114,7 @@ export async function runRetakeAwareCut(
 
   // 10. optional LLM review of the STRUCTURED candidates only. Provisional
   // groups (ambiguous detections) cut ONLY if the judge affirms them.
-  op(65, 'Retake β: reviewing retake groups…')
+  op(70, 'Trimming retakes…')
   const context = chunks.map((c) => `[${c.id}] ${c.text}`).join('\n').slice(0, 12000)
   const ambiguousFillers = fillerDecisions.filter((f) => f.classification === 'keep' || f.classification === 'shorten')
   const provisionalCount = groups.filter((g) => g.provisional).length
@@ -154,7 +154,7 @@ export async function runRetakeAwareCut(
   const orphanConnectors = detectOrphanConnectors(chunks, vt.words)
 
   // 11. cut spans (whole failed attempts + tails + corrections + fillers)
-  op(85, 'Retake β: building cut spans…')
+  op(86, 'Cleaning silence…')
   const baseCutSpans = buildCutSpans(vt, groups, fillerDecisions, falseStarts, selfCorrections, repeatedSetups, orphanConnectors)
 
   // 12. Retake β HYBRID silence: the pause SPAN comes from the TRANSCRIPT word
@@ -163,7 +163,7 @@ export async function runRetakeAwareCut(
   // so VAD under-detection can't leave 1–3s of silence. Regions are protect:true
   // so computeKeepRanges applies them verbatim. If the VAD scan fails we still
   // trim from the transcript gaps (VAD safety is optional).
-  op(90, 'Retake β: tightening pauses (transcript-gap hybrid)…')
+  op(92, 'Reducing noise…')
   let vadSil: { start: number; end: number }[] = []
   try {
     vadSil = (await deps.detectSilence(retakeBetaVadSafetyOpts())).map((r) => ({ start: r.start, end: r.end }))
@@ -200,7 +200,7 @@ export async function runRetakeAwareCut(
   let silenceRegions: SilenceRegion[]
   let vadHardCutDebug: { source: 'vad_hard_cut'; opts: ReturnType<typeof retakeBetaVadHardCutOpts>; regions_count: number; total_removed_s: number } | null = null
   if (silenceSettings.vadHardCut) {
-    op(90, 'Retake β: hard-cutting pauses (aggressive VAD)…')
+    op(92, 'Cleaning silence…')
     let hard: { start: number; end: number }[] = []
     try {
       hard = (await deps.detectSilence(retakeBetaVadHardCutOpts())).map((r) => ({ start: r.start, end: r.end }))
