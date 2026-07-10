@@ -578,6 +578,64 @@ export function detectFalseStarts(chunks: Chunk[], words: VerbatimWord[], groups
   return out
 }
 
+// Bare openers a speaker abandons and re-starts. Kept TIGHT so genuine parallel
+// structure ("I'm happy, I'm sad") is never cut: for the no-dash case the
+// fragment must be one of these incomplete openers AND the next chunk must
+// re-open with the fragment's EXACT tokens.
+const INCOMPLETE_OPENERS = new Set([
+  'i', 'you', 'he', 'she', 'we', 'they', 'it', 'this', 'that', 'these', 'those', 'the', 'a', 'an',
+  "i'm", "it's", "that's", "there's", "we're", "they're", "you're", "he's", "she's", "i've", "i'll", "we'll"
+])
+const SHORT_RESTART_MAX_TOKENS = 3
+
+/** 3b2. SHORT abandoned openers re-started in the NEXT chunk — cross-chunk, so
+ *  the dash-only false-start detector and the in-chunk self-correction detector
+ *  both miss them: "I'm," → "I'm glad I took the risk.", "this is—" → "this is
+ *  probably…". Fires on (a) a clear cut-off dash ending the fragment, or (b) a
+ *  bare incomplete opener whose EXACT tokens re-open the next chunk. */
+export function detectShortRestarts(chunks: Chunk[], words: VerbatimWord[], groups: RetakeGroup[]): TailCut[] {
+  const grouped = new Set<number>()
+  for (const g of groups) {
+    if (g.llm_rejected) continue
+    for (const a of g.attempts) for (let i = a.word_start_index; i <= a.word_end_index; i++) grouped.add(i)
+  }
+  const out: TailCut[] = []
+  for (let ci = 0; ci < chunks.length - 1; ci++) {
+    const a = chunks[ci]
+    const b = chunks[ci + 1]
+    if (grouped.has(a.wordStart) || grouped.has(a.wordEnd)) continue
+    if (a.wordEnd - a.wordStart + 1 > SHORT_RESTART_MAX_TOKENS) continue
+    const aText = a.text.trim()
+    if (/[.!?]["')\]]?$/.test(aText)) continue // a completed sentence is not abandoned
+    const aTokens: string[] = []
+    for (let i = a.wordStart; i <= a.wordEnd; i++) {
+      const t = normToken(words[i].word)
+      if (t) aTokens.push(t)
+    }
+    if (!aTokens.length) continue
+    const bTokens: string[] = []
+    for (let i = b.wordStart; i <= b.wordEnd && bTokens.length < aTokens.length; i++) {
+      const t = normToken(words[i].word)
+      if (t) bTokens.push(t)
+    }
+    const dashAbandoned = DASH_RE.test(aText)
+    const sameOpening = bTokens.length >= aTokens.length && aTokens.every((t, i) => bTokens[i] === t)
+    const bareOpener = INCOMPLETE_OPENERS.has(aTokens[0])
+    if (!(dashAbandoned || (sameOpening && bareOpener))) continue
+    out.push({
+      chunk_id: a.id,
+      word_start_index: a.wordStart,
+      word_end_index: a.wordEnd,
+      text: words.slice(a.wordStart, a.wordEnd + 1).map((w) => w.word).join(' '),
+      reason: dashAbandoned
+        ? 'abandoned short start (cut-off "—", re-started next line)'
+        : 'abandoned short start (same opener re-started next line)',
+      kind: 'short_restart'
+    })
+  }
+  return out
+}
+
 // ---- 3c. in-chunk self-corrections + lead-in orphans + stutter restarts ----
 // "…do not be surprised if you got— or do not be surprised if your mans
 // wants…"  ->  cut the abandoned first attempt through the correction marker.

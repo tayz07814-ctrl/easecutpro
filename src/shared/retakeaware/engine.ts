@@ -21,6 +21,7 @@ import {
   findRetakeGroups,
   extendProgressiveRetakes,
   detectFalseStarts,
+  detectShortRestarts,
   detectSelfCorrections,
   detectRepeatedSetups,
   detectOrphanConnectors,
@@ -149,13 +150,16 @@ export async function runRetakeAwareCut(
   // 3b/3c. abandoned false starts + in-chunk self-corrections (run AFTER the
   // LLM so a chunk owned by an affirmed retake group is not tail-cut twice).
   const falseStarts = detectFalseStarts(chunks, vt.words, activeGroups)
+  // Cross-chunk short abandoned openers ("I'm," → "I'm glad…", "this is—" →
+  // "this is…") — same cut family as false starts.
+  const allFalseStarts = [...falseStarts, ...detectShortRestarts(chunks, vt.words, activeGroups)]
   const selfCorrections = detectSelfCorrections(chunks, vt.words)
   const repeatedSetups = detectRepeatedSetups(chunks, vt.words)
   const orphanConnectors = detectOrphanConnectors(chunks, vt.words)
 
   // 11. cut spans (whole failed attempts + tails + corrections + fillers)
   op(86, 'Cleaning silence…')
-  const baseCutSpans = buildCutSpans(vt, groups, fillerDecisions, falseStarts, selfCorrections, repeatedSetups, orphanConnectors)
+  const baseCutSpans = buildCutSpans(vt, groups, fillerDecisions, allFalseStarts, selfCorrections, repeatedSetups, orphanConnectors)
 
   // 12. Retake β HYBRID silence: the pause SPAN comes from the TRANSCRIPT word
   // gaps (the full perceived pause), guarded off both words; VAD is only a safety
@@ -286,7 +290,7 @@ export async function runRetakeAwareCut(
     repetition_candidates: candidates,
     retake_groups: groups,
     rejected_retake_candidates: rejections,
-    false_starts: falseStarts,
+    false_starts: allFalseStarts,
     self_corrections: selfCorrections,
     micro_cutoff_fragments: microCutoffs,
     partial_word_restarts: partialWordRestarts,

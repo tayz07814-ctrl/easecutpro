@@ -20,7 +20,7 @@ import {
   type ProgressFn
 } from '@shared/retakeaware/engine'
 import { DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type RetakeBetaSilenceSettings } from '@shared/retakeaware/silence'
-import { invokeEdge } from './supabase'
+import { getSupabase, invokeEdge } from './supabase'
 import { extractSttAudio } from './audio'
 import { transcribeVerbatimCloud } from './stt'
 import { detectSilenceFloat32 } from './vad'
@@ -72,10 +72,29 @@ export async function retakeAwareCutCloud(
     detectSilence: (opts) => detectSilenceFloat32(audio.float32, audio.sampleRate, opts, audio.durationS),
     reviewRetakeGroups: reviewRetakeGroupsCloud,
     saveDebug: async (json) => {
-      // No disk in the cloud build — one console line keeps the run debuggable
-      // (copy the object from devtools when a run needs dissecting).
-      console.debug(`[retake-aware-beta] debug JSON (${json.length} bytes) — not persisted in the cloud build`)
-      return null
+      // Persist EVERY run's debug JSON (a copy of the transcription + the cuts it
+      // proposes + all decisions) to the private `retake-aware-debugs` bucket, so
+      // detection mistakes can be reviewed and corrected against real data.
+      // Best-effort: a failed upload logs and never fails the run.
+      try {
+        const sb = getSupabase()
+        const { data } = await sb.auth.getUser()
+        const uid = data.user?.id ?? 'anon'
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+        const path = `${uid}/${stamp}.json`
+        const { error } = await sb.storage
+          .from('retake-aware-debugs')
+          .upload(path, new Blob([json], { type: 'application/json' }), { contentType: 'application/json', upsert: false })
+        if (error) {
+          console.warn('[retake-aware-beta] debug upload failed:', error.message)
+          return null
+        }
+        console.log('[retake-aware-beta] debug saved to storage:', path)
+        return path
+      } catch (e) {
+        console.warn('[retake-aware-beta] debug upload error:', (e as Error).message)
+        return null
+      }
     }
   }
   return runRetakeAwareCut(deps, onProgress, silenceSettings, warnings)
