@@ -62,13 +62,13 @@ async function claudeFinalize(key: string, payload: string, proposal: unknown): 
     method: 'POST',
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      // 8k is ample for the EDL (a small JSON); the desktop Opus pass uses 16k
-      // but never needs it here. thinking is disabled: Sonnet 5 runs adaptive
-      // thinking by default, which this structured-JSON task doesn't need — it
-      // would only add latency + billed thinking tokens (Haiku/Opus omit it too).
+      // Sonnet 5 leans on adaptive thinking for multi-step work; with thinking
+      // DISABLED it did a shallow pass and returned an empty EDL (zero cuts),
+      // unlike Opus/Haiku which cut fine without it. Keep thinking ON and give
+      // max_tokens headroom so the thinking + the EDL both fit (no truncation).
       model: CLAUDE_MODEL,
-      max_tokens: 8000,
-      thinking: { type: 'disabled' },
+      max_tokens: 16000,
+      thinking: { type: 'adaptive' },
       system: SYSTEM,
       messages: [{ role: 'user', content: userText }]
     })
