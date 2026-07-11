@@ -3,9 +3,10 @@
 // Cloud ProCut has no GPT "listening" pass (that stays desktop-only): the
 // browser transcribes with AssemblyAI, builds the index-anchored transcript +
 // pause map (shared/cutcutpro buildAiPayload) and this function runs Claude as
-// the SINGLE finalizer — the same claude-opus verification pass the desktop
-// pipeline uses (src/main/cutcutpro.ts claudeVerifyPass + CLAUDE_VERIFY_SYSTEM),
-// given an EMPTY first-pass proposal so it performs the full analysis itself.
+// the SINGLE finalizer — the SAME verification prompt the desktop pipeline uses
+// (src/main/cutcutpro.ts claudeVerifyPass + CLAUDE_VERIFY_SYSTEM), on Haiku
+// instead of Opus, given an EMPTY first-pass proposal so it does the full
+// analysis itself.
 //
 // The browser parses `raw` with the SAME validateEdl/refineEdl as the desktop
 // path and degrades to "nothing staged" on any problem, so this returns
@@ -17,9 +18,10 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { json, preflight } from '../_shared/http.ts'
 
-// The finalizer's model — the SAME one the desktop ProCut pipeline finalizes
-// with (src/main/cutcutpro.ts CLAUDE_MODEL). Kept in sync deliberately.
-const CLAUDE_MODEL = 'claude-opus-4-8'
+// Cloud ProCut finalizer model. Desktop finalizes with Opus; the cloud runs
+// Haiku (much faster + cheaper) so its cut quality can be A/B'd against the
+// desktop Opus pass. Flip this one line to change the tradeoff.
+const CLAUDE_MODEL = 'claude-haiku-4-5-20251001'
 
 const EDL_SHAPE = `Reply with VALID JSON ONLY (no prose, no markdown fences), exactly:
 {"word_cuts":[{"from":12,"to":18,"reason":"earlier take of this line; kept the later one"}],
@@ -60,8 +62,10 @@ async function claudeFinalize(key: string, payload: string, proposal: unknown): 
     method: 'POST',
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
+      // 8k is ample for the EDL (a small JSON) and stays under Haiku's output
+      // ceiling; the desktop Opus pass uses 16k but never needs it here.
       model: CLAUDE_MODEL,
-      max_tokens: 16000,
+      max_tokens: 8000,
       system: SYSTEM,
       messages: [{ role: 'user', content: userText }]
     })
@@ -82,10 +86,10 @@ Deno.serve(async (req) => {
     const anthropic = Deno.env.get('ANTHROPIC_API_KEY')
     if (!anthropic) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await claudeFinalize(anthropic, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: 'anthropic:claude-opus' })
+      return json({ raw: await claudeFinalize(anthropic, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: 'anthropic:claude-haiku' })
     } catch (e) {
       console.warn('[procut-judge] anthropic failed:', (e as Error).message)
-      return json({ raw: null, judge: 'anthropic:claude-opus' })
+      return json({ raw: null, judge: 'anthropic:claude-haiku' })
     }
   } catch (e) {
     return json({ error: (e as Error).message }, 500)
