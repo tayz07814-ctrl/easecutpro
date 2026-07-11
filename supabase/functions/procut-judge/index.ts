@@ -4,8 +4,8 @@
 // browser transcribes with AssemblyAI, builds the index-anchored transcript +
 // pause map (shared/cutcutpro buildAiPayload) and this function runs Claude as
 // the SINGLE finalizer — the SAME verification prompt the desktop pipeline uses
-// (src/main/cutcutpro.ts claudeVerifyPass + CLAUDE_VERIFY_SYSTEM), on Haiku
-// instead of Opus, given an EMPTY first-pass proposal so it does the full
+// (src/main/cutcutpro.ts claudeVerifyPass + CLAUDE_VERIFY_SYSTEM), on Sonnet
+// (A/B vs Haiku/Opus), given an EMPTY first-pass proposal so it does the full
 // analysis itself.
 //
 // The browser parses `raw` with the SAME validateEdl/refineEdl as the desktop
@@ -18,10 +18,10 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { json, preflight } from '../_shared/http.ts'
 
-// Cloud ProCut finalizer model. Desktop finalizes with Opus; the cloud runs
-// Haiku (much faster + cheaper) so its cut quality can be A/B'd against the
-// desktop Opus pass. Flip this one line to change the tradeoff.
-const CLAUDE_MODEL = 'claude-haiku-4-5-20251001'
+// Cloud ProCut finalizer model. Desktop finalizes with Opus; the cloud is on
+// Sonnet for now (mid-tier: stronger than Haiku, ~40% the cost of Opus) so its
+// cut quality can be A/B'd. Flip this one line to change the tradeoff.
+const CLAUDE_MODEL = 'claude-sonnet-5'
 
 const EDL_SHAPE = `Reply with VALID JSON ONLY (no prose, no markdown fences), exactly:
 {"word_cuts":[{"from":12,"to":18,"reason":"earlier take of this line; kept the later one"}],
@@ -62,10 +62,13 @@ async function claudeFinalize(key: string, payload: string, proposal: unknown): 
     method: 'POST',
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      // 8k is ample for the EDL (a small JSON) and stays under Haiku's output
-      // ceiling; the desktop Opus pass uses 16k but never needs it here.
+      // 8k is ample for the EDL (a small JSON); the desktop Opus pass uses 16k
+      // but never needs it here. thinking is disabled: Sonnet 5 runs adaptive
+      // thinking by default, which this structured-JSON task doesn't need — it
+      // would only add latency + billed thinking tokens (Haiku/Opus omit it too).
       model: CLAUDE_MODEL,
       max_tokens: 8000,
+      thinking: { type: 'disabled' },
       system: SYSTEM,
       messages: [{ role: 'user', content: userText }]
     })
@@ -86,10 +89,10 @@ Deno.serve(async (req) => {
     const anthropic = Deno.env.get('ANTHROPIC_API_KEY')
     if (!anthropic) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await claudeFinalize(anthropic, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: 'anthropic:claude-haiku' })
+      return json({ raw: await claudeFinalize(anthropic, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: 'anthropic:claude-sonnet' })
     } catch (e) {
       console.warn('[procut-judge] anthropic failed:', (e as Error).message)
-      return json({ raw: null, judge: 'anthropic:claude-haiku' })
+      return json({ raw: null, judge: 'anthropic:claude-sonnet' })
     }
   } catch (e) {
     return json({ error: (e as Error).message }, 500)
