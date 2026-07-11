@@ -62,13 +62,15 @@ async function claudeFinalize(key: string, payload: string, proposal: unknown): 
     method: 'POST',
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      // Sonnet 5 leans on adaptive thinking for multi-step work; with thinking
-      // DISABLED it did a shallow pass and returned an empty EDL (zero cuts),
-      // unlike Opus/Haiku which cut fine without it. Keep thinking ON and give
-      // max_tokens headroom so the thinking + the EDL both fit (no truncation).
+      // Sonnet 5 needs SOME thinking here (with it OFF it returned an empty EDL),
+      // but at its default HIGH effort it thought for ~152s and the edge function
+      // killed the run (status 546, ~150s wall-clock cap). Cap effort to LOW:
+      // enough reasoning to find the cuts, but it finishes in ~15-25s — safely
+      // under the edge limit. max_tokens is just a ceiling (low effort won't use it).
       model: CLAUDE_MODEL,
       max_tokens: 16000,
       thinking: { type: 'adaptive' },
+      output_config: { effort: 'low' },
       system: SYSTEM,
       messages: [{ role: 'user', content: userText }]
     })
