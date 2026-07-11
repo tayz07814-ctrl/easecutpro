@@ -179,28 +179,31 @@ function ClutterCleaner(): JSX.Element {
   // creates it. Shared between the empty state and the full panel.
   const engineActions = (
     <div className="row cl-actions">
-      {/* FastCut/ProCut need the PC engines — hidden in the cloud build, where
-          Retake β (fully in-browser + edge functions) is the one cut engine. */}
+      {/* FastCut is the offline Parakeet engine — desktop/self-host only. ProCut
+          runs in the cloud too (AssemblyAI transcribes + Claude finalizes via the
+          procut-judge edge fn), so it shows alongside Retake β everywhere. */}
       {!IS_CLOUD && (
-        <>
-          <button
-            className="primary"
-            onClick={() => void runFastCutLord()}
-            disabled={jobActive}
-            title="FastCut — offline repeat/retake engine + VAD silence scan (⚙ profile). Highlights only; nothing is cut until Execute."
-          >
-            ⚡ FastCut
-          </button>
-          <button
-            className="primary"
-            onClick={() => void runProCut()}
-            disabled={jobActive}
-            title="ProCut — premium 4-phase AI pipeline (whisper+Parakeet map → Claude → OpenAI listens) + VAD silence scan. Highlights only; nothing is cut until Execute."
-          >
-            ✂ ProCut
-          </button>
-        </>
+        <button
+          className="primary"
+          onClick={() => void runFastCutLord()}
+          disabled={jobActive}
+          title="FastCut — offline repeat/retake engine + VAD silence scan (⚙ profile). Highlights only; nothing is cut until Execute."
+        >
+          ⚡ FastCut
+        </button>
       )}
+      <button
+        className="primary"
+        onClick={() => void runProCut()}
+        disabled={jobActive}
+        title={
+          IS_CLOUD
+            ? 'ProCut — premium AI cut: AssemblyAI transcribes, then Claude finalizes zero-repeat cuts + VAD silence. Highlights only; nothing is cut until Execute.'
+            : 'ProCut — premium 4-phase AI pipeline (whisper+Parakeet map → Claude → OpenAI listens) + VAD silence scan. Highlights only; nothing is cut until Execute.'
+        }
+      >
+        ✂ ProCut
+      </button>
       <button
         className={IS_CLOUD ? 'primary' : ''}
         onClick={() => void runRetakeCutBeta()}

@@ -86,3 +86,19 @@ export interface LlmJudgeRes {
   raw: string | null
   judge: string
 }
+
+// ---- procut-judge edge function (ProCut cloud: Claude finalizes the cut EDL) ----
+// The browser builds the index-anchored transcript payload (shared/cutcutpro
+// buildAiPayload) and this returns Claude's raw EDL text, parsed client-side
+// with the same validateEdl as the desktop pipeline. raw:null on any failure so
+// the job always completes (nothing staged rather than a hard error).
+export interface ProcutJudgeReq {
+  /** buildAiPayload(map) — the index-anchored words + pauses + fillers. */
+  payload: string
+  /** first-pass EDL proposal ({word_cuts:[],pause_cuts:[]} in cloud: no GPT pass). */
+  proposal: unknown
+}
+export interface ProcutJudgeRes {
+  raw: string | null
+  judge: string
+}
