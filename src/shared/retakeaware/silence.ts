@@ -10,7 +10,7 @@ import type { SilenceRegion, SilenceDetectOptions } from '../types'
 import type { VerbatimWord, CutSpan } from './types'
 
 // ---- user-tunable settings (Retake β silence detection only) ----
-export type SilencePreset = 'conservative' | 'balanced' | 'aggressive' | 'custom'
+export type SilencePreset = 'conservative' | 'balanced' | 'aggressive' | 'tight' | 'custom'
 export interface RetakeBetaSilenceSettings {
   preset: SilencePreset
   minPauseS: number // ignore transcript gaps under this
@@ -30,7 +30,15 @@ export interface RetakeBetaSilenceSettings {
 export const RETAKE_BETA_SILENCE_PRESETS: Record<Exclude<SilencePreset, 'custom'>, Omit<RetakeBetaSilenceSettings, 'preset'>> = {
   conservative: { minPauseS: 1.5, targetRemainingS: 0.7, paddingBeforeS: 0.3, paddingAfterS: 0.38, minRemovedS: 0.8, removeBreaths: false, maxCutsPerMinute: 4, antiSliver: true, vadHardCut: false },
   balanced: { minPauseS: 1.2, targetRemainingS: 0.55, paddingBeforeS: 0.25, paddingAfterS: 0.32, minRemovedS: 0.65, removeBreaths: false, maxCutsPerMinute: 6, antiSliver: true, vadHardCut: false },
-  aggressive: { minPauseS: 0.85, targetRemainingS: 0.4, paddingBeforeS: 0.2, paddingAfterS: 0.25, minRemovedS: 0.45, removeBreaths: false, maxCutsPerMinute: 10, antiSliver: true, vadHardCut: false }
+  aggressive: { minPauseS: 0.85, targetRemainingS: 0.4, paddingBeforeS: 0.2, paddingAfterS: 0.25, minRemovedS: 0.45, removeBreaths: false, maxCutsPerMinute: 10, antiSliver: true, vadHardCut: false },
+  // TIGHT hybrid: the tightest of the transcript-gap presets — near-VAD-hard-cut
+  // snappiness while KEEPING every hybrid protection (speech-island carve,
+  // anti-sliver, word-clamp, noise classification). Leaves only ~0.2s of air per
+  // pause (the guards floor it there; fragile short words still keep their 0.32/
+  // 0.38 safety floor so onsets never clip), cuts pauses down to 0.5s, and lifts
+  // the density cap. vadHardCut is false — this IS the hybrid, tightened. Picking
+  // it in the UI turns the hard-cut toggle OFF so this actually runs.
+  tight: { minPauseS: 0.5, targetRemainingS: 0.12, paddingBeforeS: 0.1, paddingAfterS: 0.12, minRemovedS: 0.2, removeBreaths: false, maxCutsPerMinute: 30, antiSliver: true, vadHardCut: false }
 }
 /** Launch default: Balanced, safe (no breath removal, anti-sliver ON). */
 export const DEFAULT_RETAKE_BETA_SILENCE_SETTINGS: RetakeBetaSilenceSettings = { preset: 'balanced', ...RETAKE_BETA_SILENCE_PRESETS.balanced }

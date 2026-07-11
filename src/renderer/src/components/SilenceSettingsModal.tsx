@@ -1,7 +1,7 @@
 import { useStore } from '../store'
 import { RETAKE_BETA_SILENCE_PRESETS, type SilencePreset } from '@shared/retakeaware/silence'
 
-const PRESETS: SilencePreset[] = ['conservative', 'balanced', 'aggressive', 'custom']
+const PRESETS: SilencePreset[] = ['conservative', 'balanced', 'aggressive', 'tight', 'custom']
 
 interface Row {
   key: 'minPauseS' | 'targetRemainingS' | 'paddingBeforeS' | 'paddingAfterS' | 'minRemovedS' | 'maxCutsPerMinute'
@@ -11,13 +11,16 @@ interface Row {
   step: number
   unit: string
 }
+// Ranges span the whole preset spread including 'tight' (target remaining down to
+// ~0.1s, min pause down to ~0.4s, up to 40 cuts/min) so every preset's values are
+// representable + editable on the sliders instead of clamping.
 const ROWS: Row[] = [
-  { key: 'minPauseS', label: 'Minimum pause to detect', min: 0.7, max: 3.0, step: 0.05, unit: 's' },
-  { key: 'targetRemainingS', label: 'Target remaining pause', min: 0.3, max: 1.2, step: 0.05, unit: 's' },
-  { key: 'paddingBeforeS', label: 'Speech padding before word', min: 0.1, max: 0.6, step: 0.02, unit: 's' },
-  { key: 'paddingAfterS', label: 'Speech padding after word', min: 0.1, max: 0.7, step: 0.02, unit: 's' },
-  { key: 'minRemovedS', label: 'Minimum silence removed', min: 0.3, max: 2.0, step: 0.05, unit: 's' },
-  { key: 'maxCutsPerMinute', label: 'Max silence cuts per minute', min: 2, max: 20, step: 1, unit: '/min' }
+  { key: 'minPauseS', label: 'Minimum pause to detect', min: 0.4, max: 3.0, step: 0.05, unit: 's' },
+  { key: 'targetRemainingS', label: 'Target remaining pause', min: 0.1, max: 1.2, step: 0.02, unit: 's' },
+  { key: 'paddingBeforeS', label: 'Speech padding before word', min: 0.08, max: 0.6, step: 0.02, unit: 's' },
+  { key: 'paddingAfterS', label: 'Speech padding after word', min: 0.08, max: 0.7, step: 0.02, unit: 's' },
+  { key: 'minRemovedS', label: 'Minimum silence removed', min: 0.15, max: 2.0, step: 0.05, unit: 's' },
+  { key: 'maxCutsPerMinute', label: 'Max silence cuts per minute', min: 2, max: 40, step: 1, unit: '/min' }
 ]
 
 export default function SilenceSettingsModal(): JSX.Element {
@@ -45,13 +48,13 @@ export default function SilenceSettingsModal(): JSX.Element {
 
         {/* Sensitivity preset */}
         <div style={{ fontSize: 12, color: '#9aa', marginBottom: 6 }}>Sensitivity preset</div>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: s.preset === 'tight' ? 6 : 16 }}>
           {PRESETS.map((p) => (
             <button
               key={p}
               onClick={() => setS({ preset: p })}
               style={{
-                flex: 1, padding: '6px 4px', borderRadius: 6, cursor: 'pointer', textTransform: 'capitalize',
+                flex: '1 1 78px', padding: '6px 4px', borderRadius: 6, cursor: 'pointer', textTransform: 'capitalize',
                 border: s.preset === p ? '1px solid #6ea8fe' : '1px solid #3a3d44',
                 background: s.preset === p ? '#22314e' : '#24262c', color: s.preset === p ? '#cfe0ff' : '#cfcfcf', fontSize: 12
               }}
@@ -60,6 +63,11 @@ export default function SilenceSettingsModal(): JSX.Element {
             </button>
           ))}
         </div>
+        {s.preset === 'tight' && (
+          <div style={{ fontSize: 11, color: '#8fb7ff', marginBottom: 16, lineHeight: 1.4 }}>
+            Tightest hybrid — leaves ~0.2s of air per pause, keeps speech-island &amp; word protection. Turns the hard-cut toggle <b>off</b> so it runs.
+          </div>
+        )}
 
         {/* Numeric sliders */}
         {ROWS.map((r) => {
