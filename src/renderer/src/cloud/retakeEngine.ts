@@ -18,7 +18,7 @@
 // uploaded best-effort to the private `retake-aware-debugs` bucket.
 
 import type { RetakeAwareResult, CutSpan } from '@shared/retakeaware/types'
-import type { Transcript, SilenceRegion } from '@shared/types'
+import type { Transcript, SilenceRegion, SilenceDetectOptions } from '@shared/types'
 import type { ProcutJudgeReq, ProcutJudgeRes } from '@shared/cloud'
 import {
   buildTimestampMap,
@@ -34,10 +34,27 @@ import { detectArtifacts } from '@shared/retakeaware/artifacts'
 import {
   detectBetaSilencesHybrid,
   retakeBetaVadSafetyOpts,
-  retakeBetaVadHardCutOpts,
   DEFAULT_RETAKE_BETA_SILENCE_SETTINGS,
   type RetakeBetaSilenceSettings
 } from '@shared/retakeaware/silence'
+
+// TIGHTER cloud hard-cut profile (cloud-only — the shared desktop
+// retakeBetaVadHardCutOpts is deliberately left untouched). The desktop profile
+// (min-gap 0.2s, speech pad 50ms) shrank the short breath gap after each phrase
+// below the 0.2s threshold, so it was FILTERED OUT and the whole ~0.3s breath
+// tail survived at every clip end. Dropping the min-gap to 0.1s + the pad to
+// 20ms makes those gaps clear the threshold and get removed; a touch more edge
+// trim (60ms) eats the VAD-as-speech breath tail. detectBetaSilencesHybrid's
+// clampOffWords still guards real transcript words by 30ms, so no word clips.
+const CLOUD_HARDCUT_OPTS: SilenceDetectOptions = {
+  mode: 'vad',
+  noiseDb: -30,
+  minDuration: 0.1,
+  vadThreshold: 0.5,
+  speechPadMs: 20,
+  edgeTrimMs: 60,
+  removeBreaths: false
+}
 import { getSupabase, invokeEdge } from './supabase'
 import { extractSttAudio } from './audio'
 import { transcribeVerbatimCloud } from './stt'
@@ -176,7 +193,7 @@ export async function retakeAwareCutCloud(
     // words so no onset/tail is clipped. Mirrors runRetakeAwareCut's hard-cut arm.
     let hard: { start: number; end: number }[] = []
     try {
-      hard = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadHardCutOpts(), audio.durationS)).map((r) => ({
+      hard = (await detectSilenceFloat32(audio.float32, audio.sampleRate, CLOUD_HARDCUT_OPTS, audio.durationS)).map((r) => ({
         start: r.start,
         end: r.end
       }))
@@ -200,7 +217,13 @@ export async function retakeAwareCutCloud(
       .map((r) => clampOffWords(r.start, r.end))
       .filter((r) => r.end - r.start > 0.05)
       .map((r, i) => ({ id: `betasil-hardvad-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
-    silenceDebug = { source: 'vad_hard_cut', regions_count: silenceRegions.length }
+    silenceDebug = {
+      source: 'vad_hard_cut',
+      opts: CLOUD_HARDCUT_OPTS,
+      regions_count: silenceRegions.length,
+      total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3)),
+      regions: silenceRegions.map((r) => ({ start: Number(r.start.toFixed(3)), end: Number(r.end.toFixed(3)), dur: Number((r.end - r.start).toFixed(3)) }))
+    }
   } else {
     const beta = detectBetaSilencesHybrid(artifacts.repairedWords, cutSpans, vadSil, silenceSettings, mediaDurS)
     silenceRegions = beta.regions
