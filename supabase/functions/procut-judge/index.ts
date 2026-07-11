@@ -3,10 +3,9 @@
 // Cloud ProCut has no GPT "listening" pass (that stays desktop-only): the
 // browser transcribes with AssemblyAI, builds the index-anchored transcript +
 // pause map (shared/cutcutpro buildAiPayload) and this function runs Claude as
-// the SINGLE finalizer — the SAME verification prompt the desktop pipeline uses
-// (src/main/cutcutpro.ts claudeVerifyPass + CLAUDE_VERIFY_SYSTEM), on Sonnet
-// (A/B vs Haiku/Opus), given an EMPTY first-pass proposal so it does the full
-// analysis itself.
+// the SINGLE finalizer — the SAME verification pass the desktop pipeline uses
+// (src/main/cutcutpro.ts claudeVerifyPass + CLAUDE_VERIFY_SYSTEM), on Opus,
+// given an EMPTY first-pass proposal so it does the full analysis itself.
 //
 // The browser parses `raw` with the SAME validateEdl/refineEdl as the desktop
 // path and degrades to "nothing staged" on any problem, so this returns
@@ -18,10 +17,10 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { json, preflight } from '../_shared/http.ts'
 
-// Cloud ProCut finalizer model. Desktop finalizes with Opus; the cloud is on
-// Sonnet for now (mid-tier: stronger than Haiku, ~40% the cost of Opus) so its
-// cut quality can be A/B'd. Flip this one line to change the tradeoff.
-const CLAUDE_MODEL = 'claude-sonnet-5'
+// Cloud ProCut finalizer model — Opus, matching the desktop pipeline. In the
+// A/B test Sonnet and Haiku both landed ~70% cut accuracy; Opus hit ~98%, so
+// the cloud stays on Opus. Flip this one line to trade quality for cost.
+const CLAUDE_MODEL = 'claude-opus-4-8'
 
 const EDL_SHAPE = `Reply with VALID JSON ONLY (no prose, no markdown fences), exactly:
 {"word_cuts":[{"from":12,"to":18,"reason":"earlier take of this line; kept the later one"}],
@@ -62,15 +61,12 @@ async function claudeFinalize(key: string, payload: string, proposal: unknown): 
     method: 'POST',
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      // Sonnet 5 needs SOME thinking here (with it OFF it returned an empty EDL),
-      // but at its default HIGH effort it thought for ~152s and the edge function
-      // killed the run (status 546, ~150s wall-clock cap). Cap effort to LOW:
-      // enough reasoning to find the cuts, but it finishes in ~15-25s — safely
-      // under the edge limit. max_tokens is just a ceiling (low effort won't use it).
+      // Opus runs WITHOUT thinking (omitting the param = no extended reasoning on
+      // this tier) and still produced the best cuts, so no thinking/effort config
+      // — which also keeps it fast (~20s) and clear of the edge wall-clock limit
+      // that Sonnet's high-effort thinking blew past (a 152s kill, status 546).
       model: CLAUDE_MODEL,
       max_tokens: 16000,
-      thinking: { type: 'adaptive' },
-      output_config: { effort: 'low' },
       system: SYSTEM,
       messages: [{ role: 'user', content: userText }]
     })
@@ -91,10 +87,10 @@ Deno.serve(async (req) => {
     const anthropic = Deno.env.get('ANTHROPIC_API_KEY')
     if (!anthropic) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await claudeFinalize(anthropic, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: 'anthropic:claude-sonnet' })
+      return json({ raw: await claudeFinalize(anthropic, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: 'anthropic:claude-opus' })
     } catch (e) {
       console.warn('[procut-judge] anthropic failed:', (e as Error).message)
-      return json({ raw: null, judge: 'anthropic:claude-sonnet' })
+      return json({ raw: null, judge: 'anthropic:claude-opus' })
     }
   } catch (e) {
     return json({ error: (e as Error).message }, 500)
