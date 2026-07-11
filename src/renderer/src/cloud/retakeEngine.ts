@@ -1,55 +1,94 @@
-// Cloud build — Retake-Aware Cut Beta wrapper for the browser (no PC server).
+// Cloud build — Retake-Aware Cut Beta for the browser (no PC server).
 //
-// The orchestration is the SAME shared core Electron runs
-// (src/shared/retakeaware/engine.ts) — this file only binds its deps to the
-// cloud services: audio decoded in the browser (audio.ts), verbatim STT via
-// the Supabase `stt` edge function (stt.ts), Silero VAD via onnxruntime-web
-// over the SAME decoded samples (vad.ts), and the LLM judge via the
-// `llm-judge` edge function (parsed with the shared parseLlmDecisions, so a
-// bad reply degrades to rule-based decisions exactly like the Node path).
-// Debug JSON is console-only here — there is no disk to write it to.
+// WORD CUTS are now LLM-first, "ProCut style": instead of the rules-first
+// detectors deciding the cuts and Opus only adjudicating the ambiguous ones, the
+// FULL index-anchored transcript (shared/cutcutpro buildAiPayload) goes to the
+// SAME Opus finalizer ProCut uses (the `procut-judge` edge fn, empty first pass)
+// and Opus scans everything and returns the cut EDL. This closes the recall gap
+// vs ProCut — Opus is the detector, not a downstream referee.
+//
+// SILENCE is DELIBERATELY UNCHANGED: Retake β's own tuned, UI-driven engine
+// (detectBetaSilencesHybrid + the vadHardCut toggle), fed the SAME VAD safety
+// scan + ASR-artifact repair as before — it just consumes the Opus word-cut
+// spans instead of the rules' spans. The desktop path (src/main/retakeaware,
+// runRetakeAwareCut) stays rules-first and is untouched.
+//
+// The result shape (RetakeAwareResult) and the store's review-first contract are
+// identical, so the transcript/highlight/Execute UX is unchanged. Debug JSON is
+// uploaded best-effort to the private `retake-aware-debugs` bucket.
 
-import type { RetakeAwareResult, ReviewPayload, LlmDecisions } from '@shared/retakeaware/types'
-import type { Transcript } from '@shared/types'
-import type { LlmJudgeReq, LlmJudgeRes } from '@shared/cloud'
+import type { RetakeAwareResult, CutSpan } from '@shared/retakeaware/types'
+import type { Transcript, SilenceRegion } from '@shared/types'
+import type { ProcutJudgeReq, ProcutJudgeRes } from '@shared/cloud'
 import {
-  runRetakeAwareCut,
-  toAppTranscript,
-  parseLlmDecisions,
-  type RetakeEngineDeps,
-  type ProgressFn
-} from '@shared/retakeaware/engine'
-import { DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type RetakeBetaSilenceSettings } from '@shared/retakeaware/silence'
+  buildTimestampMap,
+  buildAiPayload,
+  validateEdl,
+  refineEdl,
+  type Edl,
+  type TimestampMap
+} from '@shared/cutcutpro'
+import { toAppTranscript, type ProgressFn } from '@shared/retakeaware/engine'
+import { spansToWordIds } from '@shared/retakeaware/analyze'
+import { detectArtifacts } from '@shared/retakeaware/artifacts'
+import {
+  detectBetaSilencesHybrid,
+  retakeBetaVadSafetyOpts,
+  retakeBetaVadHardCutOpts,
+  DEFAULT_RETAKE_BETA_SILENCE_SETTINGS,
+  type RetakeBetaSilenceSettings
+} from '@shared/retakeaware/silence'
 import { getSupabase, invokeEdge } from './supabase'
 import { extractSttAudio } from './audio'
 import { transcribeVerbatimCloud } from './stt'
 import { detectSilenceFloat32 } from './vad'
 
-/** Browser twin of src/main/retakeaware/llm.ts reviewRetakeGroups: the edge
- *  function picks the judge (Anthropic -> OpenAI -> none) and returns the raw
- *  model text; parsing + every degradation path stays client-side so the
- *  warnings match the Node run word for word. Never throws. */
-async function reviewRetakeGroupsCloud(
-  payload: ReviewPayload,
-  warnings: string[]
-): Promise<{ decisions: LlmDecisions | null; judge: string }> {
+/** Opus EDL (inclusive word-index cuts) -> Retake β time-based CutSpans. The
+ *  silence engine + spansToWordIds both work in time, so this is the only bridge
+ *  needed between ProCut's index EDL and Retake β's span pipeline. */
+function edlToRetakeCutSpans(edl: Edl, map: TimestampMap): CutSpan[] {
+  const spans: CutSpan[] = []
+  for (const c of edl.word_cuts) {
+    const from = map.words[c.from]
+    const to = map.words[c.to]
+    if (!from || !to) continue
+    spans.push({
+      start: from.start,
+      end: to.end,
+      type: 'failed_retake',
+      source: 'retake_aware_beta',
+      reason: c.reason || 'Opus: earlier/duplicate take or production chatter'
+    })
+  }
+  return spans
+}
+
+/** Persist every run's debug JSON (transcription + Opus payload/reply + the cuts
+ *  and silence it produced) to the private `retake-aware-debugs` bucket so
+ *  detection mistakes can be reviewed against real data. Best-effort: a failed
+ *  upload logs and returns null; it never fails the run. */
+async function saveRetakeDebug(debug: Record<string, unknown>): Promise<string | null> {
   try {
-    const res = await invokeEdge<LlmJudgeRes>('llm-judge', { payload } satisfies LlmJudgeReq)
-    if (res.judge === 'none') {
-      warnings.push('No LLM key configured — retake decisions are rule-based only.')
-      return { decisions: null, judge: 'none' }
+    const sb = getSupabase()
+    const { data } = await sb.auth.getUser()
+    const uid = data.user?.id ?? 'anon'
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const path = `${uid}/${stamp}-opus.json`
+    const { error } = await sb.storage
+      .from('retake-aware-debugs')
+      .upload(path, new Blob([JSON.stringify({ mode: 'retake_aware_beta_opus', ...debug }, null, 2)], { type: 'application/json' }), {
+        contentType: 'application/json',
+        upsert: false
+      })
+    if (error) {
+      console.warn('[retake-aware-beta] debug upload failed:', error.message)
+      return null
     }
-    // raw null with a real judge = the function had a key but its provider
-    // call failed — same degradation (and warning) as a judge.review() throw.
-    if (res.raw == null) {
-      warnings.push('LLM review failed (the edge function got no reply from the model) — using rule-based decisions.')
-      return { decisions: null, judge: res.judge }
-    }
-    return { decisions: parseLlmDecisions(res.raw, warnings), judge: res.judge }
+    console.log('[retake-aware-beta] debug saved to storage:', path)
+    return path
   } catch (e) {
-    warnings.push(`LLM review failed (${(e as Error).message}) — using rule-based decisions.`)
-    console.warn('[retake-aware-beta] LLM review failed:', (e as Error).message)
-    return { decisions: null, judge: 'none' }
+    console.warn('[retake-aware-beta] debug upload error:', (e as Error).message)
+    return null
   }
 }
 
@@ -60,44 +99,142 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start:', mediaId)
+  console.log('[retake-aware-beta] cloud job start (Opus judge):', mediaId)
 
-  // 1. audio — decoded ONCE in the browser; the upload blob, the VAD samples
-  // and the transcription all come from this single decode (shared clock).
+  // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
+  //    silence engine all read from this single decode (shared clock).
   op(3, 'Getting your audio ready…')
   const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
 
-  const deps: RetakeEngineDeps = {
-    transcribeVerbatim: (p) => transcribeVerbatimCloud(audio, p),
-    detectSilence: (opts) => detectSilenceFloat32(audio.float32, audio.sampleRate, opts, audio.durationS),
-    reviewRetakeGroups: reviewRetakeGroupsCloud,
-    saveDebug: async (json) => {
-      // Persist EVERY run's debug JSON (a copy of the transcription + the cuts it
-      // proposes + all decisions) to the private `retake-aware-debugs` bucket, so
-      // detection mistakes can be reviewed and corrected against real data.
-      // Best-effort: a failed upload logs and never fails the run.
-      try {
-        const sb = getSupabase()
-        const { data } = await sb.auth.getUser()
-        const uid = data.user?.id ?? 'anon'
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-        const path = `${uid}/${stamp}.json`
-        const { error } = await sb.storage
-          .from('retake-aware-debugs')
-          .upload(path, new Blob([json], { type: 'application/json' }), { contentType: 'application/json', upsert: false })
-        if (error) {
-          console.warn('[retake-aware-beta] debug upload failed:', error.message)
-          return null
-        }
-        console.log('[retake-aware-beta] debug saved to storage:', path)
-        return path
-      } catch (e) {
-        console.warn('[retake-aware-beta] debug upload error:', (e as Error).message)
-        return null
+  // 2. verbatim transcription (AssemblyAI -> Deepgram); emits 8..49.
+  const { vt, warnings: tw } = await transcribeVerbatimCloud(audio, op)
+  warnings.push(...tw)
+
+  // 3. VAD safety scan (Retake β's own profile) — ONE pass, reused for the Opus
+  //    payload's pause markers AND the silence engine below (same as the rules
+  //    path's safety scan). If it fails we fall back to transcript-gap pauses.
+  op(56, 'Listening for pauses…')
+  let vadSil: { start: number; end: number }[] = []
+  try {
+    vadSil = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadSafetyOpts(), audio.durationS)).map((r) => ({
+      start: r.start,
+      end: r.end
+    }))
+  } catch (e) {
+    warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
+  }
+
+  // 4. WORD-CUT BRAIN — ProCut-style Opus finalizer over the FULL transcript
+  //    (procut-judge, empty first pass). REPLACES the rules-first detectors; Opus
+  //    scans everything and returns the cut EDL, the exact judging ProCut uses.
+  op(72, 'Cut Lord is judging your takes…')
+  // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
+  // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
+  // transcript (from repaired words) is rebuilt after the Opus pass below.
+  const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
+  const payload = buildAiPayload(map)
+  let baseCutSpans: CutSpan[] = []
+  let claudeRaw: string | null = null
+  try {
+    const res = await invokeEdge<ProcutJudgeRes>('procut-judge', {
+      payload,
+      proposal: { word_cuts: [], pause_cuts: [] }
+    } satisfies ProcutJudgeReq)
+    claudeRaw = res.raw
+    if (res.judge === 'none') {
+      warnings.push('Retake β needs a Claude key configured on the server — no takes were judged.')
+    } else if (res.raw == null) {
+      warnings.push('Retake β’s judge got no reply from the model — no takes were cut.')
+    } else {
+      const v = validateEdl(res.raw, map)
+      if (!v.ok) {
+        warnings.push('Retake β’s judge returned an unusable reply — no takes were cut.')
+      } else {
+        baseCutSpans = edlToRetakeCutSpans(refineEdl(v.edl, map).edl, map)
       }
     }
+  } catch (e) {
+    warnings.push(`Retake β judge failed (${(e as Error).message}).`)
   }
-  return runRetakeAwareCut(deps, onProgress, silenceSettings, warnings)
+
+  // 5. SILENCE ENGINE — UNCHANGED. ASR-artifact repair (stretched-word clamp +
+  //    orphan clicks) feeds the tuned transcript-gap hybrid, or the vadHardCut
+  //    toggle, EXACTLY as the rules path did — the only difference is the word
+  //    cuts above now come from Opus, not the deterministic detectors.
+  op(90, 'Cleaning silence…')
+  const artifacts = detectArtifacts(vt.words, baseCutSpans, vadSil)
+  const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
+  const cutSpans = [...baseCutSpans, ...artifacts.orphanCutSpans].sort((a, b) => a.start - b.start)
+  const deleteWordIds = spansToWordIds(cutSpans, transcript)
+
+  const lastWordEnd = vt.words.length ? vt.words[vt.words.length - 1].end : 0
+  const mediaDurS = Math.max(lastWordEnd, ...(vadSil.length ? vadSil.map((r) => r.end) : [0]))
+  let silenceRegions: SilenceRegion[]
+  let silenceDebug: unknown = null
+  if (silenceSettings.vadHardCut) {
+    // vadHardCut toggle: aggressive raw VAD pass (own opts), clamped off the kept
+    // words so no onset/tail is clipped. Mirrors runRetakeAwareCut's hard-cut arm.
+    let hard: { start: number; end: number }[] = []
+    try {
+      hard = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadHardCutOpts(), audio.durationS)).map((r) => ({
+        start: r.start,
+        end: r.end
+      }))
+    } catch (e) {
+      warnings.push(`VAD hard-cut scan failed (${(e as Error).message}) — no silence removed this run.`)
+    }
+    const keptWords = artifacts.repairedWords.filter((w) => {
+      const m = (w.start + w.end) / 2
+      return !cutSpans.some((s) => m >= s.start && m <= s.end)
+    })
+    const clampOffWords = (a: number, b: number): { start: number; end: number } => {
+      let cs = a
+      let ce = b
+      for (const w of keptWords) {
+        if (cs <= w.start && ce > w.start + 0.002 && ce < w.end) ce = Math.max(cs, w.start - 0.03)
+        if (ce >= w.end && cs < w.end - 0.002 && cs > w.start) cs = Math.min(ce, w.end + 0.03)
+      }
+      return { start: cs, end: ce }
+    }
+    silenceRegions = hard
+      .map((r) => clampOffWords(r.start, r.end))
+      .filter((r) => r.end - r.start > 0.05)
+      .map((r, i) => ({ id: `betasil-hardvad-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
+    silenceDebug = { source: 'vad_hard_cut', regions_count: silenceRegions.length }
+  } else {
+    const beta = detectBetaSilencesHybrid(artifacts.repairedWords, cutSpans, vadSil, silenceSettings, mediaDurS)
+    silenceRegions = beta.regions
+    silenceDebug = beta.debug
+  }
+
+  // 6. debug JSON (best-effort, private bucket).
+  const debugPath = await saveRetakeDebug({
+    provider: vt.provider,
+    ai_payload: payload,
+    claude_raw: claudeRaw,
+    cut_spans: cutSpans,
+    delete_word_ids_count: deleteWordIds.length,
+    silence: silenceDebug,
+    warnings
+  })
+
+  op(100, 'Cut Lord finished')
+  return {
+    cut_mode: 'retake_aware_beta',
+    provider: vt.provider,
+    verbatim: vt,
+    transcript,
+    deleteWordIds,
+    cutSpans,
+    silenceRegions,
+    // Opus judges the whole transcript holistically — there are no per-group
+    // rule structures to surface (the store's review UX reads only the flags).
+    retakeGroups: [],
+    fillerDecisions: [],
+    debugPath,
+    warnings,
+    summary: `Retake β (${vt.provider} + Opus judge): ${deleteWordIds.length} word(s) flagged, ${silenceRegions.length} pause(s)`
+  }
 }
 
 /** Plain cloud transcription for the Transcribe button: same audio + provider
