@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { mediaSrc } from '../platform'
 import { computeKeepRanges, virtualKeepsToClipSegments } from '@shared/edit'
-import { playClock, easeInOut } from '../clock'
+import { playClock, easeInOut, primePlayback } from '../clock'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -708,13 +708,14 @@ export default function SequencePreview(): JSX.Element {
               key={shownSrc}
               ref={ref}
               playsInline
+              data-ec-base
               src={mediaSrc(shownSrc)}
               onLoadedMetadata={onLoaded}
               onLoadedData={onLoaded}
               onCanPlay={onLoaded}
               onTimeUpdate={onTimeUpdate}
               onError={onMediaError}
-              onClick={() => setPlaying(!playing)}
+              onClick={() => { if (!playing) primePlayback(); setPlaying(!playing) }}
               style={{ visibility: inGap ? 'hidden' : 'visible' }}
             />
             {frame.width > 0 && <OverlayLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}

@@ -6,7 +6,7 @@ import TextLayer from './TextLayer'
 import SequencePreview from './SequencePreview'
 import DocPreview from './DocPreview'
 import { useSharedEngineSnapshot } from '../timelineEngine'
-import { playClock } from '../clock'
+import { playClock, primePlayback } from '../clock'
 import { mediaSrc } from '../platform'
 
 /**
@@ -251,9 +251,10 @@ export default function VideoPreview(): JSX.Element {
                 key={mediaUrl}
                 ref={ref}
                 playsInline
+                data-ec-base
                 src={mediaUrl}
                 onTimeUpdate={onTimeUpdate}
-                onClick={() => setPlaying(!playing)}
+                onClick={() => { if (!playing) primePlayback(); setPlaying(!playing) }}
                 style={{ transformOrigin: 'center center' }}
               />
               {frame.width > 0 && (

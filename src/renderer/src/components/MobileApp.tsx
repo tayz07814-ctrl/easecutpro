@@ -4,6 +4,7 @@ import { IS_CLOUD } from '../platform'
 import { probeEncodeCaps, whyNotLocal, type EncodeCaps } from '../export/localExport'
 import { useSmoothProgress } from '../useSmoothProgress'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
+import { primePlayback } from '../clock'
 import * as C from '@shared/timeline/commands'
 import { Icon } from './mobile/Icon'
 import { MobileTools } from './mobile/MobileTools'
@@ -188,7 +189,7 @@ export default function MobileApp(): JSX.Element {
           <button className="m-ic m-zoom" onClick={() => s.setZoom((snap?.session.zoom ?? 60) - 24)} disabled={!hasBase} title="Zoom out">−</button>
           <button className="m-ic m-zoom" onClick={() => s.setZoom((snap?.session.zoom ?? 60) + 24)} disabled={!hasBase} title="Zoom in">+</button>
         </div>
-        <button className="m-ic m-play" onClick={() => hasBase && s.setPlaying(!s.playing)} disabled={!hasBase} title={s.playing ? 'Pause' : 'Play'}>
+        <button className="m-ic m-play" onClick={() => { if (!hasBase) return; const next = !s.playing; if (next) primePlayback(); s.setPlaying(next) }} disabled={!hasBase} title={s.playing ? 'Pause' : 'Play'}>
           <Icon name={s.playing ? 'pause' : 'play'} size={20} />
         </button>
         <div className="m-tp-side end">

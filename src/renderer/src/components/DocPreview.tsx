@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { playClock, easeInOut } from '../clock'
+import { playClock, easeInOut, primePlayback } from '../clock'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -458,7 +458,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     <div className="preview">
       <DocAudio doc={doc} playing={playing} playhead={playhead} />
       <div className="video-wrap">
-        <div className="stage" ref={stageRef} onClick={() => setPlaying(!playing)}>
+        <div className="stage" ref={stageRef} onClick={() => { if (!playing) primePlayback(); setPlaying(!playing) }}>
           <div
             className="frame"
             style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height, backgroundColor: '#000' }}
@@ -468,6 +468,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                 key={src}
                 src={urlOf.get(src)}
                 preload="auto"
+                playsInline
+                data-ec-base
                 style={{ visibility: 'hidden', position: 'absolute', inset: 0, width: '100%', height: '100%' }}
                 onError={() => badRef.current.add(src)}
                 ref={(el) => {
