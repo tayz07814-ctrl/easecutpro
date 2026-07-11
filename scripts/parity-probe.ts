@@ -158,11 +158,17 @@ async function call(tag: string, model: string, system: string, user: string, ma
 // TEST A
 await call('TEST A — raw transcript → Haiku (simple instruction)', 'claude-haiku-4-5-20251001', SIMPLE_INSTRUCTION_A, userA, 4000)
 
-// TEST B1 — cloud production (Opus, full transcript, EDL)
-const rawB1 = await call('TEST B1 — cloud production (Opus, full transcript, procut-judge prompt)', 'claude-opus-4-8', PROCUT_SYSTEM, userB1, 16000)
-const v = validateEdl(rawB1, map)
-console.log(`\nvalidateEdl: ok=${v.ok}  word_cuts=${v.edl.word_cuts.length}  pause_cuts=${v.edl.pause_cuts.length}${v.ok ? '' : '  ⚠ REJECTED (unusable/runaway) → nothing staged'}`)
-if (v.ok) {
+// TEST B1 — the SAME cloud procut-judge pipeline, run across the models we A/B'd.
+// Haiku matches your chat model; Opus is current production (98%). Identical
+// prompt + full transcript + EDL for each, so any Haiku-API-vs-Haiku-chat gap is
+// the PIPELINE/FORMAT, not the model. validateEdl ok/reject + word_cuts count is
+// the tell: "did Haiku's EDL get dropped (parse/runaway) or come back valid-but-
+// -worse (index errors / under-cut)?"
+async function runB1(model: string, maxTokens: number): Promise<void> {
+  const raw = await call(`TEST B1 — cloud procut pipeline · ${model}`, model, PROCUT_SYSTEM, userB1, maxTokens)
+  const v = validateEdl(raw, map)
+  console.log(`\nvalidateEdl: ok=${v.ok}  word_cuts=${v.edl.word_cuts.length}  pause_cuts=${v.edl.pause_cuts.length}${v.ok ? '' : '  ⚠ REJECTED (unparseable, or runaway >60% of words) → NOTHING STAGED'}`)
+  if (!v.ok) return
   const refined = refineEdl(v.edl, map)
   const spans: CutSpan[] = refined.edl.word_cuts
     .map((c) => ({ start: map.words[c.from]?.start, end: map.words[c.to]?.end, type: 'failed_retake' as const, source: 'retake_aware_beta' as const, reason: c.reason }))
@@ -171,8 +177,10 @@ if (v.ok) {
   const ids = spansToWordIds(spans, transcript as never)
   console.log(`refineEdl notes: ${refined.notes.length ? refined.notes.join(' | ') : '(none)'}`)
   console.log(`final cut spans: ${spans.length}  mapped word ids: ${ids.length}`)
-  console.log(`cut text preview: ${spans.slice(0, 8).map((s) => `[${vt.words.filter((w) => (w.start + w.end) / 2 >= s.start && (w.start + w.end) / 2 <= s.end).map((w) => w.word).join(' ')}]`).join('  ')}`)
+  console.log(`cut text preview: ${spans.slice(0, 10).map((s) => `[${vt.words.filter((w) => (w.start + w.end) / 2 >= s.start && (w.start + w.end) / 2 <= s.end).map((w) => w.word).join(' ')}]`).join('  ')}`)
 }
+await runB1('claude-haiku-4-5-20251001', 16000) // your chat model, but through the pipeline
+await runB1('claude-opus-4-8', 16000) // current production (was 98% in the A/B)
 
 // TEST B2 — rules-first (Haiku, filtered) using the EXACT production classifier prompt
 const { pickJudge } = await import('../src/main/retakeaware/llm')
