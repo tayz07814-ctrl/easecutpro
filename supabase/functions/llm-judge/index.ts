@@ -7,9 +7,10 @@
 // any problem — this function therefore returns { raw: null } rather than
 // erroring whenever a provider misbehaves, so the cut job always completes.
 //
-// Provider order mirrors src/main/retakeaware/llm.ts: Anthropic Claude Haiku ->
-// OpenAI gpt-4o-mini -> none. SYSTEM prompt is a mirrored copy of llm.ts (keep
-// them in sync).
+// Provider order: Anthropic Claude Opus -> OpenAI gpt-4o-mini -> none. (Opus
+// for the highest-quality retake/chatter judgments, same tier ProCut uses; the
+// desktop src/main/retakeaware/llm.ts still runs Haiku.) SYSTEM prompt is a
+// mirrored copy of llm.ts (keep them in sync).
 //
 // Secrets (supabase secrets set): ANTHROPIC_API_KEY, OPENAI_API_KEY (optional).
 
@@ -44,7 +45,7 @@ async function anthropicReview(key: string, payload: unknown): Promise<string> {
     method: 'POST',
     headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-opus-4-8',
       max_tokens: 4000,
       system: SYSTEM,
       messages: [{ role: 'user', content: JSON.stringify(payload) }]
@@ -86,7 +87,7 @@ Deno.serve(async (req) => {
     const openai = Deno.env.get('OPENAI_API_KEY')
     if (anthropic) {
       try {
-        return json({ raw: await anthropicReview(anthropic, payload), judge: 'anthropic:claude-haiku-4-5' })
+        return json({ raw: await anthropicReview(anthropic, payload), judge: 'anthropic:claude-opus' })
       } catch (e) {
         console.warn('[llm-judge] anthropic failed:', (e as Error).message)
         if (openai) {
@@ -96,7 +97,7 @@ Deno.serve(async (req) => {
             console.warn('[llm-judge] openai fallback failed:', (e2 as Error).message)
           }
         }
-        return json({ raw: null, judge: 'anthropic:claude-haiku-4-5' })
+        return json({ raw: null, judge: 'anthropic:claude-opus' })
       }
     }
     if (openai) {
