@@ -9,6 +9,7 @@ import { secondsToFrames, framesToSeconds } from '@shared/timeline/time'
 import type { TimelineDocument } from '@shared/timeline/types'
 import OverlayPanel from './OverlayPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
+import VadSilenceSettingsModal from './VadSilenceSettingsModal'
 
 /**
  * A single-source doc timeline runs the store playhead in EDITED time, but the
@@ -215,7 +216,11 @@ function ClutterCleaner(): JSX.Element {
       <button
         onClick={() => setShowSilenceSettings(true)}
         disabled={jobActive}
-        title="Retake β silence-detection settings (Retake β only — does not affect FastCut/ProCut)."
+        title={
+          IS_CLOUD
+            ? 'Silence-cutting VAD settings — applies to ProCut AND Retake β.'
+            : 'Retake β silence-detection settings (Retake β only — does not affect FastCut/ProCut).'
+        }
       >
         🔇 Silence Settings
       </button>
@@ -233,7 +238,7 @@ function ClutterCleaner(): JSX.Element {
       >
         ▶ Execute cuts ({executable})
       </button>
-      {showSilenceSettings && <SilenceSettingsModal />}
+      {showSilenceSettings && (IS_CLOUD ? <VadSilenceSettingsModal /> : <SilenceSettingsModal />)}
     </div>
   )
 

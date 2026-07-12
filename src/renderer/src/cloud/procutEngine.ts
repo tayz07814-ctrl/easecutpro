@@ -10,7 +10,7 @@
 // -> refineEdl -> edlToEdits), so the review-first contract and cut quality
 // match the desktop path. The desktop GPT/whisper code is untouched.
 
-import type { Transcript, SilenceDetectOptions } from '@shared/types'
+import type { Transcript } from '@shared/types'
 import type { ProcutJudgeReq, ProcutJudgeRes } from '@shared/cloud'
 import {
   buildTimestampMap,
@@ -23,13 +23,11 @@ import {
   type CutCutProResult
 } from '@shared/cutcutpro'
 import { toAppTranscript } from '@shared/retakeaware/engine'
+import { DEFAULT_VAD_SILENCE_SETTINGS, vadSilenceToOpts, type VadSilenceSettings } from '@shared/vadsilence'
 import { invokeEdge } from './supabase'
 import { extractSttAudio, type SttAudio } from './audio'
 import { transcribeVerbatimCloud } from './stt'
-import { detectSilenceFloat32 } from './vad'
-
-// Same VAD profile the desktop ProCut uses for its pause map (main/cutcutpro.ts).
-const PROCUT_VAD_OPTS: SilenceDetectOptions = { mode: 'vad', noiseDb: -35, minDuration: 0.25, vadThreshold: 0.5 }
+import { detectSilenceFloat32, clampSilenceRegions } from './vad'
 
 /**
  * Cloud twin of src/main/cutcutpro.ts cutCutPro. `runVad=false` (the VAD testing
@@ -41,6 +39,7 @@ export async function cutCutProCloud(
   existing: Transcript | null,
   runVad: boolean,
   script: string | undefined,
+  vadSettings: VadSilenceSettings = DEFAULT_VAD_SILENCE_SETTINGS,
   onProgress?: (pct: number, msg?: string) => void
 ): Promise<CutCutProResult> {
   const op = (pct: number, msg?: string): void => onProgress?.(pct, msg)
@@ -65,7 +64,7 @@ export async function cutCutProCloud(
     try {
       op(52, 'Cut Lord is mapping pauses (1/4)…')
       if (!audio) audio = await extractSttAudio(mediaId)
-      const regions = await detectSilenceFloat32(audio.float32, audio.sampleRate, PROCUT_VAD_OPTS, audio.durationS)
+      const regions = await detectSilenceFloat32(audio.float32, audio.sampleRate, vadSilenceToOpts(vadSettings), audio.durationS)
       vad = regions.map((r) => ({ start: r.start, end: r.end }))
     } catch (e) {
       warnings.push(`VAD unavailable (${(e as Error).message}) — pauses from word gaps only.`)
@@ -92,25 +91,34 @@ export async function cutCutProCloud(
       warnings.push('ProCut’s finalizer got no reply from the model — nothing was cut.')
     } else {
       const v = validateEdl(res.raw, map)
-      if (v.ok) finalEdl = v.edl
+      // VAD owns silence now (Phase 4 below); ignore any pause_cuts the model returned.
+      if (v.ok) finalEdl = { word_cuts: v.edl.word_cuts, pause_cuts: [] }
       else warnings.push('ProCut’s finalizer returned an unusable EDL — nothing was cut.')
     }
   } catch (e) {
     warnings.push(`ProCut finalizer failed (${(e as Error).message}).`)
   }
 
-  // ---- Phase 4: deterministic guards + resolve onto the edit model -----------
+  // ---- Phase 4: word cuts via the EDL + silence via the unified VAD pass ------
   op(88, 'Cut Lord is cutting (4/4)…')
   const refined = refineEdl(finalEdl, map)
-  const edits = edlToEdits(refined.edl, map, transcript.words)
+  const edits = edlToEdits(refined.edl, map, transcript.words) // pause_cuts empty → silenceAdds []
+  // SILENCE = the configurable VAD pass (replaces Opus pause cuts). Clamp the
+  // same VAD regions off the words the EDL keeps, so no kept word onset clips.
+  let silenceAdds = edits.silenceAdds
+  if (runVad && vad.length) {
+    const cut = new Set(edits.deleteWordIds)
+    const keptWords = transcript.words.filter((w) => !w.deleted && !cut.has(w.id))
+    silenceAdds = clampSilenceRegions(vad, keptWords, 'procutvad')
+  }
 
   op(100, 'Cut Lord finished')
   return {
     transcript: existing ? null : transcript,
     deleteWordIds: edits.deleteWordIds,
-    silenceAdds: edits.silenceAdds,
+    silenceAdds,
     debugPath: '',
     warnings,
-    summary: `ProCut flagged ${edits.deleteWordIds.length} word(s) + ${edits.silenceAdds.length} pause(s).`
+    summary: `ProCut flagged ${edits.deleteWordIds.length} word(s) + ${silenceAdds.length} pause(s).`
   }
 }

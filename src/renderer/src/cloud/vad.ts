@@ -12,16 +12,20 @@
 //                      shrinks away from speech and word edges never clip
 //   • minDuration   -> only inverted gaps ≥ max(0.1, minDuration) count as
 //                      silence (whisper-vad's -vsd / the Node post-filter)
+//   • padBeforeMs / padAfterMs -> ASYMMETRIC guard: silence kept before a word's
+//                      onset vs after its tail (each falls back to speechPadMs)
 //   • edgeTrimMs    -> grow every silence region by this on both sides, clamp
 //                      to the media and merge (eats into speech — tighter cuts)
-//   • removeBreaths -> NOT supported here (needs ffmpeg's energy scan); the
-//                      retake engine always passes false, so nothing is lost
+//   • removeBreaths -> scan each speech segment's samples for runs quieter than
+//                      breathDb (RMS energy gate — the browser twin of ffmpeg's
+//                      breath scan) and remove them too. breathDb sets the gate.
 // Output invariants match the Node path: regions sorted, non-overlapping,
 // action 'remove', ≥ min gap. Min speech stays at whisper.cpp's 250ms default
 // (the native binary never overrode it).
 
 import { NonRealTimeVAD } from '@ricky0123/vad-web'
 import type { SilenceRegion, SilenceDetectOptions } from '@shared/types'
+import { vadSilenceToOpts, type VadSilenceSettings } from '@shared/vadsilence'
 import { decodeAudioFloat32 } from './audio'
 
 /** Where the VAD's static assets are served from (Vite public dir → site root). */
@@ -116,12 +120,16 @@ export async function detectSilenceFloat32(
   // 2. undo the redemption-frame overshoot (a segment that runs to the end of
   //    the audio was closed by EOF, not redemption — leave that one alone),
   //    then pad both sides by speechPadMs and merge.
-  const pad = Math.max(0, (opts?.speechPadMs ?? 40) / 1000)
+  // ASYMMETRIC padding: keep padBeforeMs of silence before a word's onset and
+  // padAfterMs after its tail (falls back to the old symmetric speechPadMs).
+  const fallbackPad = (opts?.speechPadMs ?? 40) / 1000
+  const padBefore = Math.max(0, opts?.padBeforeMs != null ? opts.padBeforeMs / 1000 : fallbackPad)
+  const padAfter = Math.max(0, opts?.padAfterMs != null ? opts.padAfterMs / 1000 : fallbackPad)
   const redemption = REDEMPTION_MS / 1000
   const padded = mergeIntervals(
     speech.map((s) => {
       const end = s.end >= durationS - 0.15 ? s.end : Math.max(s.start, s.end - redemption)
-      return { start: Math.max(0, s.start - pad), end: Math.min(durationS, end + pad) }
+      return { start: Math.max(0, s.start - padBefore), end: Math.min(durationS, end + padAfter) }
     })
   )
 
@@ -137,7 +145,43 @@ export async function detectSilenceFloat32(
   if (durationS > cursor + 0.02) regions.push({ start: cursor, end: durationS })
   regions = regions.filter((r) => r.end - r.start >= minDur)
 
-  // (removeBreaths: skipped — see header. Retake β always passes false.)
+  // 3b. removeBreaths: the VAD keeps breaths / quiet fillers as "speech". Scan
+  //     each speech segment's own samples for runs quieter than breathDb (an RMS
+  //     energy gate — the browser twin of ffmpeg's breath scan) and add any run
+  //     ≥ minDur to the silence set. Word-clamping downstream (in the engine)
+  //     protects real quiet words, so this only sweeps genuine dead/breath audio.
+  if (opts?.removeBreaths) {
+    const breathDb = opts?.breathDb ?? opts?.noiseDb ?? -30
+    const frame = Math.max(160, Math.round(sampleRate * 0.02)) // ~20ms
+    const rmsDbAt = (i0: number): number => {
+      const n = Math.min(frame, float32.length - i0)
+      let sum = 0
+      for (let k = 0; k < n; k++) sum += float32[i0 + k] * float32[i0 + k]
+      return 20 * Math.log10(Math.sqrt(sum / Math.max(1, n)) + 1e-9)
+    }
+    const breaths: { start: number; end: number }[] = []
+    for (const seg of speech) {
+      const i0 = Math.max(0, Math.floor(seg.start * sampleRate))
+      const i1 = Math.min(float32.length, Math.ceil(seg.end * sampleRate))
+      let runStart = -1
+      for (let i = i0; i < i1; i += frame) {
+        const quiet = rmsDbAt(i) < breathDb
+        if (quiet && runStart < 0) runStart = i
+        else if (!quiet && runStart >= 0) {
+          const a = runStart / sampleRate
+          const b = i / sampleRate
+          if (b - a >= minDur) breaths.push({ start: a, end: b })
+          runStart = -1
+        }
+      }
+      if (runStart >= 0) {
+        const a = runStart / sampleRate
+        const b = i1 / sampleRate
+        if (b - a >= minDur) breaths.push({ start: a, end: b })
+      }
+    }
+    if (breaths.length) regions = mergeIntervals([...regions, ...breaths]).filter((r) => r.end - r.start >= minDur)
+  }
 
   // 4. optionally eat an extra edgeTrimMs into the speech on BOTH sides of
   //    every cut for tighter, snappier cuts. Clamped to the media; merged.
@@ -157,4 +201,42 @@ export async function detectSilenceFloat32(
 export async function detectSilenceCloud(mediaId: string, opts: SilenceDetectOptions): Promise<SilenceRegion[]> {
   const { float32, sampleRate, durationS } = await decodeAudioFloat32(mediaId)
   return detectSilenceFloat32(float32, sampleRate, opts, durationS)
+}
+
+/** The unified silence pass shared by cloud ProCut AND Retake β: run the raw VAD
+ *  with the user's VadSilenceSettings, then CLAMP every region ~30ms off the KEPT
+ *  words so a word the VAD under-detected can never be clipped (the safety the
+ *  hybrid used to provide). Regions are protect:true / action:'remove' — staged as
+ *  review chips exactly like before. keptWords = the transcript words NOT already
+ *  removed by word cuts (their midpoints outside every cut span). */
+export function clampSilenceRegions(
+  raw: { start: number; end: number }[],
+  keptWords: { start: number; end: number }[],
+  idPrefix = 'vadsil'
+): SilenceRegion[] {
+  const clamp = (a: number, b: number): { start: number; end: number } => {
+    let cs = a
+    let ce = b
+    for (const w of keptWords) {
+      if (cs <= w.start && ce > w.start + 0.002 && ce < w.end) ce = Math.max(cs, w.start - 0.03) // cut end reaches into a word → stop before it
+      if (ce >= w.end && cs < w.end - 0.002 && cs > w.start) cs = Math.min(ce, w.end + 0.03) // cut start reaches into a word → start after it
+    }
+    return { start: cs, end: ce }
+  }
+  return raw
+    .map((r) => clamp(r.start, r.end))
+    .filter((r) => r.end - r.start > 0.05)
+    .map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
+}
+
+export async function vadSilenceRegions(
+  float32: Float32Array,
+  sampleRate: number,
+  durationS: number,
+  settings: VadSilenceSettings,
+  keptWords: { start: number; end: number }[],
+  idPrefix = 'vadsil'
+): Promise<SilenceRegion[]> {
+  const raw = await detectSilenceFloat32(float32, sampleRate, vadSilenceToOpts(settings), durationS)
+  return clampSilenceRegions(raw, keptWords, idPrefix)
 }

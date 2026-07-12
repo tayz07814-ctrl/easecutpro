@@ -48,8 +48,9 @@ import {
   RETAKE_BETA_SILENCE_PRESETS,
   type RetakeBetaSilenceSettings
 } from '@shared/retakeaware/silence'
+import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
 import { positionToBox } from '@shared/overlay'
-import { mediaSrc, IS_WEB } from './platform'
+import { mediaSrc, IS_WEB, IS_CLOUD } from './platform'
 import { createProject, saveProject, serializeProject } from './projectsApi'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideo } from './batchClean'
@@ -473,6 +474,10 @@ interface AppState {
   /** Retake β silence-detection settings (Retake β ONLY — never FastCut/ProCut). */
   retakeBetaSilenceSettings: RetakeBetaSilenceSettings
   setRetakeBetaSilenceSettings: (patch: Partial<RetakeBetaSilenceSettings>) => void
+  /** Unified cloud VAD silence-cutting profile — shared by ProCut AND Retake β
+   *  (cloud build). One 🔇 Silence Settings modal edits this for both engines. */
+  vadSilenceSettings: VadSilenceSettings
+  setVadSilenceSettings: (patch: Partial<VadSilenceSettings>) => void
   /** Retake β "Silence Settings" modal open? */
   showSilenceSettings: boolean
   setShowSilenceSettings: (v: boolean) => void
@@ -1558,6 +1563,25 @@ export const useStore = create<AppState>((set, get) => ({
     }
     set({ retakeBetaSilenceSettings: next })
   },
+
+  vadSilenceSettings: ((): VadSilenceSettings => {
+    try {
+      const raw = localStorage.getItem('ec.vadSilence')
+      if (raw) return normalizeVadSilence(JSON.parse(raw))
+    } catch {
+      /* ignore */
+    }
+    return { ...DEFAULT_VAD_SILENCE_SETTINGS }
+  })(),
+  setVadSilenceSettings: (patch) => {
+    const next = normalizeVadSilence({ ...get().vadSilenceSettings, ...patch })
+    try {
+      localStorage.setItem('ec.vadSilence', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+    set({ vadSilenceSettings: next })
+  },
   showSilenceSettings: false,
   setShowSilenceSettings: (v) => set({ showSilenceSettings: v }),
 
@@ -1612,7 +1636,7 @@ export const useStore = create<AppState>((set, get) => ({
       // ProCut transcribes with its own OpenAI whisper-1 (inside cutCutPro) and pulls
       // it into the word selector below. VAD switch OFF => runVad=false (word cuts only).
       const vadOn = get().cutLordSettings.vadDuringAnalysis
-      const res = await window.api.cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, vadOn, get().project.script || undefined)
+      const res = await window.api.cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, vadOn, get().project.script || undefined, get().vadSilenceSettings)
       // REVIEW-ONLY: adopt the transcript if the pipeline made one (ids must
       // match), HIGHLIGHT the words + stage the pause cuts — nothing is applied
       // until the user presses Execute cuts. ⚙ filler switch adds filler words.
@@ -1635,9 +1659,16 @@ export const useStore = create<AppState>((set, get) => ({
             (res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '')
         }
       }))
-      // VAD switch ON: stage the AI's pause cuts + the ⚙ VAD silences for review.
-      // OFF: word cuts only here — silence is applied at Execute cuts instead.
-      if (vadOn) await get()._stageVadSilences('ProCut', res.silenceAdds)
+      // Cloud: silence came from the configurable browser VAD pass (protect:true,
+      // already word-clamped). Stage it DIRECTLY like Retake β and mark it staged so
+      // Execute won't re-scan — _stageVadSilences is a server (ffmpeg) path that
+      // no-ops in the cloud. Desktop/self-host keep the server VAD staging.
+      if (IS_CLOUD) {
+        const sil = res.silenceAdds ?? []
+        set({ stagedSilences: sil, stagedSilenceSel: new Set(sil.map((r) => r.id)), retakeSilenceStaged: true })
+      } else if (vadOn) {
+        await get()._stageVadSilences('ProCut', res.silenceAdds)
+      }
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `ProCut failed: ${(e as Error).message}` } })
     }
@@ -1664,7 +1695,7 @@ export const useStore = create<AppState>((set, get) => ({
       } else {
         path = p0.media!.path
       }
-      const res = await window.api.retakeAwareCut(path, get().retakeBetaSilenceSettings)
+      const res = await window.api.retakeAwareCut(path, get().retakeBetaSilenceSettings, get().vadSilenceSettings)
       const cur = get().project
       // REVIEW-STATE CONTRACT (the whole point of this fix):
       //  - ALWAYS show the beta's FULL raw/verbatim transcript. Its decisions

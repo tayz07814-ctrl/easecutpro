@@ -7,18 +7,19 @@
 // and Opus scans everything and returns the cut EDL. This closes the recall gap
 // vs ProCut — Opus is the detector, not a downstream referee.
 //
-// SILENCE is DELIBERATELY UNCHANGED: Retake β's own tuned, UI-driven engine
-// (detectBetaSilencesHybrid + the vadHardCut toggle), fed the SAME VAD safety
-// scan + ASR-artifact repair as before — it just consumes the Opus word-cut
-// spans instead of the rules' spans. The desktop path (src/main/retakeaware,
-// runRetakeAwareCut) stays rules-first and is untouched.
+// SILENCE now uses the UNIFIED configurable VAD pass shared with ProCut
+// (vad.ts vadSilenceRegions, driven by the store's VadSilenceSettings): raw
+// Silero speech detection + asymmetric guard padding + edge trim + breath
+// removal, then clamped off the kept words. This REPLACES the transcript-gap
+// hybrid + vadHardCut toggle in the cloud build. The desktop path
+// (src/main/retakeaware, runRetakeAwareCut) still uses the hybrid, untouched.
 //
 // The result shape (RetakeAwareResult) and the store's review-first contract are
 // identical, so the transcript/highlight/Execute UX is unchanged. Debug JSON is
 // uploaded best-effort to the private `retake-aware-debugs` bucket.
 
 import type { RetakeAwareResult, CutSpan } from '@shared/retakeaware/types'
-import type { Transcript, SilenceRegion, SilenceDetectOptions } from '@shared/types'
+import type { Transcript, SilenceRegion } from '@shared/types'
 import type { ProcutJudgeReq, ProcutJudgeRes } from '@shared/cloud'
 import {
   buildTimestampMap,
@@ -31,34 +32,12 @@ import {
 import { toAppTranscript, type ProgressFn } from '@shared/retakeaware/engine'
 import { spansToWordIds } from '@shared/retakeaware/analyze'
 import { detectArtifacts } from '@shared/retakeaware/artifacts'
-import {
-  detectBetaSilencesHybrid,
-  retakeBetaVadSafetyOpts,
-  DEFAULT_RETAKE_BETA_SILENCE_SETTINGS,
-  type RetakeBetaSilenceSettings
-} from '@shared/retakeaware/silence'
-
-// TIGHTER cloud hard-cut profile (cloud-only — the shared desktop
-// retakeBetaVadHardCutOpts is deliberately left untouched). The desktop profile
-// (min-gap 0.2s, speech pad 50ms) shrank the short breath gap after each phrase
-// below the 0.2s threshold, so it was FILTERED OUT and the whole ~0.3s breath
-// tail survived at every clip end. Dropping the min-gap to 0.1s + the pad to
-// 20ms makes those gaps clear the threshold and get removed; a touch more edge
-// trim (60ms) eats the VAD-as-speech breath tail. detectBetaSilencesHybrid's
-// clampOffWords still guards real transcript words by 30ms, so no word clips.
-const CLOUD_HARDCUT_OPTS: SilenceDetectOptions = {
-  mode: 'vad',
-  noiseDb: -30,
-  minDuration: 0.1,
-  vadThreshold: 0.5,
-  speechPadMs: 20,
-  edgeTrimMs: 60,
-  removeBreaths: false
-}
+import { retakeBetaVadSafetyOpts } from '@shared/retakeaware/silence'
+import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
 import { getSupabase, invokeEdge } from './supabase'
 import { extractSttAudio } from './audio'
 import { transcribeVerbatimCloud } from './stt'
-import { detectSilenceFloat32 } from './vad'
+import { detectSilenceFloat32, vadSilenceRegions } from './vad'
 
 /** Opus EDL (inclusive word-index cuts) -> Retake β time-based CutSpans. The
  *  silence engine + spansToWordIds both work in time, so this is the only bridge
@@ -112,7 +91,7 @@ async function saveRetakeDebug(debug: Record<string, unknown>): Promise<string |
 export async function retakeAwareCutCloud(
   mediaId: string,
   onProgress?: (pct: number, msg?: string) => void,
-  silenceSettings: RetakeBetaSilenceSettings = DEFAULT_RETAKE_BETA_SILENCE_SETTINGS
+  vadSettings: VadSilenceSettings = DEFAULT_VAD_SILENCE_SETTINGS
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
@@ -174,60 +153,31 @@ export async function retakeAwareCutCloud(
     warnings.push(`Retake β judge failed (${(e as Error).message}).`)
   }
 
-  // 5. SILENCE ENGINE — UNCHANGED. ASR-artifact repair (stretched-word clamp +
-  //    orphan clicks) feeds the tuned transcript-gap hybrid, or the vadHardCut
-  //    toggle, EXACTLY as the rules path did — the only difference is the word
-  //    cuts above now come from Opus, not the deterministic detectors.
+  // 5. SILENCE — the UNIFIED configurable VAD pass (shared with ProCut). ASR-
+  //    artifact repair still runs (stretched-word clamp + orphan record-clicks)
+  //    so the word-clamp inside vadSilenceRegions protects real words; then it
+  //    cuts silence per the user's VadSilenceSettings.
   op(90, 'Cleaning silence…')
   const artifacts = detectArtifacts(vt.words, baseCutSpans, vadSil)
   const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
   const cutSpans = [...baseCutSpans, ...artifacts.orphanCutSpans].sort((a, b) => a.start - b.start)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
-  const lastWordEnd = vt.words.length ? vt.words[vt.words.length - 1].end : 0
-  const mediaDurS = Math.max(lastWordEnd, ...(vadSil.length ? vadSil.map((r) => r.end) : [0]))
-  let silenceRegions: SilenceRegion[]
-  let silenceDebug: unknown = null
-  if (silenceSettings.vadHardCut) {
-    // vadHardCut toggle: aggressive raw VAD pass (own opts), clamped off the kept
-    // words so no onset/tail is clipped. Mirrors runRetakeAwareCut's hard-cut arm.
-    let hard: { start: number; end: number }[] = []
-    try {
-      hard = (await detectSilenceFloat32(audio.float32, audio.sampleRate, CLOUD_HARDCUT_OPTS, audio.durationS)).map((r) => ({
-        start: r.start,
-        end: r.end
-      }))
-    } catch (e) {
-      warnings.push(`VAD hard-cut scan failed (${(e as Error).message}) — no silence removed this run.`)
-    }
-    const keptWords = artifacts.repairedWords.filter((w) => {
-      const m = (w.start + w.end) / 2
-      return !cutSpans.some((s) => m >= s.start && m <= s.end)
-    })
-    const clampOffWords = (a: number, b: number): { start: number; end: number } => {
-      let cs = a
-      let ce = b
-      for (const w of keptWords) {
-        if (cs <= w.start && ce > w.start + 0.002 && ce < w.end) ce = Math.max(cs, w.start - 0.03)
-        if (ce >= w.end && cs < w.end - 0.002 && cs > w.start) cs = Math.min(ce, w.end + 0.03)
-      }
-      return { start: cs, end: ce }
-    }
-    silenceRegions = hard
-      .map((r) => clampOffWords(r.start, r.end))
-      .filter((r) => r.end - r.start > 0.05)
-      .map((r, i) => ({ id: `betasil-hardvad-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
-    silenceDebug = {
-      source: 'vad_hard_cut',
-      opts: CLOUD_HARDCUT_OPTS,
-      regions_count: silenceRegions.length,
-      total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3)),
-      regions: silenceRegions.map((r) => ({ start: Number(r.start.toFixed(3)), end: Number(r.end.toFixed(3)), dur: Number((r.end - r.start).toFixed(3)) }))
-    }
-  } else {
-    const beta = detectBetaSilencesHybrid(artifacts.repairedWords, cutSpans, vadSil, silenceSettings, mediaDurS)
-    silenceRegions = beta.regions
-    silenceDebug = beta.debug
+  const keptWords = artifacts.repairedWords.filter((w) => {
+    const m = (w.start + w.end) / 2
+    return !cutSpans.some((s) => m >= s.start && m <= s.end)
+  })
+  let silenceRegions: SilenceRegion[] = []
+  try {
+    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
+  } catch (e) {
+    warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
+  }
+  const silenceDebug = {
+    source: 'vad_pass',
+    settings: vadSettings,
+    regions_count: silenceRegions.length,
+    total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3))
   }
 
   // 6. debug JSON (best-effort, private bucket).

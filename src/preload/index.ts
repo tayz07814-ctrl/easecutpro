@@ -25,6 +25,7 @@ import type { ToolStatus } from '../main/binaries'
 import type { CutCutProResult } from '../shared/cutcutpro'
 import type { RetakeAwareResult } from '../shared/retakeaware/types'
 import type { RetakeBetaSilenceSettings } from '../shared/retakeaware/silence'
+import type { VadSilenceSettings } from '../shared/vadsilence'
 
 const api = {
   toolStatus: (): Promise<ToolStatus> => ipcRenderer.invoke(IPC.toolStatus),
@@ -43,11 +44,22 @@ const api = {
   fastCut: (transcript: Transcript, audioPath?: string, script?: string): Promise<AICutResult> =>
     ipcRenderer.invoke(IPC.fastCut, transcript, audioPath, script),
   /** CutCutPro: 4-phase pipeline (whisper+Parakeet+VAD -> Claude -> OpenAI listen -> EDL). */
-  cutCutPro: (path: string, transcript: Transcript | null, modelName?: string, runVad?: boolean, script?: string): Promise<CutCutProResult> =>
-    ipcRenderer.invoke(IPC.cutCutPro, path, transcript, modelName, runVad, script),
+  cutCutPro: (
+    path: string,
+    transcript: Transcript | null,
+    modelName?: string,
+    runVad?: boolean,
+    script?: string,
+    vadSilenceSettings?: VadSilenceSettings
+  ): Promise<CutCutProResult> =>
+    ipcRenderer.invoke(IPC.cutCutPro, path, transcript, modelName, runVad, script, vadSilenceSettings),
   /** Retake-Aware Cut Beta: separate experimental engine (cut_mode: retake_aware_beta). */
-  retakeAwareCut: (path: string, silenceSettings?: RetakeBetaSilenceSettings): Promise<RetakeAwareResult> =>
-    ipcRenderer.invoke(IPC.retakeAwareCut, path, silenceSettings),
+  retakeAwareCut: (
+    path: string,
+    silenceSettings?: RetakeBetaSilenceSettings,
+    vadSilenceSettings?: VadSilenceSettings
+  ): Promise<RetakeAwareResult> =>
+    ipcRenderer.invoke(IPC.retakeAwareCut, path, silenceSettings, vadSilenceSettings),
   /** Smart Smooth Cut (beta): AI pause judge — JSON in, raw JSON text out. */
   cutJudge: (payload: unknown): Promise<string> => ipcRenderer.invoke(IPC.cutJudge, payload),
   /** Smart Smooth Cut (beta): persist the per-run debug JSON; returns the path. */

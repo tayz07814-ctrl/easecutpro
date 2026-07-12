@@ -131,14 +131,14 @@ const cloudApi: Window['api'] = {
   fastCut: async () => desktopOnly('Fast Cut'),
   // ProCut in the cloud: AssemblyAI transcribes + Claude finalizes the cuts
   // (procut-judge edge fn). No GPT "listening" pass — that stays desktop-only.
-  cutCutPro: (path, transcript, _modelName, runVad, script) =>
-    cutCutProCloud(needLocal(path), transcript ?? null, runVad ?? true, script, (pct, msg) => emit('transcribe', pct, msg)),
+  cutCutPro: (path, transcript, _modelName, runVad, script, vadSilenceSettings) =>
+    cutCutProCloud(needLocal(path), transcript ?? null, runVad ?? true, script, vadSilenceSettings, (pct, msg) => emit('transcribe', pct, msg)),
   cutJudge: async () => desktopOnly('Smart Smooth Cut'),
   saveSmartCutDebug: async () => desktopOnly('Smart Smooth Cut'),
   generateOverlays: async () => desktopOnly('AI overlay generation'),
 
-  retakeAwareCut: (path, silenceSettings) =>
-    retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), silenceSettings),
+  retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
+    retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
 
   openaiStatus: async () => ({ available: false }),
   whisperModels: async () => [],
