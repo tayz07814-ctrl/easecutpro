@@ -506,8 +506,15 @@ export async function exportOnDevice(
   //    firing), or the harvest stalls. Exactness is unchanged either way:
   //    output frame N carries timestamp N/fps and shows the presented source
   //    frame nearest its mapped time — the same frame a seek would land on.
-  const rvfcOK =
-    typeof (HTMLVideoElement.prototype as { requestVideoFrameCallback?: unknown }).requestVideoFrameCallback === 'function'
+  // PLAY-HARVEST DISABLED: the real-time play-capture path dropped the first
+  // 1–2s of the video (play() start-up latency on Android — frames advance
+  // before capture catches up) and drifted audio↔video under encoder
+  // backpressure (playback clock vs encode clock slipping, gap growing to the
+  // end). Force the deterministic pure per-frame SEEK path — seek to each exact
+  // time and grab that frame. Slower on phones, but exact. Re-enable by
+  // restoring the rVFC probe:
+  //   typeof HTMLVideoElement.prototype.requestVideoFrameCallback === 'function'
+  const rvfcOK = false
   const frameDur = 1 / FPS
   interface Grab {
     frame: VideoFrame
