@@ -24,14 +24,15 @@ export interface VadSilenceSettings {
   breathDb: number
 }
 
-/** The settings the user asked for as the launch default. */
+/** Launch defaults. Breath/quiet-filler removal is OFF until the user opts in
+ *  (it's the most aggressive control); the rest are the tuned silence values. */
 export const DEFAULT_VAD_SILENCE_SETTINGS: VadSilenceSettings = {
   speechThreshold: 0.8,
   minGapS: 0.1,
-  padBeforeS: 0.04,
+  padBeforeS: 0.1,
   padAfterS: 0.07,
-  edgeTrimS: 0.02,
-  removeBreaths: true,
+  edgeTrimS: 0,
+  removeBreaths: false,
   breathDb: -30
 }
 
