@@ -1,0 +1,215 @@
+/*
+ * Easecut premium redesign — P2: desktop shell + toolbar + panel chrome.
+ *
+ * Scoped entirely under :root[data-ec-ui="new"] (set on <html> only when
+ * VITE_NEW_EASECUT_UI=true), so the legacy UI is untouched when the flag is off.
+ *
+ * VISUAL ONLY. No rule changes display / flex / width / position that would
+ * affect the resizable layout — only color, border, radius, typography, shadow
+ * and hover/focus/disabled appearance. No component markup or handler is touched.
+ *
+ * Control styling (buttons / inputs / tabs) is deliberately scoped to the shell
+ * regions `.toolbar` and `.main` (via :is()). The timeline (`.timeline-host`) is
+ * a SIBLING of `.main`, so it is excluded — the timeline keeps its current look
+ * until its own phase (P6). Modals/dashboard are restyled in their phases (P4/P5).
+ */
+
+/* ------------------------------------------------------------------ shell */
+:root[data-ec-ui='new'] .app {
+  background: var(--ec-bg);
+  color: var(--ec-text);
+}
+
+/* Toolbar — flat panel with a hairline, not the legacy glass gradient */
+:root[data-ec-ui='new'] .toolbar {
+  background: var(--ec-panel);
+  border-bottom: 1px solid var(--ec-line);
+  box-shadow: none;
+}
+:root[data-ec-ui='new'] .brand {
+  background: none;
+  -webkit-text-fill-color: var(--ec-text);
+  color: var(--ec-text);
+  font-weight: 700;
+}
+:root[data-ec-ui='new'] .brand span {
+  -webkit-text-fill-color: var(--ec-accent);
+  color: var(--ec-accent);
+}
+:root[data-ec-ui='new'] .sep {
+  background: var(--ec-line-3);
+}
+:root[data-ec-ui='new'] .zoom {
+  color: var(--ec-text-2);
+}
+
+/* Columns / panels */
+:root[data-ec-ui='new'] .col-left {
+  background: var(--ec-panel);
+  border-right-color: var(--ec-line);
+}
+:root[data-ec-ui='new'] .col-right {
+  background: var(--ec-panel);
+  border-left-color: var(--ec-line);
+}
+:root[data-ec-ui='new'] .col-center {
+  background: var(--ec-bg-deep);
+}
+:root[data-ec-ui='new'] .preview,
+:root[data-ec-ui='new'] .video-wrap,
+:root[data-ec-ui='new'] .stage {
+  background: var(--ec-bg-deep);
+}
+
+/* Resizers (shell) — recolor only; 8px grab area + grip geometry unchanged */
+:root[data-ec-ui='new'] .divider-v,
+:root[data-ec-ui='new'] .row-divider {
+  background: var(--ec-line);
+}
+:root[data-ec-ui='new'] .divider-v::after,
+:root[data-ec-ui='new'] .row-divider::after {
+  background: var(--ec-text-3);
+}
+:root[data-ec-ui='new'] .divider-v:hover,
+:root[data-ec-ui='new'] .divider-v:active,
+:root[data-ec-ui='new'] .row-divider:hover,
+:root[data-ec-ui='new'] .row-divider:active {
+  background: var(--ec-accent);
+}
+
+/* ------------------------------------------------------------ panel chrome */
+/* Right-panel tab strip */
+:root[data-ec-ui='new'] .tools-tabs {
+  background: var(--ec-panel);
+  border-bottom-color: var(--ec-line);
+}
+:root[data-ec-ui='new'] .tools-body {
+  background: var(--ec-panel);
+}
+/* .tools-tabs .tools-tab (2 classes) outranks the generic shell-button rule */
+:root[data-ec-ui='new'] .tools-tabs .tools-tab {
+  color: var(--ec-text-2);
+}
+:root[data-ec-ui='new'] .tools-tabs .tools-tab:hover {
+  background: var(--ec-surface);
+  color: var(--ec-text);
+}
+:root[data-ec-ui='new'] .tools-tabs .tools-tab.active {
+  color: var(--ec-text);
+  background: var(--ec-panel);
+  border-bottom-color: var(--ec-accent);
+  font-weight: 600;
+}
+
+/* Panel headers + generic panel backgrounds (chrome; inner content is later phases) */
+:root[data-ec-ui='new'] .cl-head,
+:root[data-ec-ui='new'] .media-lib-head {
+  background: var(--ec-panel);
+  border-bottom-color: var(--ec-line);
+}
+:root[data-ec-ui='new'] .silence-panel {
+  background: var(--ec-panel);
+}
+
+/* Media library cards */
+:root[data-ec-ui='new'] .media-card {
+  background: var(--ec-surface);
+  border: 1px solid var(--ec-line-2);
+  border-radius: var(--ec-r-card);
+}
+:root[data-ec-ui='new'] .media-card.active {
+  border-color: var(--ec-accent);
+  box-shadow: inset 0 0 0 1px var(--ec-accent), 0 0 0 3px var(--ec-accent-wash);
+}
+:root[data-ec-ui='new'] .media-active-badge {
+  background: var(--ec-accent);
+}
+
+/* ---------------------------------------------------------------- controls */
+/* Scoped to the shell (toolbar + main); excludes the timeline + modals. */
+
+/* Base (tonal secondary). Variant + tab rules below carry higher specificity. */
+:root[data-ec-ui='new'] :is(.toolbar, .main) button {
+  background: var(--ec-surface-2);
+  border: 1px solid var(--ec-line-3);
+  color: var(--ec-text);
+  border-radius: var(--ec-r-control);
+}
+:root[data-ec-ui='new'] :is(.toolbar, .main) button:hover:not(:disabled) {
+  background: var(--ec-surface-3);
+  border-color: var(--ec-line-3);
+}
+:root[data-ec-ui='new'] :is(.toolbar, .main) button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+:root[data-ec-ui='new'] :is(.toolbar, .main) button:disabled {
+  opacity: 0.45;
+}
+
+/* Primary — flat accent (glow is reserved for the single hero action, added per screen in P3+) */
+:root[data-ec-ui='new'] :is(.toolbar, .main) button.primary {
+  background: var(--ec-accent);
+  border: none;
+  color: #fff;
+  box-shadow: none;
+}
+:root[data-ec-ui='new'] :is(.toolbar, .main) button.primary:hover:not(:disabled) {
+  background: var(--ec-accent-hover);
+  filter: none;
+  box-shadow: none;
+}
+/* Destructive */
+:root[data-ec-ui='new'] :is(.toolbar, .main) button.danger {
+  background: var(--ec-danger-wash);
+  border: 1px solid rgba(217, 104, 110, 0.3);
+  color: var(--ec-danger-text);
+}
+:root[data-ec-ui='new'] :is(.toolbar, .main) button.danger:hover:not(:disabled) {
+  background: rgba(217, 104, 110, 0.2);
+}
+/* Toggle-on */
+:root[data-ec-ui='new'] :is(.toolbar, .main) button.toggle.on {
+  background: var(--ec-accent-wash);
+  border-color: var(--ec-accent);
+  color: var(--ec-accent-tint);
+}
+/* Link + mini keep their lightweight shapes */
+:root[data-ec-ui='new'] :is(.toolbar, .main) button.link {
+  background: none;
+  border: none;
+  color: var(--ec-accent);
+  border-radius: 0;
+}
+:root[data-ec-ui='new'] :is(.toolbar, .main) button.mini {
+  background: var(--ec-surface);
+  border-color: var(--ec-line-2);
+}
+
+/* Text-ish inputs + selects (range sliders styled in their own phase) */
+:root[data-ec-ui='new'] :is(.toolbar, .main) :is(input[type='number'], input[type='text'], select, textarea) {
+  background: var(--ec-surface);
+  border: 1px solid var(--ec-line-2);
+  color: var(--ec-text);
+  border-radius: var(--ec-r-sm);
+}
+:root[data-ec-ui='new'] :is(.toolbar, .main) :is(input[type='number'], input[type='text'], select, textarea):focus-visible {
+  border-color: var(--ec-accent);
+  outline: none;
+}
+
+/* Status badges → semantic tokens */
+:root[data-ec-ui='new'] .badge {
+  border-color: var(--ec-line-3);
+}
+:root[data-ec-ui='new'] .badge.ok {
+  color: var(--ec-success);
+  border-color: rgba(70, 165, 124, 0.4);
+}
+:root[data-ec-ui='new'] .badge.warn {
+  color: var(--ec-warn);
+  border-color: rgba(217, 164, 74, 0.4);
+}
+:root[data-ec-ui='new'] .badge.err {
+  color: var(--ec-danger);
+  border-color: rgba(217, 104, 110, 0.4);
+}

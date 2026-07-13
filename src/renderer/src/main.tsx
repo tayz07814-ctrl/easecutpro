@@ -16,6 +16,8 @@ import './styles.css'
 // Design-system foundation (tokens + self-hosted fonts). Scoped under
 // [data-ec-ui="new"] — inert unless the flag below marks <html>.
 import './design/tokens.css'
+// P2: desktop shell + toolbar + panel chrome (scoped; visual-only).
+import './design/shell.css'
 
 // Opt-in premium redesign: mark the root so the scoped design CSS applies. OFF
 // by default → legacy UI unchanged. Set once, before first paint.
