@@ -88,6 +88,8 @@ useStore.setState({
   selectedWordIds: new Set(rk.cutIds),
   stagedSilences: rk.sils,
   stagedSilenceSel: new Set(rk.sils.map((s) => s.id)),
+  showSilenceSettings: new URLSearchParams(location.search).get('sil') === '1',
+  vadSilenceSettings: { speechThreshold: 0.8, minGapS: 1.0, padBeforeS: 0.1, padAfterS: 0.07, edgeTrimS: 0, removeBreaths: false, breathDb: -30 },
   library: [
     { id: 'l1', path: 'seed-base', name: 'Bedroom take 3.mp4', kind: 'video', duration: 208, width: 1080, height: 1920, fps: 30, hasAudio: true, hasVideo: true },
     { id: 'l2', path: 'seed-2', name: 'Bedroom take 2.mp4', kind: 'video', duration: 171, width: 1080, height: 1920, fps: 30, hasAudio: true, hasVideo: true }

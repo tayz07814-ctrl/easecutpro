@@ -3,6 +3,7 @@ import { css } from '../css'
 import { useStore } from '../../store'
 import type { LibraryItem } from '@shared/types'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
+import SilenceSettingsModal from './SilenceSettingsModal'
 
 function fmtDur(s: number): string {
   if (!s || s < 0) return '0:00'
@@ -280,6 +281,7 @@ export default function Editor(): JSX.Element {
         <AiPanel />
       </div>
       <Timeline />
+      <SilenceSettingsModal />
     </div>
   )
 }
