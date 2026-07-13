@@ -180,31 +180,28 @@ function ClutterCleaner(): JSX.Element {
   // creates it. Shared between the empty state and the full panel.
   const engineActions = (
     <div className="row cl-actions">
-      {/* FastCut is the offline Parakeet engine — desktop/self-host only. ProCut
-          runs in the cloud too (AssemblyAI transcribes + Claude finalizes via the
-          procut-judge edge fn), so it shows alongside Retake β everywhere. */}
+      {/* FastCut (offline) and ProCut are desktop/self-host only for now — the
+          cloud beta ships Retake β alone. */}
       {!IS_CLOUD && (
         <button
           className="primary"
           onClick={() => void runFastCutLord()}
           disabled={jobActive}
-          title="FastCut — offline repeat/retake engine + VAD silence scan (⚙ profile). Highlights only; nothing is cut until Execute."
+          title="FastCut — offline repeat/retake engine + silence scan. Highlights only; nothing is cut until Execute."
         >
           ⚡ FastCut
         </button>
       )}
-      <button
-        className="primary"
-        onClick={() => void runProCut()}
-        disabled={jobActive}
-        title={
-          IS_CLOUD
-            ? 'ProCut — premium AI cut: AssemblyAI transcribes, then Claude finalizes zero-repeat cuts + VAD silence. Highlights only; nothing is cut until Execute.'
-            : 'ProCut — premium 4-phase AI pipeline (whisper+Parakeet map → Claude → OpenAI listens) + VAD silence scan. Highlights only; nothing is cut until Execute.'
-        }
-      >
-        ✂ ProCut
-      </button>
+      {!IS_CLOUD && (
+        <button
+          className="primary"
+          onClick={() => void runProCut()}
+          disabled={jobActive}
+          title="ProCut — premium AI cut + silence scan. Highlights only; nothing is cut until Execute."
+        >
+          ✂ ProCut
+        </button>
+      )}
       <button
         className={IS_CLOUD ? 'primary' : ''}
         onClick={() => void runRetakeCutBeta()}
@@ -216,11 +213,7 @@ function ClutterCleaner(): JSX.Element {
       <button
         onClick={() => setShowSilenceSettings(true)}
         disabled={jobActive}
-        title={
-          IS_CLOUD
-            ? 'Silence-cutting VAD settings — applies to ProCut AND Retake β.'
-            : 'Retake β silence-detection settings (Retake β only — does not affect FastCut/ProCut).'
-        }
+        title="Retake β silence-detection settings."
       >
         🔇 Silence Settings
       </button>

@@ -1760,15 +1760,21 @@ export const useStore = create<AppState>((set, get) => ({
             `${res.summary} — ${flagIds.length} word(s) highlighted` +
             (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
             `, review then Execute cuts` +
-            (res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
-            (res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '') +
-            (reviewBroken ? ' · ⚠ REVIEW-STATE ERROR — see console/debug' : '')
+            (!IS_CLOUD && res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
+            (!IS_CLOUD && res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '') +
+            (!IS_CLOUD && reviewBroken ? ' · ⚠ REVIEW-STATE ERROR — see console/debug' : '')
         }
       })
     } catch (e) {
       // Show the REAL error on-screen (the vanishing job message hid it on mobile).
       ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Retake β) failed', e)
-      set({ job: { active: false, percent: 0, message: `Retake β failed: ${(e as Error).message}` } })
+      set({
+        job: {
+          active: false,
+          percent: 0,
+          message: IS_CLOUD ? 'Retake β couldn’t finish — please try again.' : `Retake β failed: ${(e as Error).message}`
+        }
+      })
     }
   },
 

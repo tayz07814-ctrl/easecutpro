@@ -53,7 +53,7 @@ function edlToRetakeCutSpans(edl: Edl, map: TimestampMap): CutSpan[] {
       end: to.end,
       type: 'failed_retake',
       source: 'retake_aware_beta',
-      reason: c.reason || 'Opus: earlier/duplicate take or production chatter'
+      reason: c.reason || 'earlier/duplicate take or production chatter'
     })
   }
   return spans
@@ -138,19 +138,19 @@ export async function retakeAwareCutCloud(
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
-      warnings.push('Retake β needs a Claude key configured on the server — no takes were judged.')
+      warnings.push('Retake β couldn’t analyze this clip — please try again.')
     } else if (res.raw == null) {
-      warnings.push('Retake β’s judge got no reply from the model — no takes were cut.')
+      warnings.push('Retake β couldn’t analyze this clip — no takes were cut.')
     } else {
       const v = validateEdl(res.raw, map)
       if (!v.ok) {
-        warnings.push('Retake β’s judge returned an unusable reply — no takes were cut.')
+        warnings.push('Retake β couldn’t read the result — no takes were cut.')
       } else {
         baseCutSpans = edlToRetakeCutSpans(refineEdl(v.edl, map).edl, map)
       }
     }
-  } catch (e) {
-    warnings.push(`Retake β judge failed (${(e as Error).message}).`)
+  } catch {
+    warnings.push('Retake β couldn’t finish — please try again.')
   }
 
   // 5. SILENCE — the UNIFIED configurable VAD pass (shared with ProCut). ASR-
@@ -206,7 +206,7 @@ export async function retakeAwareCutCloud(
     fillerDecisions: [],
     debugPath,
     warnings,
-    summary: `Retake β (${vt.provider} + Opus judge): ${deleteWordIds.length} word(s) flagged, ${silenceRegions.length} pause(s)`
+    summary: `Retake β: ${deleteWordIds.length} word(s) flagged, ${silenceRegions.length} pause(s)`
   }
 }
 

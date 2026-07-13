@@ -34,14 +34,14 @@ export default function SilencePanel(): JSX.Element {
           <button
             className={'mini toggle' + (mode === 'vad' ? ' on' : '')}
             onClick={() => setOpts({ mode: 'vad' })}
-            title="Silero VAD — detects real speech, ignores background noise (recommended)"
+            title="Detects real speech, ignores background noise (recommended)"
           >
             ✨ Smart (VAD)
           </button>
           <button
             className={'mini toggle' + (mode === 'fast' ? ' on' : '')}
             onClick={() => setOpts({ mode: 'fast' })}
-            title="ffmpeg dB threshold — fast, but fooled by background noise"
+            title="Fast, but fooled by background noise"
           >
             Fast (dB)
           </button>
@@ -101,7 +101,7 @@ export default function SilencePanel(): JSX.Element {
           <label
             className="row"
             style={{ alignItems: 'center', gap: 6 }}
-            title="Also remove breaths and quiet non-word fillers the VAD kept as speech. Can clip very soft speech — review the cuts after."
+            title="Also remove breaths and quiet non-word fillers kept as speech. Can clip very soft speech — review the cuts after."
           >
             <input
               type="checkbox"
@@ -124,7 +124,7 @@ export default function SilencePanel(): JSX.Element {
         )}
         {mode === 'vad' && (
           <div className="muted small" style={{ marginTop: 4 }}>
-            VAD finds real speech (handles background noise/music) — runs on CPU, near-instant.
+            Finds real speech (handles background noise/music) — near-instant.
           </div>
         )}
       </div>

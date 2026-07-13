@@ -42,7 +42,7 @@ export default function VadSilenceSettingsModal(): JSX.Element {
           <button onClick={() => close(false)} style={{ background: 'none', border: 'none', color: '#aaa', fontSize: 18, cursor: 'pointer' }}>✕</button>
         </div>
         <div style={{ fontSize: 12, color: '#9aa', marginBottom: 14 }}>
-          Silence-cutting VAD pass — applies to <b>ProCut</b> and <b>Retake β</b>. Word/retake cuts are unaffected.
+          Silence-cutting for <b>Retake β</b>. Word/retake cuts are unaffected.
         </div>
 
         {ROWS.map((r) => {
@@ -78,7 +78,7 @@ export default function VadSilenceSettingsModal(): JSX.Element {
           </button>
         </div>
         <div style={{ fontSize: 11, color: '#778', marginTop: 10 }}>
-          Then run <b>✂ ProCut</b> or <b>🧪 Find Retakes &amp; Silence</b> — silence chips stage for review; nothing is cut until Execute.
+          Then run <b>🧪 Find Retakes &amp; Silence</b> — silence chips stage for review; nothing is cut until Execute.
         </div>
       </div>
     </div>
