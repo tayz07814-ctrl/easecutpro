@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { IS_CLOUD } from '../platform'
 import { buildSilenceChips } from '@shared/cutlord'
 import type { Word } from '@shared/types'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { docEditedToSource, docSourceToEdited } from '../docTime'
-import VadSilenceSettingsModal from './VadSilenceSettingsModal'
-import SilenceSettingsModal from './SilenceSettingsModal'
+import SilenceSettingsSheet from './SilenceSettingsSheet'
 
 /**
  * Retake Cleaner — the redesigned right-panel view (VITE_NEW_EASECUT_UI only).
@@ -154,7 +152,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
     setPlaying(true)
   }
 
-  const modal = showSilenceSettings ? IS_CLOUD ? <VadSilenceSettingsModal /> : <SilenceSettingsModal /> : null
+  const modal = showSilenceSettings ? <SilenceSettingsSheet /> : null
 
   // ---- header (shared across states) ----
   const header = (

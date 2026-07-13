@@ -20,6 +20,8 @@ import './design/tokens.css'
 import './design/shell.css'
 // P3: Retake Cleaner panel presentation (scoped; visual-only).
 import './design/panel.css'
+// P4: Silence Settings sheet (scoped; visual-only).
+import './design/silence.css'
 
 // Opt-in premium redesign: mark the root so the scoped design CSS applies. OFF
 // by default → legacy UI unchanged. Set once, before first paint.
