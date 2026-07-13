@@ -1,4 +1,14 @@
+import { useState } from 'react'
 import { css } from '../css'
+import { useStore } from '../../store'
+import type { LibraryItem } from '@shared/types'
+
+function fmtDur(s: number): string {
+  if (!s || s < 0) return '0:00'
+  const m = Math.floor(s / 60)
+  const sec = Math.round(s % 60)
+  return `${m}:${String(sec).padStart(2, '0')}`
+}
 
 // Screen 1b — Video editor (1440 · AI Cut tab, results-ready / reviewing state).
 // Verbatim port of the approved design. Fluid: fills width/height; media panel
@@ -9,33 +19,100 @@ const HAIR = 'rgba(255,255,255,.06)'
 const CLIP9x16 =
   "width:42px;height:74px;flex:none;border-radius:7px;background:repeating-linear-gradient(45deg,#23252b 0,#23252b 8px,#1e2026 8px,#1e2026 16px);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:8px;color:#686E7B"
 
+// saveState → the design's status dot + label (green Saved / amber Saving / red failed).
+const SAVE_UI: Record<string, { c: string; t: string }> = {
+  idle: { c: '#46A57C', t: 'Saved' },
+  saved: { c: '#46A57C', t: 'Saved' },
+  saving: { c: '#D9A44A', t: 'Saving…' },
+  error: { c: '#D9686E', t: 'Save failed' }
+}
+
 function TopBar(): JSX.Element {
+  const name = useStore((s) => s.project.name)
+  const saveState = useStore((s) => s.saveState)
+  const canUndo = useStore((s) => s.canUndo)
+  const canRedo = useStore((s) => s.canRedo)
+  const goHome = useStore((s) => s.goHome)
+  const undo = useStore((s) => s.undo)
+  const redo = useStore((s) => s.redo)
+  const importMedia = useStore((s) => s.importMedia)
+  const rename = useStore((s) => s.renameCurrentProject)
+  const setShowExportModal = useStore((s) => s.setShowExportModal)
+  const setShowSettings = useStore((s) => s.setShowSettings)
+  const sv = SAVE_UI[saveState] ?? SAVE_UI.saved
+
   return (
     <div style={css(`display:flex;align-items:center;gap:12px;height:52px;padding:0 16px;border-bottom:1px solid ${HAIR};flex:none`)}>
-      <div style={css('display:flex;align-items:center;gap:7px;font-size:13px;color:#9BA0AC;padding:6px 10px;border-radius:8px;cursor:pointer')}>
+      <div onClick={goHome} style={css('display:flex;align-items:center;gap:7px;font-size:13px;color:#9BA0AC;padding:6px 10px;border-radius:8px;cursor:pointer')}>
         <span style={css('font-size:14px')}>‹</span> Projects
       </div>
       <div style={css('width:1px;height:20px;background:rgba(255,255,255,.08)')} />
       <div style={css('display:flex;align-items:center;gap:8px')}>
-        <div style={css('font-size:13.5px;font-weight:600;padding:5px 8px;border-radius:8px;cursor:text')}>Morning routine — bedroom take</div>
+        <div
+          contentEditable
+          suppressContentEditableWarning
+          onBlur={(e) => {
+            const v = e.currentTarget.textContent?.trim()
+            if (v && v !== name) rename(v)
+            else e.currentTarget.textContent = name
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() }
+          }}
+          style={css('font-size:13.5px;font-weight:600;padding:5px 8px;border-radius:8px;cursor:text;outline:none')}
+        >
+          {name}
+        </div>
         <div style={css('display:flex;align-items:center;gap:5px;font-size:11.5px;color:#686E7B')}>
-          <div style={css('width:6px;height:6px;border-radius:50%;background:#46A57C')} />Saved
+          <div style={css(`width:6px;height:6px;border-radius:50%;background:${sv.c}`)} />{sv.t}
         </div>
       </div>
       <div style={css('flex:1')} />
       <div style={css('display:flex;align-items:center;gap:4px')}>
-        <div style={css('width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#9BA0AC;font-size:14px;cursor:pointer')}>↶</div>
-        <div style={css('width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#4A4F5B;font-size:14px')}>↷</div>
+        <div onClick={() => canUndo && undo()} style={css(`width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:14px;color:${canUndo ? '#9BA0AC' : '#4A4F5B'};cursor:${canUndo ? 'pointer' : 'default'}`)}>↶</div>
+        <div onClick={() => canRedo && redo()} style={css(`width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:14px;color:${canRedo ? '#9BA0AC' : '#4A4F5B'};cursor:${canRedo ? 'pointer' : 'default'}`)}>↷</div>
       </div>
       <div style={css('width:1px;height:20px;background:rgba(255,255,255,.08)')} />
-      <button style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:7px 13px;cursor:pointer')}>Import</button>
-      <div style={css('width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#9BA0AC;font-size:15px;cursor:pointer')}>···</div>
-      <button style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 16px;cursor:pointer')}>Export</button>
+      <button onClick={importMedia} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:7px 13px;cursor:pointer')}>Import</button>
+      <div onClick={() => setShowSettings(true)} style={css('width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#9BA0AC;font-size:15px;cursor:pointer')}>···</div>
+      <button onClick={() => setShowExportModal(true)} style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 16px;cursor:pointer')}>Export</button>
+    </div>
+  )
+}
+
+function MediaClip({ item, isBase, onSetBase, onRemove }: { item: LibraryItem; isBase: boolean; onSetBase: () => void; onRemove: () => void }): JSX.Element {
+  const shell = isBase
+    ? 'background:#1E2026;border:1px solid rgba(110,106,232,.55);border-radius:12px;padding:10px;display:flex;gap:10px;box-shadow:0 0 0 3px rgba(110,106,232,.12);position:relative;cursor:pointer'
+    : 'background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:10px;display:flex;gap:10px;cursor:pointer'
+  const meta = item.width && item.height ? `${fmtDur(item.duration)} · ${item.width}×${item.height}` : fmtDur(item.duration)
+  return (
+    <div onClick={onSetBase} style={css(shell)}>
+      <div style={css(CLIP9x16)}>{item.thumb ? <img src={item.thumb} alt="" style={css('width:100%;height:100%;object-fit:cover;border-radius:7px')} draggable={false} /> : '9:16'}</div>
+      <div style={css('flex:1;min-width:0;display:flex;flex-direction:column;gap:4px')}>
+        <div style={css('font-size:12.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')} title={item.name}>{item.name}</div>
+        <div style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>{meta}</div>
+        {isBase && (
+          <div style={css('display:flex;gap:6px;margin-top:2px')}>
+            <span style={css('font-size:10px;font-weight:600;color:#B7B5F4;background:rgba(110,106,232,.18);border-radius:5px;padding:2px 7px')}>Base clip</span>
+          </div>
+        )}
+      </div>
+      <div onClick={(e) => { e.stopPropagation(); onRemove() }} style={css('color:#9BA0AC;font-size:14px;line-height:1;height:22px;padding:2px 5px;border-radius:6px;cursor:pointer')}>···</div>
     </div>
   )
 }
 
 function MediaPanel(): JSX.Element {
+  const library = useStore((s) => s.library)
+  const basePath = useStore((s) => s.project.media?.path)
+  const addToLibrary = useStore((s) => s.addToLibrary)
+  const setBaseFromLibrary = useStore((s) => s.setBaseFromLibrary)
+  const removeFromLibrary = useStore((s) => s.removeFromLibrary)
+  const [filter, setFilter] = useState('')
+
+  const q = filter.trim().toLowerCase()
+  const items = q ? library.filter((it) => it.name.toLowerCase().includes(q)) : library
+
   return (
     <div style={css(`width:264px;flex:none;border-right:1px solid ${HAIR};display:flex;flex-direction:column;background:#191B20`)}>
       <div style={css('display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px')}>
@@ -43,35 +120,24 @@ function MediaPanel(): JSX.Element {
         <div style={css('font-size:13px;color:#686E7B;cursor:pointer')}>⟨</div>
       </div>
       <div style={css('padding:0 16px 12px;display:flex;flex-direction:column;gap:8px')}>
-        <button style={css('background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer;width:100%')}>＋ Import media</button>
+        <button onClick={addToLibrary} style={css('background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer;width:100%')}>＋ Import media</button>
         <div style={css('display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:#1E2026;border:1px solid rgba(255,255,255,.06);border-radius:8px')}>
           <div style={css('width:10px;height:10px;border:1.5px solid #686E7B;border-radius:50%;position:relative')}>
             <div style={css('position:absolute;width:4px;height:1.5px;background:#686E7B;bottom:-2px;right:-2px;transform:rotate(45deg)')} />
           </div>
-          <span style={css('font-size:12px;color:#686E7B')}>Filter media</span>
+          <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter media" style={css('font-size:12px;color:#E9EAEE;flex:1;min-width:0;background:none;border:none;outline:none;font-family:inherit;padding:0;margin:0')} />
         </div>
       </div>
       <div style={css('padding:0 12px;display:flex;flex-direction:column;gap:8px;overflow:hidden')}>
-        {/* selected base clip */}
-        <div style={css('background:#1E2026;border:1px solid rgba(110,106,232,.55);border-radius:12px;padding:10px;display:flex;gap:10px;box-shadow:0 0 0 3px rgba(110,106,232,.12);position:relative')}>
-          <div style={css(CLIP9x16)}>9:16</div>
-          <div style={css('flex:1;min-width:0;display:flex;flex-direction:column;gap:4px')}>
-            <div style={css('font-size:12.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>Bedroom take 3.mp4</div>
-            <div style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>3:28 · 1080×1920</div>
-            <div style={css('display:flex;gap:6px;margin-top:2px')}>
-              <span style={css('font-size:10px;font-weight:600;color:#B7B5F4;background:rgba(110,106,232,.18);border-radius:5px;padding:2px 7px')}>Base clip</span>
-            </div>
-          </div>
-          <div style={css('color:#9BA0AC;font-size:14px;line-height:1;height:22px;padding:2px 5px;border-radius:6px;cursor:pointer')}>···</div>
-        </div>
-        <div style={css('background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:10px;display:flex;gap:10px')}>
-          <div style={css(CLIP9x16)}>9:16</div>
-          <div style={css('flex:1;min-width:0;display:flex;flex-direction:column;gap:4px')}>
-            <div style={css('font-size:12.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>Bedroom take 2.mp4</div>
-            <div style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>2:51 · 1080×1920</div>
-          </div>
-          <div style={css('color:#9BA0AC;font-size:14px;line-height:1;height:22px;padding:2px 5px;border-radius:6px;cursor:pointer')}>···</div>
-        </div>
+        {items.map((it) => (
+          <MediaClip
+            key={it.id}
+            item={it}
+            isBase={!!basePath && it.path === basePath}
+            onSetBase={() => setBaseFromLibrary(it.id)}
+            onRemove={() => removeFromLibrary(it.id)}
+          />
+        ))}
       </div>
       <div style={css('flex:1')} />
       <div style={css('padding:14px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Import once, reuse anywhere. Set a clip as base, or drag it onto a track.</div>

@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client'
 import '../newui.css'
 import { useStore } from '../../store'
 import Dashboard from '../screens/Dashboard'
+import Editor from '../screens/Editor'
 
 const min = 60_000
 const svg = (c: string): string =>
@@ -39,16 +40,31 @@ w.api = {
   openMediaDialogMulti: rec('openMediaDialogMulti')
 }
 
+const seededProject = {
+  ...useStore.getState().freshProject(),
+  name: 'Morning routine — bedroom take',
+  media: { path: 'seed-base', duration: 208, width: 1080, height: 1920, hasAudio: true, hasVideo: true, fps: 30 }
+}
 useStore.setState({
   user: { id: 'u', email: 'tayz07814@gmail.com' },
-  batchJobs: [{ projectId: 'p3', name: 'Kitchen b-roll batch', status: 'processing', step: 'Uploading media…' }]
+  batchJobs: [{ projectId: 'p3', name: 'Kitchen b-roll batch', status: 'processing', step: 'Uploading media…' }],
+  view: 'editor',
+  currentProjectId: 'p1',
+  project: seededProject,
+  saveState: 'saved',
+  canUndo: true,
+  canRedo: false,
+  library: [
+    { id: 'l1', path: 'seed-base', name: 'Bedroom take 3.mp4', kind: 'video', duration: 208, width: 1080, height: 1920, fps: 30, hasAudio: true, hasVideo: true },
+    { id: 'l2', path: 'seed-2', name: 'Bedroom take 2.mp4', kind: 'video', duration: 171, width: 1080, height: 1920, fps: 30, hasAudio: true, hasVideo: true }
+  ]
 })
 
 const screen = new URLSearchParams(location.search).get('screen') || '1a'
-const MAP: Record<string, () => JSX.Element> = { '1a': Dashboard }
+const MAP: Record<string, () => JSX.Element> = { '1a': Dashboard, '1b': Editor }
 const Comp = MAP[screen] || Dashboard
 createRoot(document.getElementById('root') as HTMLElement).render(
-  <div id="screen">
+  <div id="screen" style={screen === '1b' ? { height: '100vh' } : undefined}>
     <Comp />
   </div>
 )
