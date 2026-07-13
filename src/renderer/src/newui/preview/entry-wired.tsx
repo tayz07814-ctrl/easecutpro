@@ -4,6 +4,7 @@
 import { createRoot } from 'react-dom/client'
 import '../newui.css'
 import { useStore } from '../../store'
+import type { Project } from '@shared/types'
 import Dashboard from '../screens/Dashboard'
 import Editor from '../screens/Editor'
 
@@ -40,11 +41,41 @@ w.api = {
   openMediaDialogMulti: rec('openMediaDialogMulti')
 }
 
+// Build a small transcript matching the design snippet: cut ranges → selected
+// word ids; inter-part gaps → staged silences (so the results state renders).
+function buildRetakeSeed() {
+  const parts = [
+    { text: 'You can start talking.', cut: false, gap: 6.7 },
+    { text: 'You really think you can make the bed quicker than', cut: true, gap: 0 },
+    { text: 'I can finish brushing my teeth?', cut: false, gap: 1.6 },
+    { text: 'Don’t tow anything, just leave it rolling.', cut: false, gap: 2.6 },
+    { text: 'I’m not just gonna make it, I’m gonna do it in 20 seconds.', cut: false, gap: 0 },
+    { text: 'Wait, hold on — let me start that again.', cut: true, gap: 0 }
+  ]
+  let t = 0
+  let wi = 0
+  const words: { id: string; text: string; start: number; end: number }[] = []
+  const cutIds: string[] = []
+  const sils: { id: string; start: number; end: number; action: 'remove' }[] = []
+  for (const p of parts) {
+    for (const tok of p.text.split(' ')) {
+      const w = { id: 'w' + wi++, text: tok, start: +t.toFixed(2), end: +(t + 0.32).toFixed(2) }
+      words.push(w)
+      if (p.cut) cutIds.push(w.id)
+      t += 0.4
+    }
+    if (p.gap) { sils.push({ id: 's' + sils.length, start: +t.toFixed(2), end: +(t + p.gap).toFixed(2), action: 'remove' }); t += p.gap }
+  }
+  return { transcript: { words, segments: [{ id: 'seg1', words }] }, cutIds, sils }
+}
+const rk = buildRetakeSeed()
+
 const seededProject = {
   ...useStore.getState().freshProject(),
   name: 'Morning routine — bedroom take',
-  media: { path: 'seed-base', duration: 208, width: 1080, height: 1920, hasAudio: true, hasVideo: true, fps: 30 }
-}
+  media: { path: 'seed-base', duration: 208, width: 1080, height: 1920, hasAudio: true, hasVideo: true, fps: 30 },
+  transcript: rk.transcript
+} as unknown as Project
 useStore.setState({
   user: { id: 'u', email: 'tayz07814@gmail.com' },
   batchJobs: [{ projectId: 'p3', name: 'Kitchen b-roll batch', status: 'processing', step: 'Uploading media…' }],
@@ -54,6 +85,9 @@ useStore.setState({
   saveState: 'saved',
   canUndo: true,
   canRedo: false,
+  selectedWordIds: new Set(rk.cutIds),
+  stagedSilences: rk.sils,
+  stagedSilenceSel: new Set(rk.sils.map((s) => s.id)),
   library: [
     { id: 'l1', path: 'seed-base', name: 'Bedroom take 3.mp4', kind: 'video', duration: 208, width: 1080, height: 1920, fps: 30, hasAudio: true, hasVideo: true },
     { id: 'l2', path: 'seed-2', name: 'Bedroom take 2.mp4', kind: 'video', duration: 171, width: 1080, height: 1920, fps: 30, hasAudio: true, hasVideo: true }

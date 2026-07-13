@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { css } from '../css'
 import { useStore } from '../../store'
 import type { LibraryItem } from '@shared/types'
+import RetakeCleanerPanel from './RetakeCleanerPanel'
 
 function fmtDur(s: number): string {
   if (!s || s < 0) return '0:00'
@@ -196,59 +197,7 @@ function AiPanel(): JSX.Element {
         <div style={css('padding:13px 12px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>Overlays</div>
         <div style={css('padding:13px 12px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>Audio</div>
       </div>
-      <div style={css('flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;padding:18px 18px 0')}>
-        <div style={css('display:flex;align-items:center;gap:8px')}>
-          <div style={css('font-size:15px;font-weight:650;letter-spacing:-.01em')}>Retake Cleaner</div>
-          <span style={css('font-size:9.5px;font-weight:600;letter-spacing:.05em;color:#9BA0AC;border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:2px 6px')}>BETA</span>
-          <div style={css('flex:1')} />
-          <div style={css('color:#9BA0AC;font-size:14px;padding:3px 6px;border-radius:7px;cursor:pointer')}>···</div>
-        </div>
-        <div style={css('font-size:12.5px;line-height:1.5;color:#9BA0AC;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
-
-        {/* summary card */}
-        <div style={css('margin-top:16px;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px')}>
-          <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:12px 16px')}>
-            <div><div style={css('font-size:17px;font-weight:650')}>8</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>retakes found</div></div>
-            <div><div style={css('font-size:17px;font-weight:650;color:#D9868B')}>75</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>words to remove</div></div>
-            <div><div style={css('font-size:17px;font-weight:650;color:#D9A44A')}>30</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>pauses shortened</div></div>
-            <div><div style={css('font-size:17px;font-weight:650;color:#46A57C')}>~48s</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>time saved</div></div>
-          </div>
-        </div>
-
-        <div style={css('display:flex;gap:8px;margin-top:12px')}>
-          <button style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.3)')}>Execute 105 cuts</button>
-          <button style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 14px;cursor:pointer')}>Silence Settings</button>
-        </div>
-        <div style={css('display:flex;align-items:center;gap:9px;margin-top:12px')}>
-          <div style={css('width:32px;height:18px;border-radius:9px;background:#6E6AE8;position:relative;flex:none;cursor:pointer')}>
-            <div style={css('position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff')} />
-          </div>
-          <div style={css('font-size:12px;color:#C6C9D2')}>Smart Silence Cutter</div>
-          <div style={css('flex:1')} />
-          <div style={css('font-size:11px;color:#686E7B')}>30 pauses</div>
-        </div>
-
-        {/* transcript */}
-        <div style={css(`display:flex;align-items:center;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid ${HAIR}`)}>
-          <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review transcript</div>
-          <div style={css('flex:1')} />
-          <span style={css('font-size:11.5px;color:#9BA0AC;padding:4px 8px;border-radius:7px;cursor:pointer')}>Restore</span>
-          <span style={css('font-size:11.5px;color:#9BA0AC;padding:4px 8px;border-radius:7px;cursor:pointer')}>Clear</span>
-        </div>
-        <div style={css('flex:1;min-height:0;overflow:hidden;margin:10px -18px 0;padding:2px 18px 18px;font-size:13.5px;line-height:2.1;color:#C6C9D2;-webkit-mask-image:linear-gradient(#000 82%,transparent)')}>
-          {/* Inter-span single spaces mirror the design HTML's collapsing
-              source whitespace between inline spans (on top of chip margins). */}
-          <span>You can start talking.</span>{' '}
-          <span style={css("background:rgba(217,164,74,.14);color:#D9A44A;border:1px solid rgba(217,164,74,.3);border-radius:6px;padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-size:10px;margin:0 4px;white-space:nowrap")}>6.7s</span>{' '}
-          <span style={css('background:rgba(217,104,110,.13);color:#D9868B;border-radius:5px;padding:1px 4px;text-decoration:line-through;text-decoration-color:rgba(217,134,139,.55)')}>You really think you can make the bed quicker than</span>{' '}
-          <span> I can finish brushing my teeth?</span>{' '}
-          <span style={css("background:rgba(217,164,74,.14);color:#D9A44A;border:1px solid rgba(217,164,74,.3);border-radius:6px;padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-size:10px;margin:0 4px;white-space:nowrap")}>1.6s</span>{' '}
-          <span> Don’t tow anything, just leave it rolling.</span>{' '}
-          <span style={css("background:rgba(217,164,74,.14);color:#D9A44A;border:1px solid rgba(217,164,74,.3);border-radius:6px;padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-size:10px;margin:0 4px;white-space:nowrap")}>2.6s</span>{' '}
-          <span> I’m not just gonna make it, I’m gonna do it in 20 seconds.</span>{' '}
-          <span style={css('background:rgba(217,104,110,.13);color:#D9868B;border-radius:5px;padding:1px 4px;text-decoration:line-through;text-decoration-color:rgba(217,134,139,.55)')}>Wait, hold on — let me start that again.</span>
-        </div>
-      </div>
+      <RetakeCleanerPanel />
     </div>
   )
 }

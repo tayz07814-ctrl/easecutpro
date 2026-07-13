@@ -482,6 +482,11 @@ interface AppState {
   /** Retake β "Silence Settings" modal open? */
   showSilenceSettings: boolean
   setShowSilenceSettings: (v: boolean) => void
+  /** New-UI orchestration flag (Retake Cleaner "Smart Silence Cutter"). When OFF,
+   *  staged silence suggestions are hidden from review and excluded from Execute.
+   *  UI-layer only — never modifies the silence engine or Retake β. */
+  smartSilenceCutter: boolean
+  setSmartSilenceCutter: (v: boolean) => void
   /** silence cuts staged for review (highlighted chips — NOT applied yet). */
   stagedSilences: SilenceRegion[]
   /** staged silences currently enabled (chip highlighted). */
@@ -1585,6 +1590,15 @@ export const useStore = create<AppState>((set, get) => ({
   },
   showSilenceSettings: false,
   setShowSilenceSettings: (v) => set({ showSilenceSettings: v }),
+
+  smartSilenceCutter: true,
+  setSmartSilenceCutter: (v) =>
+    set((s) => ({
+      smartSilenceCutter: v,
+      // Orchestration only: OFF deselects every staged silence (so review hides
+      // them and Execute skips them); ON re-selects them. Engine untouched.
+      stagedSilenceSel: v ? new Set(s.stagedSilences.map((r) => r.id)) : new Set<string>()
+    })),
 
   stagedSilences: [],
   stagedSilenceSel: new Set<string>(),
