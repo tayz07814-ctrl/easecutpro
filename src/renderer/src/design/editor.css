@@ -1,0 +1,207 @@
+/*
+ * Easecut redesign — P5: editor shell + top bar.
+ * Scoped under :root[data-ec-ui="new"]; consumes P1 tokens. Visual/layout only —
+ * every control calls the existing store action. Legacy shell (flag off) untouched.
+ * The new toolbar (.nt) is a sibling of .main, so it is styled in full here.
+ */
+
+/* ---- top bar ---- */
+:root[data-ec-ui='new'] .nt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 52px;
+  padding: 0 14px;
+  flex: none;
+  background: var(--ec-panel);
+  border-bottom: 1px solid var(--ec-line);
+}
+:root[data-ec-ui='new'] .nt button {
+  font-family: var(--ec-font-sans);
+  cursor: pointer;
+}
+:root[data-ec-ui='new'] .nt-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--ec-line-3);
+  flex: none;
+}
+:root[data-ec-ui='new'] .nt-spacer {
+  flex: 1;
+}
+:root[data-ec-ui='new'] .nt-group {
+  display: flex;
+  gap: 2px;
+}
+:root[data-ec-ui='new'] .nt-projects {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--ec-text-2);
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: var(--ec-r-sm);
+}
+:root[data-ec-ui='new'] .nt-projects:hover {
+  background: var(--ec-surface);
+  color: var(--ec-text);
+}
+:root[data-ec-ui='new'] .nt-chevron {
+  font-size: 15px;
+}
+:root[data-ec-ui='new'] .nt-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: none;
+  color: var(--ec-text-2);
+  font-size: 15px;
+  border-radius: var(--ec-r-sm);
+}
+:root[data-ec-ui='new'] .nt-icon:hover:not(:disabled) {
+  background: var(--ec-surface);
+  color: var(--ec-text);
+}
+:root[data-ec-ui='new'] .nt-icon:disabled {
+  color: var(--ec-text-disabled);
+  cursor: default;
+}
+:root[data-ec-ui='new'] .nt-secondary {
+  background: none;
+  border: 1px solid var(--ec-line-3);
+  color: var(--ec-text);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: var(--ec-r-control);
+}
+:root[data-ec-ui='new'] .nt-secondary:hover {
+  border-color: var(--ec-text-3);
+}
+:root[data-ec-ui='new'] .nt-export {
+  background: var(--ec-accent);
+  border: none;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 8px 18px;
+  border-radius: var(--ec-r-control);
+  box-shadow: 0 4px 14px rgba(110, 106, 232, 0.28); /* restrained glow — the one prominent action */
+}
+:root[data-ec-ui='new'] .nt-export:hover:not(:disabled) {
+  background: var(--ec-accent-hover);
+}
+:root[data-ec-ui='new'] .nt-export:disabled {
+  background: var(--ec-surface-2);
+  color: var(--ec-text-disabled);
+  box-shadow: none;
+  cursor: default;
+}
+
+/* editable project name + autosave status (ProjectTitle, restyled for new UI) */
+:root[data-ec-ui='new'] .proj-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+:root[data-ec-ui='new'] .proj-title-name {
+  background: none;
+  border: none;
+  color: var(--ec-text);
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 5px 8px;
+  border-radius: var(--ec-r-sm);
+  cursor: text;
+}
+:root[data-ec-ui='new'] .proj-title-name:hover {
+  background: var(--ec-surface);
+}
+:root[data-ec-ui='new'] .proj-title input {
+  background: var(--ec-surface);
+  border: 1px solid var(--ec-accent);
+  color: var(--ec-text);
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: var(--ec-r-sm);
+}
+:root[data-ec-ui='new'] .save-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--ec-text-3);
+}
+:root[data-ec-ui='new'] .save-dot::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+:root[data-ec-ui='new'] .save-dot.saved {
+  color: var(--ec-success);
+}
+:root[data-ec-ui='new'] .save-dot.saving {
+  color: var(--ec-text-2);
+}
+:root[data-ec-ui='new'] .save-dot.error {
+  color: var(--ec-danger);
+}
+
+/* ---- overflow menu (shared look for the toolbar dropdown) ---- */
+:root[data-ec-ui='new'] .nt-menu-wrap {
+  position: relative;
+}
+:root[data-ec-ui='new'] .nt-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 900;
+  min-width: 200px;
+  background: var(--ec-surface-2);
+  border: 1px solid var(--ec-line-3);
+  border-radius: var(--ec-r-card);
+  box-shadow: var(--ec-shadow-pop);
+  padding: 6px;
+}
+:root[data-ec-ui='new'] .nt-mi {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--ec-text);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: var(--ec-r-sm);
+}
+:root[data-ec-ui='new'] .nt-mi:hover:not(:disabled) {
+  background: var(--ec-surface-3);
+}
+:root[data-ec-ui='new'] .nt-mi:disabled {
+  color: var(--ec-text-disabled);
+  cursor: default;
+}
+:root[data-ec-ui='new'] .nt-mi-sep {
+  height: 1px;
+  background: var(--ec-line-2);
+  margin: 5px 6px;
+}
+:root[data-ec-ui='new'] .nt-mi-zoom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--ec-text-2);
+}
+:root[data-ec-ui='new'] .nt-mi-zoom input[type='range'] {
+  width: 100%;
+  accent-color: var(--ec-accent);
+}

@@ -22,6 +22,8 @@ import './design/shell.css'
 import './design/panel.css'
 // P4: Silence Settings sheet (scoped; visual-only).
 import './design/silence.css'
+// P5: editor shell + top bar (scoped; visual-only).
+import './design/editor.css'
 
 // Opt-in premium redesign: mark the root so the scoped design CSS applies. OFF
 // by default → legacy UI unchanged. Set once, before first paint.

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useStore } from './store'
+import { IS_NEW_UI } from './platform'
 import Toolbar from './components/Toolbar'
+import NewToolbar from './components/NewToolbar'
 import VideoPreview from './components/VideoPreview'
 import MediaLibrary from './components/MediaLibrary'
 import ToolsPanel from './components/ToolsPanel'
@@ -25,6 +27,7 @@ export default function App(): JSX.Element {
   const showExportModal = useStore((s) => s.showExportModal)
   const editingClipId = useStore((s) => s.editingClipId)
   const finishSequenceClipEdit = useStore((s) => s.finishSequenceClipEdit)
+  const mediaCollapsed = useStore((s) => s.mediaCollapsed)
   const isMobile = useIsMobile()
 
   const [leftW, setLeftW] = useState(() => num('ec.leftW', 360))
@@ -118,9 +121,14 @@ export default function App(): JSX.Element {
 
   if (isMobile) return <MobileApp />
 
+  // Redesigned UI collapses the left media panel to a rail; legacy keeps the
+  // resizable column exactly as before.
+  const leftCollapsed = IS_NEW_UI && mediaCollapsed
+  const leftWidth = leftCollapsed ? 52 : leftW
+
   return (
     <div className="app">
-      <Toolbar />
+      {IS_NEW_UI ? <NewToolbar /> : <Toolbar />}
       {editingClipId && (
         <div
           style={{
@@ -139,10 +147,10 @@ export default function App(): JSX.Element {
         </div>
       )}
       <div className="main">
-        <div className="col-left" style={{ width: leftW }}>
+        <div className="col-left" style={{ width: leftWidth }}>
           <MediaLibrary />
         </div>
-        <div className="divider-v" onMouseDown={(e) => startColDrag(e, 'left')} />
+        {!leftCollapsed && <div className="divider-v" onMouseDown={(e) => startColDrag(e, 'left')} />}
         <div className="col-center">
           <VideoPreview />
         </div>

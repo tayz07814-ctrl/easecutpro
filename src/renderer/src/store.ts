@@ -486,6 +486,10 @@ interface AppState {
    *  only — never touches the silence-detection or Retake β engine internals. */
   smartSilenceCutter: boolean
   setSmartSilenceCutter: (v: boolean) => void
+  /** Redesigned UI only: left media panel collapsed to a rail (persisted). Pure
+   *  layout state — no effect on media, projects, or any engine. */
+  mediaCollapsed: boolean
+  setMediaCollapsed: (v: boolean) => void
   /** Retake β "Silence Settings" modal open? */
   showSilenceSettings: boolean
   setShowSilenceSettings: (v: boolean) => void
@@ -1605,6 +1609,21 @@ export const useStore = create<AppState>((set, get) => ({
       /* ignore */
     }
     set({ smartSilenceCutter: v })
+  },
+  mediaCollapsed: ((): boolean => {
+    try {
+      return localStorage.getItem('ec.mediaCollapsed') === '1'
+    } catch {
+      return false
+    }
+  })(),
+  setMediaCollapsed: (v) => {
+    try {
+      localStorage.setItem('ec.mediaCollapsed', v ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+    set({ mediaCollapsed: v })
   },
   showSilenceSettings: false,
   setShowSilenceSettings: (v) => set({ showSilenceSettings: v }),
