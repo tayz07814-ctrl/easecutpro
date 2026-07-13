@@ -1,0 +1,115 @@
+/*
+ * Easecut premium redesign — design-system FOUNDATION (P1).
+ *
+ * Contains ONLY: self-hosted web fonts + design tokens (color / type / spacing /
+ * radii / shadows) from the approved Claude Design system (screen 1e), plus a
+ * minimal base application (canvas + font) on the scoped root.
+ *
+ * Gating: every token and rule is scoped under `:root[data-ec-ui="new"]`, which
+ * is set on <html> only when VITE_NEW_EASECUT_UI=true (see platform.ts / main.tsx).
+ * With the flag OFF the selector never matches, so the legacy UI (styles.css,
+ * untouched) renders exactly as before. No component is restyled here — that is
+ * P2+. No behavioral logic lives in CSS.
+ *
+ * Fonts are self-hosted (same-origin woff2) because the app CSP is `default-src
+ * 'self'` with no font-src / remote style-src — a Google Fonts CDN link would be
+ * blocked. Vite fingerprints these under /assets so they stay same-origin.
+ */
+
+/* ---- Web fonts (self-hosted, latin subset) ---- */
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 400 700; /* variable */
+  font-display: swap;
+  src: url('./fonts/InstrumentSans-400-700-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/IBMPlexMono-400-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./fonts/IBMPlexMono-500-latin.woff2') format('woff2');
+}
+
+/* ---- Design tokens (scoped to the new UI) ---- */
+:root[data-ec-ui='new'] {
+  /* surfaces */
+  --ec-bg: #17181c; /* canvas */
+  --ec-bg-deep: #141519; /* preview well */
+  --ec-panel: #191b20;
+  --ec-surface: #1e2026;
+  --ec-surface-2: #262932;
+  --ec-surface-3: #2e3140;
+
+  /* accent + semantic */
+  --ec-accent: #6e6ae8;
+  --ec-accent-hover: #7b77ee;
+  --ec-accent-tint: #b7b5f4; /* text/icon on accent-wash */
+  --ec-info: #5b9bd9;
+  --ec-success: #46a57c;
+  --ec-success-text: #7fcba8;
+  --ec-warn: #d9a44a; /* silence */
+  --ec-danger: #d9686e; /* cut / destructive */
+  --ec-danger-text: #e09ba0;
+
+  /* text */
+  --ec-text: #e9eaee;
+  --ec-text-body: #c6c9d2; /* transcript / long-form */
+  --ec-text-2: #9ba0ac; /* secondary / metadata */
+  --ec-text-3: #686e7b; /* tertiary / hints */
+  --ec-text-disabled: #565c68;
+
+  /* hairlines / borders (white alpha) */
+  --ec-line: rgba(255, 255, 255, 0.06);
+  --ec-line-2: rgba(255, 255, 255, 0.09);
+  --ec-line-3: rgba(255, 255, 255, 0.12);
+
+  /* accent washes */
+  --ec-accent-wash: rgba(110, 106, 232, 0.14);
+  --ec-accent-wash-2: rgba(110, 106, 232, 0.28);
+  --ec-warn-wash: rgba(217, 164, 74, 0.14);
+  --ec-danger-wash: rgba(217, 104, 110, 0.13);
+  --ec-success-wash: rgba(70, 165, 124, 0.1);
+
+  /* type */
+  --ec-font-sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ec-font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* spacing scale (4-based) */
+  --ec-sp-1: 4px;
+  --ec-sp-2: 8px;
+  --ec-sp-3: 12px;
+  --ec-sp-4: 16px;
+  --ec-sp-5: 24px;
+  --ec-sp-6: 32px;
+  --ec-sp-7: 48px;
+
+  /* radii */
+  --ec-r-chip: 6px;
+  --ec-r-sm: 8px;
+  --ec-r-control: 10px;
+  --ec-r-card: 12px;
+  --ec-r-tile: 14px;
+
+  /* elevation */
+  --ec-shadow-card: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --ec-shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --ec-glow: 0 6px 20px rgba(110, 106, 232, 0.35); /* reserved for the single hero action */
+}
+
+/* ---- Minimal base application (foundation only) ----
+ * Sets the canvas + base font on the new-UI root so the foundation is real and
+ * verifiable. Component restyling is deferred to P2 — nothing else is touched. */
+:root[data-ec-ui='new'] body {
+  background: var(--ec-bg);
+  color: var(--ec-text);
+  font-family: var(--ec-font-sans);
+}

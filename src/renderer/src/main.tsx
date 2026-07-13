@@ -4,7 +4,7 @@ import App from './App'
 import AuthScreen from './components/AuthScreen'
 import HomeScreen from './components/HomeScreen'
 import { useStore } from './store'
-import { IS_WEB, IS_CLOUD } from './platform'
+import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { redactForCreator } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
@@ -13,6 +13,13 @@ import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
 import './styles.css'
+// Design-system foundation (tokens + self-hosted fonts). Scoped under
+// [data-ec-ui="new"] — inert unless the flag below marks <html>.
+import './design/tokens.css'
+
+// Opt-in premium redesign: mark the root so the scoped design CSS applies. OFF
+// by default → legacy UI unchanged. Set once, before first paint.
+if (IS_NEW_UI) document.documentElement.setAttribute('data-ec-ui', 'new')
 
 if (IS_WEB) {
   if (IS_CLOUD) installCloudApi()

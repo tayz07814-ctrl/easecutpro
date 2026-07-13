@@ -17,6 +17,13 @@ export const IS_WEB =
 // self-hosted web build.
 export const IS_CLOUD = IS_WEB && import.meta.env.VITE_CLOUD === '1'
 
+// Easecut premium redesign, gated behind an opt-in build flag. OFF by default:
+// the existing UI ships unchanged unless VITE_NEW_EASECUT_UI=true. When on,
+// main.tsx marks <html data-ec-ui="new"> and the scoped design-system CSS
+// (design/*.css) applies. Purely presentational — no engine/handler behavior
+// depends on this flag.
+export const IS_NEW_UI = import.meta.env.VITE_NEW_EASECUT_UI === 'true'
+
 /** Build a playable/streamable URL for a server- or local-side media path. */
 export function mediaSrc(p: string): string {
   if (!p) return ''
