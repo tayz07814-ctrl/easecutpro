@@ -50,7 +50,7 @@ import {
 } from '@shared/retakeaware/silence'
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
 import { positionToBox } from '@shared/overlay'
-import { mediaSrc, IS_WEB, IS_CLOUD } from './platform'
+import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject } from './projectsApi'
 import { hydrateProjectMedia } from './webapi'
@@ -479,6 +479,13 @@ interface AppState {
    *  (cloud build). One 🔇 Silence Settings modal edits this for both engines. */
   vadSilenceSettings: VadSilenceSettings
   setVadSilenceSettings: (patch: Partial<VadSilenceSettings>) => void
+  /** Smart Silence Cutter (redesigned UI only). ON (default): Retake β silence
+   *  suggestions are staged/shown/executed as normal. OFF: the engine still runs
+   *  unchanged but its silence suggestions are not staged, displayed, or executed
+   *  (already-committed project silences are left intact). Orchestration-layer
+   *  only — never touches the silence-detection or Retake β engine internals. */
+  smartSilenceCutter: boolean
+  setSmartSilenceCutter: (v: boolean) => void
   /** Retake β "Silence Settings" modal open? */
   showSilenceSettings: boolean
   setShowSilenceSettings: (v: boolean) => void
@@ -1583,6 +1590,22 @@ export const useStore = create<AppState>((set, get) => ({
     }
     set({ vadSilenceSettings: next })
   },
+  smartSilenceCutter: ((): boolean => {
+    try {
+      // Default ON; only an explicit stored "false" turns it off.
+      return localStorage.getItem('ec.smartSilence') !== 'false'
+    } catch {
+      return true
+    }
+  })(),
+  setSmartSilenceCutter: (v) => {
+    try {
+      localStorage.setItem('ec.smartSilence', v ? 'true' : 'false')
+    } catch {
+      /* ignore */
+    }
+    set({ smartSilenceCutter: v })
+  },
   showSilenceSettings: false,
   setShowSilenceSettings: (v) => set({ showSilenceSettings: v }),
 
@@ -1715,7 +1738,13 @@ export const useStore = create<AppState>((set, get) => ({
       // NOT the aggressive shared Cut Lord VAD. Stage the protected regions as
       // review-first chips; the retakeSilenceStaged flag tells Execute cuts NOT
       // to re-run the shared VAD pass over them (which would clobber the clamp).
-      const silenceRegions = res.silenceRegions ?? []
+      // Smart Silence Cutter (redesigned UI): when OFF, discard Retake β's silence
+      // suggestions here — the engine already ran unchanged, we simply don't stage
+      // them. Flag-off/legacy or toggle-ON keep the exact current behavior.
+      // retakeSilenceStaged stays true regardless so Execute never re-runs the
+      // shared VAD and re-introduces silence.
+      const includeSilence = !IS_NEW_UI || get().smartSilenceCutter
+      const silenceRegions = includeSilence ? (res.silenceRegions ?? []) : []
       set({
         project: nextProject,
         selectedWordIds: new Set(flagIds),
@@ -1868,7 +1897,11 @@ export const useStore = create<AppState>((set, get) => ({
       await get()._stageVadSilences('Execute')
     }
     const s = get()
-    const enabled = s.stagedSilences.filter((r) => s.stagedSilenceSel.has(r.id))
+    // Smart Silence Cutter OFF (new UI) must also block executing Retake β silences
+    // that were staged while it was ON. Scoped to retakeSilenceStaged so FastCut /
+    // ProCut (which set it false) are never affected; legacy (flag off) is unchanged.
+    const dropRetakeSilence = IS_NEW_UI && s.retakeSilenceStaged && !s.smartSilenceCutter
+    const enabled = dropRetakeSilence ? [] : s.stagedSilences.filter((r) => s.stagedSilenceSel.has(r.id))
     const hadWords = s.selectedWordIds.size
     if (!hadWords && !enabled.length) {
       set({ job: { active: false, percent: 0, message: 'Nothing staged — run FastCut / ProCut or select words first' } })

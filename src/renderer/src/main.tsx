@@ -18,6 +18,8 @@ import './styles.css'
 import './design/tokens.css'
 // P2: desktop shell + toolbar + panel chrome (scoped; visual-only).
 import './design/shell.css'
+// P3: Retake Cleaner panel presentation (scoped; visual-only).
+import './design/panel.css'
 
 // Opt-in premium redesign: mark the root so the scoped design CSS applies. OFF
 // by default → legacy UI unchanged. Set once, before first paint.

@@ -1,0 +1,378 @@
+/*
+ * Easecut redesign — P3: Retake Cleaner right-panel presentation.
+ * Scoped under :root[data-ec-ui="new"]; consumes the P1 tokens and inherits the
+ * P2 control system. Visual-only — all behavior is in RetakeCleanerPanel.tsx /
+ * the existing store. Legacy UI (flag off) never sees these rules.
+ */
+
+:root[data-ec-ui='new'] .rc-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 16px 22px;
+  color: var(--ec-text);
+}
+
+/* header */
+:root[data-ec-ui='new'] .rc-head {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+:root[data-ec-ui='new'] .rc-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+:root[data-ec-ui='new'] .rc-beta {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--ec-text-2);
+  border: 1px solid var(--ec-line-3);
+  border-radius: 5px;
+  padding: 2px 6px;
+}
+:root[data-ec-ui='new'] .rc-sub {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ec-text-2);
+}
+:root[data-ec-ui='new'] .rc-note,
+:root[data-ec-ui='new'] .rc-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ec-text-3);
+}
+:root[data-ec-ui='new'] .rc-hint {
+  text-align: center;
+}
+:root[data-ec-ui='new'] .rc-mono {
+  font-family: var(--ec-font-mono);
+  font-size: 11px;
+  color: var(--ec-text-2);
+}
+
+/* cards */
+:root[data-ec-ui='new'] .rc-card {
+  background: var(--ec-surface);
+  border: 1px solid var(--ec-line-2);
+  border-radius: var(--ec-r-card);
+  padding: 14px;
+}
+
+/* full-width buttons (inherit the P2 button system; just size + hero glow here) */
+:root[data-ec-ui='new'] .rc-hero,
+:root[data-ec-ui='new'] .rc-secondary,
+:root[data-ec-ui='new'] .rc-execute,
+:root[data-ec-ui='new'] .rc-run-again {
+  width: 100%;
+  padding: 11px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+/* the single hero action per screen carries the reserved glow */
+:root[data-ec-ui='new'] .rc-hero {
+  box-shadow: var(--ec-glow);
+}
+:root[data-ec-ui='new'] .rc-run-again {
+  margin-top: 2px;
+  background: none;
+  border: 1px dashed var(--ec-line-3);
+  color: var(--ec-text-2);
+  font-weight: 500;
+}
+:root[data-ec-ui='new'] .rc-actions {
+  display: flex;
+  gap: 8px;
+}
+:root[data-ec-ui='new'] .rc-actions button {
+  flex: 1;
+  padding: 10px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+:root[data-ec-ui='new'] .rc-actions .rc-secondary {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+}
+
+/* Smart Silence toggle */
+:root[data-ec-ui='new'] .rc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ec-text-body);
+}
+:root[data-ec-ui='new'] .rc-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+:root[data-ec-ui='new'] .rc-toggle-track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--ec-surface-3);
+  transition: background 0.14s ease;
+}
+:root[data-ec-ui='new'] .rc-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ec-text-2);
+  transition: transform 0.14s ease, background 0.14s ease;
+}
+:root[data-ec-ui='new'] .rc-toggle input:checked + .rc-toggle-track {
+  background: var(--ec-accent);
+}
+:root[data-ec-ui='new'] .rc-toggle input:checked + .rc-toggle-track .rc-toggle-knob {
+  transform: translateX(14px);
+  background: #fff;
+}
+:root[data-ec-ui='new'] .rc-toggle input:focus-visible + .rc-toggle-track {
+  outline: 2px solid var(--ec-accent);
+  outline-offset: 2px;
+}
+
+/* analyzing */
+:root[data-ec-ui='new'] .rc-row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+}
+:root[data-ec-ui='new'] .rc-analyzing-msg {
+  color: var(--ec-text);
+  font-weight: 550;
+}
+:root[data-ec-ui='new'] .rc-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ec-surface-3);
+  overflow: hidden;
+  margin-top: 12px;
+}
+:root[data-ec-ui='new'] .rc-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--ec-accent);
+  transition: width 0.3s ease;
+}
+:root[data-ec-ui='new'] .rc-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 14px;
+  font-size: 12px;
+}
+:root[data-ec-ui='new'] .rc-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ec-text-3);
+}
+:root[data-ec-ui='new'] .rc-step.on {
+  color: var(--ec-text);
+}
+:root[data-ec-ui='new'] .rc-step.done {
+  color: var(--ec-success);
+}
+:root[data-ec-ui='new'] .rc-step-dot {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: 8px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+}
+:root[data-ec-ui='new'] .rc-step.done .rc-step-dot {
+  border-color: transparent;
+  background: var(--ec-success-wash);
+}
+
+/* success + error cards */
+:root[data-ec-ui='new'] .rc-success,
+:root[data-ec-ui='new'] .rc-error {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+:root[data-ec-ui='new'] .rc-success {
+  background: var(--ec-success-wash);
+  border-color: rgba(70, 165, 124, 0.25);
+}
+:root[data-ec-ui='new'] .rc-error {
+  background: rgba(217, 104, 110, 0.07);
+  border-color: rgba(217, 104, 110, 0.25);
+}
+:root[data-ec-ui='new'] .rc-success-icon,
+:root[data-ec-ui='new'] .rc-error-icon {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+}
+:root[data-ec-ui='new'] .rc-success-icon {
+  background: rgba(70, 165, 124, 0.18);
+  color: var(--ec-success-text);
+}
+:root[data-ec-ui='new'] .rc-error-icon {
+  background: rgba(217, 104, 110, 0.16);
+  color: var(--ec-danger-text);
+}
+:root[data-ec-ui='new'] .rc-success-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ec-success-text);
+}
+:root[data-ec-ui='new'] .rc-error-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ec-danger-text);
+}
+:root[data-ec-ui='new'] .rc-success-msg,
+:root[data-ec-ui='new'] .rc-error-msg {
+  font-size: 12px;
+  color: var(--ec-text-2);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+/* summary stats */
+:root[data-ec-ui='new'] .rc-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+}
+:root[data-ec-ui='new'] .rc-stat-n {
+  font-size: 17px;
+  font-weight: 650;
+}
+:root[data-ec-ui='new'] .rc-stat-n.cut {
+  color: var(--ec-danger-text);
+}
+:root[data-ec-ui='new'] .rc-stat-n.sil {
+  color: var(--ec-warn);
+}
+:root[data-ec-ui='new'] .rc-stat-n.ok {
+  color: var(--ec-success);
+}
+:root[data-ec-ui='new'] .rc-stat-l {
+  font-size: 11px;
+  color: var(--ec-text-2);
+  margin-top: 2px;
+}
+
+/* review header */
+:root[data-ec-ui='new'] .rc-review-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ec-line);
+}
+:root[data-ec-ui='new'] .rc-review-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ec-text-2);
+}
+:root[data-ec-ui='new'] .rc-spacer {
+  flex: 1;
+}
+:root[data-ec-ui='new'] .rc-review-hint {
+  font-size: 11.5px;
+  color: var(--ec-text-3);
+  line-height: 1.5;
+}
+:root[data-ec-ui='new'] .rc-link {
+  background: none;
+  border: none;
+  color: var(--ec-text-2);
+  font-size: 11.5px;
+  padding: 4px 8px;
+  border-radius: 7px;
+}
+:root[data-ec-ui='new'] .rc-link:hover:not(:disabled) {
+  background: var(--ec-surface-2);
+  color: var(--ec-text);
+}
+
+/* transcript */
+:root[data-ec-ui='new'] .rc-transcript {
+  font-size: 13.5px;
+  line-height: 2.1;
+  color: var(--ec-text-body);
+}
+:root[data-ec-ui='new'] .rc-seg {
+  margin: 0 0 8px;
+}
+:root[data-ec-ui='new'] .rc-w {
+  cursor: pointer;
+  border-radius: 5px;
+  padding: 1px 2px;
+  transition: background 0.1s ease;
+}
+:root[data-ec-ui='new'] .rc-w:hover {
+  background: var(--ec-surface-2);
+}
+:root[data-ec-ui='new'] .rc-w.active {
+  background: var(--ec-accent-wash);
+  color: var(--ec-text);
+}
+:root[data-ec-ui='new'] .rc-w.cut {
+  background: var(--ec-danger-wash);
+  color: var(--ec-danger-text);
+  text-decoration: line-through;
+  text-decoration-color: rgba(217, 134, 139, 0.55);
+}
+:root[data-ec-ui='new'] .rc-w.deleted {
+  color: var(--ec-text-3);
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* silence chips */
+:root[data-ec-ui='new'] .rc-chip {
+  display: inline-block;
+  font-family: var(--ec-font-mono);
+  font-size: 10px;
+  color: var(--ec-warn);
+  background: var(--ec-warn-wash);
+  border: 1px solid rgba(217, 164, 74, 0.3);
+  border-radius: 6px;
+  padding: 2px 7px;
+  margin: 0 3px;
+  white-space: nowrap;
+  cursor: pointer;
+  vertical-align: middle;
+}
+:root[data-ec-ui='new'] .rc-chip.applied {
+  color: var(--ec-text-3);
+  background: none;
+  border-color: var(--ec-line-2);
+  cursor: default;
+  text-decoration: line-through;
+}
+:root[data-ec-ui='new'] .rc-chip.staged:not(.on) {
+  opacity: 0.45;
+  text-decoration: line-through;
+}

@@ -1,52 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { IS_CLOUD } from '../platform'
+import { IS_CLOUD, IS_NEW_UI } from '../platform'
+import RetakeCleanerPanel from './RetakeCleanerPanel'
 import { buildSilenceChips, CUTLORD_PRESETS, type CutLordMode } from '@shared/cutlord'
 import type { Word } from '@shared/types'
 import { useSharedEngineSnapshot } from '../timelineEngine'
-import { mainTrackId } from '@shared/timeline/model'
-import { secondsToFrames, framesToSeconds } from '@shared/timeline/time'
-import type { TimelineDocument } from '@shared/timeline/types'
+import { docEditedToSource, docSourceToEdited } from '../docTime'
 import OverlayPanel from './OverlayPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import VadSilenceSettingsModal from './VadSilenceSettingsModal'
-
-/**
- * A single-source doc timeline runs the store playhead in EDITED time, but the
- * transcript words stay in SOURCE time — so `playhead >= w.start` drifts by the
- * cut amount and the highlighted word lags the audio. These map between the two
- * through the main lane. Montage (multiple source files) keeps the words' own
- * domain, so both return the value unchanged there (and in legacy mode).
- */
-function docMainSingleSource(doc: TimelineDocument): TimelineDocument['tracks'][number] | null {
-  const mainId = mainTrackId(doc)
-  const main = mainId ? doc.tracks.find((t) => t.id === mainId) : undefined
-  if (!main || !main.clips.length) return null
-  return new Set(main.clips.map((c) => c.sourcePath)).size === 1 ? main : null
-}
-function docEditedToSource(doc: TimelineDocument | undefined, editedSec: number): number {
-  const main = doc ? docMainSingleSource(doc) : null
-  if (!doc || !main) return editedSec
-  const f = secondsToFrames(editedSec, doc.timebase)
-  const clips = [...main.clips].sort((a, b) => a.start - b.start)
-  const clip = clips.find((c) => f >= c.start && f < c.end) ?? clips[clips.length - 1]
-  const span = clip.sourceOut - clip.sourceIn
-  return clip.duration > 0 ? clip.sourceIn + ((f - clip.start) / clip.duration) * span : editedSec
-}
-function docSourceToEdited(doc: TimelineDocument | undefined, srcSec: number): number {
-  const main = doc ? docMainSingleSource(doc) : null
-  if (!doc || !main) return srcSec
-  const clips = [...main.clips].sort((a, b) => a.start - b.start)
-  const clip = clips.find((c) => srcSec >= c.sourceIn && srcSec < c.sourceOut)
-  if (!clip) {
-    // the word was cut out: seek to the first kept clip that starts after it.
-    const after = clips.find((c) => c.sourceIn >= srcSec) ?? clips[clips.length - 1]
-    return framesToSeconds(after.start, doc.timebase)
-  }
-  const span = clip.sourceOut - clip.sourceIn
-  const frac = span > 0 ? (srcSec - clip.sourceIn) / span : 0
-  return framesToSeconds(clip.start + frac * clip.duration, doc.timebase)
-}
 
 /**
  * Cut Lord — the all-in-one cleanup panel (formerly "Transcript").
@@ -56,6 +18,11 @@ function docSourceToEdited(doc: TimelineDocument | undefined, srcSec: number): n
  * Tab 2 Auto Zoom & B-roll: zoom keyframes + the AI overlay (B-roll) tools.
  */
 export default function TranscriptPanel(): JSX.Element {
+  // Redesigned UI (opt-in flag): the whole panel becomes the Retake Cleaner. The
+  // legacy path below is untouched. IS_NEW_UI is a build-time constant, so this
+  // early return is stable for the app's lifetime (no hooks-order concern).
+  if (IS_NEW_UI) return <RetakeCleanerPanel />
+
   const [clTab, setClTab] = useState<'clutter' | 'zoom'>('clutter')
 
   return (

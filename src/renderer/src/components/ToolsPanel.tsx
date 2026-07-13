@@ -1,4 +1,5 @@
 import { useStore } from '../store'
+import { IS_NEW_UI } from '../platform'
 import TranscriptPanel from './TranscriptPanel'
 import BasicPanel from './BasicPanel'
 import SilencePanel from './SilencePanel'
@@ -6,13 +7,15 @@ import OstPanel from './OstPanel'
 import TextPanel from './TextPanel'
 import OverlayPanel from './OverlayPanel'
 
+// Tab IDs and handlers are unchanged; only the display labels are refreshed under
+// the redesigned UI (VITE_NEW_EASECUT_UI). Legacy labels stay put when the flag is off.
 const TABS: { id: 'transcript' | 'basic' | 'text' | 'silence' | 'ost' | 'overlays'; label: string }[] = [
-  { id: 'transcript', label: 'Cut Lord' },
-  { id: 'basic', label: 'Basic' },
+  { id: 'transcript', label: IS_NEW_UI ? 'AI Cut' : 'Cut Lord' },
+  { id: 'basic', label: IS_NEW_UI ? 'Edit' : 'Basic' },
   { id: 'text', label: 'Text' },
   { id: 'overlays', label: 'Overlays' },
   { id: 'silence', label: 'Silence' },
-  { id: 'ost', label: 'OST' }
+  { id: 'ost', label: IS_NEW_UI ? 'Audio' : 'OST' }
 ]
 
 export default function ToolsPanel(): JSX.Element {
