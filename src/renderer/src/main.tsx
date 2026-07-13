@@ -5,6 +5,7 @@ import AuthScreen from './components/AuthScreen'
 import HomeScreen from './components/HomeScreen'
 import { useStore } from './store'
 import { IS_WEB, IS_CLOUD } from './platform'
+import { redactForCreator } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
 import { cloudAuthMe } from './cloud/auth'
@@ -25,13 +26,26 @@ if (IS_WEB) {
   const showErr = (label: string, err: unknown): void => {
     try {
       const e = err as Error | undefined
+      // Full detail ALWAYS goes to the console (developer remote-debugging), never
+      // gated — only what renders on-screen is masked.
+      try {
+        console.error('[ec]', label, err)
+      } catch {
+        /* console unavailable */
+      }
       // Safari's Error.stack lists frames but OMITS the message line, so always
       // show the message FIRST — otherwise we see where it threw, not WHAT failed.
       const message = (e && e.message) || String(err)
       const stack = (e && e.stack) || ''
-      const msg = stack && !stack.startsWith(message) ? `${message}\n${stack}` : stack || message
-      if (seenErr.has(msg)) return
-      seenErr.add(msg)
+      // Beta ship (cloud): mask everything confidential — creators see a redacted
+      // one-liner, NO stack/paths/URLs/vendor names. Desktop/self-host: full detail.
+      const msg = IS_CLOUD
+        ? redactForCreator(message) || 'Something went wrong — please try again.'
+        : stack && !stack.startsWith(message)
+          ? `${message}\n${stack}`
+          : stack || message
+      if (seenErr.has(label + '|' + msg)) return
+      seenErr.add(label + '|' + msg)
       let box = document.getElementById('ec-err')
       if (!box) {
         box = document.createElement('div')
@@ -63,8 +77,10 @@ if (IS_WEB) {
   window.addEventListener('error', (e) => showErr('Error', e.error || e.message))
   // Surface failed async ops in the status bar (clear a stuck spinner) AND on-screen.
   window.addEventListener('unhandledrejection', (e) => {
-    const msg = (e.reason && (e.reason.message || String(e.reason))) || 'Unknown error'
-    useStore.setState({ job: { active: false, percent: 0, message: `Error: ${msg}` } })
+    // Clear a stuck spinner; keep the raw reason OFF the creator's screen in cloud.
+    useStore.setState({
+      job: { active: false, percent: 0, message: IS_CLOUD ? 'Something went wrong — please try again.' : `Error: ${(e.reason && (e.reason.message || String(e.reason))) || 'Unknown error'}` }
+    })
     showErr('Async error', e.reason)
   })
 

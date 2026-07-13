@@ -51,6 +51,7 @@ import {
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
 import { positionToBox } from '@shared/overlay'
 import { mediaSrc, IS_WEB, IS_CLOUD } from './platform'
+import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject } from './projectsApi'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideo } from './batchClean'
@@ -939,7 +940,7 @@ export const useStore = create<AppState>((set, get) => ({
       window.api.waveform(info.path).then((wf) => set({ waveform: wf })).catch(() => undefined)
       window.api.thumbnails(info.path).then((t) => set({ thumbnails: t })).catch(() => undefined)
     } catch (e) {
-      set({ job: { active: false, percent: 0, message: `Combine failed: ${(e as Error).message}` } })
+      set({ job: { active: false, percent: 0, message: `Combine failed: ${safeErrMessage(e)}` } })
     }
   },
 
@@ -1670,7 +1671,7 @@ export const useStore = create<AppState>((set, get) => ({
         await get()._stageVadSilences('ProCut', res.silenceAdds)
       }
     } catch (e) {
-      set({ job: { active: false, percent: 0, message: `ProCut failed: ${(e as Error).message}` } })
+      set({ job: { active: false, percent: 0, message: `ProCut failed: ${safeErrMessage(e)}` } })
     }
   },
 
@@ -1804,7 +1805,7 @@ export const useStore = create<AppState>((set, get) => ({
       set((s) => ({ project: { ...s.project, transcript } }))
       return true
     } catch (e) {
-      set({ job: { active: false, percent: 0, message: `Transcription failed: ${(e as Error).message}` } })
+      set({ job: { active: false, percent: 0, message: `Transcription failed: ${safeErrMessage(e)}` } })
       return false
     }
   },
@@ -1850,7 +1851,7 @@ export const useStore = create<AppState>((set, get) => ({
       })
     } catch (e) {
       // Silence staging must never kill the word results.
-      set({ job: { active: false, percent: 0, message: `${label}: silence scan failed (${(e as Error).message}) — word flags kept` } })
+      set({ job: { active: false, percent: 0, message: `${label}: silence scan failed (${safeErrMessage(e)}) — word flags kept` } })
     }
   },
 
@@ -1993,7 +1994,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }))
     } catch (e) {
-      set({ job: { active: false, percent: 0, message: `Smart Smooth Cut failed: ${(e as Error).message}` } })
+      set({ job: { active: false, percent: 0, message: `Smart Smooth Cut failed: ${safeErrMessage(e)}` } })
     }
   },
 
@@ -2682,7 +2683,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 100, message: `Saved ${name} to this device` } })
     } catch (e) {
       set({
-        job: { active: false, percent: 0, message: `On-device export: ${(e as Error).message} — use the normal Export instead` }
+        job: { active: false, percent: 0, message: `On-device export: ${safeErrMessage(e)} — use the normal Export instead` }
       })
     }
   },
@@ -2704,7 +2705,7 @@ export const useStore = create<AppState>((set, get) => ({
       const out = await window.api.exportProject(project, settings, textOverlays)
       set({ job: { active: false, percent: 100, message: out ? `Exported: ${out}` : 'Export canceled' } })
     } catch (e) {
-      set({ job: { active: false, percent: 0, message: `Export failed: ${(e as Error).message}` } })
+      set({ job: { active: false, percent: 0, message: `Export failed: ${safeErrMessage(e)}` } })
     }
   },
 
@@ -2721,7 +2722,7 @@ export const useStore = create<AppState>((set, get) => ({
         await saveProject(currentProjectId, { project: serialized, name: project.name })
         set({ job: { active: false, percent: 100, message: 'Project + media saved to the PC' } })
       } catch (e) {
-        set({ job: { active: false, percent: 0, message: `Save failed: ${(e as Error).message}` } })
+        set({ job: { active: false, percent: 0, message: `Save failed: ${safeErrMessage(e)}` } })
       }
       return
     }

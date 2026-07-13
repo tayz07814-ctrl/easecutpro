@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import { authLogin, authSignup, authMe } from '../webapi'
 import { cloudLogin, cloudSignup } from '../cloud/auth'
 import { IS_CLOUD } from '../platform'
+import { safeErrMessage } from '../safeError'
 
 export default function AuthScreen(): JSX.Element {
   const setUser = useStore((s) => s.setUser)
@@ -36,7 +37,7 @@ export default function AuthScreen(): JSX.Element {
       setUser(user)
       setView('home')
     } catch (e) {
-      setErr((e as Error).message)
+      setErr(safeErrMessage(e))
     } finally {
       setBusy(false)
     }
