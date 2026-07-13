@@ -57,6 +57,19 @@
   font-family: var(--ec-sans);
 }
 
+/* Inputs used to make static design labels functional (search, rename, sliders)
+   inherit the design's typography and use the tertiary token for placeholders,
+   so converting a label to an <input> introduces no visual drift. */
+.ec-newui input,
+.ec-newui textarea {
+  font-family: var(--ec-sans);
+}
+.ec-newui input::placeholder,
+.ec-newui textarea::placeholder {
+  color: var(--ec-text-3);
+  opacity: 1;
+}
+
 /* Gallery framing for isolated state cards (screens 1c/1d). Mirrors the design
    canvas .dv-card chrome. Background is set per-card inline, so not here. */
 .ec-newui .dc-card {
