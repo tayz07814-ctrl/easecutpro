@@ -52,7 +52,12 @@ export default defineConfig(({ mode }) => {
     publicDir: resolve(__dirname, '.cloud-public'),
     define: {
       // Hard-bake the cloud flag — IS_CLOUD gates compile away in other builds.
-      'import.meta.env.VITE_CLOUD': JSON.stringify('1')
+      'import.meta.env.VITE_CLOUD': JSON.stringify('1'),
+      // Premium redesign is LIVE on the cloud build by default. Still overridable:
+      // set VITE_NEW_EASECUT_UI=false in the Vercel env (+ redeploy) to fall back
+      // to the legacy UI. The Electron/self-host builds are unaffected and stay on
+      // the legacy UI unless the var is explicitly 'true'.
+      'import.meta.env.VITE_NEW_EASECUT_UI': JSON.stringify(env.VITE_NEW_EASECUT_UI ?? 'true')
     },
     build: {
       outDir: resolve(__dirname, 'dist-cloud'),
