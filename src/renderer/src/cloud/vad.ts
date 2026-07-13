@@ -212,7 +212,8 @@ export async function detectSilenceCloud(mediaId: string, opts: SilenceDetectOpt
 export function clampSilenceRegions(
   raw: { start: number; end: number }[],
   keptWords: { start: number; end: number }[],
-  idPrefix = 'vadsil'
+  idPrefix = 'vadsil',
+  durationS = 0
 ): SilenceRegion[] {
   const clamp = (a: number, b: number): { start: number; end: number } => {
     let cs = a
@@ -224,6 +225,10 @@ export function clampSilenceRegions(
     return { start: cs, end: ce }
   }
   return raw
+    // KEEP the head + tail: never auto-cut the LEADING silence (the quiet intro
+    // before the first word — cutting it dropped the first 1–2s on export) or the
+    // TRAILING silence (the outro). Only silence BETWEEN speech is trimmed.
+    .filter((r) => r.start > 0.15 && !(durationS > 0 && r.end >= durationS - 0.15))
     .map((r) => clamp(r.start, r.end))
     .filter((r) => r.end - r.start > 0.05)
     .map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
@@ -238,5 +243,5 @@ export async function vadSilenceRegions(
   idPrefix = 'vadsil'
 ): Promise<SilenceRegion[]> {
   const raw = await detectSilenceFloat32(float32, sampleRate, vadSilenceToOpts(settings), durationS)
-  return clampSilenceRegions(raw, keptWords, idPrefix)
+  return clampSilenceRegions(raw, keptWords, idPrefix, durationS)
 }
