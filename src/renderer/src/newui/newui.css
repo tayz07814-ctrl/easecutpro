@@ -1,0 +1,67 @@
+/* New Easecut UI — ported from the approved Claude Design (project
+   "Easecut Premium Redesign", file "Easecut Redesign.dc.html").
+
+   The design canvas renders with the browser-default box model
+   (content-box) — support.js applies NO global box-sizing reset. To
+   reproduce it pixel-exactly we scope content-box to the new-UI subtree,
+   overriding the app's global border-box. Colors/spacing come verbatim
+   from each element's inline style (see css.ts); tokens below are the
+   documented 1e palette, kept for Stage C migration and reference. */
+
+.ec-newui {
+  /* palette (screen 1e) */
+  --ec-bg: #17181c;
+  --ec-panel: #191b20;
+  --ec-surface: #1e2026;
+  --ec-surface-2: #262932;
+  --ec-accent: #6e6ae8;
+  --ec-accent-hover: #7b77ee;
+  --ec-accent-light: #b7b5f4;
+  --ec-accent-link: #8b88f0;
+  --ec-info: #5b9bd9;
+  --ec-success: #46a57c;
+  --ec-warn: #d9a44a;
+  --ec-cut: #d9686e;
+  --ec-cut-light: #d9868b;
+  --ec-text: #e9eaee;
+  --ec-text-2: #9ba0ac;
+  --ec-text-3: #686e7b;
+  --ec-sans: 'Instrument Sans', system-ui, sans-serif;
+  --ec-mono: 'IBM Plex Mono', monospace;
+
+  font-family: var(--ec-sans);
+  color: var(--ec-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Match the design's box model exactly, scoped to the new UI only. The design
+   canvas has NO author box-sizing reset, so it renders on pure UA defaults:
+   content-box for normal elements, border-box for form controls. We reproduce
+   that inside the app (whose global `*{box-sizing:border-box}` would otherwise
+   leak in) by resetting to content-box, then restoring border-box on controls. */
+.ec-newui,
+.ec-newui *,
+.ec-newui *::before,
+.ec-newui *::after {
+  box-sizing: content-box;
+}
+.ec-newui button,
+.ec-newui input,
+.ec-newui select,
+.ec-newui textarea {
+  box-sizing: border-box;
+}
+
+.ec-newui button {
+  font-family: var(--ec-sans);
+}
+
+/* Gallery framing for isolated state cards (screens 1c/1d). Mirrors the design
+   canvas .dv-card chrome. Background is set per-card inline, so not here. */
+.ec-newui .dc-card {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
