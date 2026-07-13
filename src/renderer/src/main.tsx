@@ -24,6 +24,8 @@ import './design/panel.css'
 import './design/silence.css'
 // P5: editor shell + top bar (scoped; visual-only).
 import './design/editor.css'
+// P6: media library (scoped; visual-only).
+import './design/media.css'
 
 // Opt-in premium redesign: mark the root so the scoped design CSS applies. OFF
 // by default → legacy UI unchanged. Set once, before first paint.

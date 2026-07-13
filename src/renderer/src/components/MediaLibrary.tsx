@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useStore } from '../store'
-import { mediaSrc, IS_CLOUD } from '../platform'
+import { mediaSrc, IS_CLOUD, IS_NEW_UI } from '../platform'
 import { insertLibraryItemAtPlayhead } from '../timelineInsert'
 import type { LibraryItem } from '@shared/types'
+import NewMediaLibrary from './NewMediaLibrary'
 
 function fmtDur(s: number): string {
   if (!s || s < 0) return ''
@@ -18,6 +19,11 @@ const KIND_ICON: Record<LibraryItem['kind'], string> = {
 }
 
 export default function MediaLibrary(): JSX.Element {
+  // Redesigned UI (opt-in flag): the whole panel becomes NewMediaLibrary. The
+  // legacy panel below is untouched. IS_NEW_UI is a build-time constant, so the
+  // early return is stable for the app's lifetime (no hooks-order concern).
+  if (IS_NEW_UI) return <NewMediaLibrary />
+
   const library = useStore((s) => s.library)
   const addToLibrary = useStore((s) => s.addToLibrary)
   const importFolderToLibrary = useStore((s) => s.importFolderToLibrary)
