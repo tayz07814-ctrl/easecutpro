@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { css } from '../css'
 import { useStore } from '../../store'
@@ -34,6 +34,20 @@ const SAVE_UI: Record<string, { c: string; t: string }> = {
   saved: { c: '#46A57C', t: 'Saved' },
   saving: { c: '#D9A44A', t: 'Saving…' },
   error: { c: '#D9686E', t: 'Save failed' }
+}
+
+// Persisted panel sizes for the drag handles below. Namespaced ec.nu.* so they
+// never collide with the legacy editor's own ec.leftW / ec.rightW / ec.timelineH.
+function num(key: string, def: number): number {
+  try {
+    const v = Number(localStorage.getItem(key))
+    return v > 0 ? v : def
+  } catch {
+    return def
+  }
+}
+function clampN(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v))
 }
 
 function TopBar(): JSX.Element {
@@ -111,7 +125,7 @@ function MediaClip({ item, isBase, onSetBase, onRemove }: { item: LibraryItem; i
   )
 }
 
-function MediaPanel(): JSX.Element {
+function MediaPanel({ width }: { width: number }): JSX.Element {
   const library = useStore((s) => s.library)
   const basePath = useStore((s) => s.project.media?.path)
   const addToLibrary = useStore((s) => s.addToLibrary)
@@ -123,7 +137,7 @@ function MediaPanel(): JSX.Element {
   const items = q ? library.filter((it) => it.name.toLowerCase().includes(q)) : library
 
   return (
-    <div style={css(`width:264px;flex:none;border-right:1px solid ${HAIR};display:flex;flex-direction:column;background:#191B20`)}>
+    <div style={css(`width:${width}px;flex:none;display:flex;flex-direction:column;background:#191B20`)}>
       <div style={css('display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px')}>
         <div style={css('font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Media</div>
         <div style={css('font-size:13px;color:#686E7B;cursor:pointer')}>⟨</div>
@@ -160,10 +174,10 @@ function MediaPanel(): JSX.Element {
 // honest placeholder rather than mounting off-design legacy panels.
 const AI_TABS = ['AI Cut', 'Edit', 'Text', 'Overlays', 'Audio'] as const
 
-function AiPanel(): JSX.Element {
+function AiPanel({ width }: { width: number }): JSX.Element {
   const [tab, setTab] = useState<(typeof AI_TABS)[number]>('AI Cut')
   return (
-    <div style={css(`width:360px;flex:none;border-left:1px solid ${HAIR};display:flex;flex-direction:column;background:#191B20`)}>
+    <div style={css(`width:${width}px;flex:none;display:flex;flex-direction:column;background:#191B20`)}>
       <div style={css(`display:flex;padding:0 8px;border-bottom:1px solid ${HAIR};flex:none`)}>
         {AI_TABS.map((t) =>
           t === tab ? (
@@ -187,11 +201,55 @@ function AiPanel(): JSX.Element {
 export default function Editor(): JSX.Element {
   const showExportModal = useStore((s) => s.showExportModal)
   const showSettings = useStore((s) => s.showSettings)
+
+  // Creator-resizable panels (drag handles below), persisted per browser.
+  const [leftW, setLeftW] = useState(() => num('ec.nu.leftW', 264))
+  const [rightW, setRightW] = useState(() => num('ec.nu.rightW', 360))
+  const [timelineH, setTimelineH] = useState(() => num('ec.nu.timelineH', 300))
+  useEffect(() => { try { localStorage.setItem('ec.nu.leftW', String(leftW)) } catch { /* ignore */ } }, [leftW])
+  useEffect(() => { try { localStorage.setItem('ec.nu.rightW', String(rightW)) } catch { /* ignore */ } }, [rightW])
+  useEffect(() => { try { localStorage.setItem('ec.nu.timelineH', String(timelineH)) } catch { /* ignore */ } }, [timelineH])
+
+  // Pointer drag (mouse + touch): lock the cursor and kill text selection for the
+  // whole gesture so the drag reads smoothly and doesn't highlight the UI.
+  function beginDrag(cursor: string, onMove: (e: PointerEvent) => void): void {
+    const prevCursor = document.body.style.cursor
+    const prevSelect = document.body.style.userSelect
+    document.body.style.cursor = cursor
+    document.body.style.userSelect = 'none'
+    function onUp(): void {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevSelect
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+  function startColDrag(e: ReactPointerEvent, which: 'left' | 'right'): void {
+    e.preventDefault()
+    const startX = e.clientX
+    const l0 = leftW
+    const r0 = rightW
+    beginDrag('col-resize', (ev) => {
+      const dx = ev.clientX - startX
+      if (which === 'left') setLeftW(clampN(l0 + dx, 200, 480))
+      else setRightW(clampN(r0 - dx, 300, 560))
+    })
+  }
+  function startRowDrag(e: ReactPointerEvent): void {
+    e.preventDefault()
+    const startY = e.clientY
+    const h0 = timelineH
+    beginDrag('row-resize', (ev) => setTimelineH(clampN(h0 - (ev.clientY - startY), 160, 620)))
+  }
+
   return (
     <div style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column')} className="ec-newui ec-editor">
       <TopBar />
       <div style={css('display:flex;flex:1;min-height:0')}>
-        <MediaPanel />
+        <MediaPanel width={leftW} />
+        <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'left')} title="Drag to resize" />
         {/* Live editor core — the production preview. `.ec-legacy` restores the
             app's border-box model (the .ec-newui content-box reset would leak in
             and break the legacy layout). It reads the SAME shared timeline engine
@@ -199,12 +257,14 @@ export default function Editor(): JSX.Element {
         <div className="ec-legacy" style={css('flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:#000')}>
           <VideoPreview />
         </div>
-        <AiPanel />
+        <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'right')} title="Drag to resize" />
+        <AiPanel width={rightW} />
       </div>
+      <div className="ec-divh" onPointerDown={startRowDrag} title="Drag to resize" />
       {/* Live editor core — the production timeline. Publishes the timeline engine
           that the preview + export read, so drag/trim/split and word/silence cuts
           all stay consistent (exactly the live app's behavior). */}
-      <div className="ec-legacy timeline-host" style={css(`flex:none;height:300px;min-height:0;border-top:1px solid ${HAIR}`)}>
+      <div className="ec-legacy timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0`)}>
         <TimelinePanel />
       </div>
       <SilenceSettingsModal />

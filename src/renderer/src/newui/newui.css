@@ -107,6 +107,56 @@
   opacity: 1;
 }
 
+/* Resizable-panel drag handles for the new editor (screens/Editor.tsx). A
+   hairline at rest that becomes the design accent on hover/drag; they replace the
+   media/AI panels' static borders and the timeline's top border. */
+.ec-newui .ec-divv {
+  width: 6px;
+  flex: none;
+  cursor: col-resize;
+  position: relative;
+  z-index: 2;
+  touch-action: none;
+}
+.ec-newui .ec-divv::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  transition: background 0.12s, width 0.12s;
+}
+.ec-newui .ec-divv:hover::after,
+.ec-newui .ec-divv:active::after {
+  background: #6e6ae8;
+  width: 2px;
+}
+.ec-newui .ec-divh {
+  height: 6px;
+  flex: none;
+  cursor: row-resize;
+  position: relative;
+  z-index: 2;
+  touch-action: none;
+}
+.ec-newui .ec-divh::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  transition: background 0.12s, height 0.12s;
+}
+.ec-newui .ec-divh:hover::after,
+.ec-newui .ec-divh:active::after {
+  background: #6e6ae8;
+  height: 2px;
+}
+
 /* Gallery framing for isolated state cards (screens 1c/1d). Mirrors the design
    canvas .dv-card chrome. Background is set per-card inline, so not here. */
 .ec-newui .dc-card {
