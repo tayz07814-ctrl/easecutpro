@@ -73,6 +73,8 @@ export default function SilenceSettingsModal(): JSX.Element | null {
   const tile = 'border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 14px;cursor:pointer'
   const tileDesc = 'font-size:11.5px;color:#9BA0AC;margin-top:4px;line-height:1.45'
   const sel = (p: Preset): boolean => view === p
+  const descOf = (id: 'conservative' | 'balanced' | 'aggressive'): string =>
+    sil.presets.find((p) => p.id === id)?.blurb ?? ''
 
   return (
     <div onClick={sil.close} style={css('position:fixed;inset:0;background:rgba(10,11,14,.55);display:grid;place-items:center;z-index:1000')}>
@@ -83,17 +85,17 @@ export default function SilenceSettingsModal(): JSX.Element | null {
             <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px')}>
               <div onClick={() => pick('conservative')} style={css(sel('conservative') ? 'border:1.5px solid #6E6AE8;border-radius:12px;padding:13px 14px;background:rgba(110,106,232,.07);cursor:pointer;position:relative' : tile)}>
                 <div style={css(sel('conservative') ? 'font-size:13px;font-weight:600;color:#B7B5F4' : 'font-size:13px;font-weight:600')}>Conservative</div>
-                <div style={css(tileDesc)}>Only trims pauses longer than 2 seconds</div>
+                <div style={css(tileDesc)}>{descOf('conservative')}</div>
                 {sel('conservative') && <div style={css('position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;background:#6E6AE8;display:grid;place-items:center;color:#fff;font-size:8px')}>✓</div>}
               </div>
               <div onClick={() => pick('balanced')} style={css(sel('balanced') ? 'border:1.5px solid #6E6AE8;border-radius:12px;padding:13px 14px;background:rgba(110,106,232,.07);cursor:pointer;position:relative' : tile)}>
                 <div style={css(sel('balanced') ? 'font-size:13px;font-weight:600;color:#B7B5F4' : 'font-size:13px;font-weight:600')}>Balanced</div>
-                <div style={css(tileDesc)}>Trims pauses over 1 second, keeps natural rhythm</div>
+                <div style={css(tileDesc)}>{descOf('balanced')}</div>
                 {sel('balanced') && <div style={css('position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;background:#6E6AE8;display:grid;place-items:center;color:#fff;font-size:8px')}>✓</div>}
               </div>
               <div onClick={() => pick('aggressive')} style={css(sel('aggressive') ? 'border:1.5px solid #6E6AE8;border-radius:12px;padding:13px 14px;background:rgba(110,106,232,.07);cursor:pointer;position:relative' : tile)}>
                 <div style={css(sel('aggressive') ? 'font-size:13px;font-weight:600;color:#B7B5F4' : 'font-size:13px;font-weight:600')}>Aggressive</div>
-                <div style={css(tileDesc)}>Tight, fast-paced — trims anything over half a second</div>
+                <div style={css(tileDesc)}>{descOf('aggressive')}</div>
                 {sel('aggressive') && <div style={css('position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;background:#6E6AE8;display:grid;place-items:center;color:#fff;font-size:8px')}>✓</div>}
               </div>
               <div onClick={() => pick('custom')} style={css(tile)}>
@@ -113,7 +115,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
               <div style={css('flex:1;border:1.5px solid #6E6AE8;border-radius:10px;padding:9px 0;text-align:center;font-size:12px;font-weight:600;color:#B7B5F4;background:rgba(110,106,232,.07)')}>Custom</div>
             </div>
             <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:20px')}>
-              <Slider label="Trim pauses longer than" value={sil.s.minGapS} min={0.3} max={2} step={0.1} fmt={(v) => `${v.toFixed(1)} s`} lo="0.3s · tight" hi="3s · relaxed" onChange={(v) => set('minGapS', v)} />
+              <Slider label="Trim pauses longer than" value={sil.s.minGapS} min={0.05} max={2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0.05s · tight" hi="2s · relaxed" onChange={(v) => set('minGapS', v)} />
               <Slider label="Leave this much pause" value={sil.s.padAfterS} min={0} max={0.4} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="none · jump cuts" hi="1s · gentle" onChange={(v) => set('padAfterS', v)} />
               <Slider label="Background noise level" value={sil.s.speechThreshold} min={0.5} max={0.95} step={0.01} fmt={noiseLabel} lo="silent studio" hi="noisy street" onChange={(v) => set('speechThreshold', v)} />
               <div style={css('display:flex;align-items:center;gap:9px')}>

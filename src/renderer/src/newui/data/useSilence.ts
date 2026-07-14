@@ -1,35 +1,30 @@
 // Stage C — Silence Settings adapter (screen 1d). Maps the design's presets +
-// friendly sliders onto the existing vadSilenceSettings profile (persisted to
-// localStorage via setVadSilenceSettings). No silence-engine change.
+// friendly sliders onto the existing vadSilenceSettings profile (persisted via
+// setVadSilenceSettings). It uses the SHARED canonical presets (silencePresets.ts
+// — the same unit-tested bundles the stable app uses), so the new UI and the
+// stable app detect silence identically. No silence-engine change.
 
 import { useStore } from '../../store'
 import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
+import {
+  SILENCE_PRESETS,
+  detectPreset as detectSilencePreset,
+  presetValues,
+  type SilencePresetId,
+  type SilencePresetOrCustom
+} from '../../silencePresets'
 
-export type Preset = 'conservative' | 'balanced' | 'aggressive' | 'custom'
-
-// Preset value-bundles. minGapS follows the approved design copy
-// (Conservative >2s · Balanced >1s · Aggressive >0.5s); the other fields are
-// proposed defaults (FLAGGED — adjust on request).
-export const PRESET_BUNDLES: Record<Exclude<Preset, 'custom'>, Partial<VadSilenceSettings>> = {
-  conservative: { minGapS: 2.0, padBeforeS: 0.15, padAfterS: 0.12, speechThreshold: 0.7 },
-  balanced: { minGapS: 1.0, padBeforeS: 0.1, padAfterS: 0.07, speechThreshold: 0.8 },
-  aggressive: { minGapS: 0.5, padBeforeS: 0.05, padAfterS: 0.04, speechThreshold: 0.85 }
-}
-
-function matches(s: VadSilenceSettings, b: Partial<VadSilenceSettings>): boolean {
-  return (Object.keys(b) as (keyof VadSilenceSettings)[]).every((k) => Math.abs((s[k] as number) - (b[k] as number)) < 1e-6)
-}
-
-export function detectPreset(s: VadSilenceSettings): Preset {
-  for (const p of ['conservative', 'balanced', 'aggressive'] as const) if (matches(s, PRESET_BUNDLES[p])) return p
-  return 'custom'
-}
+export type Preset = SilencePresetOrCustom
+export { SILENCE_PRESETS }
+export type { SilencePresetId }
 
 export interface SilenceModel {
   show: boolean
   s: VadSilenceSettings
   detected: Preset
-  applyPreset: (p: Exclude<Preset, 'custom'>) => void
+  /** the canonical preset definitions (id/label/blurb/values) for rendering. */
+  presets: typeof SILENCE_PRESETS
+  applyPreset: (p: SilencePresetId) => void
   setField: (k: keyof VadSilenceSettings, v: number | boolean) => void
   reset: () => void
   close: () => void
@@ -43,10 +38,14 @@ export function useSilence(): SilenceModel {
   return {
     show,
     s,
-    detected: detectPreset(s),
-    applyPreset: (p) => setS(PRESET_BUNDLES[p]),
+    detected: detectSilencePreset(s),
+    presets: SILENCE_PRESETS,
+    // presetValues() is a full VadSilenceSettings bundle (all 7 fields), so a
+    // preset lands on exactly the tested values — not a partial that leaves
+    // stale fields behind (the old bug that made "Balanced" under-cut).
+    applyPreset: (p) => setS(presetValues(p)),
     setField: (k, v) => setS({ [k]: v } as Partial<VadSilenceSettings>),
-    reset: () => setS({ ...DEFAULT_VAD_SILENCE_SETTINGS }),
+    reset: () => setS({ ...DEFAULT_VAD_SILENCE_SETTINGS }), // Balanced
     close: () => setShow(false)
   }
 }
