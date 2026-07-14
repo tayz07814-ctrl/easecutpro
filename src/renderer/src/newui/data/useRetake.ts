@@ -24,8 +24,12 @@ export interface RetakeModel {
   segments: { id: string; words: { id: string; text: string; start: number; end: number }[] }[]
   chipAfter: Map<string, { durS: number; stagedId?: string; applied?: boolean }>
   isSelected: (id: string) => boolean
+  /** committed (already-executed) cut — word.deleted in the transcript. */
+  isDeleted: (id: string) => boolean
   isChipSel: (stagedId?: string) => boolean
   smartSilence: boolean
+  /** count of committed (executed) word cuts still in effect. */
+  deletedCount: number
   // actions
   find: () => void
   execute: () => void
@@ -33,6 +37,8 @@ export interface RetakeModel {
   clear: () => void
   selectWord: (id: string, additive: boolean, rangeTo?: string) => void
   toggleChip: (id: string) => void
+  /** toggle a committed cut (restore a struck word, or cut a kept one) — live. */
+  toggleWord: (id: string) => void
   openSilenceSettings: () => void
   setSmartSilence: (v: boolean) => void
 }
@@ -53,6 +59,7 @@ export function useRetake(): RetakeModel {
   const selectWord = useStore((s) => s.selectWord)
   const toggleStagedSilence = useStore((s) => s.toggleStagedSilence)
   const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
+  const toggleWordDeleted = useStore((s) => s.toggleWordDeleted)
 
   // "executed" and "error" aren't distinct store flags, so the panel tracks the
   // last terminal transition locally (reset when a new analysis starts).
@@ -71,6 +78,10 @@ export function useRetake(): RetakeModel {
   const words = selected.size
   const selStaged = staged.filter((r) => stagedSel.has(r.id))
   const pauses = smartSilence ? selStaged.length : 0
+
+  // committed cuts (word.deleted) — struck-through in the executed-state review.
+  const deletedIds = new Set<string>()
+  if (transcript) for (const w of transcript.words) if (w.deleted) deletedIds.add(w.id)
 
   // retakes-found proxy: contiguous runs of staged word cuts across the transcript.
   let retakes = 0
@@ -101,9 +112,11 @@ export function useRetake(): RetakeModel {
     wordCount: words,
     pauseCount: pauses,
     executable: words + pauses,
+    deletedCount: deletedIds.size,
     segments: transcript?.segments ?? [],
     chipAfter,
     isSelected: (id) => selected.has(id),
+    isDeleted: (id) => deletedIds.has(id),
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
     smartSilence,
     find: () => { setExecuted(false); void runRetakeCutBeta() },
@@ -112,6 +125,7 @@ export function useRetake(): RetakeModel {
     clear: () => clearSelection(),
     selectWord,
     toggleChip: (id) => toggleStagedSilence(id),
+    toggleWord: (id) => toggleWordDeleted(id),
     openSilenceSettings: () => setShowSilenceSettings(true),
     setSmartSilence
   }

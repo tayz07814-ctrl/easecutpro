@@ -32,7 +32,13 @@ function Header(): JSX.Element {
   )
 }
 
-function Transcript({ r }: { r: ReturnType<typeof useRetake> }): JSX.Element {
+// `stage` (results): strike STAGED words, click toggles the staged selection.
+// `applied` (executed): strike COMMITTED cuts (word.deleted), click toggles the
+// committed cut live (restore a struck word / cut a kept one) — the timeline,
+// preview and export all follow word.deleted, so the edit updates immediately.
+function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage' | 'applied' }): JSX.Element {
+  const isCut = mode === 'applied' ? r.isDeleted : r.isSelected
+  const onWord = mode === 'applied' ? r.toggleWord : (id: string) => r.selectWord(id, true)
   return (
     <div style={css('flex:1;min-height:0;overflow:auto;margin:10px -18px 0;padding:2px 18px 18px;font-size:13.5px;line-height:2.1;color:#C6C9D2;-webkit-mask-image:linear-gradient(#000 82%,transparent)')}>
       {r.segments.map((seg) => (
@@ -42,8 +48,8 @@ function Transcript({ r }: { r: ReturnType<typeof useRetake> }): JSX.Element {
             return (
               <span key={w.id}>
                 <span
-                  onMouseDown={(e) => { e.preventDefault(); r.selectWord(w.id, true) }}
-                  style={r.isSelected(w.id) ? css(CUT) : undefined}
+                  onMouseDown={(e) => { e.preventDefault(); onWord(w.id) }}
+                  style={isCut(w.id) ? css(CUT) : css('cursor:pointer')}
                 >
                   {w.text}
                 </span>{' '}
@@ -116,15 +122,20 @@ export default function RetakeCleanerPanel(): JSX.Element {
   if (r.state === 'executed') {
     return shell(
       <>
-        <div style={css('margin-top:14px;background:rgba(70,165,124,.08);border:1px solid rgba(70,165,124,.25);border-radius:12px;padding:16px;display:flex;gap:12px')}>
+        <div style={css('margin-top:14px;background:rgba(70,165,124,.08);border:1px solid rgba(70,165,124,.25);border-radius:12px;padding:14px;display:flex;gap:12px;flex:none')}>
           <div style={css('width:26px;height:26px;flex:none;border-radius:50%;background:rgba(70,165,124,.18);display:grid;place-items:center;color:#5FBF94;font-size:12px')}>✓</div>
           <div>
-            <div style={css('font-size:13px;font-weight:600;color:#7FCBA8')}>Cuts applied</div>
+            <div style={css('font-size:13px;font-weight:600;color:#7FCBA8')}>{r.deletedCount} cut{r.deletedCount === 1 ? '' : 's'} applied</div>
             <div style={css('font-size:12px;color:#9BA0AC;margin-top:4px;line-height:1.5')}>Every cut is on the timeline and can be undone.</div>
           </div>
         </div>
-        <button onClick={r.find} style={css('width:100%;margin-top:14px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer')}>Run again</button>
-        <div style={css('font-size:11px;color:#686E7B;margin-top:12px;text-align:center')}>Run again after more edits to catch new pauses.</div>
+        <button onClick={r.find} style={css('width:100%;margin-top:12px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;flex:none')}>Run again</button>
+        <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
+          <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review cuts</div>
+          <div style={css('flex:1')} />
+          <div style={css('font-size:11px;color:#686E7B')}>tap a word to restore or cut</div>
+        </div>
+        <Transcript r={r} mode="applied" />
       </>
     )
   }
@@ -167,7 +178,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <span onClick={r.restore} style={css('font-size:11.5px;color:#9BA0AC;padding:4px 8px;border-radius:7px;cursor:pointer')}>Restore</span>
         <span onClick={r.clear} style={css('font-size:11.5px;color:#9BA0AC;padding:4px 8px;border-radius:7px;cursor:pointer')}>Clear</span>
       </div>
-      <Transcript r={r} />
+      <Transcript r={r} mode="stage" />
     </>
   )
 }
