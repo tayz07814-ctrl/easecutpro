@@ -129,7 +129,11 @@ export default function RetakeCleanerPanel(): JSX.Element {
             <div style={css('font-size:12px;color:#9BA0AC;margin-top:4px;line-height:1.5')}>Every cut is on the timeline and can be undone.</div>
           </div>
         </div>
-        <button onClick={r.find} style={css('width:100%;margin-top:12px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;flex:none')}>Run again</button>
+        <div style={css('display:flex;gap:8px;margin-top:12px;flex:none')}>
+          <button onClick={r.find} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer')}>Run again</button>
+          <button onClick={r.openSilenceSettings} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 14px;cursor:pointer')}>Silence Settings</button>
+        </div>
+        {smartRow}
         <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
           <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review cuts</div>
           <div style={css('flex:1')} />
