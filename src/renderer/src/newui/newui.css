@@ -157,6 +157,25 @@
   height: 2px;
 }
 
+/* Desktop editor preview (screens/Editor.tsx): blend the letterbox gutters into
+   the editor background instead of a stark black void, so a portrait clip reads as
+   "just the clip" framed by the UI (giving the side panels visual breathing room)
+   rather than a small clip lost in a big black box. The video's own .frame keeps
+   its dark media area. Scoped to .ec-editor so the legacy app is untouched. */
+.ec-editor .preview,
+.ec-editor .video-wrap,
+.ec-editor .stage {
+  background: #17181c;
+}
+
+/* Preview transport: if the preview column is ever narrow, let the controls wrap
+   onto a second line (aspect chips stay up top, the scrubber drops below) instead
+   of overflowing out of view. MIN_PREVIEW normally prevents this — belt + braces. */
+.ec-editor .transport {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
 /* Mobile editor (screens/MobileEditor.tsx): the stage is a FIXED height that the
    user resizes via the grip. The production preview fills it, but its internal
    min-heights (.video-wrap 200px / .stage 240px, from styles.css) would push the

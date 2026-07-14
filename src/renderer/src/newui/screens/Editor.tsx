@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { css } from '../css'
 import { useStore } from '../../store'
@@ -27,19 +27,22 @@ function fmtDur(s: number): string {
 
 const HAIR = 'rgba(255,255,255,.06)'
 
-// Resizable-panel bounds. Widths/heights are clamped to BOTH an absolute cap and
-// a viewport-aware cap that always reserves MIN_PREVIEW for the centre preview and
-// MIN_MIDDLE for the whole preview+panels row — so no drag can crush the preview,
-// clip a panel's buttons/scrollbar, or push the timeline off-screen.
+// Resizable-panel bounds. Only the LEFT/RIGHT panels resize (the timeline is a
+// fixed, viewport-proportional container with its own internal scroll). Widths are
+// clamped to BOTH an absolute cap and a viewport-aware cap that always reserves
+// MIN_PREVIEW for the centre preview — so widening a panel can never crush the
+// preview or clip its transport controls.
 const MIN_LEFT = 200
 const MAX_LEFT = 480
 const MIN_RIGHT = 300
 const MAX_RIGHT = 560
-const MIN_TL = 160
-const MAX_TL = 680
-const MIN_PREVIEW = 320 // the centre preview never shrinks narrower than this
-const MIN_MIDDLE = 260 // the preview+panels row never shrinks shorter than this
-const HANDLE = 6 // .ec-divv / .ec-divh thickness
+const MIN_PREVIEW = 420 // keeps the preview + its full transport row intact when panels widen
+const HANDLE = 6 // .ec-divv thickness
+// Timeline height = this fraction of the editor height, clamped — enough for the
+// default lanes, never a tall empty void; extra tracks scroll inside the panel.
+const TL_FRACTION = 0.38
+const TL_MIN = 240
+const TL_MAX = 360
 
 const CLIP9x16 =
   "width:42px;height:74px;flex:none;border-radius:7px;background:repeating-linear-gradient(45deg,#23252b 0,#23252b 8px,#1e2026 8px,#1e2026 16px);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:8px;color:#686E7B"
@@ -310,19 +313,18 @@ export default function Editor(): JSX.Element {
   const showExportModal = useStore((s) => s.showExportModal)
   const showSettings = useStore((s) => s.showSettings)
 
-  // Creator-resizable panels (drag handles below), persisted per browser.
+  // The LEFT/RIGHT panels resize (persisted). The timeline is NOT draggable — it's
+  // a fixed, viewport-proportional container with its own internal scroll.
   const [leftW, setLeftW] = useState(() => num('ec.nu.leftW', 264))
   const [rightW, setRightW] = useState(() => num('ec.nu.rightW', 360))
-  const [timelineH, setTimelineH] = useState(() => num('ec.nu.timelineH', 300))
+  const [timelineH, setTimelineH] = useState(TL_MIN)
   useEffect(() => { try { localStorage.setItem('ec.nu.leftW', String(leftW)) } catch { /* ignore */ } }, [leftW])
   useEffect(() => { try { localStorage.setItem('ec.nu.rightW', String(rightW)) } catch { /* ignore */ } }, [rightW])
-  useEffect(() => { try { localStorage.setItem('ec.nu.timelineH', String(timelineH)) } catch { /* ignore */ } }, [timelineH])
 
   // Measured live so every clamp is viewport-aware (the preview never drops below
-  // MIN_PREVIEW; the preview+panels row never below MIN_MIDDLE).
+  // MIN_PREVIEW, which also keeps its transport row intact).
   const rootRef = useRef<HTMLDivElement>(null)
   const middleRef = useRef<HTMLDivElement>(null)
-  const timelineRef = useRef<HTMLDivElement>(null)
 
   // Widest a panel may be right now: its absolute cap, but never so wide that the
   // centre preview drops below MIN_PREVIEW (the OTHER panel is fixed during a drag).
@@ -334,18 +336,10 @@ export default function Editor(): JSX.Element {
     const midW = middleRef.current?.clientWidth ?? window.innerWidth
     return Math.max(MIN_RIGHT, Math.min(MAX_RIGHT, midW - 2 * HANDLE - leftPx - MIN_PREVIEW))
   }
-  // Tallest the timeline may be: its cap, but never so tall the preview+panels row
-  // drops below MIN_MIDDLE. flexV = the vertical zone the middle row + timeline
-  // share (the fixed topbar is excluded).
-  const maxTimelinePx = (): number => {
-    const flexV = (middleRef.current?.clientHeight ?? 0) + (timelineRef.current?.clientHeight ?? timelineH)
-    return Math.max(MIN_TL, Math.min(MAX_TL, flexV - MIN_MIDDLE))
-  }
 
-  // Joint re-clamp on mount + window resize, so a persisted size or a shrunk window
-  // can never leave the preview crushed or the timeline off-screen. Shrinks the
-  // panels (right first, then left) until the preview keeps MIN_PREVIEW. Held in a
-  // ref so the resize listener binds once yet always sees the latest sizes.
+  // Re-clamp on mount + window resize: keep the preview >= MIN_PREVIEW (shrinking
+  // the panels right-then-left) and derive the fixed timeline height from the
+  // viewport. Held in a ref so the resize listener binds once yet sees fresh sizes.
   const clampRef = useRef<() => void>(() => undefined)
   clampRef.current = (): void => {
     const mid = middleRef.current
@@ -358,9 +352,8 @@ export default function Editor(): JSX.Element {
     if (over > 0) { const c = Math.min(over, L - MIN_LEFT); L -= c; over -= c }
     if (L !== leftW) setLeftW(L)
     if (R !== rightW) setRightW(R)
-    const flexV = mid.clientHeight + (timelineRef.current?.clientHeight ?? 0)
-    const maxH = Math.max(MIN_TL, Math.min(MAX_TL, flexV - MIN_MIDDLE))
-    if (timelineH > maxH || timelineH < MIN_TL) setTimelineH(clampN(timelineH, MIN_TL, maxH))
+    const ch = rootRef.current?.clientHeight ?? window.innerHeight
+    setTimelineH(clampN(Math.round(ch * TL_FRACTION), TL_MIN, TL_MAX))
   }
   useEffect(() => {
     const fn = (): void => clampRef.current()
@@ -398,13 +391,6 @@ export default function Editor(): JSX.Element {
       else setRightW(clampN(r0 - dx, MIN_RIGHT, maxR))
     })
   }
-  function startRowDrag(e: ReactPointerEvent): void {
-    e.preventDefault()
-    const startY = e.clientY
-    const h0 = timelineH
-    const maxH = maxTimelinePx()
-    beginDrag('row-resize', (ev) => setTimelineH(clampN(h0 - (ev.clientY - startY), MIN_TL, maxH)))
-  }
 
   return (
     <div ref={rootRef} style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-editor">
@@ -416,17 +402,18 @@ export default function Editor(): JSX.Element {
             app's border-box model (the .ec-newui content-box reset would leak in
             and break the legacy layout). It reads the SAME shared timeline engine
             the timeline below publishes, so playback reflects the real edit. */}
-        <div className="ec-legacy" style={css('flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:#000')}>
+        <div className="ec-legacy" style={css('flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:#17181C')}>
           <VideoPreview />
         </div>
         <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'right')} title="Drag to resize" />
         <AiPanel width={rightW} />
       </div>
-      <div className="ec-divh" onPointerDown={startRowDrag} title="Drag to resize" />
-      {/* Live editor core — the production timeline. Publishes the timeline engine
-          that the preview + export read, so drag/trim/split and word/silence cuts
-          all stay consistent (exactly the live app's behavior). */}
-      <div ref={timelineRef} className="ec-legacy timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative;overflow:hidden`)}>
+      {/* Live editor core — the production timeline. A FIXED-height container with
+          its OWN internal scroll (Timeline's .ec-tl-scroll); intentionally NOT
+          user-resizable, so it can never grow into a tall empty void. It still
+          publishes the timeline engine the preview + export read, so drag/trim/
+          split and word/silence cuts stay consistent (the live app's behaviour). */}
+      <div className="ec-legacy timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative;overflow:hidden;border-top:1px solid ${HAIR}`)}>
         <TimelinePanel />
         <TimelineZoom />
       </div>
