@@ -7,7 +7,6 @@ import RetakeCleanerPanel from './RetakeCleanerPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
-import TimelinePanel from '../../components/timeline/TimelinePanel'
 import { usePreviewPlayback } from '../data/usePreviewPlayback'
 
 function fmtDur(s: number): string {
@@ -395,11 +394,7 @@ export default function Editor(): JSX.Element {
         <PreviewStage />
         <AiPanel />
       </div>
-      {/* P7: real interactive timeline (drag/trim/split/move) — the existing
-          engine, self-contained. Box model reset to border-box (it assumes it). */}
-      <div className="ec-legacy-tl" style={css('flex:none;height:248px;min-height:0;border-top:1px solid rgba(255,255,255,.06);overflow:hidden;position:relative')}>
-        <TimelinePanel />
-      </div>
+      <Timeline />
       <SilenceSettingsModal />
       {/* Legacy modals assume the app's global border-box — portal them out of
           the .ec-newui (content-box) subtree so they render correctly. */}
