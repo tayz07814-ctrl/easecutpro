@@ -76,6 +76,14 @@
   box-sizing: border-box;
 }
 
+/* The mounted legacy timeline (P7) assumes the app's global border-box. */
+.ec-newui .ec-legacy-tl,
+.ec-newui .ec-legacy-tl *,
+.ec-newui .ec-legacy-tl *::before,
+.ec-newui .ec-legacy-tl *::after {
+  box-sizing: border-box;
+}
+
 .ec-newui button {
   font-family: var(--ec-sans);
 }
