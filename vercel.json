@@ -2,5 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build:cloud",
   "outputDirectory": "dist-cloud",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    {
+      "source": "/edge/:fn",
+      "destination": "https://zlqxrdlognjvwqpmnfjq.supabase.co/functions/v1/:fn"
+    },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
