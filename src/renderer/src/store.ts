@@ -55,9 +55,27 @@ import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject } from './projectsApi'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideo } from './batchClean'
+import { getFile } from './webmedia'
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+}
+
+/** Human-facing clip name. Prefer the original filename from the OS file picker;
+ *  otherwise recover it from the still-registered browser File (single-file /
+ *  overlay imports only carry the opaque id), then the path's basename. Never
+ *  surface an opaque web-media id (webmedia:… / blob:…) — that's the id we use
+ *  as a "path", not a name the creator recognizes. */
+function mediaDisplayName(path: string, preferred?: string): string {
+  const opaque = /^(webmedia|ecmedia|blob):/i
+  const clean = (s: string | undefined): string => (s ?? '').trim()
+  const p = clean(preferred)
+  if (p && !opaque.test(p)) return p
+  const fromReg = clean(getFile(path)?.name)
+  if (fromReg && !opaque.test(fromReg)) return fromReg
+  const base = clean(path.split(/[\\/]/).pop())
+  if (!base || opaque.test(base) || opaque.test(path)) return 'Imported clip'
+  return base
 }
 
 /** Per-source waveform cache so the montage waveform rebuilds instantly on
@@ -160,14 +178,16 @@ function saveLibrary(lib: LibraryItem[]): void {
   }
 }
 
-/** Probe a file and build a library item (with a small preview thumbnail). */
-async function buildLibraryItem(path: string): Promise<LibraryItem> {
+/** Probe a file and build a library item (with a small preview thumbnail).
+ *  `preferredName` is the original filename from the OS picker — pass it so the
+ *  clip keeps its real name instead of falling back to the opaque web-media id. */
+async function buildLibraryItem(path: string, preferredName?: string): Promise<LibraryItem> {
   const info = await window.api.probe(path).catch(() => null)
   // Web media ids (webmedia:xxxx) carry no file extension, so extension sniffing
   // alone classified every browser-imported image as "video". The probe knows:
   // an image has visuals but no duration and no audio.
   const isImage = IMAGE_RE.test(path) || (!!info && info.hasVideo && !info.hasAudio && (info.duration || 0) === 0)
-  const name = path.split(/[\\/]/).pop() ?? 'media'
+  const name = mediaDisplayName(path, preferredName)
   let kind: LibraryItem['kind'] = 'video'
   if (isImage) kind = 'image'
   else if (info && !info.hasVideo && info.hasAudio) kind = 'audio'
@@ -219,7 +239,7 @@ function libraryFromProject(p: Project): LibraryItem[] {
     out.push({
       id: uid(),
       path,
-      name: name || path.split(/[\\/]/).pop() || 'clip',
+      name: mediaDisplayName(path, name),
       kind,
       duration: dur ?? 0,
       width: w ?? 0,
@@ -309,7 +329,7 @@ function seqClipFromMedia(m: MediaInfo): SequenceClip {
   return {
     id: Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
     sourcePath: m.path,
-    name: m.path.split(/[\\/]/).pop() ?? 'base',
+    name: mediaDisplayName(m.path),
     sourceIn: 0,
     sourceOut: m.duration || 0,
     sourceDuration: m.duration || 0,
@@ -732,7 +752,7 @@ export const useStore = create<AppState>((set, get) => ({
     let lastName = ''
     for (const p of picked) {
       if (lib.some((it) => it.path === p.path)) continue
-      const item = await buildLibraryItem(p.path)
+      const item = await buildLibraryItem(p.path, p.name)
       lib.push(item)
       added++
       lastName = item.name
@@ -758,7 +778,7 @@ export const useStore = create<AppState>((set, get) => ({
       const it = items[i]
       if (lib.some((x) => x.path === it.path)) continue
       try {
-        lib.push(await buildLibraryItem(it.path))
+        lib.push(await buildLibraryItem(it.path, it.name))
         added++
       } catch {
         /* skip unreadable file */
@@ -1198,7 +1218,7 @@ export const useStore = create<AppState>((set, get) => ({
     const info = await window.api.probe(path).catch(() => null)
     const music: MusicClip = {
       path,
-      name: path.split(/[\\/]/).pop() ?? 'music',
+      name: mediaDisplayName(path),
       duration: info?.duration ?? 0,
       gain: 0.5,
       startAt: 0,
@@ -1230,7 +1250,7 @@ export const useStore = create<AppState>((set, get) => ({
     for (const p of picked) {
       let item = lib.find((it) => it.path === p.path)
       if (!item) {
-        item = await buildLibraryItem(p.path)
+        item = await buildLibraryItem(p.path, p.name)
         lib.push(item)
       }
       items.push(item)
@@ -1249,7 +1269,7 @@ export const useStore = create<AppState>((set, get) => ({
     for (const p of picked) {
       let item = lib.find((x) => x.path === p.path)
       if (!item) {
-        item = await buildLibraryItem(p.path)
+        item = await buildLibraryItem(p.path, p.name)
         lib.push(item)
       }
       fresh.push(item)
@@ -2357,7 +2377,7 @@ export const useStore = create<AppState>((set, get) => ({
     const dur = isImage ? 5 : info?.duration || 5
     const clip: Clip = {
       id: uid(),
-      name: path.split(/[\\/]/).pop() ?? 'b-roll',
+      name: mediaDisplayName(path),
       sourcePath: path,
       sourceIn: 0,
       sourceOut: dur,
