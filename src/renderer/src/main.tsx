@@ -14,7 +14,9 @@ import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
 import Dashboard from './newui/screens/Dashboard'
 import Editor from './newui/screens/Editor'
+import MobileEditor from './newui/screens/MobileEditor'
 import { isNewUi } from './newui/flag'
+import { useIsMobile } from './useMobile'
 import './styles.css'
 // Design-system foundation (tokens + self-hosted fonts). Scoped under
 // [data-ec-ui="new"] — inert unless the flag below marks <html>.
@@ -152,6 +154,7 @@ if (IS_WEB) {
 
 function Root(): JSX.Element {
   const view = useStore((s) => s.view)
+  const isMobile = useIsMobile()
 
   // Bootstrap (web): probe the backend first. If it's unreachable (bundled
   // Capacitor app with no server, PC asleep, no network) drop into OFFLINE mode —
@@ -254,7 +257,8 @@ function Root(): JSX.Element {
   if (view === 'loading') return <div className="auth"><div className="muted">Loading…</div></div>
   if (view === 'auth') return <AuthScreen />
   if (view === 'home') return NEW_UI ? <Dashboard /> : <HomeScreen />
-  return NEW_UI ? <Editor /> : <App />
+  if (NEW_UI) return isMobile ? <MobileEditor /> : <Editor />
+  return <App />
 }
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(

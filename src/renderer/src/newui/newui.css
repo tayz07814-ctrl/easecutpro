@@ -157,6 +157,17 @@
   height: 2px;
 }
 
+/* Mobile editor (screens/MobileEditor.tsx): let the production preview fill the
+   stage and hide its built-in transport — the mobile editor supplies its own
+   play/zoom row and a bottom tab bar. */
+.ec-newui .ec-m-stage .preview {
+  flex: 1;
+  min-height: 0;
+}
+.ec-newui .ec-m-stage .transport {
+  display: none;
+}
+
 /* Gallery framing for isolated state cards (screens 1c/1d). Mirrors the design
    canvas .dv-card chrome. Background is set per-card inline, so not here. */
 .ec-newui .dc-card {
