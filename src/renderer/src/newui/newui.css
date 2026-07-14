@@ -76,6 +76,19 @@
   box-sizing: border-box;
 }
 
+/* Live editor core: the production VideoPreview + TimelinePanel are mounted
+   inside the new editor (screens/Editor.tsx) so cuts/drag/trim/export behave
+   exactly like the live app. They assume the app's global border-box model, so
+   restore it for their subtree — the .ec-newui content-box reset above would
+   otherwise leak in and break their layout. Placed AFTER the reset so it wins on
+   source order (equal specificity). */
+.ec-legacy,
+.ec-legacy *,
+.ec-legacy *::before,
+.ec-legacy *::after {
+  box-sizing: border-box;
+}
+
 
 .ec-newui button {
   font-family: var(--ec-sans);
