@@ -9,6 +9,7 @@ import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
 import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../../components/timeline/TimelinePanel'
+import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 
 function fmtDur(s: number): string {
   if (!s || s < 0) return '0:00'
@@ -198,6 +199,33 @@ function AiPanel({ width }: { width: number }): JSX.Element {
   )
 }
 
+// Visible timeline zoom. The production timeline only zooms via Ctrl+wheel — no
+// on-screen control, and nothing at all on touch. This floating −/＋ drives the
+// SAME shared TimelineEngine the wheel does (single source of truth), and
+// re-renders via useSharedEngineSnapshot so it stays in sync with wheel zoom.
+const ZOOM_MIN = 4
+const ZOOM_MAX = 2000
+function TimelineZoom(): JSX.Element | null {
+  useSharedEngineSnapshot()
+  const eng = getSharedEngine()
+  if (!eng) return null
+  const zoom = eng.sessionState.zoom
+  const atMin = zoom <= ZOOM_MIN + 0.01
+  const atMax = zoom >= ZOOM_MAX - 0.01
+  const step = (factor: number) => (): void => {
+    const e = getSharedEngine()
+    if (e) e.setZoom(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, e.sessionState.zoom * factor)))
+  }
+  const btn = (dis: boolean): string =>
+    `width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#1E2026;color:${dis ? '#4A4F5B' : '#C6C9D2'};font-size:16px;line-height:1;display:grid;place-items:center;cursor:${dis ? 'default' : 'pointer'};font-family:inherit`
+  return (
+    <div style={css('position:absolute;bottom:10px;right:14px;z-index:20;display:flex;align-items:center;gap:5px;background:rgba(20,21,25,.85);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:4px 5px')}>
+      <button title="Zoom out" onClick={step(1 / 1.4)} disabled={atMin} style={css(btn(atMin))}>−</button>
+      <button title="Zoom in" onClick={step(1.4)} disabled={atMax} style={css(btn(atMax))}>＋</button>
+    </div>
+  )
+}
+
 export default function Editor(): JSX.Element {
   const showExportModal = useStore((s) => s.showExportModal)
   const showSettings = useStore((s) => s.showSettings)
@@ -264,8 +292,9 @@ export default function Editor(): JSX.Element {
       {/* Live editor core — the production timeline. Publishes the timeline engine
           that the preview + export read, so drag/trim/split and word/silence cuts
           all stay consistent (exactly the live app's behavior). */}
-      <div className="ec-legacy timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0`)}>
+      <div className="ec-legacy timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative`)}>
         <TimelinePanel />
+        <TimelineZoom />
       </div>
       <SilenceSettingsModal />
       {/* Legacy modals assume the app's global border-box — portal them out of
