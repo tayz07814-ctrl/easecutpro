@@ -43,6 +43,8 @@ function MediaSheet({ onClose }: { onClose: () => void }): JSX.Element {
   const basePath = useStore((s) => s.project.media?.path)
   const addToLibrary = useStore((s) => s.addToLibrary)
   const setBaseFromLibrary = useStore((s) => s.setBaseFromLibrary)
+  const addAllToTimeline = useStore((s) => s.addAllToTimeline)
+  const canSequence = library.some((it) => it.kind === 'video' || it.kind === 'image')
   const fmt = (it: LibraryItem): string => {
     const d = it.duration ? `${Math.floor(it.duration / 60)}:${String(Math.round(it.duration % 60)).padStart(2, '0')}` : ''
     return it.width && it.height ? `${d} · ${it.width}×${it.height}` : d
@@ -57,6 +59,11 @@ function MediaSheet({ onClose }: { onClose: () => void }): JSX.Element {
         </div>
       }
     >
+      {canSequence && (
+        <div style={css('flex:none;padding:0 14px 10px')}>
+          <button onClick={() => { addAllToTimeline(); onClose() }} style={css('width:100%;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;font-family:inherit;font-size:13px;font-weight:550;border-radius:10px;padding:11px 0;cursor:pointer')}>▦ Add all to timeline</button>
+        </div>
+      )}
       <div style={css('flex:1;min-height:0;overflow:auto;padding:0 14px 20px;display:flex;flex-direction:column;gap:8px')}>
         {library.length === 0 && <div style={css('color:#686E7B;font-size:13px;text-align:center;padding:32px 0')}>No clips yet — tap ＋ Import to add videos.</div>}
         {library.map((it) => {

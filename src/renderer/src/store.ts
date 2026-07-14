@@ -416,6 +416,7 @@ interface AppState {
   addToSequence: (libraryId: string) => void
   /** append ALL library videos to the base sequence, in order (numbered). */
   addAllToSequence: () => void
+  addAllToTimeline: () => void
   /** drag-drop a clip onto the A-roll: append as a SEPARATE base clip (no merge). */
   dropOntoBase: (libraryId: string) => void
   /** reorder a base-sequence clip from one index to another. */
@@ -818,6 +819,61 @@ export const useStore = create<AppState>((set, get) => ({
         job: { active: false, percent: 100, message: `Sequence: ${seq.length} clip(s) — numbered in order` }
       }
     }),
+
+  // Build the base timeline from EVERY video/image in the library, in library
+  // order, as one gapless sequence (montage). Doc-native: we rebuild the
+  // authoritative timeline document HERE (the same proven path as
+  // setBaseFromLibrary), so the live-engine timeline in the new UI shows the
+  // sequence immediately — projectStructureKey changes → TimelinePanel replaces
+  // the engine document from this project.
+  addAllToTimeline: () => {
+    const s = get()
+    const vids = s.library.filter((it) => it.kind === 'video' || it.kind === 'image')
+    if (!vids.length) {
+      set({ job: { active: false, percent: 0, message: 'No videos or images in the library to add' } })
+      return
+    }
+    const cur = s.project
+    // Only warn when there's real work to lose (a populated base + a transcript).
+    const doc = getSharedEngine()?.document ?? cur.timeline
+    const mainHasClips = doc ? doc.tracks.some((t) => t.isMain && t.clips.length > 0) : !!cur.media
+    if ((mainHasClips || (cur.baseSequence?.length ?? 0) > 0) && cur.transcript) {
+      const ok = window.confirm(
+        'Build one sequence from all media clips? This replaces the current base track and clears its transcript and base edits.'
+      )
+      if (!ok) {
+        set({ job: { active: false, percent: 0, message: 'Canceled' } })
+        return
+      }
+    }
+    const seq = vids.map(seqClipFromLibrary)
+    // Replace ONLY the base track with the sequence; keep the project's overlays,
+    // text, and music (spread ...cur, like dropOntoBase). Clear the base-specific
+    // cut state (transcript/silences/cuts) since the base changed.
+    const fresh: Project = {
+      ...cur,
+      baseSequence: seq,
+      media: undefined,
+      transcript: undefined,
+      silences: [],
+      manualCuts: [],
+      keepOverrides: [],
+      baseSplits: [],
+      playhead: 0
+    }
+    fresh.timeline = normalizeDefaultLanes(projectToDocument(fresh))
+    set({
+      project: fresh,
+      mediaUrl: null,
+      waveform: null,
+      thumbnails: [],
+      selectedWordIds: new Set(),
+      selectedClipId: null,
+      selectedSeg: null,
+      selectedTextId: null,
+      job: { active: false, percent: 100, message: `Timeline: ${seq.length} clip(s) in a sequence` }
+    })
+  },
 
   // Drag a clip onto the A-roll → append it to the base as a SEPARATE clip (no
   // merge). The current single base becomes clip 1; the dropped clip is appended.

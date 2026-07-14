@@ -132,10 +132,12 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
   const addToLibrary = useStore((s) => s.addToLibrary)
   const setBaseFromLibrary = useStore((s) => s.setBaseFromLibrary)
   const removeFromLibrary = useStore((s) => s.removeFromLibrary)
+  const addAllToTimeline = useStore((s) => s.addAllToTimeline)
   const [filter, setFilter] = useState('')
 
   const q = filter.trim().toLowerCase()
   const items = q ? library.filter((it) => it.name.toLowerCase().includes(q)) : library
+  const canSequence = library.some((it) => it.kind === 'video' || it.kind === 'image')
 
   return (
     <div style={css(`width:${width}px;flex:none;display:flex;flex-direction:column;background:#191B20`)}>
@@ -145,6 +147,9 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
       </div>
       <div style={css('padding:0 16px 12px;display:flex;flex-direction:column;gap:8px')}>
         <button onClick={addToLibrary} style={css('background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer;width:100%')}>＋ Import media</button>
+        {canSequence && (
+          <button onClick={addAllToTimeline} title="Add every video/image to the timeline as one sequence, in order" style={css('background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:550;border-radius:9px;padding:8px 0;cursor:pointer;width:100%')}>▦ Add all to timeline</button>
+        )}
         <div style={css('display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:#1E2026;border:1px solid rgba(255,255,255,.06);border-radius:8px')}>
           <div style={css('width:10px;height:10px;border:1.5px solid #686E7B;border-radius:50%;position:relative')}>
             <div style={css('position:absolute;width:4px;height:1.5px;background:#686E7B;bottom:-2px;right:-2px;transform:rotate(45deg)')} />
@@ -152,7 +157,12 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
           <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter media" style={css('font-size:12px;color:#E9EAEE;flex:1;min-width:0;background:none;border:none;outline:none;font-family:inherit;padding:0;margin:0')} />
         </div>
       </div>
-      <div style={css('padding:0 12px;display:flex;flex-direction:column;gap:8px;overflow:hidden')}>
+      <div style={css('flex:1;min-height:0;padding:0 12px 12px;display:flex;flex-direction:column;gap:8px;overflow-y:auto')}>
+        {items.length === 0 && (
+          <div style={css('color:#686E7B;font-size:12px;text-align:center;padding:24px 8px')}>
+            {library.length === 0 ? 'No media yet — tap ＋ Import media to add clips.' : 'No clips match your filter.'}
+          </div>
+        )}
         {items.map((it) => (
           <MediaClip
             key={it.id}
@@ -163,8 +173,7 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
           />
         ))}
       </div>
-      <div style={css('flex:1')} />
-      <div style={css('padding:14px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Import once, reuse anywhere. Set a clip as base, or drag it onto a track.</div>
+      <div style={css('flex:none;padding:14px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Import once, reuse anywhere. Set a clip as base, or drag it onto a track.</div>
     </div>
   )
 }
