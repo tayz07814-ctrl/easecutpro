@@ -1608,7 +1608,12 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       /* ignore */
     }
-    set({ smartSilenceCutter: v })
+    // Orchestration only: OFF deselects every staged silence (so review hides
+    // them and Execute skips them); ON re-selects them. Engine untouched.
+    set((s) => ({
+      smartSilenceCutter: v,
+      stagedSilenceSel: v ? new Set(s.stagedSilences.map((r) => r.id)) : new Set<string>()
+    }))
   },
   mediaCollapsed: ((): boolean => {
     try {

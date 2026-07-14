@@ -12,6 +12,9 @@ import { cloudAuthMe } from './cloud/auth'
 import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
+import Dashboard from './newui/screens/Dashboard'
+import Editor from './newui/screens/Editor'
+import { isNewUi } from './newui/flag'
 import './styles.css'
 // Design-system foundation (tokens + self-hosted fonts). Scoped under
 // [data-ec-ui="new"] — inert unless the flag below marks <html>.
@@ -26,10 +29,16 @@ import './design/silence.css'
 import './design/editor.css'
 // P6: media library (scoped; visual-only).
 import './design/media.css'
+import './newui/newui.css'
 
-// Opt-in premium redesign: mark the root so the scoped design CSS applies. OFF
-// by default → legacy UI unchanged. Set once, before first paint.
+// Opt-in premium redesign (P1–P6, gated by VITE_NEW_EASECUT_UI): mark the root
+// so the scoped design CSS applies. OFF by default → legacy UI unchanged. This
+// attempt is dormant in production (the env var is unset); kept inert, not removed.
 if (IS_NEW_UI) document.documentElement.setAttribute('data-ec-ui', 'new')
+
+// Gated cutover to the Stage A–C new UI: legacy is the default; ?newui=1
+// (persisted to localStorage) opts in. Independent of IS_NEW_UI above.
+const NEW_UI = isNewUi()
 
 if (IS_WEB) {
   if (IS_CLOUD) installCloudApi()
@@ -244,8 +253,8 @@ function Root(): JSX.Element {
 
   if (view === 'loading') return <div className="auth"><div className="muted">Loading…</div></div>
   if (view === 'auth') return <AuthScreen />
-  if (view === 'home') return <HomeScreen />
-  return <App />
+  if (view === 'home') return NEW_UI ? <Dashboard /> : <HomeScreen />
+  return NEW_UI ? <Editor /> : <App />
 }
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
