@@ -323,6 +323,13 @@ function seqClipFromLibrary(it: LibraryItem): SequenceClip {
   }
 }
 
+/** Natural, case-insensitive filename order (0501.MOV < 0502.MOV < 0510.MOV, and
+ *  clip2 < clip10) — how "Add all to timeline" sequences clips, so numbered/named
+ *  files line up the way the creator expects rather than in import order. */
+function byClipName(a: LibraryItem, b: LibraryItem): number {
+  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+}
+
 /** Turn the current single base video into a sequence clip (so a dropped clip can
  *  be appended after it and the two combined into one base). */
 function seqClipFromMedia(m: MediaInfo): SequenceClip {
@@ -811,7 +818,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   addAllToSequence: () =>
     set((s) => {
-      const vids = s.library.filter((it) => it.kind === 'video' || it.kind === 'image')
+      const vids = s.library.filter((it) => it.kind === 'video' || it.kind === 'image').slice().sort(byClipName)
       if (!vids.length) return { job: { active: false, percent: 0, message: 'No videos/images in the library to add' } }
       const seq = [...(s.project.baseSequence ?? []), ...vids.map(seqClipFromLibrary)]
       return {
@@ -820,15 +827,16 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }),
 
-  // Build the base timeline from EVERY video/image in the library, in library
-  // order, as one gapless sequence (montage). Doc-native: we rebuild the
+  // Build the base timeline from EVERY video/image in the library, in filename
+  // (natural/numeric) order, as one gapless sequence (montage). Doc-native: we rebuild the
   // authoritative timeline document HERE (the same proven path as
   // setBaseFromLibrary), so the live-engine timeline in the new UI shows the
   // sequence immediately — projectStructureKey changes → TimelinePanel replaces
   // the engine document from this project.
   addAllToTimeline: () => {
     const s = get()
-    const vids = s.library.filter((it) => it.kind === 'video' || it.kind === 'image')
+    // Alphabetical / numeric filename order (0501 < 0502 < 0510), NOT import order.
+    const vids = s.library.filter((it) => it.kind === 'video' || it.kind === 'image').slice().sort(byClipName)
     if (!vids.length) {
       set({ job: { active: false, percent: 0, message: 'No videos or images in the library to add' } })
       return
