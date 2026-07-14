@@ -104,13 +104,38 @@ function TopBar(): JSX.Element {
   )
 }
 
-function MediaClip({ item, isBase, onSetBase, onRemove }: { item: LibraryItem; isBase: boolean; onSetBase: () => void; onRemove: () => void }): JSX.Element {
-  const shell = isBase
-    ? 'background:#1E2026;border:1px solid rgba(110,106,232,.55);border-radius:12px;padding:10px;display:flex;gap:10px;box-shadow:0 0 0 3px rgba(110,106,232,.12);position:relative;cursor:pointer'
-    : 'background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:10px;display:flex;gap:10px;cursor:pointer'
+// A library clip. Draggable onto the timeline (the production Timeline accepts
+// the `application/x-ec-media` payload and drops it on the lane under the
+// cursor) — clicking no longer force-loads it as the base, so clips are only
+// added by dragging. Renders as a list row or a grid tile.
+function MediaClip({ item, isBase, grid, onRemove }: { item: LibraryItem; isBase: boolean; grid?: boolean; onRemove: () => void }): JSX.Element {
+  const onDragStart = (e: React.DragEvent): void => {
+    e.dataTransfer.setData('application/x-ec-media', item.id)
+    e.dataTransfer.effectAllowed = 'copy'
+  }
   const meta = item.width && item.height ? `${fmtDur(item.duration)} · ${item.width}×${item.height}` : fmtDur(item.duration)
+
+  if (grid) {
+    return (
+      <div draggable onDragStart={onDragStart} title={`${item.name} — drag onto the timeline`} style={css(`background:#1E2026;border:1px solid ${isBase ? 'rgba(110,106,232,.55)' : 'rgba(255,255,255,.07)'};border-radius:11px;overflow:hidden;cursor:grab;${isBase ? 'box-shadow:0 0 0 3px rgba(110,106,232,.12);' : ''}`)}>
+        <div style={css('position:relative;aspect-ratio:9/16;max-height:150px;background:#15161a;display:grid;place-items:center')}>
+          {item.thumb ? <img src={item.thumb} alt="" draggable={false} style={css('width:100%;height:100%;object-fit:cover')} /> : <span style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>9:16</span>}
+          <span style={css("position:absolute;right:5px;bottom:5px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#E9EAEE;background:rgba(13,14,17,.72);border-radius:5px;padding:2px 5px")}>{fmtDur(item.duration)}</span>
+          {isBase && <span style={css('position:absolute;left:5px;top:5px;font-size:9px;font-weight:600;color:#fff;background:rgba(110,106,232,.9);border-radius:5px;padding:2px 6px')}>Base</span>}
+        </div>
+        <div style={css('display:flex;align-items:center;gap:2px;padding:6px 6px 7px')}>
+          <div style={css('flex:1;min-width:0;font-size:11px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')} title={item.name}>{item.name}</div>
+          <div onClick={(e) => { e.stopPropagation(); onRemove() }} style={css('color:#9BA0AC;font-size:13px;line-height:1;padding:0 3px;cursor:pointer')}>···</div>
+        </div>
+      </div>
+    )
+  }
+
+  const shell = isBase
+    ? 'background:#1E2026;border:1px solid rgba(110,106,232,.55);border-radius:12px;padding:10px;display:flex;gap:10px;box-shadow:0 0 0 3px rgba(110,106,232,.12);position:relative;cursor:grab'
+    : 'background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:10px;display:flex;gap:10px;cursor:grab'
   return (
-    <div onClick={onSetBase} style={css(shell)}>
+    <div draggable onDragStart={onDragStart} title={`${item.name} — drag onto the timeline`} style={css(shell)}>
       <div style={css(CLIP9x16)}>{item.thumb ? <img src={item.thumb} alt="" style={css('width:100%;height:100%;object-fit:cover;border-radius:7px')} draggable={false} /> : '9:16'}</div>
       <div style={css('flex:1;min-width:0;display:flex;flex-direction:column;gap:4px')}>
         <div style={css('font-size:12.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')} title={item.name}>{item.name}</div>
@@ -130,10 +155,10 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
   const library = useStore((s) => s.library)
   const basePath = useStore((s) => s.project.media?.path)
   const addToLibrary = useStore((s) => s.addToLibrary)
-  const setBaseFromLibrary = useStore((s) => s.setBaseFromLibrary)
   const removeFromLibrary = useStore((s) => s.removeFromLibrary)
   const addAllToTimeline = useStore((s) => s.addAllToTimeline)
   const [filter, setFilter] = useState('')
+  const [view, setView] = useState<'list' | 'grid'>('list')
 
   const q = filter.trim().toLowerCase()
   const items = q ? library.filter((it) => it.name.toLowerCase().includes(q)) : library
@@ -143,7 +168,13 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
     <div style={css(`width:${width}px;flex:none;display:flex;flex-direction:column;background:#191B20`)}>
       <div style={css('display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px')}>
         <div style={css('font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Media</div>
-        <div style={css('font-size:13px;color:#686E7B;cursor:pointer')}>⟨</div>
+        <div style={css('display:flex;align-items:center;gap:8px')}>
+          <div style={css('display:flex;gap:2px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:7px;padding:2px')}>
+            <button onClick={() => setView('list')} title="List view" style={css(`width:24px;height:20px;border:none;border-radius:5px;cursor:pointer;font-size:12px;display:grid;place-items:center;font-family:inherit;background:${view === 'list' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'list' ? '#B7B5F4' : '#9BA0AC'}`)}>☰</button>
+            <button onClick={() => setView('grid')} title="Grid view" style={css(`width:24px;height:20px;border:none;border-radius:5px;cursor:pointer;font-size:12px;display:grid;place-items:center;font-family:inherit;background:${view === 'grid' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'grid' ? '#B7B5F4' : '#9BA0AC'}`)}>▦</button>
+          </div>
+          <div style={css('font-size:13px;color:#686E7B;cursor:pointer')}>⟨</div>
+        </div>
       </div>
       <div style={css('padding:0 16px 12px;display:flex;flex-direction:column;gap:8px')}>
         <button onClick={addToLibrary} style={css('background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer;width:100%')}>＋ Import media</button>
@@ -157,23 +188,26 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
           <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter media" style={css('font-size:12px;color:#E9EAEE;flex:1;min-width:0;background:none;border:none;outline:none;font-family:inherit;padding:0;margin:0')} />
         </div>
       </div>
-      <div style={css('flex:1;min-height:0;padding:0 12px 12px;display:flex;flex-direction:column;gap:8px;overflow-y:auto')}>
-        {items.length === 0 && (
+      <div style={css('flex:1;min-height:0;padding:0 12px 12px;overflow-y:auto')}>
+        {items.length === 0 ? (
           <div style={css('color:#686E7B;font-size:12px;text-align:center;padding:24px 8px')}>
             {library.length === 0 ? 'No media yet — tap ＋ Import media to add clips.' : 'No clips match your filter.'}
           </div>
+        ) : view === 'grid' ? (
+          <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:8px')}>
+            {items.map((it) => (
+              <MediaClip key={it.id} item={it} grid isBase={!!basePath && it.path === basePath} onRemove={() => removeFromLibrary(it.id)} />
+            ))}
+          </div>
+        ) : (
+          <div style={css('display:flex;flex-direction:column;gap:8px')}>
+            {items.map((it) => (
+              <MediaClip key={it.id} item={it} isBase={!!basePath && it.path === basePath} onRemove={() => removeFromLibrary(it.id)} />
+            ))}
+          </div>
         )}
-        {items.map((it) => (
-          <MediaClip
-            key={it.id}
-            item={it}
-            isBase={!!basePath && it.path === basePath}
-            onSetBase={() => setBaseFromLibrary(it.id)}
-            onRemove={() => removeFromLibrary(it.id)}
-          />
-        ))}
       </div>
-      <div style={css('flex:none;padding:14px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Import once, reuse anywhere. Set a clip as base, or drag it onto a track.</div>
+      <div style={css('flex:none;padding:14px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Drag a clip onto the timeline to add it. Drag clips on the timeline to reorder them.</div>
     </div>
   )
 }

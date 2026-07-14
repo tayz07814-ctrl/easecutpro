@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client'
 import '../../styles.css'
 import '../newui.css'
 import { useStore } from '../../store'
+import { getSharedEngine } from '../../timelineEngine'
 import type { Project } from '@shared/types'
 import Dashboard from '../screens/Dashboard'
 import MobileDashboard from '../screens/MobileDashboard'
@@ -25,8 +26,16 @@ const metas = [
   { id: 'p6', name: 'Apartment tour — draft', thumb: svg('242a33'), createdAt: 0, updatedAt: now - 50 * 60 * min }
 ]
 
-const w = window as unknown as { api: Record<string, unknown>; __calls: string[] }
+const w = window as unknown as { api: Record<string, unknown>; __calls: string[]; __mainClips?: () => unknown; __engine?: () => unknown }
 w.__calls = []
+// Test hooks: read the shared engine's main-lane clip order + reach the engine
+// itself (drives the SAME beginDrag/updateDrag/endDrag path the timeline uses).
+w.__mainClips = () => {
+  const doc = getSharedEngine()?.document
+  const main = doc?.tracks.find((t) => t.isMain)
+  return (main?.clips ?? []).slice().sort((a, b) => a.start - b.start).map((c) => ({ src: c.sourcePath, start: c.start, name: c.name }))
+}
+w.__engine = () => getSharedEngine()
 const rec = (name: string) => (...args: unknown[]): unknown => {
   w.__calls.push(name + ':' + JSON.stringify(args).slice(0, 80))
   if (name === 'listProjects') return Promise.resolve(metas)
