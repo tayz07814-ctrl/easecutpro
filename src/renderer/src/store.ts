@@ -722,17 +722,30 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   addToLibrary: async () => {
-    const path = await window.api.openMediaDialog()
-    if (!path) return
-    if (get().library.some((it) => it.path === path)) {
-      set({ job: { active: false, percent: 100, message: 'Already in the library' } })
-      return
+    // Multi-select: creators can add several clips in one go. Duplicates
+    // (already in the library) are skipped so re-picking is harmless.
+    const picked = await window.api.openMediaDialogMulti()
+    if (!picked || !picked.length) return
+    set({ job: { active: true, kind: 'probe', percent: 0, message: picked.length > 1 ? `Adding ${picked.length} clips…` : 'Adding to library…' } })
+    const lib = [...get().library]
+    let added = 0
+    let lastName = ''
+    for (const p of picked) {
+      if (lib.some((it) => it.path === p.path)) continue
+      const item = await buildLibraryItem(p.path)
+      lib.push(item)
+      added++
+      lastName = item.name
     }
-    set({ job: { active: true, kind: 'probe', percent: 0, message: 'Adding to library…' } })
-    const item = await buildLibraryItem(path)
-    const library = [...get().library, item]
-    saveLibrary(library)
-    set({ library, job: { active: false, percent: 100, message: `Added ${item.name} to the library` } })
+    saveLibrary(lib)
+    set({
+      library: lib,
+      job: {
+        active: false,
+        percent: 100,
+        message: added === 0 ? 'Already in the library' : added === 1 ? `Added ${lastName} to the library` : `Added ${added} clips to the library`
+      }
+    })
   },
 
   importFolderToLibrary: async () => {
@@ -1207,17 +1220,24 @@ export const useStore = create<AppState>((set, get) => ({
   removeMusic: () => set((s) => ({ project: { ...s.project, music: undefined }, musicWaveform: null })),
 
   importMedia: async () => {
-    const path = await window.api.openMediaDialog()
-    if (!path) return
-    set({ job: { active: true, kind: 'probe', percent: 0, message: 'Probing media' } })
-    let item = get().library.find((it) => it.path === path)
-    if (!item) {
-      item = await buildLibraryItem(path)
-      const library = [...get().library, item]
-      saveLibrary(library)
-      set({ library })
+    // Multi-select import: every picked clip lands in the library; the first
+    // becomes the base you start editing.
+    const picked = await window.api.openMediaDialogMulti()
+    if (!picked || !picked.length) return
+    set({ job: { active: true, kind: 'probe', percent: 0, message: picked.length > 1 ? `Importing ${picked.length} clips…` : 'Probing media' } })
+    const lib = [...get().library]
+    const items: LibraryItem[] = []
+    for (const p of picked) {
+      let item = lib.find((it) => it.path === p.path)
+      if (!item) {
+        item = await buildLibraryItem(p.path)
+        lib.push(item)
+      }
+      items.push(item)
     }
-    get().setBaseFromLibrary(item.id)
+    saveLibrary(lib)
+    set({ library: lib })
+    if (items[0]) get().setBaseFromLibrary(items[0].id)
   },
 
   appendToBase: async () => {
