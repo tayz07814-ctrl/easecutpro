@@ -29,6 +29,28 @@ const HAIR = 'rgba(255,255,255,.06)'
 const CLIP9x16 =
   "width:42px;height:74px;flex:none;border-radius:7px;background:repeating-linear-gradient(45deg,#23252b 0,#23252b 8px,#1e2026 8px,#1e2026 16px);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:8px;color:#686E7B"
 
+// Small control glyphs drawn as SVG (not Unicode text) so they sit dead-centre in
+// the tiny square buttons — the +/−/list/grid characters never optically centre
+// (the fullwidth ＋ especially sits off to one side). They inherit `currentColor`.
+const icoStyle = { display: 'block' } as const
+const IcMinus = (): JSX.Element => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={icoStyle}><path d="M2.5 6h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+)
+const IcPlus = (): JSX.Element => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={icoStyle}><path d="M6 2.5v7M2.5 6h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+)
+const IcList = (): JSX.Element => (
+  <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style={icoStyle}><path d="M2 3.5h9M2 6.5h9M2 9.5h9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+)
+const IcGrid = (): JSX.Element => (
+  <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor" style={icoStyle}>
+    <rect x="2" y="2" width="3.6" height="3.6" rx="0.8" />
+    <rect x="7.4" y="2" width="3.6" height="3.6" rx="0.8" />
+    <rect x="2" y="7.4" width="3.6" height="3.6" rx="0.8" />
+    <rect x="7.4" y="7.4" width="3.6" height="3.6" rx="0.8" />
+  </svg>
+)
+
 // saveState → the design's status dot + label (green Saved / amber Saving / red failed).
 const SAVE_UI: Record<string, { c: string; t: string }> = {
   idle: { c: '#46A57C', t: 'Saved' },
@@ -170,8 +192,8 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
         <div style={css('font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Media</div>
         <div style={css('display:flex;align-items:center;gap:8px')}>
           <div style={css('display:flex;gap:2px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:7px;padding:2px')}>
-            <button onClick={() => setView('list')} title="List view" style={css(`width:24px;height:20px;border:none;border-radius:5px;cursor:pointer;font-size:12px;display:grid;place-items:center;font-family:inherit;background:${view === 'list' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'list' ? '#B7B5F4' : '#9BA0AC'}`)}>☰</button>
-            <button onClick={() => setView('grid')} title="Grid view" style={css(`width:24px;height:20px;border:none;border-radius:5px;cursor:pointer;font-size:12px;display:grid;place-items:center;font-family:inherit;background:${view === 'grid' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'grid' ? '#B7B5F4' : '#9BA0AC'}`)}>▦</button>
+            <button onClick={() => setView('list')} title="List view" style={css(`width:24px;height:20px;border:none;border-radius:5px;cursor:pointer;display:grid;place-items:center;background:${view === 'list' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'list' ? '#B7B5F4' : '#9BA0AC'}`)}><IcList /></button>
+            <button onClick={() => setView('grid')} title="Grid view" style={css(`width:24px;height:20px;border:none;border-radius:5px;cursor:pointer;display:grid;place-items:center;background:${view === 'grid' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'grid' ? '#B7B5F4' : '#9BA0AC'}`)}><IcGrid /></button>
           </div>
           <div style={css('font-size:13px;color:#686E7B;cursor:pointer')}>⟨</div>
         </div>
@@ -263,8 +285,8 @@ function TimelineZoom(): JSX.Element | null {
     `width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#1E2026;color:${dis ? '#4A4F5B' : '#C6C9D2'};font-size:16px;line-height:1;display:grid;place-items:center;cursor:${dis ? 'default' : 'pointer'};font-family:inherit`
   return (
     <div style={css('position:absolute;bottom:10px;right:14px;z-index:20;display:flex;align-items:center;gap:5px;background:rgba(20,21,25,.85);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:4px 5px')}>
-      <button title="Zoom out" onClick={step(1 / 1.4)} disabled={atMin} style={css(btn(atMin))}>−</button>
-      <button title="Zoom in" onClick={step(1.4)} disabled={atMax} style={css(btn(atMax))}>＋</button>
+      <button title="Zoom out" onClick={step(1 / 1.4)} disabled={atMin} style={css(btn(atMin))}><IcMinus /></button>
+      <button title="Zoom in" onClick={step(1.4)} disabled={atMax} style={css(btn(atMax))}><IcPlus /></button>
     </div>
   )
 }
