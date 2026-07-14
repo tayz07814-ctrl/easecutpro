@@ -1,4 +1,4 @@
-import { useEffect, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { css } from '../css'
 import { useStore } from '../../store'
@@ -26,6 +26,21 @@ function fmtDur(s: number): string {
 // (the earlier hybrid preview was what left "massive non-cut clips").
 
 const HAIR = 'rgba(255,255,255,.06)'
+
+// Resizable-panel bounds. Widths/heights are clamped to BOTH an absolute cap and
+// a viewport-aware cap that always reserves MIN_PREVIEW for the centre preview and
+// MIN_MIDDLE for the whole preview+panels row — so no drag can crush the preview,
+// clip a panel's buttons/scrollbar, or push the timeline off-screen.
+const MIN_LEFT = 200
+const MAX_LEFT = 480
+const MIN_RIGHT = 300
+const MAX_RIGHT = 560
+const MIN_TL = 160
+const MAX_TL = 680
+const MIN_PREVIEW = 320 // the centre preview never shrinks narrower than this
+const MIN_MIDDLE = 260 // the preview+panels row never shrinks shorter than this
+const HANDLE = 6 // .ec-divv / .ec-divh thickness
+
 const CLIP9x16 =
   "width:42px;height:74px;flex:none;border-radius:7px;background:repeating-linear-gradient(45deg,#23252b 0,#23252b 8px,#1e2026 8px,#1e2026 16px);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:8px;color:#686E7B"
 
@@ -187,7 +202,7 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
   const canSequence = library.some((it) => it.kind === 'video' || it.kind === 'image')
 
   return (
-    <div style={css(`width:${width}px;flex:none;display:flex;flex-direction:column;background:#191B20`)}>
+    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#191B20;overflow:hidden`)}>
       <div style={css('display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px')}>
         <div style={css('font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Media</div>
         <div style={css('display:flex;align-items:center;gap:8px')}>
@@ -243,7 +258,7 @@ const AI_TABS = ['AI Cut', 'Edit', 'Text', 'Overlays', 'Audio'] as const
 function AiPanel({ width }: { width: number }): JSX.Element {
   const [tab, setTab] = useState<(typeof AI_TABS)[number]>('AI Cut')
   return (
-    <div style={css(`width:${width}px;flex:none;display:flex;flex-direction:column;background:#191B20`)}>
+    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#191B20;overflow:hidden`)}>
       <div style={css(`display:flex;padding:0 8px;border-bottom:1px solid ${HAIR};flex:none`)}>
         {AI_TABS.map((t) =>
           t === tab ? (
@@ -303,6 +318,57 @@ export default function Editor(): JSX.Element {
   useEffect(() => { try { localStorage.setItem('ec.nu.rightW', String(rightW)) } catch { /* ignore */ } }, [rightW])
   useEffect(() => { try { localStorage.setItem('ec.nu.timelineH', String(timelineH)) } catch { /* ignore */ } }, [timelineH])
 
+  // Measured live so every clamp is viewport-aware (the preview never drops below
+  // MIN_PREVIEW; the preview+panels row never below MIN_MIDDLE).
+  const rootRef = useRef<HTMLDivElement>(null)
+  const middleRef = useRef<HTMLDivElement>(null)
+  const timelineRef = useRef<HTMLDivElement>(null)
+
+  // Widest a panel may be right now: its absolute cap, but never so wide that the
+  // centre preview drops below MIN_PREVIEW (the OTHER panel is fixed during a drag).
+  const maxLeftPx = (rightPx: number): number => {
+    const midW = middleRef.current?.clientWidth ?? window.innerWidth
+    return Math.max(MIN_LEFT, Math.min(MAX_LEFT, midW - 2 * HANDLE - rightPx - MIN_PREVIEW))
+  }
+  const maxRightPx = (leftPx: number): number => {
+    const midW = middleRef.current?.clientWidth ?? window.innerWidth
+    return Math.max(MIN_RIGHT, Math.min(MAX_RIGHT, midW - 2 * HANDLE - leftPx - MIN_PREVIEW))
+  }
+  // Tallest the timeline may be: its cap, but never so tall the preview+panels row
+  // drops below MIN_MIDDLE. flexV = the vertical zone the middle row + timeline
+  // share (the fixed topbar is excluded).
+  const maxTimelinePx = (): number => {
+    const flexV = (middleRef.current?.clientHeight ?? 0) + (timelineRef.current?.clientHeight ?? timelineH)
+    return Math.max(MIN_TL, Math.min(MAX_TL, flexV - MIN_MIDDLE))
+  }
+
+  // Joint re-clamp on mount + window resize, so a persisted size or a shrunk window
+  // can never leave the preview crushed or the timeline off-screen. Shrinks the
+  // panels (right first, then left) until the preview keeps MIN_PREVIEW. Held in a
+  // ref so the resize listener binds once yet always sees the latest sizes.
+  const clampRef = useRef<() => void>(() => undefined)
+  clampRef.current = (): void => {
+    const mid = middleRef.current
+    if (!mid) return
+    const midW = mid.clientWidth
+    let L = clampN(leftW, MIN_LEFT, MAX_LEFT)
+    let R = clampN(rightW, MIN_RIGHT, MAX_RIGHT)
+    let over = L + R + 2 * HANDLE + MIN_PREVIEW - midW
+    if (over > 0) { const c = Math.min(over, R - MIN_RIGHT); R -= c; over -= c }
+    if (over > 0) { const c = Math.min(over, L - MIN_LEFT); L -= c; over -= c }
+    if (L !== leftW) setLeftW(L)
+    if (R !== rightW) setRightW(R)
+    const flexV = mid.clientHeight + (timelineRef.current?.clientHeight ?? 0)
+    const maxH = Math.max(MIN_TL, Math.min(MAX_TL, flexV - MIN_MIDDLE))
+    if (timelineH > maxH || timelineH < MIN_TL) setTimelineH(clampN(timelineH, MIN_TL, maxH))
+  }
+  useEffect(() => {
+    const fn = (): void => clampRef.current()
+    fn()
+    window.addEventListener('resize', fn)
+    return () => window.removeEventListener('resize', fn)
+  }, [])
+
   // Pointer drag (mouse + touch): lock the cursor and kill text selection for the
   // whole gesture so the drag reads smoothly and doesn't highlight the UI.
   function beginDrag(cursor: string, onMove: (e: PointerEvent) => void): void {
@@ -324,23 +390,26 @@ export default function Editor(): JSX.Element {
     const startX = e.clientX
     const l0 = leftW
     const r0 = rightW
+    const maxL = maxLeftPx(r0)
+    const maxR = maxRightPx(l0)
     beginDrag('col-resize', (ev) => {
       const dx = ev.clientX - startX
-      if (which === 'left') setLeftW(clampN(l0 + dx, 200, 480))
-      else setRightW(clampN(r0 - dx, 300, 560))
+      if (which === 'left') setLeftW(clampN(l0 + dx, MIN_LEFT, maxL))
+      else setRightW(clampN(r0 - dx, MIN_RIGHT, maxR))
     })
   }
   function startRowDrag(e: ReactPointerEvent): void {
     e.preventDefault()
     const startY = e.clientY
     const h0 = timelineH
-    beginDrag('row-resize', (ev) => setTimelineH(clampN(h0 - (ev.clientY - startY), 160, 620)))
+    const maxH = maxTimelinePx()
+    beginDrag('row-resize', (ev) => setTimelineH(clampN(h0 - (ev.clientY - startY), MIN_TL, maxH)))
   }
 
   return (
-    <div style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column')} className="ec-newui ec-editor">
+    <div ref={rootRef} style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-editor">
       <TopBar />
-      <div style={css('display:flex;flex:1;min-height:0')}>
+      <div ref={middleRef} style={css('display:flex;flex:1;min-height:0;min-width:0')}>
         <MediaPanel width={leftW} />
         <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'left')} title="Drag to resize" />
         {/* Live editor core — the production preview. `.ec-legacy` restores the
@@ -357,7 +426,7 @@ export default function Editor(): JSX.Element {
       {/* Live editor core — the production timeline. Publishes the timeline engine
           that the preview + export read, so drag/trim/split and word/silence cuts
           all stay consistent (exactly the live app's behavior). */}
-      <div className="ec-legacy timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative`)}>
+      <div ref={timelineRef} className="ec-legacy timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative;overflow:hidden`)}>
         <TimelinePanel />
         <TimelineZoom />
       </div>
