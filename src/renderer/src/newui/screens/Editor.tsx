@@ -1,9 +1,12 @@
 import { useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { css } from '../css'
 import { useStore } from '../../store'
 import type { LibraryItem } from '@shared/types'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
+import ExportModal from '../../components/ExportModal'
+import SettingsModal from '../../components/SettingsModal'
 import { usePreviewPlayback } from '../data/usePreviewPlayback'
 
 function fmtDur(s: number): string {
@@ -193,8 +196,8 @@ function PreviewStage(): JSX.Element {
   const duration = media?.duration ?? 0
 
   return (
-    <div style={css('flex:1;min-width:0;display:flex;flex-direction:column;background:#141519')}>
-      <div style={css('flex:1;display:grid;place-items:center;padding:28px')}>
+    <div style={css('flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:#141519')}>
+      <div style={css('flex:1;min-height:0;display:grid;place-items:center;padding:28px')}>
         <PreviewVideo />
       </div>
       <div style={css('flex:none;display:flex;align-items:center;gap:16px;padding:0 20px 18px')}>
@@ -291,6 +294,7 @@ function Timeline(): JSX.Element {
   const pxPerSec = useStore((s) => s.project.pxPerSec)
   const setZoom = useStore((s) => s.setZoom)
   const playhead = useStore((s) => s.project.playhead)
+  const setPlayhead = useStore((s) => s.setPlayhead)
   const media = useStore((s) => s.project.media)
   const transcript = useStore((s) => s.project.transcript)
   const selected = useStore((s) => s.selectedWordIds)
@@ -339,8 +343,15 @@ function Timeline(): JSX.Element {
           <div style={css('flex:1;display:flex;align-items:center;gap:7px;padding:0 10px;color:#E9EAEE;font-weight:550;border-bottom:1px solid rgba(255,255,255,.04)')}>Video<div style={css('flex:1')} /><span style={css('color:#4A4F5B;font-size:10px')}>◦ ◦</span></div>
           <div style={css('height:34px;display:flex;align-items:center;gap:7px;padding:0 10px;color:#9BA0AC')}>Audio<div style={css('flex:1')} /><span style={css('color:#4A4F5B;font-size:10px')}>◦ ◦</span></div>
         </div>
-        {/* lanes */}
-        <div style={css('flex:1;position:relative;overflow:hidden')}>
+        {/* lanes — click to move the playhead (inverse of the playhead map) */}
+        <div
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect()
+            const frac = (e.clientX - r.left) / r.width
+            setPlayhead(Math.max(0, Math.min(duration, ((frac - 0.015) / 0.965) * duration)))
+          }}
+          style={css('flex:1;position:relative;overflow:hidden;cursor:pointer')}
+        >
           {/* ruler (derived from duration) */}
           <div style={css("height:26px;display:flex;align-items:center;border-bottom:1px solid rgba(255,255,255,.05);font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#565C68")}>
             {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} style={css(cell)}>{fmtMS((duration * i) / 6)}</div>)}
@@ -373,6 +384,8 @@ function Timeline(): JSX.Element {
 }
 
 export default function Editor(): JSX.Element {
+  const showExportModal = useStore((s) => s.showExportModal)
+  const showSettings = useStore((s) => s.showSettings)
   return (
     <div style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column')} className="ec-newui ec-editor">
       <TopBar />
@@ -383,6 +396,10 @@ export default function Editor(): JSX.Element {
       </div>
       <Timeline />
       <SilenceSettingsModal />
+      {/* Legacy modals assume the app's global border-box — portal them out of
+          the .ec-newui (content-box) subtree so they render correctly. */}
+      {showExportModal && createPortal(<ExportModal />, document.body)}
+      {showSettings && createPortal(<SettingsModal />, document.body)}
     </div>
   )
 }
