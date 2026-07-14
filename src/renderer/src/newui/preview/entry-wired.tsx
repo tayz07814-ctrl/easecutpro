@@ -2,11 +2,14 @@
 // + real Zustand store with realistic data, then mounts a WIRED screen so it can
 // be screenshotted / smoke-tested against the real store (not mock data).
 import { createRoot } from 'react-dom/client'
+import '../../styles.css'
 import '../newui.css'
 import { useStore } from '../../store'
 import type { Project } from '@shared/types'
 import Dashboard from '../screens/Dashboard'
+import MobileDashboard from '../screens/MobileDashboard'
 import Editor from '../screens/Editor'
+import MobileEditor from '../screens/MobileEditor'
 
 const min = 60_000
 const svg = (c: string): string =>
@@ -32,7 +35,7 @@ const rec = (name: string) => (...args: unknown[]): unknown => {
   if (name === 'openMediaDialogMulti') return Promise.resolve([])
   return Promise.resolve()
 }
-w.api = {
+const explicitApi: Record<string, unknown> = {
   listProjects: rec('listProjects'),
   getProject: rec('getProject'),
   createProject: rec('createProject'),
@@ -40,6 +43,23 @@ w.api = {
   saveProjectRecord: rec('saveProjectRecord'),
   openMediaDialogMulti: rec('openMediaDialogMulti')
 }
+// Any other engine/media method (waveform, thumbnails, probeMedia…) resolves to
+// a harmless empty default so mounting the live TimelinePanel/VideoPreview in the
+// harness doesn't throw on an un-stubbed IPC call (these exist in the real env).
+w.api = new Proxy(explicitApi, {
+  get(target, prop) {
+    if (typeof prop !== 'string' || prop === 'then') return undefined
+    if (prop in target) return target[prop]
+    return (): Promise<unknown> =>
+      Promise.resolve(
+        prop === 'waveform'
+          ? { peaks: new Float32Array(0), sampleRate: 44100, duration: 0 }
+          : prop === 'thumbnails'
+            ? []
+            : null
+      )
+  }
+})
 
 // Build a small transcript matching the design snippet: cut ranges → selected
 // word ids; inter-part gaps → staged silences (so the results state renders).
@@ -99,10 +119,10 @@ useStore.setState({
 })
 
 const screen = new URLSearchParams(location.search).get('screen') || '1a'
-const MAP: Record<string, () => JSX.Element> = { '1a': Dashboard, '1b': Editor }
+const MAP: Record<string, () => JSX.Element> = { '1a': Dashboard, '1b': Editor, '1a-m': MobileDashboard, '1b-m': MobileEditor }
 const Comp = MAP[screen] || Dashboard
 createRoot(document.getElementById('root') as HTMLElement).render(
-  <div id="screen" style={screen === '1b' ? { height: '100vh' } : undefined}>
+  <div id="screen" style={screen === '1b' || screen === '1b-m' ? { height: '100vh' } : undefined}>
     <Comp />
   </div>
 )

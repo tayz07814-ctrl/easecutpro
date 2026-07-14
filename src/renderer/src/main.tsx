@@ -13,6 +13,7 @@ import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
 import Dashboard from './newui/screens/Dashboard'
+import MobileDashboard from './newui/screens/MobileDashboard'
 import Editor from './newui/screens/Editor'
 import MobileEditor from './newui/screens/MobileEditor'
 import { isNewUi } from './newui/flag'
@@ -256,7 +257,7 @@ function Root(): JSX.Element {
 
   if (view === 'loading') return <div className="auth"><div className="muted">Loading…</div></div>
   if (view === 'auth') return <AuthScreen />
-  if (view === 'home') return NEW_UI ? <Dashboard /> : <HomeScreen />
+  if (view === 'home') return NEW_UI ? (isMobile ? <MobileDashboard /> : <Dashboard />) : <HomeScreen />
   if (NEW_UI) return isMobile ? <MobileEditor /> : <Editor />
   return <App />
 }

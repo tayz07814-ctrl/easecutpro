@@ -157,12 +157,21 @@
   height: 2px;
 }
 
-/* Mobile editor (screens/MobileEditor.tsx): let the production preview fill the
-   stage and hide its built-in transport — the mobile editor supplies its own
-   play/zoom row and a bottom tab bar. */
+/* Mobile editor (screens/MobileEditor.tsx): the stage is a FIXED height that the
+   user resizes via the grip. The production preview fills it, but its internal
+   min-heights (.video-wrap 200px / .stage 240px, from styles.css) would push the
+   stage taller than its set height as media/waveform load — that was the "timeline
+   keeps moving" drift. Reset them all to 0 so the stage holds exactly its height
+   and the flex:1 timeline stays put. Hide the preview's built-in transport — the
+   mobile editor supplies its own play/zoom row. */
+.ec-newui .ec-m-stage,
+.ec-newui .ec-m-stage .preview,
+.ec-newui .ec-m-stage .video-wrap,
+.ec-newui .ec-m-stage .stage {
+  min-height: 0;
+}
 .ec-newui .ec-m-stage .preview {
   flex: 1;
-  min-height: 0;
 }
 .ec-newui .ec-m-stage .transport {
   display: none;

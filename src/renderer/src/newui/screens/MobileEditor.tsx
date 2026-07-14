@@ -1,10 +1,12 @@
-import { useState, type ReactNode } from 'react'
+import { useState, useEffect, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { css } from '../css'
 import { useStore } from '../../store'
 import type { LibraryItem } from '@shared/types'
 import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../../components/timeline/TimelinePanel'
+import { MobileTools } from '../../components/mobile/MobileTools'
+import TextPanel from '../../components/TextPanel'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import ExportModal from '../../components/ExportModal'
@@ -12,16 +14,17 @@ import SettingsModal from '../../components/SettingsModal'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { primePlayback } from '../../clock'
 
-// Mobile layout for the new UI editor. Reuses the production preview + mobile
-// timeline (the same engine the desktop editor mounts) and the new Retake
-// Cleaner / Silence Settings, arranged for a phone: stage on top, transport, the
-// mobile timeline, and a bottom tab bar that opens sheets. Portrait-first.
+// Mobile layout for the new UI editor. Same chassis the proven legacy MobileApp
+// uses — a FIXED, user-resizable stage (so the timeline never drifts), the
+// production preview + mobile timeline (the shared engine), and the CapCut-style
+// MobileTools dock (Import + Cut Lord, contextual tools when a clip is selected).
+// Cut Lord / Silence Settings are the NEW-UI panels. Portrait-first.
 
 const HAIR = 'rgba(255,255,255,.06)'
 const ZOOM_MIN = 4
 const ZOOM_MAX = 2000
 
-type SheetKind = 'cut' | 'media' | null
+type SheetKind = 'cut' | 'media' | 'text' | null
 
 function Sheet({ onClose, children, header }: { onClose: () => void; children: ReactNode; header?: ReactNode }): JSX.Element {
   return (
@@ -100,15 +103,44 @@ export default function MobileEditor(): JSX.Element {
   const goHome = useStore((s) => s.goHome)
   const setShowExportModal = useStore((s) => s.setShowExportModal)
   const setShowSettings = useStore((s) => s.setShowSettings)
-  const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
   const showExportModal = useStore((s) => s.showExportModal)
   const showSettings = useStore((s) => s.showSettings)
   const [sheet, setSheet] = useState<SheetKind>(null)
   const hasBase = !!media || ((useStore.getState().project.baseSequence?.length ?? 0) > 0)
 
-  const tab = (label: string, onClick: () => void, primary?: boolean): JSX.Element => (
-    <button onClick={onClick} style={css(`flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 0 10px;background:none;border:none;color:${primary ? '#B7B5F4' : '#9BA0AC'};font-family:inherit;font-size:11px;font-weight:${primary ? 600 : 500};cursor:pointer`)}>{label}</button>
-  )
+  // Stage height (vh): fixed by default (~46% of the screen) and user-adjustable
+  // by dragging the grip under the canvas. A FIXED height is what keeps the
+  // timeline from drifting — a flex:1 stage fights the preview's internal
+  // min-heights (.video-wrap/.stage) and jumps as media/waveform load.
+  const [stageVh, setStageVh] = useState<number>(() => {
+    const v = Number(localStorage.getItem('ec.nu.mStageVh'))
+    return v >= 22 && v <= 58 ? v : 46
+  })
+  useEffect(() => {
+    localStorage.setItem('ec.nu.mStageVh', String(stageVh))
+  }, [stageVh])
+  // Consume the pointer-down (preventDefault + stopPropagation) so iOS doesn't
+  // hijack the touch as a page scroll before the drag starts; window listeners
+  // then drive the move. Pointer events only (no touch+mouse) — avoids the iOS
+  // double-drag from simulated mouse events.
+  function startStageDrag(e: ReactPointerEvent<HTMLDivElement>): void {
+    e.preventDefault()
+    e.stopPropagation()
+    const vh0 = stageVh
+    const y0 = e.clientY
+    const onMove = (ev: PointerEvent): void => {
+      const dvh = ((ev.clientY - y0) / window.innerHeight) * 100
+      setStageVh(Math.min(58, Math.max(22, vh0 + dvh)))
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
 
   return (
     <div style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-m-editor">
@@ -120,9 +152,14 @@ export default function MobileEditor(): JSX.Element {
         <button onClick={() => setShowExportModal(true)} style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 14px;cursor:pointer')}>Export</button>
       </div>
 
-      {/* Stage — production preview (its own transport is hidden via CSS below) */}
-      <div className="ec-legacy ec-m-stage" style={css('flex:1;min-height:0;display:flex;flex-direction:column;background:#000')}>
+      {/* Stage — FIXED height; production preview (its own transport is hidden via CSS) */}
+      <div className="ec-legacy ec-m-stage" style={css(`flex:none;height:${stageVh}vh;min-height:0;display:flex;flex-direction:column;background:#000`)}>
         <VideoPreview />
+      </div>
+
+      {/* Stage resize grip */}
+      <div onPointerDown={startStageDrag} style={css('flex:none;height:20px;display:grid;place-items:center;cursor:row-resize;touch-action:none')}>
+        <span style={css('width:44px;height:4px;border-radius:2px;background:rgba(255,255,255,.18)')} />
       </div>
 
       {/* Transport */}
@@ -140,17 +177,18 @@ export default function MobileEditor(): JSX.Element {
         <IcBtn label="＋" onClick={() => zoomStep(1.4)} />
       </div>
 
-      {/* Mobile timeline */}
-      <div className="ec-legacy ec-m-tl" style={css(`flex:none;height:172px;min-height:0;border-top:1px solid ${HAIR};position:relative`)}>
+      {/* Mobile timeline — grows to fill the space between the fixed stage and dock */}
+      <div className="ec-legacy ec-m-tl" style={css(`flex:1;min-height:120px;border-top:1px solid ${HAIR};position:relative`)}>
         <TimelinePanel mobile />
       </div>
 
-      {/* Bottom tabs */}
-      <div style={css(`flex:none;display:flex;border-top:1px solid ${HAIR};background:#191B20;padding-bottom:env(safe-area-inset-bottom)`)}>
-        {tab('✦ Cut Lord', () => setSheet('cut'), true)}
-        {tab('Media', () => setSheet('media'))}
-        {tab('Silence', () => setShowSilenceSettings(true))}
-        {tab('Export', () => setShowExportModal(true))}
+      {/* Bottom dock — Import + Cut Lord (contextual tools when a clip is selected) */}
+      <div className="ec-legacy ec-m-dock" style={css(`flex:none;border-top:1px solid ${HAIR};background:#191B20`)}>
+        <MobileTools
+          onImport={() => setSheet('media')}
+          onCutlord={() => setSheet('cut')}
+          onEditText={() => setSheet('text')}
+        />
       </div>
 
       {/* Sheets + modals */}
@@ -160,6 +198,13 @@ export default function MobileEditor(): JSX.Element {
         </Sheet>
       )}
       {sheet === 'media' && <MediaSheet onClose={() => setSheet(null)} />}
+      {sheet === 'text' && (
+        <Sheet onClose={() => setSheet(null)} header={<div style={css('flex:none;padding:6px 16px 12px;font-size:15px;font-weight:650')}>Text</div>}>
+          <div className="ec-legacy" style={css('flex:1;min-height:0;overflow:auto;padding:0 14px 16px')}>
+            <TextPanel />
+          </div>
+        </Sheet>
+      )}
       <SilenceSettingsModal />
       {showExportModal && createPortal(<ExportModal />, document.body)}
       {showSettings && createPortal(<SettingsModal />, document.body)}
