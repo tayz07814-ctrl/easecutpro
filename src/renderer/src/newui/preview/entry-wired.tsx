@@ -73,8 +73,9 @@ const rk = buildRetakeSeed()
 const seededProject = {
   ...useStore.getState().freshProject(),
   name: 'Morning routine — bedroom take',
-  media: { path: 'seed-base', duration: 208, width: 1080, height: 1920, hasAudio: true, hasVideo: true, fps: 30 },
-  transcript: rk.transcript
+  media: { path: 'Bedroom take 3.mp4', duration: 208, width: 1080, height: 1920, hasAudio: true, hasVideo: true, fps: 30 },
+  transcript: rk.transcript,
+  playhead: 41.2
 } as unknown as Project
 useStore.setState({
   user: { id: 'u', email: 'tayz07814@gmail.com' },

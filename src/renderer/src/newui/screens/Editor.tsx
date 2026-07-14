@@ -188,37 +188,93 @@ function PreviewStage(): JSX.Element {
   )
 }
 
+// Only the AI Cut tab has approved design content. The others (Edit/Text/
+// Overlays/Audio) are wired for active-state + selection but their panels await
+// design (and the "Audio" ↔ silence/ost mapping decision), so they show an
+// honest placeholder rather than mounting off-design legacy panels.
+const AI_TABS = ['AI Cut', 'Edit', 'Text', 'Overlays', 'Audio'] as const
+
 function AiPanel(): JSX.Element {
+  const [tab, setTab] = useState<(typeof AI_TABS)[number]>('AI Cut')
   return (
     <div style={css(`width:360px;flex:none;border-left:1px solid ${HAIR};display:flex;flex-direction:column;background:#191B20`)}>
       <div style={css(`display:flex;padding:0 8px;border-bottom:1px solid ${HAIR};flex:none`)}>
-        <div style={css('padding:13px 12px 11px;font-size:12.5px;font-weight:600;color:#E9EAEE;border-bottom:2px solid #6E6AE8;margin-bottom:-1px')}>AI Cut</div>
-        <div style={css('padding:13px 12px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>Edit</div>
-        <div style={css('padding:13px 12px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>Text</div>
-        <div style={css('padding:13px 12px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>Overlays</div>
-        <div style={css('padding:13px 12px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>Audio</div>
+        {AI_TABS.map((t) =>
+          t === tab ? (
+            <div key={t} style={css('padding:13px 12px 11px;font-size:12.5px;font-weight:600;color:#E9EAEE;border-bottom:2px solid #6E6AE8;margin-bottom:-1px')}>{t}</div>
+          ) : (
+            <div key={t} onClick={() => setTab(t)} style={css('padding:13px 12px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>{t}</div>
+          )
+        )}
       </div>
-      <RetakeCleanerPanel />
+      {tab === 'AI Cut' ? (
+        <RetakeCleanerPanel />
+      ) : (
+        <div style={css('flex:1;display:grid;place-items:center;padding:24px;text-align:center')}>
+          <div style={css('font-size:12.5px;color:#686E7B;line-height:1.6')}>{tab} tools are coming to the new editor.</div>
+        </div>
+      )}
     </div>
   )
 }
 
+function fmtTC(t: number, fps = 30): string {
+  const tt = Math.max(0, t)
+  const h = Math.floor(tt / 3600)
+  const m = Math.floor((tt % 3600) / 60)
+  const s = Math.floor(tt % 60)
+  const f = Math.floor((tt % 1) * fps)
+  return [h, m, s, f].map((n) => String(n).padStart(2, '0')).join(':')
+}
+function fmtMS(t: number): string {
+  const m = Math.floor(t / 60)
+  const s = Math.floor(t % 60)
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
 function Timeline(): JSX.Element {
+  const magnet = useStore((s) => s.project.magnet)
+  const toggleMagnet = useStore((s) => s.toggleMagnet)
+  const splitAtPlayhead = useStore((s) => s.splitAtPlayhead)
+  const splitBaseAtPlayhead = useStore((s) => s.splitBaseAtPlayhead)
+  const pxPerSec = useStore((s) => s.project.pxPerSec)
+  const setZoom = useStore((s) => s.setZoom)
+  const playhead = useStore((s) => s.project.playhead)
+  const media = useStore((s) => s.project.media)
+  const transcript = useStore((s) => s.project.transcript)
+  const selected = useStore((s) => s.selectedWordIds)
+  const projSilences = useStore((s) => s.project.silences)
+  const staged = useStore((s) => s.stagedSilences)
+  const stagedSel = useStore((s) => s.stagedSilenceSel)
+  const smartSilence = useStore((s) => s.smartSilenceCutter)
+
+  const duration = media?.duration || (transcript?.words.length ? transcript.words[transcript.words.length - 1].end : 0) || 1
+  const clipName = media?.path ? media.path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, '') : 'Base'
+  const pct = (t: number): number => Math.max(0, Math.min(100, (t / duration) * 100))
+  const zoomFrac = Math.max(0, Math.min(1, (pxPerSec - 10) / (300 - 10))) * 100
+
+  // Proposed word cuts → red bands; enabled silences → amber bands (real data).
+  const wById = new Map((transcript?.words ?? []).map((w) => [w.id, w]))
+  const cutBands = [...selected].map((id) => wById.get(id)).filter(Boolean).map((w) => ({ l: pct(w!.start), wd: Math.max(0.4, pct(w!.end - w!.start)) }))
+  const silBands = [...(smartSilence ? staged.filter((r) => stagedSel.has(r.id)) : []), ...projSilences].map((r) => ({ l: pct(r.start), wd: Math.max(0.4, pct(r.end - r.start)) }))
   const cell = 'width:16.66%;padding-left:8px'
+  const playLeft = `${1.5 + (Math.max(0, Math.min(duration, playhead)) / duration) * 96.5}%`
+
   return (
     <div style={css(`flex:none;height:236px;border-top:1px solid ${HAIR};background:#191B20;display:flex;flex-direction:column`)}>
       <div style={css('display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;border-bottom:1px solid rgba(255,255,255,.05)')}>
-        <span style={css('font-size:11.5px;color:#B7B5F4;background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.28);border-radius:7px;padding:4px 10px;font-weight:550')}>Snap</span>
+        <span onClick={toggleMagnet} style={css(magnet ? 'font-size:11.5px;color:#B7B5F4;background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.28);border-radius:7px;padding:4px 10px;font-weight:550;cursor:pointer' : 'font-size:11.5px;color:#9BA0AC;border:1px solid transparent;border-radius:7px;padding:4px 10px;font-weight:550;cursor:pointer')}>Snap</span>
         <span style={css('font-size:11.5px;color:#9BA0AC;padding:4px 10px;border-radius:7px;cursor:pointer')}>＋ Track</span>
-        <span style={css('font-size:11.5px;color:#9BA0AC;padding:4px 10px;border-radius:7px;cursor:pointer')}>Split</span>
+        <span onClick={() => { splitAtPlayhead() || splitBaseAtPlayhead() }} style={css('font-size:11.5px;color:#9BA0AC;padding:4px 10px;border-radius:7px;cursor:pointer')}>Split</span>
         <span style={css('font-size:11.5px;color:#9BA0AC;padding:4px 10px;border-radius:7px;cursor:pointer')}>Detach audio</span>
         <div style={css('flex:1')} />
-        <div style={css("font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9BA0AC")}>00:00:41:06</div>
+        <div style={css("font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9BA0AC")}>{fmtTC(playhead)}</div>
         <div style={css('display:flex;align-items:center;gap:8px;margin-left:8px')}>
           <span style={css('font-size:12px;color:#686E7B')}>−</span>
           <div style={css('width:90px;height:3px;border-radius:2px;background:#2A2D36;position:relative')}>
-            <div style={css('width:55%;height:100%;border-radius:2px;background:#686E7B')} />
-            <div style={css('position:absolute;left:55%;top:50%;transform:translate(-50%,-50%);width:11px;height:11px;border-radius:50%;background:#C6C9D2')} />
+            <div style={css(`width:${zoomFrac}%;height:100%;border-radius:2px;background:#686E7B`)} />
+            <div style={css(`position:absolute;left:${zoomFrac}%;top:50%;transform:translate(-50%,-50%);width:11px;height:11px;border-radius:50%;background:#C6C9D2`)} />
+            <input type="range" min={10} max={300} value={pxPerSec} onChange={(e) => setZoom(Number(e.target.value))} style={css('position:absolute;left:0;right:0;top:-8px;bottom:-8px;width:100%;height:auto;margin:0;opacity:0;cursor:pointer')} />
           </div>
           <span style={css('font-size:12px;color:#686E7B')}>＋</span>
         </div>
@@ -234,10 +290,11 @@ function Timeline(): JSX.Element {
         </div>
         {/* lanes */}
         <div style={css('flex:1;position:relative;overflow:hidden')}>
-          {/* ruler */}
+          {/* ruler (derived from duration) */}
           <div style={css("height:26px;display:flex;align-items:center;border-bottom:1px solid rgba(255,255,255,.05);font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#565C68")}>
-            <div style={css(cell)}>00:00</div><div style={css(cell)}>00:30</div><div style={css(cell)}>01:00</div><div style={css(cell)}>01:30</div><div style={css(cell)}>02:00</div><div style={css(cell)}>02:30</div>
+            {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} style={css(cell)}>{fmtMS((duration * i) / 6)}</div>)}
           </div>
+          {/* text + overlay lanes — illustrative (not yet data-driven; flagged) */}
           <div style={css('height:26px;border-bottom:1px solid rgba(255,255,255,.04);position:relative')}><div style={css('position:absolute;left:22%;width:14%;top:5px;bottom:5px;border-radius:5px;background:rgba(91,155,217,.22);border:1px solid rgba(91,155,217,.4)')} /></div>
           <div style={css('height:26px;border-bottom:1px solid rgba(255,255,255,.04);position:relative')}><div style={css('position:absolute;left:48%;width:9%;top:5px;bottom:5px;border-radius:5px;background:rgba(91,155,217,.14);border:1px solid rgba(91,155,217,.3)')} /></div>
           {/* video lane */}
@@ -245,26 +302,19 @@ function Timeline(): JSX.Element {
             <div style={css('position:absolute;left:1.5%;right:2%;top:8px;bottom:8px;border-radius:9px;overflow:hidden;background:repeating-linear-gradient(90deg,#2b2e37 0,#2b2e37 34px,#24262e 34px,#24262e 68px);border:1px solid rgba(255,255,255,.12)')}>
               <div style={css('position:absolute;left:0;top:0;bottom:0;width:6px;background:rgba(110,106,232,.9);border-radius:9px 0 0 9px')} />
               <div style={css('position:absolute;right:0;top:0;bottom:0;width:6px;background:rgba(110,106,232,.9);border-radius:0 9px 9px 0')} />
-              <div style={css('position:absolute;left:10px;top:6px;font-size:10.5px;font-weight:550;color:#C6C9D2')}>Bedroom take 3</div>
-              {/* proposed cut regions */}
-              <div style={css('position:absolute;left:18%;width:4%;top:0;bottom:0;background:rgba(217,104,110,.28);border-left:1px solid rgba(217,104,110,.8);border-right:1px solid rgba(217,104,110,.8)')} />
-              <div style={css('position:absolute;left:44%;width:2.4%;top:0;bottom:0;background:rgba(217,104,110,.28);border-left:1px solid rgba(217,104,110,.8);border-right:1px solid rgba(217,104,110,.8)')} />
-              <div style={css('position:absolute;left:71%;width:5%;top:0;bottom:0;background:rgba(217,104,110,.28);border-left:1px solid rgba(217,104,110,.8);border-right:1px solid rgba(217,104,110,.8)')} />
-              {/* silence regions */}
-              <div style={css('position:absolute;left:9%;width:2.2%;top:0;bottom:0;background:rgba(217,164,74,.24)')} />
-              <div style={css('position:absolute;left:33%;width:1.6%;top:0;bottom:0;background:rgba(217,164,74,.24)')} />
-              <div style={css('position:absolute;left:57%;width:2.8%;top:0;bottom:0;background:rgba(217,164,74,.24)')} />
-              <div style={css('position:absolute;left:86%;width:2%;top:0;bottom:0;background:rgba(217,164,74,.24)')} />
+              <div style={css('position:absolute;left:10px;top:6px;font-size:10.5px;font-weight:550;color:#C6C9D2')}>{clipName}</div>
+              {cutBands.map((b, i) => <div key={'c' + i} style={css(`position:absolute;left:${b.l}%;width:${b.wd}%;top:0;bottom:0;background:rgba(217,104,110,.28);border-left:1px solid rgba(217,104,110,.8);border-right:1px solid rgba(217,104,110,.8)`)} />)}
+              {silBands.map((b, i) => <div key={'s' + i} style={css(`position:absolute;left:${b.l}%;width:${b.wd}%;top:0;bottom:0;background:rgba(217,164,74,.24)`)} />)}
             </div>
           </div>
-          {/* audio lane */}
+          {/* audio lane — illustrative waveform (flagged) */}
           <div style={css('position:absolute;bottom:0;height:34px;left:0;right:0')}>
             <div style={css('position:absolute;left:1.5%;right:2%;top:5px;bottom:5px;border-radius:6px;background:rgba(70,165,124,.1);border:1px solid rgba(70,165,124,.22);overflow:hidden')}>
               <div style={css('position:absolute;inset:0;background:repeating-linear-gradient(90deg,rgba(70,165,124,.4) 0,rgba(70,165,124,.4) 2px,transparent 2px,transparent 5px);-webkit-mask-image:linear-gradient(0deg,transparent 10%,#000 30%,#000 70%,transparent 90%)')} />
             </div>
           </div>
-          {/* playhead */}
-          <div style={css('position:absolute;left:20%;top:0;bottom:0;width:1.5px;background:#E9EAEE;z-index:4')}><div style={css('position:absolute;top:0;left:50%;transform:translateX(-50%);width:11px;height:14px;background:#E9EAEE;border-radius:3px 3px 6px 6px')} /></div>
+          {/* playhead (real position) */}
+          <div style={css(`position:absolute;left:${playLeft};top:0;bottom:0;width:1.5px;background:#E9EAEE;z-index:4`)}><div style={css('position:absolute;top:0;left:50%;transform:translateX(-50%);width:11px;height:14px;background:#E9EAEE;border-radius:3px 3px 6px 6px')} /></div>
         </div>
       </div>
     </div>
