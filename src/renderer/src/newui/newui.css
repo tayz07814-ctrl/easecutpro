@@ -8,6 +8,29 @@
    from each element's inline style (see css.ts); tokens below are the
    documented 1e palette, kept for Stage C migration and reference. */
 
+/* Self-hosted design faces (loaded only when a .ec-newui element renders). */
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('./fonts/InstrumentSans.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/IBMPlexMono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./fonts/IBMPlexMono-500.woff2') format('woff2');
+}
+
 .ec-newui {
   /* palette (screen 1e) */
   --ec-bg: #17181c;

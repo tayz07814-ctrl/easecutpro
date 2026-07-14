@@ -12,7 +12,14 @@ import { cloudAuthMe } from './cloud/auth'
 import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
+import Dashboard from './newui/screens/Dashboard'
+import Editor from './newui/screens/Editor'
+import { isNewUi } from './newui/flag'
 import './styles.css'
+import './newui/newui.css'
+
+// Gated cutover: legacy is the default; ?newui=1 (persisted) opts into the new UI.
+const NEW_UI = isNewUi()
 
 if (IS_WEB) {
   if (IS_CLOUD) installCloudApi()
@@ -227,8 +234,8 @@ function Root(): JSX.Element {
 
   if (view === 'loading') return <div className="auth"><div className="muted">Loading…</div></div>
   if (view === 'auth') return <AuthScreen />
-  if (view === 'home') return <HomeScreen />
-  return <App />
+  if (view === 'home') return NEW_UI ? <Dashboard /> : <HomeScreen />
+  return NEW_UI ? <Editor /> : <App />
 }
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
