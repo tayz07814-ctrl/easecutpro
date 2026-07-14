@@ -361,6 +361,9 @@ export interface ExportSettings {
   height: number
   /** target video bitrate in Mbps. */
   bitrateMbps: number
+  /** creator-chosen output file name (no extension needed); sanitized, .mp4
+   *  appended. Falls back to the project name when empty. */
+  filename?: string
 }
 
 /** A baked text overlay PNG (full-frame, base resolution) + its time window. */

@@ -2833,15 +2833,18 @@ export const useStore = create<AppState>((set, get) => ({
         { width: settings.width, height: settings.height, bitrateMbps: settings.bitrateMbps },
         (percent, message) => set({ job: { active: true, kind: 'export', percent, message } })
       )
+      // Creator-chosen file name wins (sanitized, single .mp4); else the derived one.
+      const chosen = (settings.filename ?? '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim()
+      const dl = chosen ? `${chosen}.mp4` : name
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = name
+      a.download = dl
       document.body.appendChild(a)
       a.click()
       a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 8000)
-      set({ job: { active: false, percent: 100, message: `Saved ${name} to this device` } })
+      set({ job: { active: false, percent: 100, message: `Saved ${dl} to this device` } })
     } catch (e) {
       set({
         job: { active: false, percent: 0, message: `On-device export: ${safeErrMessage(e)} — use the normal Export instead` }

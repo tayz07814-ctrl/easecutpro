@@ -68,6 +68,8 @@ export default function ExportModal(): JSX.Element {
   const [h, setH] = useState(initial.h)
   const [bitrate, setBitrate] = useState(12)
   const [active, setActive] = useState(aspectW && aspectH ? `${aspectW}:${aspectH}` : 'Source')
+  // Output file name — defaults to the project title, editable by the creator.
+  const [filename, setFilename] = useState(() => (project.name || 'export').trim())
 
   function applyPreset(p: Preset): void {
     setActive(p.label)
@@ -89,6 +91,18 @@ export default function ExportModal(): JSX.Element {
         <div className="modal-head">
           <h3>Export settings</h3>
           <button onClick={() => close(false)}>✕</button>
+        </div>
+
+        <div className="exp-row">
+          <span className="exp-label">File name</span>
+          <input
+            type="text"
+            value={filename}
+            onChange={(e) => setFilename(e.target.value)}
+            placeholder={project.name || 'export'}
+            style={{ flex: 1 }}
+          />
+          <span className="muted small">.mp4</span>
         </div>
 
         <div className="exp-row">
@@ -142,7 +156,7 @@ export default function ExportModal(): JSX.Element {
                   ? `Not available for this timeline yet: ${localGate}`
                   : 'Render + encode in this browser and save straight to this device — nothing is uploaded'
               }
-              onClick={() => void exportVideoOnDevice({ width: w, height: h, bitrateMbps: bitrate })}
+              onClick={() => void exportVideoOnDevice({ width: w, height: h, bitrateMbps: bitrate, filename })}
             >
               📱 Export on this device {!IS_CLOUD && <span className="muted small">beta</span>}
             </button>
@@ -157,7 +171,7 @@ export default function ExportModal(): JSX.Element {
             <button
               className="primary"
               disabled={!canExport || w < 16 || h < 16}
-              onClick={() => exportVideo({ width: w, height: h, bitrateMbps: bitrate })}
+              onClick={() => exportVideo({ width: w, height: h, bitrateMbps: bitrate, filename })}
             >
               ⬆ Export
             </button>
