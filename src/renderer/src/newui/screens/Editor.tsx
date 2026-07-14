@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { css } from '../css'
 import { useStore } from '../../store'
 import type { LibraryItem } from '@shared/types'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
+import { usePreviewPlayback } from '../data/usePreviewPlayback'
 
 function fmtDur(s: number): string {
   if (!s || s < 0) return '0:00'
@@ -147,32 +148,82 @@ function MediaPanel(): JSX.Element {
   )
 }
 
+function fmtT(t: number): string {
+  const tt = Math.max(0, t || 0)
+  const m = Math.floor(tt / 60)
+  const s = Math.floor(tt % 60)
+  const d = Math.floor((tt % 1) * 10)
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${d}`
+}
+
+const ASPECTS: [string, number, number][] = [['Source', 0, 0], ['9:16', 9, 16], ['16:9', 16, 9], ['1:1', 1, 1], ['4:5', 4, 5]]
+
+function PreviewVideo(): JSX.Element {
+  const ref = useRef<HTMLVideoElement>(null)
+  const mediaUrl = useStore((s) => s.mediaUrl)
+  const playing = useStore((s) => s.playing)
+  const setPlaying = useStore((s) => s.setPlaying)
+  const aw = useStore((s) => s.project.aspectW)
+  const ah = useStore((s) => s.project.aspectH)
+  const media = useStore((s) => s.project.media)
+  usePreviewPlayback(ref)
+  const ar = aw && ah ? `${aw}/${ah}` : media?.width && media?.height ? `${media.width}/${media.height}` : '9/16'
+  if (!mediaUrl) {
+    return (
+      <div style={css(`height:100%;max-height:560px;aspect-ratio:${ar};border-radius:12px;background:repeating-linear-gradient(45deg,#1d1f25 0,#1d1f25 14px,#191b20 14px,#191b20 28px);border:1px solid rgba(255,255,255,.06);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#686E7B`)}>video preview</div>
+    )
+  }
+  return (
+    <div style={css(`height:100%;max-height:560px;aspect-ratio:${ar};border-radius:12px;overflow:hidden;background:#000;border:1px solid rgba(255,255,255,.06)`)}>
+      <video ref={ref} src={mediaUrl} playsInline onClick={() => setPlaying(!playing)} style={css('width:100%;height:100%;object-fit:contain;display:block;cursor:pointer')} />
+    </div>
+  )
+}
+
 function PreviewStage(): JSX.Element {
+  const aw = useStore((s) => s.project.aspectW)
+  const ah = useStore((s) => s.project.aspectH)
+  const setAspect = useStore((s) => s.setAspect)
+  const playing = useStore((s) => s.playing)
+  const setPlaying = useStore((s) => s.setPlaying)
+  const setPlayhead = useStore((s) => s.setPlayhead)
+  const playhead = useStore((s) => s.project.playhead)
+  const media = useStore((s) => s.project.media)
+  const mediaUrl = useStore((s) => s.mediaUrl)
+  const duration = media?.duration ?? 0
+
   return (
     <div style={css('flex:1;min-width:0;display:flex;flex-direction:column;background:#141519')}>
       <div style={css('flex:1;display:grid;place-items:center;padding:28px')}>
-        <div style={css("height:100%;max-height:560px;aspect-ratio:9/16;border-radius:12px;background:repeating-linear-gradient(45deg,#1d1f25 0,#1d1f25 14px,#191b20 14px,#191b20 28px);border:1px solid rgba(255,255,255,.06);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#686E7B")}>video preview</div>
+        <PreviewVideo />
       </div>
       <div style={css('flex:none;display:flex;align-items:center;gap:16px;padding:0 20px 18px')}>
         <div style={css('display:flex;gap:2px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:3px')}>
-          <span style={css('font-size:11.5px;color:#9BA0AC;padding:5px 10px;border-radius:7px;cursor:pointer')}>Source</span>
-          <span style={css('font-size:11.5px;color:#E9EAEE;background:#2E3140;border-radius:7px;padding:5px 10px;font-weight:550')}>9:16</span>
-          <span style={css('font-size:11.5px;color:#9BA0AC;padding:5px 10px;border-radius:7px;cursor:pointer')}>16:9</span>
-          <span style={css('font-size:11.5px;color:#9BA0AC;padding:5px 10px;border-radius:7px;cursor:pointer')}>1:1</span>
-          <span style={css('font-size:11.5px;color:#9BA0AC;padding:5px 10px;border-radius:7px;cursor:pointer')}>4:5</span>
+          {ASPECTS.map(([label, w, h]) => {
+            const on = aw === w && ah === h
+            return on ? (
+              <span key={label} style={css('font-size:11.5px;color:#E9EAEE;background:#2E3140;border-radius:7px;padding:5px 10px;font-weight:550')}>{label}</span>
+            ) : (
+              <span key={label} onClick={() => setAspect(w, h)} style={css('font-size:11.5px;color:#9BA0AC;padding:5px 10px;border-radius:7px;cursor:pointer')}>{label}</span>
+            )
+          })}
         </div>
         <div style={css('flex:1')} />
         <div style={css('display:flex;align-items:center;gap:6px')}>
-          <div style={css('width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:#9BA0AC;cursor:pointer')}>
+          <div onClick={() => setPlayhead(0)} style={css('width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:#9BA0AC;cursor:pointer')}>
             <div style={css('display:flex;gap:1px')}>
               <div style={css('width:2px;height:9px;background:currentColor')} />
               <div style={css('width:0;height:0;border-right:7px solid currentColor;border-top:5px solid transparent;border-bottom:5px solid transparent')} />
             </div>
           </div>
-          <div style={css('width:38px;height:38px;border-radius:50%;background:#E9EAEE;display:grid;place-items:center;cursor:pointer')}>
-            <div style={css('width:0;height:0;border-left:11px solid #17181C;border-top:7px solid transparent;border-bottom:7px solid transparent;margin-left:2px')} />
+          <div onClick={() => mediaUrl && setPlaying(!playing)} style={css('width:38px;height:38px;border-radius:50%;background:#E9EAEE;display:grid;place-items:center;cursor:pointer')}>
+            {playing ? (
+              <div style={css('display:flex;gap:3px')}><div style={css('width:4px;height:14px;background:#17181C;border-radius:1px')} /><div style={css('width:4px;height:14px;background:#17181C;border-radius:1px')} /></div>
+            ) : (
+              <div style={css('width:0;height:0;border-left:11px solid #17181C;border-top:7px solid transparent;border-bottom:7px solid transparent;margin-left:2px')} />
+            )}
           </div>
-          <div style={css('width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:#9BA0AC;cursor:pointer')}>
+          <div onClick={() => setPlayhead(duration)} style={css('width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:#9BA0AC;cursor:pointer')}>
             <div style={css('display:flex;gap:1px')}>
               <div style={css('width:0;height:0;border-left:7px solid currentColor;border-top:5px solid transparent;border-bottom:5px solid transparent')} />
               <div style={css('width:2px;height:9px;background:currentColor')} />
@@ -181,7 +232,7 @@ function PreviewStage(): JSX.Element {
         </div>
         <div style={css('flex:1')} />
         <div style={css("font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#9BA0AC")}>
-          <span style={css('color:#E9EAEE')}>00:41.2</span> / 03:28.0
+          <span style={css('color:#E9EAEE')}>{fmtT(playhead)}</span> / {fmtT(duration)}
         </div>
       </div>
     </div>
