@@ -11,7 +11,11 @@ import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../../components/timeline/TimelinePanel'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { primePlayback } from '../../clock'
-import { framesToSeconds } from '@shared/timeline/time'
+import { framesToSeconds, secondsToFrames } from '@shared/timeline/time'
+import { createClip, mainTrackId } from '@shared/timeline/model'
+import * as C from '@shared/timeline/commands'
+import type { Command } from '@shared/timeline/commands'
+import { uid } from '@shared/timeline/ids'
 
 function fmtDur(s: number): string {
   if (!s || s < 0) return '0:00'
@@ -146,20 +150,67 @@ function TopBar(): JSX.Element {
   )
 }
 
-// A library clip. Draggable onto the timeline (the production Timeline accepts
-// the `application/x-ec-media` payload and drops it on the lane under the
-// cursor) — clicking no longer force-loads it as the base, so clips are only
-// added by dragging. Renders as a list row or a grid tile.
+// Append a library clip to the END of the timeline: video/image → the main (base)
+// lane, audio → an audio lane — through the SAME engine path drag-drop uses, so
+// existing clips are preserved (this is NOT the old behavior that rebuilt the base
+// and wiped the others). No-op until the engine + a target lane are ready.
+function addMediaToTimeline(item: LibraryItem): void {
+  const engine = getSharedEngine()
+  if (!engine) return
+  const doc = engine.document
+  const tb = doc.timebase
+  const isImage = item.kind === 'image'
+  const isAudio = item.kind === 'audio'
+  const durSec = isImage ? 4 : item.duration || 4
+  const kind = isImage ? 'image' : isAudio ? 'audio' : 'video'
+  const mainId = mainTrackId(doc)
+  const cmds: Command[] = []
+  let trackId = mainId ?? doc.tracks[0]?.id ?? ''
+  if (isAudio) {
+    const a = doc.tracks.find((t) => t.kind === 'audio')
+    if (a) trackId = a.id
+    else {
+      trackId = uid('track')
+      cmds.push(C.addTrack('audio', { id: trackId }))
+    }
+  }
+  if (!trackId) return
+  const lane = doc.tracks.find((t) => t.id === trackId)
+  const endFrame = lane ? lane.clips.reduce((m, c) => Math.max(m, c.start + c.duration), 0) : 0
+  const clip = createClip({
+    kind,
+    trackId,
+    start: endFrame,
+    duration: secondsToFrames(durSec, tb),
+    sourcePath: item.path,
+    sourceIn: 0,
+    sourceOut: durSec,
+    sourceDuration: isImage ? 3600 : item.duration || durSec,
+    srcW: item.width,
+    srcH: item.height,
+    srcFps: item.fps,
+    name: item.name,
+    hasAudio: item.hasAudio
+  })
+  cmds.push(trackId === mainId ? C.insertToMain(clip, endFrame) : C.addClip(clip))
+  engine.batch('Add clip', cmds)
+  engine.select([clip.id])
+}
+
+// A library clip. CLICK appends it to the timeline (main/base lane) and DRAG drops
+// it onto a specific lane/position — both preserve existing clips. Renders as a
+// list row or a grid tile.
 function MediaClip({ item, isBase, grid, onRemove }: { item: LibraryItem; isBase: boolean; grid?: boolean; onRemove: () => void }): JSX.Element {
   const onDragStart = (e: React.DragEvent): void => {
     e.dataTransfer.setData('application/x-ec-media', item.id)
     e.dataTransfer.effectAllowed = 'copy'
   }
+  const onClick = (): void => addMediaToTimeline(item)
   const meta = item.width && item.height ? `${fmtDur(item.duration)} · ${item.width}×${item.height}` : fmtDur(item.duration)
 
   if (grid) {
     return (
-      <div draggable onDragStart={onDragStart} title={`${item.name} — drag onto the timeline`} style={css(`background:#1E2026;border:1px solid ${isBase ? 'rgba(110,106,232,.55)' : 'rgba(255,255,255,.07)'};border-radius:11px;overflow:hidden;cursor:grab;${isBase ? 'box-shadow:0 0 0 3px rgba(110,106,232,.12);' : ''}`)}>
+      <div draggable onDragStart={onDragStart} onClick={onClick} title={`${item.name} — click to add, or drag onto the timeline`} style={css(`background:#1E2026;border:1px solid ${isBase ? 'rgba(110,106,232,.55)' : 'rgba(255,255,255,.07)'};border-radius:11px;overflow:hidden;cursor:grab;${isBase ? 'box-shadow:0 0 0 3px rgba(110,106,232,.12);' : ''}`)}>
         <div style={css('position:relative;aspect-ratio:9/16;max-height:150px;background:#15161a;display:grid;place-items:center')}>
           {item.thumb ? <img src={item.thumb} alt="" draggable={false} style={css('width:100%;height:100%;object-fit:cover')} /> : <span style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>9:16</span>}
           <span style={css("position:absolute;right:5px;bottom:5px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#E9EAEE;background:rgba(13,14,17,.72);border-radius:5px;padding:2px 5px")}>{fmtDur(item.duration)}</span>
@@ -177,7 +228,7 @@ function MediaClip({ item, isBase, grid, onRemove }: { item: LibraryItem; isBase
     ? 'background:#1E2026;border:1px solid rgba(110,106,232,.55);border-radius:12px;padding:10px;display:flex;gap:10px;box-shadow:0 0 0 3px rgba(110,106,232,.12);position:relative;cursor:grab'
     : 'background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:10px;display:flex;gap:10px;cursor:grab'
   return (
-    <div draggable onDragStart={onDragStart} title={`${item.name} — drag onto the timeline`} style={css(shell)}>
+    <div draggable onDragStart={onDragStart} onClick={onClick} title={`${item.name} — click to add, or drag onto the timeline`} style={css(shell)}>
       <div style={css(CLIP9x16)}>{item.thumb ? <img src={item.thumb} alt="" style={css('width:100%;height:100%;object-fit:cover;border-radius:7px')} draggable={false} /> : '9:16'}</div>
       <div style={css('flex:1;min-width:0;display:flex;flex-direction:column;gap:4px')}>
         <div style={css('font-size:12.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')} title={item.name}>{item.name}</div>
