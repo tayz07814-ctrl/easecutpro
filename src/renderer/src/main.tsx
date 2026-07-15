@@ -157,6 +157,15 @@ function Root(): JSX.Element {
   const view = useStore((s) => s.view)
   const isMobile = useIsMobile()
 
+  // The new UI (Dashboard/Editor) never mounts the legacy <App/>, which is the
+  // only place that calls store.init() — and init() is what subscribes to the
+  // global progress stream (window.api.onProgress → job.percent). Without it,
+  // Retake/transcribe/export progress events are emitted but never update the
+  // bar (it just jumps from the action's own 1% to 100%). Register it once here.
+  useEffect(() => {
+    if (NEW_UI) void useStore.getState().init()
+  }, [])
+
   // Bootstrap (web): probe the backend first. If it's unreachable (bundled
   // Capacitor app with no server, PC asleep, no network) drop into OFFLINE mode —
   // skip auth entirely and open a local editor session, because manual editing

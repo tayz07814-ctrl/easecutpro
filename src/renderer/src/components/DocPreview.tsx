@@ -81,6 +81,27 @@ interface Seg {
   speed: number
 }
 
+// Anti-click seam fade for the LIVE preview — matches the export: a SINGLE, very
+// subtle fade-in (~8ms) only at the START of the clip that follows a real cut, and
+// NEVER a fade-out on the outgoing tail. Fading both sides audibly eats the words on
+// either edge of the cut; a short incoming ramp is enough to soften the splice/seek
+// click. Seamless same-source joins (splits) are left untouched. Returns 0..1 gain.
+const SEAM_FADE_S = 0.008
+function seamContiguous(a: Seg, b: Seg): boolean {
+  return a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003
+}
+function seamGain(t: number, di: number, ss: Seg[], fade = SEAM_FADE_S): number {
+  const seg = ss[di]
+  if (!seg) return 1
+  const prev = ss[di - 1]
+  // Fade IN only, at the start of a post-cut segment. No outgoing-tail fade.
+  if (prev && !seamContiguous(prev, seg)) {
+    const d = t - seg.start // seconds since this segment's (cut) start
+    if (d < fade) return Math.max(0, Math.sin((Math.max(0, d) / fade) * (Math.PI / 2)))
+  }
+  return 1
+}
+
 /** Main-lane clips -> playable segments, sorted by timeline position. Pure. */
 function docSegments(doc: TimelineDocument): { segs: Seg[]; missing: number } {
   const mainId = mainTrackId(doc)
@@ -403,7 +424,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         v.style.visibility = isShown ? 'visible' : 'hidden'
         if (isShown && shown) {
           v.muted = shown.muted === true
-          v.volume = clamp(shown.gain ?? 1, 0, 1)
+          // Anti-click: dip the volume toward 0 across each real cut seam.
+          v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss), 0, 1)
           v.playbackRate = clamp(shown.speed, 0.25, 4)
           const size = shown.ovScale ?? 1
           const zs = shown.ovZoomStart ?? 1
