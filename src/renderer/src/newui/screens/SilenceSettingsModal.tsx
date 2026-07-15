@@ -14,6 +14,14 @@ function noiseLabel(th: number): string {
   return th <= 0.62 ? 'Silent studio' : th <= 0.78 ? 'Quiet room' : th <= 0.88 ? 'Some background' : 'Noisy street'
 }
 
+// The concrete values a preset uses — shown under its blurb so the creator can see
+// exactly what each template does (mirrors the Custom sliders' meaning).
+function presetSpec(v: VadSilenceSettings): string {
+  const s = (n: number): string => `${n.toFixed(2)}s`
+  return `Trim >${s(v.minGapS)} · leave ${s(v.padAfterS)} · lead ${s(v.padBeforeS)} · edges ${s(v.edgeTrimS)} · noise ${Math.round(v.speechThreshold * 100)}%${v.removeBreaths ? ' · breaths' : ''}`
+}
+const TILE_SPEC = "font-size:10px;color:#7E8393;margin-top:7px;font-family:'IBM Plex Mono',monospace;line-height:1.55;letter-spacing:.2px"
+
 function Slider({ label, value, min, max, step, fmt, lo, hi, onChange }: {
   label: string; value: number; min: number; max: number; step: number; fmt: (v: number) => string; lo: string; hi: string; onChange: (v: number) => void
 }): JSX.Element {
@@ -75,6 +83,10 @@ export default function SilenceSettingsModal(): JSX.Element | null {
   const sel = (p: Preset): boolean => view === p
   const descOf = (id: 'conservative' | 'balanced' | 'aggressive'): string =>
     sil.presets.find((p) => p.id === id)?.blurb ?? ''
+  const specOf = (id: 'conservative' | 'balanced' | 'aggressive'): string => {
+    const p = sil.presets.find((x) => x.id === id)
+    return p ? presetSpec(p.values) : ''
+  }
 
   return (
     <div onClick={sil.close} style={css('position:fixed;inset:0;background:rgba(10,11,14,.55);display:grid;place-items:center;z-index:1000')}>
@@ -86,16 +98,19 @@ export default function SilenceSettingsModal(): JSX.Element | null {
               <div onClick={() => pick('conservative')} style={css(sel('conservative') ? 'border:1.5px solid #6E6AE8;border-radius:12px;padding:13px 14px;background:rgba(110,106,232,.07);cursor:pointer;position:relative' : tile)}>
                 <div style={css(sel('conservative') ? 'font-size:13px;font-weight:600;color:#B7B5F4' : 'font-size:13px;font-weight:600')}>Conservative</div>
                 <div style={css(tileDesc)}>{descOf('conservative')}</div>
+                <div style={css(TILE_SPEC)}>{specOf('conservative')}</div>
                 {sel('conservative') && <div style={css('position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;background:#6E6AE8;display:grid;place-items:center;color:#fff;font-size:8px')}>✓</div>}
               </div>
               <div onClick={() => pick('balanced')} style={css(sel('balanced') ? 'border:1.5px solid #6E6AE8;border-radius:12px;padding:13px 14px;background:rgba(110,106,232,.07);cursor:pointer;position:relative' : tile)}>
                 <div style={css(sel('balanced') ? 'font-size:13px;font-weight:600;color:#B7B5F4' : 'font-size:13px;font-weight:600')}>Balanced</div>
                 <div style={css(tileDesc)}>{descOf('balanced')}</div>
+                <div style={css(TILE_SPEC)}>{specOf('balanced')}</div>
                 {sel('balanced') && <div style={css('position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;background:#6E6AE8;display:grid;place-items:center;color:#fff;font-size:8px')}>✓</div>}
               </div>
               <div onClick={() => pick('aggressive')} style={css(sel('aggressive') ? 'border:1.5px solid #6E6AE8;border-radius:12px;padding:13px 14px;background:rgba(110,106,232,.07);cursor:pointer;position:relative' : tile)}>
                 <div style={css(sel('aggressive') ? 'font-size:13px;font-weight:600;color:#B7B5F4' : 'font-size:13px;font-weight:600')}>Aggressive</div>
                 <div style={css(tileDesc)}>{descOf('aggressive')}</div>
+                <div style={css(TILE_SPEC)}>{specOf('aggressive')}</div>
                 {sel('aggressive') && <div style={css('position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;background:#6E6AE8;display:grid;place-items:center;color:#fff;font-size:8px')}>✓</div>}
               </div>
               <div onClick={() => pick('custom')} style={css(tile)}>

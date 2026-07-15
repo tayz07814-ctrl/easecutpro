@@ -213,22 +213,33 @@ export function clampSilenceRegions(
   raw: { start: number; end: number }[],
   keptWords: { start: number; end: number }[],
   idPrefix = 'vadsil',
-  durationS = 0
+  durationS = 0,
+  // Silence kept next to a word when a cut edge would reach into it. Tied to the
+  // creator's padding sliders (was a fixed 30ms): at 0 the cut lands exactly on the
+  // word boundary → crisp jump cut with NO residual gap; higher keeps that lead-in
+  // / trailing air. guardBeforeS guards the cut END (before the next word),
+  // guardAfterS the cut START (after the previous word).
+  guardBeforeS = 0.03,
+  guardAfterS = 0.03,
+  // trimEdges: also remove the LEADING silence before the first word and the
+  // TRAILING silence after the last word (dead air at the very start/end). The
+  // first/last word stays protected by the padding above. Default off preserves
+  // the old "keep head + tail" behavior for any other caller.
+  trimEdges = false
 ): SilenceRegion[] {
   const clamp = (a: number, b: number): { start: number; end: number } => {
     let cs = a
     let ce = b
     for (const w of keptWords) {
-      if (cs <= w.start && ce > w.start + 0.002 && ce < w.end) ce = Math.max(cs, w.start - 0.03) // cut end reaches into a word → stop before it
-      if (ce >= w.end && cs < w.end - 0.002 && cs > w.start) cs = Math.min(ce, w.end + 0.03) // cut start reaches into a word → start after it
+      if (cs <= w.start && ce > w.start + 0.002 && ce < w.end) ce = Math.max(cs, w.start - guardBeforeS) // cut end reaches into a word → stop before it
+      if (ce >= w.end && cs < w.end - 0.002 && cs > w.start) cs = Math.min(ce, w.end + guardAfterS) // cut start reaches into a word → start after it
     }
     return { start: cs, end: ce }
   }
   return raw
-    // KEEP the head + tail: never auto-cut the LEADING silence (the quiet intro
-    // before the first word — cutting it dropped the first 1–2s on export) or the
-    // TRAILING silence (the outro). Only silence BETWEEN speech is trimmed.
-    .filter((r) => r.start > 0.15 && !(durationS > 0 && r.end >= durationS - 0.15))
+    // Head/tail: trimEdges removes the leading intro + trailing outro silence too;
+    // otherwise keep them and only trim silence BETWEEN speech.
+    .filter((r) => trimEdges || (r.start > 0.15 && !(durationS > 0 && r.end >= durationS - 0.15)))
     .map((r) => clamp(r.start, r.end))
     .filter((r) => r.end - r.start > 0.05)
     .map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
@@ -243,5 +254,7 @@ export async function vadSilenceRegions(
   idPrefix = 'vadsil'
 ): Promise<SilenceRegion[]> {
   const raw = await detectSilenceFloat32(float32, sampleRate, vadSilenceToOpts(settings), durationS)
-  return clampSilenceRegions(raw, keptWords, idPrefix, durationS)
+  // Word-guard tied to the padding sliders (0 → crisp gapless cut), and trim the
+  // leading/trailing dead air of the whole clip too.
+  return clampSilenceRegions(raw, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true)
 }
