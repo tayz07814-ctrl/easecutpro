@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import AuthScreen from './components/AuthScreen'
 import HomeScreen from './components/HomeScreen'
-import { useStore } from './store'
+import { useStore, firstVideoSourcePath } from './store'
 import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { redactForCreator } from './safeError'
 import { installWebApi, authMe } from './webapi'
@@ -246,11 +246,31 @@ function Root(): JSX.Element {
         const s = useStore.getState()
         if (s.view !== 'editor' || !s.currentProjectId) return
         try {
+          // Dashboard thumbnail. openProjectRecord only eager-loads thumbnails for
+          // legacy project.media; a doc-native project (clip dragged/clicked onto
+          // the timeline, no project.media) leaves s.thumbnails empty and its card
+          // read "Preview unavailable". Derive one here from the project's first
+          // video source and cache it, so the very first save persists a thumbnail.
+          let thumb = s.thumbnails[0]?.url || ''
+          if (!thumb) {
+            const src = firstVideoSourcePath(s.project)
+            if (src) {
+              try {
+                const t = await window.api.thumbnails(src)
+                if (t[0]?.url) {
+                  thumb = t[0].url
+                  useStore.setState({ thumbnails: t })
+                }
+              } catch {
+                /* thumbnail generation is best-effort */
+              }
+            }
+          }
           const serialized = serializeProjectLite(s.project)
           await saveProject(s.currentProjectId, {
             project: serialized,
             name: s.project.name,
-            thumb: s.thumbnails[0]?.url || ''
+            thumb
           })
           useStore.setState({ saveState: 'saved' })
         } catch {

@@ -35,10 +35,10 @@ function toCard(p: ProjectMeta, job?: BatchJob): DashCard {
     // (queued/processing) and the honest status rides the footer sub-line.
     return { kind: 'processing', title: p.name, sub: job.step || 'Processing…', percent: job.status === 'processing' ? 60 : 10 }
   }
-  if (!p.thumb) {
-    return { kind: 'failed', title: p.name, edited: relDate(p.updatedAt), duration: '' }
-  }
-  return { kind: 'video', title: p.name, edited: relDate(p.updatedAt), duration: '', thumb: '16:9', image: p.thumb }
+  // Always a video card — a project without a cached thumbnail (not yet generated,
+  // or truly media-less) shows a clean placeholder tile, not a "Preview unavailable"
+  // error. A real thumbnail fills in as soon as one is generated + persisted.
+  return { kind: 'video', title: p.name, edited: relDate(p.updatedAt), duration: '', thumb: '16:9', image: p.thumb || undefined }
 }
 
 export interface DashboardModel {

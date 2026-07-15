@@ -10,7 +10,6 @@ import type { DashCard } from '../mock'
 const HAIR = 'rgba(255,255,255,.06)'
 const DUR =
   'position:absolute;right:10px;bottom:10px;font-family:\'IBM Plex Mono\',monospace;font-size:10.5px;color:#E9EAEE;background:rgba(13,14,17,.7);border-radius:6px;padding:3px 7px'
-const HATCH = 'repeating-linear-gradient(45deg,#23252b 0,#23252b 12px,#1e2026 12px,#1e2026 24px)'
 
 function Dots({ active, onClick }: { active?: boolean; onClick?: (e: React.MouseEvent) => void }): JSX.Element {
   return (
@@ -148,40 +147,30 @@ function Card({ card, onOpen, onDots, menuOpen, hovered, onHover, renaming, onRe
 
   // kind === 'video'
   const showHover = hovered || menuOpen
-  const vertical = card.thumb === '9:16'
   // Real project thumbnail: a blurred cover fills the 16:9 frame, the sharp image
   // sits contained on top — so vertical phone captures show whole, not hard-cropped.
+  const playOverlay = showHover && (
+    <div style={css('position:absolute;inset:0;z-index:2;background:rgba(13,14,17,.45);display:grid;place-items:center')}>
+      <div style={css('width:44px;height:44px;border-radius:50%;background:rgba(233,234,238,.92);display:grid;place-items:center')}>
+        <div style={css('width:0;height:0;border-left:13px solid #17181C;border-top:8px solid transparent;border-bottom:8px solid transparent;margin-left:3px')} />
+      </div>
+    </div>
+  )
   const thumb = card.image ? (
     <div style={css('position:relative;aspect-ratio:16/9;border-radius:13px 13px 0 0;overflow:hidden;background:#15161a')}>
       <img src={card.image} alt="" style={css('position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(20px);opacity:.5;transform:scale(1.15)')} />
       <img src={card.image} alt="" style={css('position:relative;z-index:1;width:100%;height:100%;object-fit:contain;display:block')} />
-      {showHover && (
-        <div style={css('position:absolute;inset:0;z-index:2;background:rgba(13,14,17,.45);display:grid;place-items:center')}>
-          <div style={css('width:44px;height:44px;border-radius:50%;background:rgba(233,234,238,.92);display:grid;place-items:center')}>
-            <div style={css('width:0;height:0;border-left:13px solid #17181C;border-top:8px solid transparent;border-bottom:8px solid transparent;margin-left:3px')} />
-          </div>
-        </div>
-      )}
-      {card.duration && <div style={css(DUR)}>{card.duration}</div>}
-    </div>
-  ) : showHover ? (
-    <div style={css('position:relative;aspect-ratio:16/9;border-radius:13px 13px 0 0;overflow:hidden;background:' + HATCH)}>
-      <div style={css("position:absolute;inset:0;display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#686E7B")}>16:9 thumbnail</div>
-      <div style={css('position:absolute;inset:0;background:rgba(13,14,17,.45);display:grid;place-items:center')}>
-        <div style={css('width:44px;height:44px;border-radius:50%;background:rgba(233,234,238,.92);display:grid;place-items:center')}>
-          <div style={css('width:0;height:0;border-left:13px solid #17181C;border-top:8px solid transparent;border-bottom:8px solid transparent;margin-left:3px')} />
-        </div>
-      </div>
-      {card.duration && <div style={css(DUR)}>{card.duration}</div>}
-    </div>
-  ) : vertical ? (
-    <div style={css('position:relative;aspect-ratio:16/9;background:#15161a;display:grid;place-items:center')}>
-      <div style={css("height:100%;aspect-ratio:9/16;background:" + HATCH + ";display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>9:16</div>
+      {playOverlay}
       {card.duration && <div style={css(DUR)}>{card.duration}</div>}
     </div>
   ) : (
-    <div style={css('position:relative;aspect-ratio:16/9;background:' + HATCH)}>
-      <div style={css("position:absolute;inset:0;display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#686E7B")}>16:9 thumbnail</div>
+    // No cached thumbnail yet — a clean neutral tile (subtle film glyph), never a
+    // "Preview unavailable" error. A real frame replaces this once one is generated.
+    <div style={css('position:relative;aspect-ratio:16/9;border-radius:13px 13px 0 0;overflow:hidden;background:#1A1C21;display:grid;place-items:center')}>
+      <div style={css('width:34px;height:26px;border:1.5px solid #3A3F4B;border-radius:6px;display:grid;place-items:center')}>
+        <div style={css('width:0;height:0;border-left:8px solid #3A3F4B;border-top:5px solid transparent;border-bottom:5px solid transparent;margin-left:2px')} />
+      </div>
+      {playOverlay}
       {card.duration && <div style={css(DUR)}>{card.duration}</div>}
     </div>
   )

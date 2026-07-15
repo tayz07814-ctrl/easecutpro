@@ -263,6 +263,28 @@ function libraryFromProject(p: Project): LibraryItem[] {
   return out
 }
 
+/** First visual (video/image) source path in a project, for a dashboard thumbnail.
+ *  Prefers legacy project.media, then the timeline document's MAIN lane (the base),
+ *  then any other lane — so doc-native projects (a clip dragged/clicked onto the
+ *  timeline, with no project.media) still yield a thumbnail source. */
+export function firstVideoSourcePath(p: Project): string | undefined {
+  if (p.media?.path && p.media.hasVideo) return p.media.path
+  const tracks = p.timeline?.tracks ?? []
+  const pick = (clips: { start: number; kind?: string; sourcePath?: string }[]): string | undefined =>
+    clips
+      .slice()
+      .sort((a, b) => a.start - b.start)
+      .find((c) => c.kind !== 'audio' && !!c.sourcePath)?.sourcePath
+  const main = tracks.find((t) => (t as { isMain?: boolean }).isMain) ?? tracks[0]
+  const fromMain = main ? pick(main.clips) : undefined
+  if (fromMain) return fromMain
+  for (const t of tracks) {
+    const p2 = pick(t.clips)
+    if (p2) return p2
+  }
+  return undefined
+}
+
 function emptyTracks(): Track[] {
   return Array.from({ length: TIMELINE_TRACK_COUNT }, (_, i) => ({
     id: uid(),

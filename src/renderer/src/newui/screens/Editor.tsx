@@ -10,6 +10,7 @@ import SettingsModal from '../../components/SettingsModal'
 import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../../components/timeline/TimelinePanel'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
+import { resolveMedia } from '../../media/resolver'
 import { primePlayback } from '../../clock'
 import { framesToSeconds, secondsToFrames } from '@shared/timeline/time'
 import { createClip, mainTrackId } from '@shared/timeline/model'
@@ -197,6 +198,37 @@ function addMediaToTimeline(item: LibraryItem): void {
   engine.select([clip.id])
 }
 
+// A clip's preview image. Prefer the probe-generated thumbnail; when that's absent
+// (the library is rebuilt from a saved project WITHOUT re-probing, so videos carry
+// no thumb) fall back to the clip's OWN first frame via a muted <video> seeked just
+// past 0 — the media is already hydrated for the open project, so this is instant
+// and needs no extra IPC. Audio / unresolvable clips show the 9:16 placeholder.
+function MediaThumb({ item, radius = 0 }: { item: LibraryItem; radius?: number }): JSX.Element {
+  const rad = radius ? `;border-radius:${radius}px` : ''
+  if (item.thumb)
+    return <img src={item.thumb} alt="" draggable={false} style={css(`width:100%;height:100%;object-fit:cover${rad}`)} />
+  const url = item.kind === 'audio' ? '' : resolveMedia(item.path).url
+  if (url)
+    return (
+      <video
+        src={url}
+        muted
+        playsInline
+        preload="metadata"
+        draggable={false}
+        onLoadedMetadata={(e) => {
+          try {
+            e.currentTarget.currentTime = 0.1
+          } catch {
+            /* seek not ready — the metadata frame still paints */
+          }
+        }}
+        style={css(`width:100%;height:100%;object-fit:cover${rad}`)}
+      />
+    )
+  return <span style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>9:16</span>
+}
+
 // A library clip. CLICK appends it to the timeline (main/base lane) and DRAG drops
 // it onto a specific lane/position — both preserve existing clips. Renders as a
 // list row or a grid tile.
@@ -212,7 +244,7 @@ function MediaClip({ item, isBase, grid, onRemove }: { item: LibraryItem; isBase
     return (
       <div draggable onDragStart={onDragStart} onClick={onClick} title={`${item.name} — click to add, or drag onto the timeline`} style={css(`background:#1E2026;border:1px solid ${isBase ? 'rgba(110,106,232,.55)' : 'rgba(255,255,255,.07)'};border-radius:11px;overflow:hidden;cursor:grab;${isBase ? 'box-shadow:0 0 0 3px rgba(110,106,232,.12);' : ''}`)}>
         <div style={css('position:relative;aspect-ratio:9/16;max-height:150px;background:#15161a;display:grid;place-items:center')}>
-          {item.thumb ? <img src={item.thumb} alt="" draggable={false} style={css('width:100%;height:100%;object-fit:cover')} /> : <span style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>9:16</span>}
+          <MediaThumb item={item} />
           <span style={css("position:absolute;right:5px;bottom:5px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#E9EAEE;background:rgba(13,14,17,.72);border-radius:5px;padding:2px 5px")}>{fmtDur(item.duration)}</span>
           {isBase && <span style={css('position:absolute;left:5px;top:5px;font-size:9px;font-weight:600;color:#fff;background:rgba(110,106,232,.9);border-radius:5px;padding:2px 6px')}>Base</span>}
         </div>
@@ -229,7 +261,7 @@ function MediaClip({ item, isBase, grid, onRemove }: { item: LibraryItem; isBase
     : 'background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:10px;display:flex;gap:10px;cursor:grab'
   return (
     <div draggable onDragStart={onDragStart} onClick={onClick} title={`${item.name} — click to add, or drag onto the timeline`} style={css(shell)}>
-      <div style={css(CLIP9x16)}>{item.thumb ? <img src={item.thumb} alt="" style={css('width:100%;height:100%;object-fit:cover;border-radius:7px')} draggable={false} /> : '9:16'}</div>
+      <div style={css(CLIP9x16)}><MediaThumb item={item} radius={7} /></div>
       <div style={css('flex:1;min-width:0;display:flex;flex-direction:column;gap:4px')}>
         <div style={css('font-size:12.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')} title={item.name}>{item.name}</div>
         <div style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>{meta}</div>
