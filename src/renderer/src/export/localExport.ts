@@ -233,6 +233,24 @@ function num(v: unknown, d: number): number {
   return typeof v === 'number' ? v : d
 }
 
+// Equal-power crossfade at cut seams: consecutive kept segments overlap by a few
+// tens of ms with cos/sin gain ramps (constant power → no volume dip, no click at
+// the splice). NON-DRIFTING: the segment BODIES still butt-join exactly, so audio
+// stays locked to the (hard-cut) video — only the short fade tails bleed into the
+// removed region. Total mix length is unchanged.
+const XFADE_S = 0.05 // total crossfade width (s); half extends past each seam side
+
+/** cos/sin ramp of `n` points scaled to `base`: 'in' = 0→base (sin), 'out' =
+ *  base→0 (cos). Equal power because in(t)²+out(t)²=base² at every matching t. */
+export function equalPowerRamp(base: number, dir: 'in' | 'out', n = 64): Float32Array {
+  const a = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 1 : i / (n - 1) // 0→1
+    a[i] = base * (dir === 'in' ? Math.sin((t * Math.PI) / 2) : Math.cos((t * Math.PI) / 2))
+  }
+  return a
+}
+
 // ---- audio (offline mix -> AudioData chunks) ----
 export async function renderAudio(
   segs: Seg[],
@@ -286,24 +304,73 @@ export async function renderAudio(
     cache.set(src, buf)
     return buf
   }
-  let any = false
   let failed = 0
-  for (const s of segs) {
+  // Decode + collect the AUDIBLE main-lane segments in timeline order, so the
+  // crossfade can see each seam's neighbours.
+  const audible: { s: Seg; buf: AudioBuffer }[] = []
+  for (const s of [...segs].sort((a, b) => a.start - b.start)) {
     if (s.muted || !s.hasAudio) continue
     const buf = await decode(s.src, s.url)
     if (!buf) {
       failed++
       continue
     }
-    any = true
+    audible.push({ s, buf })
+  }
+
+  // Per-seam crossfade extent `e` (output seconds), symmetric + shared by both
+  // sides so the fades sum to constant power. Skipped for seamless same-source
+  // joins (splits — already continuous) and clamped so a fade tail never runs off
+  // its buffer or replays kept audio across a same-source gap.
+  const HALF = XFADE_S / 2
+  const contiguous = (a: Seg, b: Seg): boolean =>
+    a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003 && Math.abs(a.speed - b.speed) < 1e-3
+  const leadE = new Array<number>(audible.length).fill(0)
+  const trailE = new Array<number>(audible.length).fill(0)
+  for (let i = 0; i + 1 < audible.length; i++) {
+    const A = audible[i]
+    const B = audible[i + 1]
+    if (contiguous(A.s, B.s)) continue
+    const spA = Math.max(0.01, A.s.speed)
+    const spB = Math.max(0.01, B.s.speed)
+    let e = HALF
+    e = Math.min(e, Math.max(0, (A.buf.duration - A.s.sourceEnd) / spA)) // A tail room in its buffer
+    e = Math.min(e, Math.max(0, B.s.sourceStart / spB)) // B head room in its buffer
+    if (A.s.src === B.s.src) {
+      // same source: keep both fade tails inside the REMOVED gap (never replay kept audio)
+      e = Math.min(e, Math.max(0, B.s.sourceStart - A.s.sourceEnd) / Math.max(spA, spB) / 2)
+    }
+    e = Math.min(e, A.s.len / 2, B.s.len / 2) // never exceed either body
+    if (e < 0.004) continue // too small to matter — leave the butt-join
+    trailE[i] = e
+    leadE[i + 1] = e
+  }
+
+  // Schedule each audible segment, extending its fade tails into the seam and
+  // ramping the gain with equal power.
+  for (let i = 0; i < audible.length; i++) {
+    const { s, buf } = audible[i]
+    const sp = Math.max(0.01, s.speed)
+    const he = leadE[i]
+    const te = trailE[i]
+    const bodyEnd = s.start + s.len
     const node = off.createBufferSource()
     node.buffer = buf
-    node.playbackRate.value = s.speed
+    node.playbackRate.value = sp
     const g = off.createGain()
-    g.gain.value = Math.max(0, s.gain)
+    const base = Math.max(0, s.gain)
+    // fade IN over [start-he, start+he]; hold at base; fade OUT over [end-te, end+te]
+    if (he > 0) g.gain.setValueCurveAtTime(equalPowerRamp(base, 'in'), s.start - he, 2 * he)
+    else g.gain.setValueAtTime(base, Math.max(0, s.start))
+    if (te > 0) g.gain.setValueCurveAtTime(equalPowerRamp(base, 'out'), bodyEnd - te, 2 * te)
     node.connect(g).connect(off.destination)
-    node.start(s.start, s.sourceStart, Math.max(0.01, s.sourceEnd - s.sourceStart))
+    node.start(
+      Math.max(0, s.start - he),
+      Math.max(0, s.sourceStart - he * sp),
+      Math.max(0.01, s.sourceEnd - s.sourceStart + (he + te) * sp)
+    )
   }
+  let any = audible.length > 0
   for (const a of extra) {
     const buf = await decode(a.src, a.url)
     if (!buf) {
