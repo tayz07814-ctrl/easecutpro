@@ -169,7 +169,10 @@ export async function retakeAwareCutCloud(
   })
   let silenceRegions: SilenceRegion[] = []
   try {
-    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
+    // Pass ALL transcribed words as the gap-coverage set (kept + cut) so removed
+    // takes stay word cuts; only genuinely untranscribed spans (handling noise,
+    // bumps) become new wordless-gap silence.
+    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad', artifacts.repairedWords)
   } catch (e) {
     warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
   }
