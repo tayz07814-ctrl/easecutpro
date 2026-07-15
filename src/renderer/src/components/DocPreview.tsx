@@ -82,11 +82,11 @@ interface Seg {
 }
 
 // Anti-click seam fade for the LIVE preview — matches the export: a SINGLE, very
-// subtle fade-in (~8ms) only at the START of the clip that follows a real cut, and
+// subtle fade-in (~25ms) only at the START of the clip that follows a real cut, and
 // NEVER a fade-out on the outgoing tail. Fading both sides audibly eats the words on
 // either edge of the cut; a short incoming ramp is enough to soften the splice/seek
 // click. Seamless same-source joins (splits) are left untouched. Returns 0..1 gain.
-const SEAM_FADE_S = 0.008
+const SEAM_FADE_S = 0.025
 function seamContiguous(a: Seg, b: Seg): boolean {
   return a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003
 }

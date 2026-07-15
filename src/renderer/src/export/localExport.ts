@@ -239,9 +239,9 @@ function num(v: unknown, d: number): number {
 // clip AND the first word of the incoming one, so across many retake cuts it audibly
 // eats words. So: no fade-out, no overlap, no removed audio replayed — each kept
 // segment plays EXACTLY its body at full gain, and any segment that begins at a real
-// cut gets a ~8ms 0→gain ramp that kills the splice click without touching speech.
+// cut gets a ~25ms 0→gain ramp that kills the splice click without touching speech.
 // Splits (seamless same-source joins) are already continuous and get nothing.
-const SEAM_FADE_IN_S = 0.008 // 8ms — inside the creator's 5–10ms ask
+const SEAM_FADE_IN_S = 0.025 // 25ms fade-in at each post-cut clip start
 
 /** cos/sin ramp of `n` points scaled to `base`: 'in' = 0→base (sin), 'out' =
  *  base→0 (cos). Only 'in' is used now (the subtle post-cut fade-in). */
