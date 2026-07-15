@@ -81,30 +81,25 @@ interface Seg {
   speed: number
 }
 
-// Anti-click seam fade for the LIVE preview. A live <video> element can't overlap
-// itself, so (unlike the export's true equal-power crossfade) the preview dips the
-// active clip's volume toward 0 over ~SEAM_FADE_S on each side of a real cut, which
-// masks the click of the hard splice/seek. Seamless same-source joins (splits) are
-// left untouched. Returns a 0..1 gain multiplier.
-const SEAM_FADE_S = 0.025
+// Anti-click seam fade for the LIVE preview — matches the export: a SINGLE, very
+// subtle fade-in (~8ms) only at the START of the clip that follows a real cut, and
+// NEVER a fade-out on the outgoing tail. Fading both sides audibly eats the words on
+// either edge of the cut; a short incoming ramp is enough to soften the splice/seek
+// click. Seamless same-source joins (splits) are left untouched. Returns 0..1 gain.
+const SEAM_FADE_S = 0.008
 function seamContiguous(a: Seg, b: Seg): boolean {
   return a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003
 }
 function seamGain(t: number, di: number, ss: Seg[], fade = SEAM_FADE_S): number {
   const seg = ss[di]
   if (!seg) return 1
-  let g = 1
   const prev = ss[di - 1]
+  // Fade IN only, at the start of a post-cut segment. No outgoing-tail fade.
   if (prev && !seamContiguous(prev, seg)) {
     const d = t - seg.start // seconds since this segment's (cut) start
-    if (d < fade) g = Math.min(g, Math.sin((Math.max(0, d) / fade) * (Math.PI / 2)))
+    if (d < fade) return Math.max(0, Math.sin((Math.max(0, d) / fade) * (Math.PI / 2)))
   }
-  const next = ss[di + 1]
-  if (next && !seamContiguous(seg, next)) {
-    const d = seg.start + seg.len - t // seconds until this segment's (cut) end
-    if (d < fade) g = Math.min(g, Math.sin((Math.max(0, d) / fade) * (Math.PI / 2)))
-  }
-  return g
+  return 1
 }
 
 /** Main-lane clips -> playable segments, sorted by timeline position. Pure. */

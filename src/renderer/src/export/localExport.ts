@@ -233,15 +233,18 @@ function num(v: unknown, d: number): number {
   return typeof v === 'number' ? v : d
 }
 
-// Equal-power crossfade at cut seams: consecutive kept segments overlap by a few
-// tens of ms with cos/sin gain ramps (constant power → no volume dip, no click at
-// the splice). NON-DRIFTING: the segment BODIES still butt-join exactly, so audio
-// stays locked to the (hard-cut) video — only the short fade tails bleed into the
-// removed region. Total mix length is unchanged.
-const XFADE_S = 0.05 // total crossfade width (s); half extends past each seam side
+// De-click fade at cut seams. The creator asked for a SINGLE, very subtle fade —
+// only at the START of the clip that follows a cut, NEVER on the outgoing tail. A
+// two-sided crossfade (the old approach) attenuates the last word of the outgoing
+// clip AND the first word of the incoming one, so across many retake cuts it audibly
+// eats words. So: no fade-out, no overlap, no removed audio replayed — each kept
+// segment plays EXACTLY its body at full gain, and any segment that begins at a real
+// cut gets a ~8ms 0→gain ramp that kills the splice click without touching speech.
+// Splits (seamless same-source joins) are already continuous and get nothing.
+const SEAM_FADE_IN_S = 0.008 // 8ms — inside the creator's 5–10ms ask
 
 /** cos/sin ramp of `n` points scaled to `base`: 'in' = 0→base (sin), 'out' =
- *  base→0 (cos). Equal power because in(t)²+out(t)²=base² at every matching t. */
+ *  base→0 (cos). Only 'in' is used now (the subtle post-cut fade-in). */
 export function equalPowerRamp(base: number, dir: 'in' | 'out', n = 64): Float32Array {
   const a = new Float32Array(n)
   for (let i = 0; i < n; i++) {
@@ -318,57 +321,30 @@ export async function renderAudio(
     audible.push({ s, buf })
   }
 
-  // Per-seam crossfade extent `e` (output seconds), symmetric + shared by both
-  // sides so the fades sum to constant power. Skipped for seamless same-source
-  // joins (splits — already continuous) and clamped so a fade tail never runs off
-  // its buffer or replays kept audio across a same-source gap.
-  const HALF = XFADE_S / 2
+  // A segment "starts at a cut" when it is NOT a seamless same-source continuation
+  // of the previous audible segment (a split). Those — plus the very first segment
+  // (a clean start from silence) — get the short fade-in; contiguous splits play
+  // straight through untouched.
   const contiguous = (a: Seg, b: Seg): boolean =>
     a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003 && Math.abs(a.speed - b.speed) < 1e-3
-  const leadE = new Array<number>(audible.length).fill(0)
-  const trailE = new Array<number>(audible.length).fill(0)
-  for (let i = 0; i + 1 < audible.length; i++) {
-    const A = audible[i]
-    const B = audible[i + 1]
-    if (contiguous(A.s, B.s)) continue
-    const spA = Math.max(0.01, A.s.speed)
-    const spB = Math.max(0.01, B.s.speed)
-    let e = HALF
-    e = Math.min(e, Math.max(0, (A.buf.duration - A.s.sourceEnd) / spA)) // A tail room in its buffer
-    e = Math.min(e, Math.max(0, B.s.sourceStart / spB)) // B head room in its buffer
-    if (A.s.src === B.s.src) {
-      // same source: keep both fade tails inside the REMOVED gap (never replay kept audio)
-      e = Math.min(e, Math.max(0, B.s.sourceStart - A.s.sourceEnd) / Math.max(spA, spB) / 2)
-    }
-    e = Math.min(e, A.s.len / 2, B.s.len / 2) // never exceed either body
-    if (e < 0.004) continue // too small to matter — leave the butt-join
-    trailE[i] = e
-    leadE[i + 1] = e
-  }
+  const fadeInAt = audible.map((cur, i) => (i === 0 ? true : !contiguous(audible[i - 1].s, cur.s)))
 
-  // Schedule each audible segment, extending its fade tails into the seam and
-  // ramping the gain with equal power.
+  // Schedule each audible segment playing EXACTLY its body — no overlap, no removed
+  // audio replayed, no fade-out. A post-cut start gets a ~8ms 0→gain ramp; the rest
+  // holds at full gain, so speech at both edges of every cut is preserved verbatim.
   for (let i = 0; i < audible.length; i++) {
     const { s, buf } = audible[i]
     const sp = Math.max(0.01, s.speed)
-    const he = leadE[i]
-    const te = trailE[i]
-    const bodyEnd = s.start + s.len
+    const base = Math.max(0, s.gain)
     const node = off.createBufferSource()
     node.buffer = buf
     node.playbackRate.value = sp
     const g = off.createGain()
-    const base = Math.max(0, s.gain)
-    // fade IN over [start-he, start+he]; hold at base; fade OUT over [end-te, end+te]
-    if (he > 0) g.gain.setValueCurveAtTime(equalPowerRamp(base, 'in'), s.start - he, 2 * he)
+    const fi = fadeInAt[i] ? Math.min(SEAM_FADE_IN_S, s.len * 0.5) : 0
+    if (fi > 0) g.gain.setValueCurveAtTime(equalPowerRamp(base, 'in'), Math.max(0, s.start), fi)
     else g.gain.setValueAtTime(base, Math.max(0, s.start))
-    if (te > 0) g.gain.setValueCurveAtTime(equalPowerRamp(base, 'out'), bodyEnd - te, 2 * te)
     node.connect(g).connect(off.destination)
-    node.start(
-      Math.max(0, s.start - he),
-      Math.max(0, s.sourceStart - he * sp),
-      Math.max(0.01, s.sourceEnd - s.sourceStart + (he + te) * sp)
-    )
+    node.start(Math.max(0, s.start), Math.max(0, s.sourceStart), Math.max(0.01, s.sourceEnd - s.sourceStart))
   }
   let any = audible.length > 0
   for (const a of extra) {
