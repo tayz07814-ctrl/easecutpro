@@ -149,7 +149,22 @@ function Card({ card, onOpen, onDots, menuOpen, hovered, onHover, renaming, onRe
   // kind === 'video'
   const showHover = hovered || menuOpen
   const vertical = card.thumb === '9:16'
-  const thumb = showHover ? (
+  // Real project thumbnail: a blurred cover fills the 16:9 frame, the sharp image
+  // sits contained on top — so vertical phone captures show whole, not hard-cropped.
+  const thumb = card.image ? (
+    <div style={css('position:relative;aspect-ratio:16/9;border-radius:13px 13px 0 0;overflow:hidden;background:#15161a')}>
+      <img src={card.image} alt="" style={css('position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(20px);opacity:.5;transform:scale(1.15)')} />
+      <img src={card.image} alt="" style={css('position:relative;z-index:1;width:100%;height:100%;object-fit:contain;display:block')} />
+      {showHover && (
+        <div style={css('position:absolute;inset:0;z-index:2;background:rgba(13,14,17,.45);display:grid;place-items:center')}>
+          <div style={css('width:44px;height:44px;border-radius:50%;background:rgba(233,234,238,.92);display:grid;place-items:center')}>
+            <div style={css('width:0;height:0;border-left:13px solid #17181C;border-top:8px solid transparent;border-bottom:8px solid transparent;margin-left:3px')} />
+          </div>
+        </div>
+      )}
+      {card.duration && <div style={css(DUR)}>{card.duration}</div>}
+    </div>
+  ) : showHover ? (
     <div style={css('position:relative;aspect-ratio:16/9;border-radius:13px 13px 0 0;overflow:hidden;background:' + HATCH)}>
       <div style={css("position:absolute;inset:0;display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#686E7B")}>16:9 thumbnail</div>
       <div style={css('position:absolute;inset:0;background:rgba(13,14,17,.45);display:grid;place-items:center')}>
@@ -209,7 +224,7 @@ export default function Dashboard(): JSX.Element {
   const metaFor = (i: number): { id: string } | undefined => (i > 0 ? dash.metas[i - 1] : undefined)
 
   return (
-    <div style={css('width:100%;background:#17181C')} className="ec-newui ec-dash" onClick={() => { setAcct(false); setMenuId(null) }}>
+    <div style={css('width:100%;height:100%;overflow-y:auto;background:#17181C')} className="ec-newui ec-dash" onClick={() => { setAcct(false); setMenuId(null) }}>
       {/* top nav */}
       <div style={css(`display:flex;align-items:center;gap:24px;height:64px;padding:0 40px;border-bottom:1px solid ${HAIR}`)}>
         <div style={css('display:flex;align-items:center;gap:10px')}>

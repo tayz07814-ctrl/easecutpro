@@ -10,6 +10,7 @@ export type DashCard =
       edited: string
       duration: string
       thumb: '16:9' | '9:16'
+      image?: string // real project thumbnail URL (data-uri / blob); placeholder when absent
       hover?: boolean // shows play scrim + open context menu (design 1a card 2)
     }
   | { kind: 'processing'; title: string; sub: string; percent: number }

@@ -38,7 +38,7 @@ function toCard(p: ProjectMeta, job?: BatchJob): DashCard {
   if (!p.thumb) {
     return { kind: 'failed', title: p.name, edited: relDate(p.updatedAt), duration: '' }
   }
-  return { kind: 'video', title: p.name, edited: relDate(p.updatedAt), duration: '', thumb: '16:9' }
+  return { kind: 'video', title: p.name, edited: relDate(p.updatedAt), duration: '', thumb: '16:9', image: p.thumb }
 }
 
 export interface DashboardModel {

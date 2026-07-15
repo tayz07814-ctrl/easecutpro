@@ -217,7 +217,7 @@ const screen = new URLSearchParams(location.search).get('screen') || '1a'
 const MAP: Record<string, () => JSX.Element> = { '1a': Dashboard, '1b': Editor, '1a-m': MobileDashboard, '1b-m': MobileEditor }
 const Comp = MAP[screen] || Dashboard
 createRoot(document.getElementById('root') as HTMLElement).render(
-  <div id="screen" style={screen === '1b' || screen === '1b-m' ? { height: '100vh' } : undefined}>
+  <div id="screen" style={{ height: '100vh' }}>
     <Comp />
   </div>
 )
