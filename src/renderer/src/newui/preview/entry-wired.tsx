@@ -153,6 +153,8 @@ wh.__job = () => useStore.getState().job
 wh.__runRetake = () => useStore.getState().runRetakeCutBeta()
 wh.__execute = () => useStore.getState().executeCuts()
 wh.__baseSeqLen = () => (useStore.getState().project.baseSequence ?? []).length
+wh.__playing = () => useStore.getState().playing
+wh.__playhead = () => useStore.getState().project.playhead
 wh.__mainSpan = () => {
   const doc = getSharedEngine()?.document
   const main = doc?.tracks.find((t) => t.isMain)

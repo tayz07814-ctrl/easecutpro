@@ -10,6 +10,8 @@ import SettingsModal from '../../components/SettingsModal'
 import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../../components/timeline/TimelinePanel'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
+import { primePlayback } from '../../clock'
+import { framesToSeconds } from '@shared/timeline/time'
 
 function fmtDur(s: number): string {
   if (!s || s < 0) return '0:00'
@@ -312,6 +314,36 @@ function TimelineZoom(): JSX.Element | null {
 export default function Editor(): JSX.Element {
   const showExportModal = useStore((s) => s.showExportModal)
   const showSettings = useStore((s) => s.showSettings)
+
+  // Transport keyboard shortcuts (CapCut-style). GLOBAL so Space works the moment
+  // the editor loads — no need to click the play button first (clicking only worked
+  // before because it focused the button and Space re-triggered it). Ignored while
+  // typing in a field. The timeline owns the editing keys (split S, Delete, ←/→
+  // frame-step, ⌘Z undo/redo, copy/paste); these are the play-head/transport keys.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return // leave ⌘/Ctrl combos to the timeline
+      if (e.key === ' ' || e.key === 'Spacebar' || e.key === 'k' || e.key === 'K') {
+        e.preventDefault() // no page scroll, and suppress a focused button's own Space
+        const st = useStore.getState()
+        if (!st.playing) primePlayback()
+        st.setPlaying(!st.playing)
+      } else if (e.key === 'Home') {
+        e.preventDefault()
+        useStore.getState().setPlayhead(0)
+      } else if (e.key === 'End') {
+        e.preventDefault()
+        const doc = getSharedEngine()?.document
+        const main = doc?.tracks.find((t) => t.isMain)
+        const endFrames = main ? main.clips.reduce((a, c) => Math.max(a, c.start + c.duration), 0) : 0
+        if (doc) useStore.getState().setPlayhead(framesToSeconds(endFrames, doc.timebase))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // The LEFT/RIGHT panels resize (persisted). The timeline is NOT draggable — it's
   // a fixed, viewport-proportional container with its own internal scroll.
