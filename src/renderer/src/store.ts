@@ -1864,7 +1864,26 @@ export const useStore = create<AppState>((set, get) => ({
       //    highlight review set FastCut/ProCut use). We NEVER set word.deleted
       //    and NEVER trim words here — nothing leaves the transcript until the
       //    user presses Execute cuts (which is the only place deleted is set).
-      const nextProject: typeof cur = { ...cur, transcript: res.transcript }
+      // DOC-NATIVE BASE (new UI): a clip dragged straight onto the timeline lives
+      // ONLY on the timeline document — the legacy media/baseSequence fields stay
+      // empty. But every cut helper (computeKeepRanges, and the timeline's
+      // document-mode cut routing) measures cuts against that legacy base, so with
+      // it empty Execute cuts updates the transcript yet never reaches the Main
+      // lane: the cuts "show in the transcript" while the timeline stays uncut.
+      // Persist the base we just folded + transcribed. p0.baseSequence is the EXACT
+      // source `retakeAwareCut` combined above, so the transcript's word times are
+      // guaranteed to live in its domain — persisting it keeps base and transcript
+      // aligned and lets the standard pipeline cut the timeline like a normal import.
+      // Applies whenever the base is doc-derived (not a single flattened `media`
+      // video): the first Retake on a dragged clip (legacy base empty) AND every
+      // "Run again" after edits, where re-folding the now-cut doc keeps baseSequence
+      // matched to the freshly-combined transcript. A real single-`media` project
+      // (which already routes cuts fine) is left untouched; a legacy montage with no
+      // doc yet folds to its own baseSequence, so this is a harmless self-assignment.
+      const docBase = !cur.media && !!p0.baseSequence?.length
+      const nextProject: typeof cur = docBase
+        ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript: res.transcript }
+        : { ...cur, transcript: res.transcript }
       const flagIds = res.deleteWordIds
       const wordsBefore = cur.transcript?.words.length ?? 0
       // Retake β silence is its OWN conservative, word-clamped VAD path (engine),
