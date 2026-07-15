@@ -87,6 +87,10 @@ interface Seg {
 // either edge of the cut; a short incoming ramp is enough to soften the splice/seek
 // click. Seamless same-source joins (splits) are left untouched. Returns 0..1 gain.
 const SEAM_FADE_S = 0.008
+// TEMP (retake testing): omit the seam fade entirely — the preview plays hard cuts
+// with NO volume ramp so the raw retake cuts can be judged on their own. Flip back
+// to true to re-enable the subtle post-cut fade-in.
+const SEAM_FADE_ENABLED = false
 function seamContiguous(a: Seg, b: Seg): boolean {
   return a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003
 }
@@ -95,7 +99,7 @@ function seamGain(t: number, di: number, ss: Seg[], fade = SEAM_FADE_S): number 
   if (!seg) return 1
   const prev = ss[di - 1]
   // Fade IN only, at the start of a post-cut segment. No outgoing-tail fade.
-  if (prev && !seamContiguous(prev, seg)) {
+  if (SEAM_FADE_ENABLED && prev && !seamContiguous(prev, seg)) {
     const d = t - seg.start // seconds since this segment's (cut) start
     if (d < fade) return Math.max(0, Math.sin((Math.max(0, d) / fade) * (Math.PI / 2)))
   }

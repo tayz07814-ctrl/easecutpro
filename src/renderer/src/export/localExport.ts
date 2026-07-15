@@ -242,6 +242,10 @@ function num(v: unknown, d: number): number {
 // cut gets a ~8ms 0→gain ramp that kills the splice click without touching speech.
 // Splits (seamless same-source joins) are already continuous and get nothing.
 const SEAM_FADE_IN_S = 0.008 // 8ms — inside the creator's 5–10ms ask
+// TEMP (retake testing): omit the seam fade entirely — export hard butt-joins with
+// NO audio ramp, so the raw retake cuts can be judged on their own. Flip back to
+// true to re-enable the subtle post-cut fade-in.
+const SEAM_FADE_ENABLED = false
 
 /** cos/sin ramp of `n` points scaled to `base`: 'in' = 0→base (sin), 'out' =
  *  base→0 (cos). Only 'in' is used now (the subtle post-cut fade-in). */
@@ -340,7 +344,7 @@ export async function renderAudio(
     node.buffer = buf
     node.playbackRate.value = sp
     const g = off.createGain()
-    const fi = fadeInAt[i] ? Math.min(SEAM_FADE_IN_S, s.len * 0.5) : 0
+    const fi = SEAM_FADE_ENABLED && fadeInAt[i] ? Math.min(SEAM_FADE_IN_S, s.len * 0.5) : 0
     if (fi > 0) g.gain.setValueCurveAtTime(equalPowerRamp(base, 'in'), Math.max(0, s.start), fi)
     else g.gain.setValueAtTime(base, Math.max(0, s.start))
     node.connect(g).connect(off.destination)
