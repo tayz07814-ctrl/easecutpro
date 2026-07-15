@@ -159,6 +159,27 @@ wh.__mainSpan = () => {
   const clips = main?.clips ?? []
   return { clips: clips.length, frames: clips.reduce((a, c) => a + c.duration, 0) }
 }
+// Dump each main-lane clip's geometry so a test can check A/V consistency: the
+// video length is duration/fps (frames), the audio length is sourceOut-sourceIn
+// (seconds) — the export renders those separately, so any per-clip mismatch
+// desyncs only the export.
+wh.__mainClipsDetail = () => {
+  const doc = getSharedEngine()?.document
+  const main = doc?.tracks.find((t) => t.isMain)
+  const fps = doc ? doc.timebase.num / doc.timebase.den : 30
+  return (main?.clips ?? [])
+    .slice()
+    .sort((a, b) => a.start - b.start)
+    .map((c) => ({
+      start: c.start,
+      duration: c.duration,
+      sourceIn: c.sourceIn,
+      sourceOut: c.sourceOut,
+      speed: typeof c.speed === 'number' ? c.speed : 1,
+      videoLenS: c.duration / fps,
+      audioLenS: (c.sourceOut - c.sourceIn) / (typeof c.speed === 'number' && c.speed > 0 ? c.speed : 1)
+    }))
+}
 // Counterfactual (old bug): set a transcript with pre-deleted words WITHOUT
 // persisting the base — exactly what the pre-fix runRetakeCutBeta produced. The
 // document-mode routing should bail (empty legacy base) and leave the Main lane
