@@ -1832,7 +1832,12 @@ export const useStore = create<AppState>((set, get) => ({
     // Same review-first contract as FastCut/ProCut: highlight + stage, apply on
     // Execute cuts. Deliberately does NOT call snapRetakeFlags or any standard-
     // engine helper: the beta engine guarantees whole-attempt spans itself.
-    const p0 = get().project
+    // Doc-native projects (new UI) hold the base on the timeline DOCUMENT, not the
+    // legacy media/baseSequence fields — a clip dragged straight onto the timeline
+    // lives only in the doc (setTimelineDoc doesn't touch media/baseSequence). Fold
+    // the doc back (same as exportVideo) so hasBase + the audio path below see it.
+    const stored = get().project
+    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
     const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
     if (!hasBase) {
       set({ job: { active: false, percent: 0, message: 'Import a video first' } })

@@ -6,6 +6,7 @@ import '../../styles.css'
 import '../newui.css'
 import { useStore } from '../../store'
 import { getSharedEngine } from '../../timelineEngine'
+import { projectToDocument, normalizeDefaultLanes } from '@shared/timeline/bridge'
 import type { Project } from '@shared/types'
 import Dashboard from '../screens/Dashboard'
 import MobileDashboard from '../screens/MobileDashboard'
@@ -106,12 +107,26 @@ const seededProject = {
   transcript: rk.transcript,
   playhead: 41.2
 } as unknown as Project
+
+// ?docbase=1 → reproduce a clip DRAGGED onto the timeline: the base lives ONLY in
+// the timeline document; the legacy media/baseSequence fields are empty (as after
+// setTimelineDoc). Retake must still find the base via the doc.
+const docOnlyProject = {
+  ...(useStore.getState().freshProject()),
+  name: 'Dragged clip project',
+  media: undefined,
+  baseSequence: undefined,
+  transcript: undefined,
+  timeline: normalizeDefaultLanes(projectToDocument(seededProject))
+} as unknown as Project
+const useDocBase = new URLSearchParams(location.search).get('docbase') === '1'
+;(window as unknown as { __job?: () => unknown }).__job = () => useStore.getState().job
 useStore.setState({
   user: { id: 'u', email: 'tayz07814@gmail.com' },
   batchJobs: [{ projectId: 'p3', name: 'Kitchen b-roll batch', status: 'processing', step: 'Uploading media…' }],
   view: 'editor',
   currentProjectId: 'p1',
-  project: seededProject,
+  project: useDocBase ? docOnlyProject : seededProject,
   saveState: 'saved',
   canUndo: true,
   canRedo: false,
