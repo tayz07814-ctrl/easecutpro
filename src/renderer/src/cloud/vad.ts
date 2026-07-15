@@ -245,68 +245,16 @@ export function clampSilenceRegions(
     .map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
 }
 
-/** Wordless-gap silence: the spans that NO word covers, so a gap the acoustic VAD
- *  mislabels as "speech" (handling noise, a bump, a cough, background music) is
- *  still removed — cuts always START FROM A WORD. Each gap runs from one word
- *  block's tail + padAfter to the next block's onset − padBefore, kept only when it
- *  survives ≥ minGap. `coverWords` define "covered" (non-gap) time: pass ALL
- *  transcribed words (kept + cut) so a removed take stays a word cut, not a
- *  duplicate silence chip. trimEdges also yields the head/tail dead air. The caller
- *  UNIONS these with the VAD's own in-speech silence — the VAD can only ADD
- *  precision inside speech, it can never VETO a wordless-gap cut (which is exactly
- *  the bug where the VAD scored handling noise as voice and kept it). */
-export function wordGapRegions(
-  coverWords: { start: number; end: number }[],
-  durationS: number,
-  minGapS: number,
-  padBeforeS: number,
-  padAfterS: number,
-  trimEdges = false
-): { start: number; end: number }[] {
-  const words = coverWords.filter((w) => w.end > w.start).sort((a, b) => a.start - b.start)
-  if (!words.length) return []
-  // Merge overlapping/adjacent word spans into speech blocks (ASR word times can
-  // overlap), so a gap is only genuine dead space BETWEEN distinct words.
-  const blocks: { start: number; end: number }[] = []
-  for (const w of words) {
-    const last = blocks[blocks.length - 1]
-    if (last && w.start <= last.end) last.end = Math.max(last.end, w.end)
-    else blocks.push({ start: w.start, end: w.end })
-  }
-  const gaps: { start: number; end: number }[] = []
-  for (let i = 0; i < blocks.length - 1; i++) {
-    const s = blocks[i].end + padAfterS
-    const e = blocks[i + 1].start - padBeforeS
-    if (e - s >= minGapS) gaps.push({ start: s, end: e })
-  }
-  if (trimEdges) {
-    const headEnd = blocks[0].start - padBeforeS
-    if (headEnd >= minGapS) gaps.push({ start: 0, end: headEnd })
-    const tailStart = blocks[blocks.length - 1].end + padAfterS
-    if (durationS > 0 && durationS - tailStart >= minGapS) gaps.push({ start: tailStart, end: durationS })
-  }
-  return gaps
-}
-
 export async function vadSilenceRegions(
   float32: Float32Array,
   sampleRate: number,
   durationS: number,
   settings: VadSilenceSettings,
   keptWords: { start: number; end: number }[],
-  idPrefix = 'vadsil',
-  // Words that define "covered" (non-gap) time — pass ALL transcribed words so a
-  // removed take stays a word cut. Defaults to keptWords for callers that don't
-  // distinguish cut from kept (then a cut-word span reads as a gap, still safe).
-  coverWords: { start: number; end: number }[] = keptWords
+  idPrefix = 'vadsil'
 ): Promise<SilenceRegion[]> {
   const raw = await detectSilenceFloat32(float32, sampleRate, vadSilenceToOpts(settings), durationS)
-  // Union the VAD's in-speech silence with the WORDLESS gaps: a gap the VAD kept
-  // as "speech" (handling noise / bumps / music) is still cut because no word
-  // covers it. The VAD only refines edges inside speech — it can't veto a gap.
-  const gaps = wordGapRegions(coverWords, durationS, settings.minGapS, settings.padBeforeS, settings.padAfterS, true)
-  const merged = mergeIntervals([...raw.map((r) => ({ start: r.start, end: r.end })), ...gaps])
   // Word-guard tied to the padding sliders (0 → crisp gapless cut), and trim the
   // leading/trailing dead air of the whole clip too.
-  return clampSilenceRegions(merged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true)
+  return clampSilenceRegions(raw, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true)
 }
