@@ -203,6 +203,114 @@ export async function detectSilenceCloud(mediaId: string, opts: SilenceDetectOpt
   return detectSilenceFloat32(float32, sampleRate, opts, durationS)
 }
 
+/** In-place iterative radix-2 FFT (re/im length must be a power of two). */
+function fftInPlace(re: Float32Array, im: Float32Array): void {
+  const n = re.length
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1
+    for (; j & bit; bit >>= 1) j ^= bit
+    j ^= bit
+    if (i < j) {
+      const tr = re[i]; re[i] = re[j]; re[j] = tr
+      const ti = im[i]; im[i] = im[j]; im[j] = ti
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (-2 * Math.PI) / len
+    const wr = Math.cos(ang), wi = Math.sin(ang)
+    for (let i = 0; i < n; i += len) {
+      let cwr = 1, cwi = 0
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = i + k + len / 2
+        const tr = re[b] * cwr - im[b] * cwi
+        const ti = re[b] * cwi + im[b] * cwr
+        re[b] = re[a] - tr; im[b] = im[a] - ti
+        re[a] += tr; im[a] += ti
+        const ncwr = cwr * wr - cwi * wi
+        cwi = cwr * wi + cwi * wr
+        cwr = ncwr
+      }
+    }
+  }
+}
+
+/** Detect low-frequency HANDLING NOISE — a phone being moved/bumped, mic handling,
+ *  a knock — that the Silero VAD mistakes for speech and therefore never cuts. Such
+ *  noise is dominated by sub-300Hz rumble with little speech-band (300–3400Hz)
+ *  energy: a spectral shape a human voice never has (a voice always carries strong
+ *  speech-band harmonics/formants). We flag it straight from the spectrum, so it's
+ *  independent of the VAD's verdict AND of the word timings — which is why it can't
+ *  cause the mis-timed-speech over-cut the word-gap approach did. Returns time
+ *  regions to REMOVE; the caller unions these with the VAD silence and clamps them
+ *  off kept words. Deliberately CONSERVATIVE (strong, sustained rumble only) so its
+ *  only failure mode is leaving some noise in, never clipping speech.
+ *
+ *  Thresholds were measured against a real phone-handling clip: the rumble ran
+ *  lo300≈0.5–0.65 / speech-band≈0.35–0.5, while every speech frame (even low-pitched,
+ *  even fricatives) stayed lo300<0.4 or speech-band>0.6 — a wide, safe margin. */
+export function detectHandlingNoise(
+  float32: Float32Array,
+  sampleRate: number,
+  minRegionS = 0.3
+): { start: number; end: number }[] {
+  const FFT = 2048
+  const hop = Math.max(1, Math.round(sampleRate * 0.02)) // 20ms
+  if (float32.length < FFT) return []
+  const hann = new Float32Array(FFT)
+  for (let i = 0; i < FFT; i++) hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (FFT - 1))
+  const binHz = sampleRate / FFT
+  const b300 = Math.max(1, Math.round(300 / binHz))
+  const b3400 = Math.min(FFT / 2, Math.round(3400 / binHz))
+  const re = new Float32Array(FFT)
+  const im = new Float32Array(FFT)
+  const pass: boolean[] = []
+  const lo300arr: number[] = []
+  for (let s = 0; s + FFT <= float32.length; s += hop) {
+    re.fill(0); im.fill(0)
+    for (let i = 0; i < FFT; i++) re[i] = float32[s + i] * hann[i]
+    fftInPlace(re, im)
+    const half = FFT / 2
+    let tot = 0, low = 0, sp = 0
+    for (let k = 1; k < half; k++) {
+      const pw = re[k] * re[k] + im[k] * im[k]
+      tot += pw
+      if (k < b300) low += pw
+      else if (k < b3400) sp += pw
+    }
+    const lo300 = tot > 0 ? low / tot : 0
+    const spBand = tot > 0 ? sp / tot : 0
+    pass.push(lo300 > 0.45 && spBand < 0.55)
+    lo300arr.push(lo300)
+  }
+  const hopS = hop / sampleRate
+  const winS = FFT / sampleRate
+  const out: { start: number; end: number }[] = []
+  const n = pass.length
+  const MAXGAP = 5 // bridge dropouts up to ~100ms — one bump's rumble momentarily
+  let i = 0        // dips out of band (a higher-freq transient) but is one event
+  while (i < n) {
+    if (pass[i]) {
+      let j = i
+      for (;;) {
+        if (j + 1 < n && pass[j + 1]) { j++; continue }
+        let k = j + 2
+        while (k < n && k <= j + 1 + MAXGAP && !pass[k]) k++
+        if (k < n && k <= j + 1 + MAXGAP && pass[k]) { j = k; continue }
+        break
+      }
+      // frame-start based bounds (avoid the FFT window smearing the cut into speech)
+      const start = i * hopS
+      const end = j * hopS + Math.min(hopS, winS)
+      let meanLo = 0
+      for (let k = i; k <= j; k++) meanLo += lo300arr[k]
+      meanLo /= j - i + 1
+      if (end - start >= minRegionS && meanLo > 0.48) out.push({ start, end })
+      i = j + 1
+    } else i++
+  }
+  return out
+}
+
 /** The unified silence pass shared by cloud ProCut AND Retake β: run the raw VAD
  *  with the user's VadSilenceSettings, then CLAMP every region ~30ms off the KEPT
  *  words so a word the VAD under-detected can never be clipped (the safety the
@@ -254,7 +362,12 @@ export async function vadSilenceRegions(
   idPrefix = 'vadsil'
 ): Promise<SilenceRegion[]> {
   const raw = await detectSilenceFloat32(float32, sampleRate, vadSilenceToOpts(settings), durationS)
-  // Word-guard tied to the padding sliders (0 → crisp gapless cut), and trim the
+  // Union the VAD silence with detected low-frequency HANDLING NOISE — rumble the
+  // VAD scored as speech and left in (e.g. the phone being moved). It's a spectral
+  // test, so it can't clip real speech or depend on word timings. Then clamp:
+  // word-guard tied to the padding sliders (0 → crisp gapless cut), and trim the
   // leading/trailing dead air of the whole clip too.
-  return clampSilenceRegions(raw, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true)
+  const noise = detectHandlingNoise(float32, sampleRate)
+  const merged = mergeIntervals([...raw.map((r) => ({ start: r.start, end: r.end })), ...noise])
+  return clampSilenceRegions(merged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true)
 }
