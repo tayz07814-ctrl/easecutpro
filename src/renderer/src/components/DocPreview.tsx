@@ -81,6 +81,32 @@ interface Seg {
   speed: number
 }
 
+// Anti-click seam fade for the LIVE preview. A live <video> element can't overlap
+// itself, so (unlike the export's true equal-power crossfade) the preview dips the
+// active clip's volume toward 0 over ~SEAM_FADE_S on each side of a real cut, which
+// masks the click of the hard splice/seek. Seamless same-source joins (splits) are
+// left untouched. Returns a 0..1 gain multiplier.
+const SEAM_FADE_S = 0.025
+function seamContiguous(a: Seg, b: Seg): boolean {
+  return a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003
+}
+function seamGain(t: number, di: number, ss: Seg[], fade = SEAM_FADE_S): number {
+  const seg = ss[di]
+  if (!seg) return 1
+  let g = 1
+  const prev = ss[di - 1]
+  if (prev && !seamContiguous(prev, seg)) {
+    const d = t - seg.start // seconds since this segment's (cut) start
+    if (d < fade) g = Math.min(g, Math.sin((Math.max(0, d) / fade) * (Math.PI / 2)))
+  }
+  const next = ss[di + 1]
+  if (next && !seamContiguous(seg, next)) {
+    const d = seg.start + seg.len - t // seconds until this segment's (cut) end
+    if (d < fade) g = Math.min(g, Math.sin((Math.max(0, d) / fade) * (Math.PI / 2)))
+  }
+  return g
+}
+
 /** Main-lane clips -> playable segments, sorted by timeline position. Pure. */
 function docSegments(doc: TimelineDocument): { segs: Seg[]; missing: number } {
   const mainId = mainTrackId(doc)
@@ -403,7 +429,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         v.style.visibility = isShown ? 'visible' : 'hidden'
         if (isShown && shown) {
           v.muted = shown.muted === true
-          v.volume = clamp(shown.gain ?? 1, 0, 1)
+          // Anti-click: dip the volume toward 0 across each real cut seam.
+          v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss), 0, 1)
           v.playbackRate = clamp(shown.speed, 0.25, 4)
           const size = shown.ovScale ?? 1
           const zs = shown.ovZoomStart ?? 1
