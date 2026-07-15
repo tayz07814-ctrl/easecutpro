@@ -172,7 +172,7 @@ function blankInfo(id: string): MediaInfo {
  * video. We parse the `elst` ourselves to recover it. Returns 0 for non-MP4 or
  * when there's no offset. (Mirrors the desktop `aresample=...:first_pts=0` fix.)
  */
-function mp4AudioStartOffset(buf: ArrayBuffer): number {
+export function mp4AudioStartOffset(buf: ArrayBuffer): number {
   try {
     const dv = new DataView(buf)
     const len = dv.byteLength
