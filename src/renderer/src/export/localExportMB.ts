@@ -23,7 +23,7 @@
 
 import { getSharedEngine } from '../timelineEngine'
 import { easeInOut } from '../clock'
-import { planFromDoc, renderAudio, FPS, exportMsg, type Seg } from './localExport'
+import { planFromDoc, renderAudio, seamFadeSeconds, FPS, exportMsg, type Seg } from './localExport'
 import {
   planOverlays,
   planTexts,
@@ -83,7 +83,7 @@ export async function exportOnDeviceMB(
 
   // Offline audio mix — same honest-failure semantics as the native path
   // (renderAudio throws if a source that should contribute sound can't decode).
-  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing your audio…'))
+  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing your audio…'), seamFadeSeconds())
 
   const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() })
   const canvas = document.createElement('canvas')

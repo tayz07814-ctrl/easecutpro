@@ -378,6 +378,23 @@ export interface BatchJob {
   error?: string
 }
 
+/** Seam blend ("overlap") at cut joins — a short incoming-only fade that de-clicks
+ *  the splice. A global render setting applied at export + preview. */
+export interface SeamFadeSettings {
+  enabled: boolean
+  ms: number
+}
+export const DEFAULT_SEAM_FADE: SeamFadeSettings = { enabled: true, ms: 25 }
+/** Clamp a possibly-partial persisted value back onto the defaults (0–60ms). */
+export function normalizeSeamFade(v: Partial<SeamFadeSettings> | null | undefined): SeamFadeSettings {
+  const d = DEFAULT_SEAM_FADE
+  if (!v) return { ...d }
+  return {
+    enabled: typeof v.enabled === 'boolean' ? v.enabled : d.enabled,
+    ms: Math.max(0, Math.min(60, typeof v.ms === 'number' && Number.isFinite(v.ms) ? v.ms : d.ms))
+  }
+}
+
 interface AppState {
   project: Project
   /** reusable media library (import once, reuse many; persisted). */
@@ -529,6 +546,12 @@ interface AppState {
    *  (cloud build). One 🔇 Silence Settings modal edits this for both engines. */
   vadSilenceSettings: VadSilenceSettings
   setVadSilenceSettings: (patch: Partial<VadSilenceSettings>) => void
+  /** Seam blend ("overlap") at every cut: a short incoming-only fade that de-clicks
+   *  the splice. Global render setting (export + preview), NOT a detection param, so
+   *  it lives outside vadSilenceSettings and is unaffected by silence presets.
+   *  enabled=false → hard cuts; ms is the fade length (0–60ms). */
+  seamFade: SeamFadeSettings
+  setSeamFade: (patch: Partial<SeamFadeSettings>) => void
   /** Smart Silence Cutter (redesigned UI only). ON (default): Retake β silence
    *  suggestions are staged/shown/executed as normal. OFF: the engine still runs
    *  unchanged but its silence suggestions are not staged, displayed, or executed
@@ -1719,6 +1742,25 @@ export const useStore = create<AppState>((set, get) => ({
       /* ignore */
     }
     set({ vadSilenceSettings: next })
+  },
+
+  seamFade: ((): SeamFadeSettings => {
+    try {
+      const raw = localStorage.getItem('ec.seamFade')
+      if (raw) return normalizeSeamFade(JSON.parse(raw))
+    } catch {
+      /* ignore */
+    }
+    return { ...DEFAULT_SEAM_FADE }
+  })(),
+  setSeamFade: (patch) => {
+    const next = normalizeSeamFade({ ...get().seamFade, ...patch })
+    try {
+      localStorage.setItem('ec.seamFade', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+    set({ seamFade: next })
   },
   smartSilenceCutter: ((): boolean => {
     try {

@@ -16,6 +16,7 @@
 // are genuinely missing in this browser.
 
 import { getSharedEngine } from '../timelineEngine'
+import { useStore } from '../store'
 import { mainTrackId } from '@shared/timeline/model'
 import { framesToSeconds } from '@shared/timeline/time'
 import { resolveMedia } from '../media/resolver'
@@ -241,7 +242,19 @@ function num(v: unknown, d: number): number {
 // segment plays EXACTLY its body at full gain, and any segment that begins at a real
 // cut gets a ~25ms 0→gain ramp that kills the splice click without touching speech.
 // Splits (seamless same-source joins) are already continuous and get nothing.
-const SEAM_FADE_IN_S = 0.025 // 25ms fade-in at each post-cut clip start
+const SEAM_FADE_IN_S = 0.025 // 25ms fade-in at each post-cut clip start (default)
+
+/** The creator-configured seam blend ("overlap") length in seconds — 0 when they
+ *  turned overlap off (hard cuts). Read live from the store; falls back to the
+ *  default if unavailable. Shared by exportOnDevice AND the Mediabunny path. */
+export function seamFadeSeconds(): number {
+  try {
+    const sf = useStore.getState().seamFade
+    return sf?.enabled ? Math.max(0, (sf.ms ?? 25) / 1000) : 0
+  } catch {
+    return SEAM_FADE_IN_S
+  }
+}
 
 /** cos/sin ramp of `n` points scaled to `base`: 'in' = 0→base (sin), 'out' =
  *  base→0 (cos). Only 'in' is used now (the subtle post-cut fade-in). */
@@ -273,7 +286,8 @@ export async function renderAudio(
   segs: Seg[],
   extra: AudioClipSched[],
   total: number,
-  onProgress: (p: number) => void
+  onProgress: (p: number) => void,
+  seamFadeS = SEAM_FADE_IN_S
 ): Promise<AudioBuffer | null> {
   const frames = Math.max(1, Math.ceil(total * AUDIO_RATE))
   const off = new OfflineAudioContext(2, frames, AUDIO_RATE)
@@ -360,7 +374,7 @@ export async function renderAudio(
     node.buffer = buf
     node.playbackRate.value = sp
     const g = off.createGain()
-    const fi = fadeInAt[i] ? Math.min(SEAM_FADE_IN_S, s.len * 0.5) : 0
+    const fi = seamFadeS > 0 && fadeInAt[i] ? Math.min(seamFadeS, s.len * 0.5) : 0
     if (fi > 0) g.gain.setValueCurveAtTime(equalPowerRamp(base, 'in'), Math.max(0, s.start), fi)
     else g.gain.setValueAtTime(base, Math.max(0, s.start))
     node.connect(g).connect(off.destination)
@@ -438,7 +452,7 @@ export async function exportOnDevice(
 
   // 1) audio first (fast, and the encoder drains it while frames trickle in)
   dbg('renderAudio: start')
-  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing your audio…'))
+  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing your audio…'), seamFadeSeconds())
   dbg('renderAudio: done', !!audioBuf)
 
   // 2) worker

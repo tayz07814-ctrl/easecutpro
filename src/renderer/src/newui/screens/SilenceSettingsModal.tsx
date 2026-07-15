@@ -77,6 +77,25 @@ export default function SilenceSettingsModal(): JSX.Element | null {
     </div>
   )
 
+  // Seam blend ("overlap") — a global render setting (export + preview), shown here
+  // per the creator's request. Toggle on/off; when on, a slider sets the fade length.
+  const overlap = (
+    <div style={css('margin-top:18px;border-top:1px solid rgba(255,255,255,.07);padding-top:16px;display:flex;flex-direction:column;gap:14px')}>
+      <div style={css('display:flex;align-items:flex-start;gap:11px')}>
+        <div onClick={() => sil.setSeamFade({ enabled: !sil.seamFade.enabled })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${sil.seamFade.enabled ? '#6E6AE8' : '#3A3E48'}`)}>
+          <div style={css(sil.seamFade.enabled ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
+        </div>
+        <div style={css('flex:1;min-width:0')}>
+          <div style={css('font-size:12.5px;color:#E9EAEE;font-weight:550')}>Blend audio at cuts (overlap)</div>
+          <div style={css('font-size:11px;color:#9BA0AC;margin-top:3px;line-height:1.45')}>A tiny fade at the start of each cut so joins don’t click. Turn off for hard cuts.</div>
+        </div>
+      </div>
+      {sil.seamFade.enabled && (
+        <Slider label="Overlap amount" value={sil.seamFade.ms} min={0} max={60} step={1} fmt={(v) => `${Math.round(v)} ms`} lo="0 · hard cut" hi="60 ms · smoother" onChange={(v) => sil.setSeamFade({ ms: v })} />
+      )}
+    </div>
+  )
+
   const isCustom = view === 'custom'
   const tile = 'border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 14px;cursor:pointer'
   const tileDesc = 'font-size:11.5px;color:#9BA0AC;margin-top:4px;line-height:1.45'
@@ -119,6 +138,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
               </div>
             </div>
             <div style={css('margin-top:16px;background:#191B20;border-radius:10px;padding:11px 14px;font-size:12px;color:#9BA0AC;line-height:1.5')}>With <span style={css('color:#E9EAEE;font-weight:550')}>{view.charAt(0).toUpperCase() + view.slice(1)}</span>, pauses longer than <span style={css('color:#E9EAEE')}>{sil.s.minGapS.toFixed(1)}s</span> are shortened, with a little breathing room kept around speech.</div>
+            {overlap}
             {footer('20px')}
           </>
         ) : (
@@ -140,6 +160,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
                 <div style={css('font-size:12px;color:#C6C9D2')}>Protect the first pause after each sentence</div>
               </div>
             </div>
+            {overlap}
             {footer('22px')}
           </>
         )}

@@ -419,13 +419,17 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       // ---- visibility + per-clip properties, every frame (cheap, idempotent) ----
       const di = displayIdxAt(t)
       const shown = di >= 0 ? ss[di] : undefined
+      // Creator-configured seam blend ("overlap"): 0 = hard cuts. Read live so the
+      // preview reflects the Silence Settings toggle/slider immediately.
+      const sf = useStore.getState().seamFade
+      const seamFadeS = sf.enabled ? sf.ms / 1000 : 0
       for (const [src, v] of pool) {
         const isShown = !!shown && shown.src === src && !badRef.current.has(src)
         v.style.visibility = isShown ? 'visible' : 'hidden'
         if (isShown && shown) {
           v.muted = shown.muted === true
           // Anti-click: dip the volume toward 0 across each real cut seam.
-          v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss), 0, 1)
+          v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
           v.playbackRate = clamp(shown.speed, 0.25, 4)
           const size = shown.ovScale ?? 1
           const zs = shown.ovZoomStart ?? 1

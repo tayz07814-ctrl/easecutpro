@@ -4,7 +4,7 @@
 // — the same unit-tested bundles the stable app uses), so the new UI and the
 // stable app detect silence identically. No silence-engine change.
 
-import { useStore } from '../../store'
+import { useStore, type SeamFadeSettings } from '../../store'
 import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
 import {
   SILENCE_PRESETS,
@@ -26,6 +26,9 @@ export interface SilenceModel {
   presets: typeof SILENCE_PRESETS
   applyPreset: (p: SilencePresetId) => void
   setField: (k: keyof VadSilenceSettings, v: number | boolean) => void
+  /** Seam blend ("overlap") at cuts — global render setting, separate from presets. */
+  seamFade: SeamFadeSettings
+  setSeamFade: (patch: Partial<SeamFadeSettings>) => void
   reset: () => void
   close: () => void
 }
@@ -35,11 +38,15 @@ export function useSilence(): SilenceModel {
   const setS = useStore((st) => st.setVadSilenceSettings)
   const show = useStore((st) => st.showSilenceSettings)
   const setShow = useStore((st) => st.setShowSilenceSettings)
+  const seamFade = useStore((st) => st.seamFade)
+  const setSeamFade = useStore((st) => st.setSeamFade)
   return {
     show,
     s,
     detected: detectSilencePreset(s),
     presets: SILENCE_PRESETS,
+    seamFade,
+    setSeamFade,
     // presetValues() is a full VadSilenceSettings bundle (all 7 fields), so a
     // preset lands on exactly the tested values — not a partial that leaves
     // stale fields behind (the old bug that made "Balanced" under-cut).
