@@ -291,20 +291,35 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
     [engine, frameFromClientX]
   )
 
-  // marquee (rubber-band) selection over empty timeline area
+  // Empty timeline body: PLAIN click/drag scrubs the playhead (so the red bar can be
+  // grabbed anywhere in the track area, not only in the ruler above). Hold
+  // Shift/Ctrl/Cmd to rubber-band (marquee) select clips instead.
   const onEmptyPointerDown = useCallback(
     (e: ReactPointerEvent) => {
       if (e.button !== 0) return
       const t = e.target as HTMLElement
       if (t.closest('.ec-tl-header') || t.closest('.ec-tl-rulerRow') || t.closest('.ec-tl-clip')) return
       const additive = e.shiftKey || e.ctrlKey || e.metaKey
-      if (!additive) engine.clearSelection()
+      if (!additive) {
+        // scrub — identical to the ruler, just triggered from the lane area
+        engine.clearSelection()
+        const seek = (cx: number): void => engine.setPlayhead(Math.max(0, frameFromClientX(cx)))
+        seek(e.clientX)
+        const move = (ev: PointerEvent): void => seek(ev.clientX)
+        const up = (): void => {
+          window.removeEventListener('pointermove', move)
+          window.removeEventListener('pointerup', up)
+        }
+        window.addEventListener('pointermove', move)
+        window.addEventListener('pointerup', up)
+        return
+      }
       const el = scrollRef.current
       if (!el) return
       const rect = el.getBoundingClientRect()
       const startFrame = frameFromClientX(e.clientX)
       const startContentY = el.scrollTop + (e.clientY - rect.top) - RULER_H
-      const baseSel = additive ? engine.interactionState.selection.slice() : []
+      const baseSel = engine.interactionState.selection.slice()
       setMarquee({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY })
       const move = (ev: PointerEvent): void => {
         const f0 = Math.min(startFrame, frameFromClientX(ev.clientX))
