@@ -233,31 +233,6 @@ function num(v: unknown, d: number): number {
   return typeof v === 'number' ? v : d
 }
 
-// De-click fade at cut seams. The creator asked for a SINGLE, very subtle fade —
-// only at the START of the clip that follows a cut, NEVER on the outgoing tail. A
-// two-sided crossfade (the old approach) attenuates the last word of the outgoing
-// clip AND the first word of the incoming one, so across many retake cuts it audibly
-// eats words. So: no fade-out, no overlap, no removed audio replayed — each kept
-// segment plays EXACTLY its body at full gain, and any segment that begins at a real
-// cut gets a ~8ms 0→gain ramp that kills the splice click without touching speech.
-// Splits (seamless same-source joins) are already continuous and get nothing.
-const SEAM_FADE_IN_S = 0.008 // 8ms — inside the creator's 5–10ms ask
-// TEMP (retake testing): omit the seam fade entirely — export hard butt-joins with
-// NO audio ramp, so the raw retake cuts can be judged on their own. Flip back to
-// true to re-enable the subtle post-cut fade-in.
-const SEAM_FADE_ENABLED = false
-
-/** cos/sin ramp of `n` points scaled to `base`: 'in' = 0→base (sin), 'out' =
- *  base→0 (cos). Only 'in' is used now (the subtle post-cut fade-in). */
-export function equalPowerRamp(base: number, dir: 'in' | 'out', n = 64): Float32Array {
-  const a = new Float32Array(n)
-  for (let i = 0; i < n; i++) {
-    const t = n === 1 ? 1 : i / (n - 1) // 0→1
-    a[i] = base * (dir === 'in' ? Math.sin((t * Math.PI) / 2) : Math.cos((t * Math.PI) / 2))
-  }
-  return a
-}
-
 // ---- audio (offline mix -> AudioData chunks) ----
 export async function renderAudio(
   segs: Seg[],
@@ -311,46 +286,24 @@ export async function renderAudio(
     cache.set(src, buf)
     return buf
   }
+  let any = false
   let failed = 0
-  // Decode + collect the AUDIBLE main-lane segments in timeline order, so the
-  // crossfade can see each seam's neighbours.
-  const audible: { s: Seg; buf: AudioBuffer }[] = []
-  for (const s of [...segs].sort((a, b) => a.start - b.start)) {
+  for (const s of segs) {
     if (s.muted || !s.hasAudio) continue
     const buf = await decode(s.src, s.url)
     if (!buf) {
       failed++
       continue
     }
-    audible.push({ s, buf })
-  }
-
-  // A segment "starts at a cut" when it is NOT a seamless same-source continuation
-  // of the previous audible segment (a split). Those — plus the very first segment
-  // (a clean start from silence) — get the short fade-in; contiguous splits play
-  // straight through untouched.
-  const contiguous = (a: Seg, b: Seg): boolean =>
-    a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003 && Math.abs(a.speed - b.speed) < 1e-3
-  const fadeInAt = audible.map((cur, i) => (i === 0 ? true : !contiguous(audible[i - 1].s, cur.s)))
-
-  // Schedule each audible segment playing EXACTLY its body — no overlap, no removed
-  // audio replayed, no fade-out. A post-cut start gets a ~8ms 0→gain ramp; the rest
-  // holds at full gain, so speech at both edges of every cut is preserved verbatim.
-  for (let i = 0; i < audible.length; i++) {
-    const { s, buf } = audible[i]
-    const sp = Math.max(0.01, s.speed)
-    const base = Math.max(0, s.gain)
+    any = true
     const node = off.createBufferSource()
     node.buffer = buf
-    node.playbackRate.value = sp
+    node.playbackRate.value = s.speed
     const g = off.createGain()
-    const fi = SEAM_FADE_ENABLED && fadeInAt[i] ? Math.min(SEAM_FADE_IN_S, s.len * 0.5) : 0
-    if (fi > 0) g.gain.setValueCurveAtTime(equalPowerRamp(base, 'in'), Math.max(0, s.start), fi)
-    else g.gain.setValueAtTime(base, Math.max(0, s.start))
+    g.gain.value = Math.max(0, s.gain)
     node.connect(g).connect(off.destination)
-    node.start(Math.max(0, s.start), Math.max(0, s.sourceStart), Math.max(0.01, s.sourceEnd - s.sourceStart))
+    node.start(s.start, s.sourceStart, Math.max(0.01, s.sourceEnd - s.sourceStart))
   }
-  let any = audible.length > 0
   for (const a of extra) {
     const buf = await decode(a.src, a.url)
     if (!buf) {

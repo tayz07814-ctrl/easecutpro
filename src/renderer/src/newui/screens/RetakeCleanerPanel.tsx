@@ -1,6 +1,5 @@
 import { css } from '../css'
 import { useRetake } from '../data/useRetake'
-import { useSmoothProgress } from '../../useSmoothProgress'
 
 // Stage C — production Retake Cleaner panel (editor right rail). Renders the
 // approved design's state-appropriate content (idle / analyzing / results /
@@ -74,9 +73,6 @@ function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage
 
 export default function RetakeCleanerPanel(): JSX.Element {
   const r = useRetake()
-  // Glide the bar between real progress milestones (and creep during the opaque
-  // transcribe step) so it never freezes at one number.
-  const shownPct = Math.round(useSmoothProgress(r.job.active, r.job.percent))
 
   const shell = (children: JSX.Element): JSX.Element => (
     <div style={css('flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;padding:18px 18px 0')}>
@@ -114,8 +110,8 @@ export default function RetakeCleanerPanel(): JSX.Element {
     return shell(
       <>
         <div style={css('margin-top:16px;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:16px')}>
-          <div style={css('display:flex;align-items:center;justify-content:space-between;font-size:12.5px')}><span style={css('color:#E9EAEE;font-weight:550')}>Analyzing your video</span><span style={css("font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9BA0AC")}>{shownPct}%</span></div>
-          <div style={css('height:4px;border-radius:2px;background:#2A2D36;overflow:hidden;margin-top:12px')}><div style={css(`width:${Math.max(4, shownPct)}%;height:100%;border-radius:2px;background:#6E6AE8`)} /></div>
+          <div style={css('display:flex;align-items:center;justify-content:space-between;font-size:12.5px')}><span style={css('color:#E9EAEE;font-weight:550')}>Analyzing your video</span><span style={css("font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9BA0AC")}>{r.job.percent}%</span></div>
+          <div style={css('height:4px;border-radius:2px;background:#2A2D36;overflow:hidden;margin-top:12px')}><div style={css(`width:${Math.max(4, r.job.percent)}%;height:100%;border-radius:2px;background:#6E6AE8`)} /></div>
           <div style={css('font-size:12px;color:#9BA0AC;margin-top:14px;line-height:1.5')}>{r.job.message || 'Working…'}</div>
         </div>
         <div style={css('font-size:11px;color:#686E7B;margin-top:10px;text-align:center')}>You can keep editing while this runs.</div>

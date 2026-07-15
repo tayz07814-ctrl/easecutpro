@@ -6,7 +6,6 @@ import '../../styles.css'
 import '../newui.css'
 import { useStore } from '../../store'
 import { getSharedEngine } from '../../timelineEngine'
-import { projectToDocument, normalizeDefaultLanes } from '@shared/timeline/bridge'
 import type { Project } from '@shared/types'
 import Dashboard from '../screens/Dashboard'
 import MobileDashboard from '../screens/MobileDashboard'
@@ -45,39 +44,13 @@ const rec = (name: string) => (...args: unknown[]): unknown => {
   if (name === 'openMediaDialogMulti') return Promise.resolve([])
   return Promise.resolve()
 }
-// Canned Retake β result: words densely covering the clip, a contiguous run in
-// the MIDDLE flagged for deletion — so Execute cuts must shrink the Main lane by
-// that span. Times are in the clip's source seconds (the base is a full 208s clip).
-function cannedRetake(): Record<string, unknown> {
-  const words: { id: string; text: string; start: number; end: number }[] = []
-  for (let i = 0; i < 24; i++) {
-    const start = +(10 + i * 0.8).toFixed(2)
-    words.push({ id: 'rw' + i, text: 'word' + i, start, end: +(start + 0.5).toFixed(2) })
-  }
-  const del = ['rw8', 'rw9', 'rw10', 'rw11', 'rw12', 'rw13', 'rw14', 'rw15'] // ~16.4s..22.5s
-  return {
-    transcript: { words, segments: [{ id: 'seg1', words }] },
-    verbatim: { words, segments: [{ id: 'seg1', words }] },
-    deleteWordIds: del,
-    silenceRegions: [],
-    cutSpans: [{ start: 16.4, end: 22.5 }],
-    summary: 'Canned retake (test)',
-    provider: 'test',
-    warnings: [],
-    debugPath: ''
-  }
-}
 const explicitApi: Record<string, unknown> = {
   listProjects: rec('listProjects'),
   getProject: rec('getProject'),
   createProject: rec('createProject'),
   deleteProjectRecord: rec('deleteProjectRecord'),
   saveProjectRecord: rec('saveProjectRecord'),
-  openMediaDialogMulti: rec('openMediaDialogMulti'),
-  // Retake β test doubles — let the REAL runRetakeCutBeta/executeCuts run against
-  // a doc-only base so the ?docbase=1 harness proves cuts reach the Main lane.
-  combineClips: () => Promise.resolve({ path: 'combined-test.wav', duration: 208 }),
-  retakeAwareCut: () => Promise.resolve(cannedRetake())
+  openMediaDialogMulti: rec('openMediaDialogMulti')
 }
 // Any other engine/media method (waveform, thumbnails, probeMedia…) resolves to
 // a harmless empty default so mounting the live TimelinePanel/VideoPreview in the
@@ -133,48 +106,12 @@ const seededProject = {
   transcript: rk.transcript,
   playhead: 41.2
 } as unknown as Project
-
-// ?docbase=1 → reproduce a clip DRAGGED onto the timeline: the base lives ONLY in
-// the timeline document; the legacy media/baseSequence fields are empty (as after
-// setTimelineDoc). Retake must still find the base via the doc.
-const docOnlyProject = {
-  ...(useStore.getState().freshProject()),
-  name: 'Dragged clip project',
-  media: undefined,
-  baseSequence: undefined,
-  transcript: undefined,
-  timeline: normalizeDefaultLanes(projectToDocument(seededProject))
-} as unknown as Project
-const useDocBase = new URLSearchParams(location.search).get('docbase') === '1'
-const wh = window as unknown as Record<string, unknown>
-wh.__job = () => useStore.getState().job
-// Retake→Execute end-to-end hooks (drive the REAL store actions, read the REAL
-// shared engine) so the harness can prove Execute cuts reaches the Main lane.
-wh.__runRetake = () => useStore.getState().runRetakeCutBeta()
-wh.__execute = () => useStore.getState().executeCuts()
-wh.__baseSeqLen = () => (useStore.getState().project.baseSequence ?? []).length
-wh.__mainSpan = () => {
-  const doc = getSharedEngine()?.document
-  const main = doc?.tracks.find((t) => t.isMain)
-  const clips = main?.clips ?? []
-  return { clips: clips.length, frames: clips.reduce((a, c) => a + c.duration, 0) }
-}
-// Counterfactual (old bug): set a transcript with pre-deleted words WITHOUT
-// persisting the base — exactly what the pre-fix runRetakeCutBeta produced. The
-// document-mode routing should bail (empty legacy base) and leave the Main lane
-// uncut. Used only by counterfactual-test.mjs.
-wh.__setTranscriptNoBase = (words: { id: string; text: string; start: number; end: number; deleted?: boolean }[]) => {
-  const st = useStore.getState()
-  const seg = { id: 'seg1', words, start: words[0]?.start ?? 0, end: words[words.length - 1]?.end ?? 0 }
-  useStore.setState({ project: { ...st.project, transcript: { words, segments: [seg] } } })
-}
 useStore.setState({
   user: { id: 'u', email: 'tayz07814@gmail.com' },
-  serverAvailable: true,
   batchJobs: [{ projectId: 'p3', name: 'Kitchen b-roll batch', status: 'processing', step: 'Uploading media…' }],
   view: 'editor',
   currentProjectId: 'p1',
-  project: useDocBase ? docOnlyProject : seededProject,
+  project: seededProject,
   saveState: 'saved',
   canUndo: true,
   canRedo: false,
