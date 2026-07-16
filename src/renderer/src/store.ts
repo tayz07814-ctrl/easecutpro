@@ -23,14 +23,16 @@ import type {
   OverlayEvent
 } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
-import { documentToProject, projectToDocument, normalizeDefaultLanes } from '@shared/timeline/bridge'
+import { documentToProject, projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips } from '@shared/timeline/bridge'
+import * as TimelineCommands from '@shared/timeline/commands'
+import type { Command } from '@shared/timeline/commands'
 import { getSharedEngine } from './timelineEngine'
 import { insertLibraryItemAtPlayhead } from './timelineInsert'
 import { exportOnDevice } from './export/localExport'
 import { renderTextPng } from './textRender'
 import { TIMELINE_TRACK_COUNT } from '@shared/types'
 import { detectFillerIds, detectRepeatIds, snapRetakeFlags, DEFAULT_FILLERS } from '@shared/fillers'
-import { computeKeepRanges, subtractRanges, collapseTime, isMultiBase, stitchMontageWaveform, virtualToClip, baseTimelineDuration } from '@shared/edit'
+import { computeKeepRanges, subtractRanges, isMultiBase, stitchMontageWaveform, virtualToClip, baseTimelineDuration } from '@shared/edit'
 import { runSmartSmoothCut, DEFAULT_SMART_CUT_PRESET, SMART_CUT_PRESETS, type SmartCutPresetName } from '@shared/smartsmooth'
 import {
   DEFAULT_CUTLORD_SETTINGS,
@@ -59,6 +61,22 @@ import { getFile } from './webmedia'
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+}
+
+/** Remove AI-generated overlay clips (metadata.overlayRuleId) from the live
+ *  timeline document as ONE undoable engine edit. No-op without an engine (legacy
+ *  mode / timeline unmounted); the callers also clean the legacy tracks. */
+function removeGeneratedDocOverlays(label: string, match: (ruleId: string) => boolean): void {
+  const engine = getSharedEngine()
+  if (!engine) return
+  const cmds: Command[] = []
+  for (const t of engine.document.tracks) {
+    for (const c of t.clips) {
+      const rid = c.metadata?.overlayRuleId
+      if (typeof rid === 'string' && match(rid)) cmds.push(TimelineCommands.removeClip(c.id))
+    }
+  }
+  if (cmds.length) engine.batch(label, cmds)
 }
 
 /** Human-facing clip name. Prefer the original filename from the OS file picker;
@@ -2311,7 +2329,8 @@ export const useStore = create<AppState>((set, get) => ({
       }
     })),
 
-  removeOverlayAsset: (overlayId) =>
+  removeOverlayAsset: (overlayId) => {
+    removeGeneratedDocOverlays('Remove overlay', (rid) => rid === overlayId)
     set((s) => ({
       project: {
         ...s.project,
@@ -2319,15 +2338,18 @@ export const useStore = create<AppState>((set, get) => ({
         overlayRules: (s.project.overlayRules ?? []).filter((r) => r.overlayId !== overlayId),
         tracks: s.project.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.overlayRuleId !== overlayId) }))
       }
-    })),
+    }))
+  },
 
-  clearGeneratedOverlays: () =>
+  clearGeneratedOverlays: () => {
+    removeGeneratedDocOverlays('Clear generated overlays', () => true)
     set((s) => ({
       project: {
         ...s.project,
         tracks: s.project.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => !c.overlayRuleId) }))
       }
-    })),
+    }))
+  },
 
   generateOverlays: async () => {
     if (!get().requireServer('Auto overlays')) return
@@ -2355,54 +2377,92 @@ export const useStore = create<AppState>((set, get) => ({
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Generating overlays…' } })
     try {
       const res = await window.api.generateOverlays(t, assets, rules, { duration: dur, cuts })
-      // turn events into image clips on overlay track 1 (source -> edited time).
-      const assetById = new Map(assets.map((a) => [a.id, a]))
-      const newClips: Clip[] = []
-      for (const ev of res.events as OverlayEvent[]) {
-        const asset = assetById.get(ev.overlayId)
-        if (!asset) continue
-        const len = Math.max(0.5, ev.end - ev.start)
-        const box = positionToBox(ev.position)
-        newClips.push({
-          id: uid(),
-          name: asset.name,
-          sourcePath: asset.file,
-          sourceIn: 0,
-          sourceOut: len,
-          sourceDuration: len,
-          isImage: true,
-          start: Math.max(0, collapseTime(ev.start, cuts)),
-          x: box.x,
-          y: box.y,
-          scale: box.scale,
-          crop: { l: 0, t: 0, r: 0, b: 0 },
-          zoomStart: 1,
-          zoomEnd: 1,
-          overlayRuleId: asset.id,
-          overlayAnimation: ev.animation,
-          overlayReason: ev.reason
-        })
+      const events = res.events as OverlayEvent[]
+      const log = [...res.log]
+      let placed = 0
+
+      const docMode = !!get().project.timeline
+      const engine = docMode ? getSharedEngine() : null
+      if (docMode && !engine) {
+        // Doc-native project but no live engine (timeline unmounted) — writing the
+        // legacy tracks would silently place clips nothing renders. Be honest.
+        set({ overlayLog: log, job: { active: false, percent: 0, message: 'Timeline is still loading — try Generate again' } })
+        return
       }
-      get().clearGeneratedOverlays()
-      if (newClips.length) {
-        set((s) => ({
-          project: {
-            ...s.project,
-            tracks: s.project.tracks.map((tr) => (tr.index === 1 ? { ...tr, clips: [...tr.clips, ...newClips] } : tr))
+      if (engine) {
+        // DOCUMENT mode (every new project): place events as image clips on the
+        // doc's overlay lane, replacing prior generated clips in ONE undoable
+        // edit. Events map source→edited frames through the main lane, so they
+        // land on the sentence that triggered them even after cuts. The engine
+        // write persists to project.timeline via TimelinePanel; preview + export
+        // read the same doc lanes, so what's placed is what renders.
+        const doc = engine.document
+        const { clips, skipped } = overlayEventsToDocClips(doc, get().project, events, assets)
+        const cmds: Command[] = []
+        for (const tr of doc.tracks) {
+          for (const c of tr.clips) {
+            if (typeof c.metadata?.overlayRuleId === 'string') cmds.push(TimelineCommands.removeClip(c.id))
           }
-        }))
+        }
+        for (const c of clips) cmds.push(TimelineCommands.addClip(c))
+        if (cmds.length) engine.batch('Generate overlays', cmds)
+        placed = clips.length
+        skipped.forEach((s) => log.push(`skipped: ${s}`))
+      } else {
+        // LEGACY mode: overlay clips live on project.tracks in SOURCE seconds —
+        // the preview gate (OverlayLayer) and the ffmpeg export both composite
+        // pre-cut, so ev.start passes through unchanged (collapsing it to edited
+        // time here made every overlay land early by the cut footage before it).
+        const assetById = new Map(assets.map((a) => [a.id, a]))
+        const newClips: Clip[] = []
+        for (const ev of events) {
+          const asset = assetById.get(ev.overlayId)
+          if (!asset) continue
+          const len = Math.max(0.5, ev.end - ev.start)
+          const box = positionToBox(ev.position)
+          newClips.push({
+            id: uid(),
+            name: asset.name,
+            sourcePath: asset.file,
+            sourceIn: 0,
+            sourceOut: len,
+            sourceDuration: len,
+            isImage: true,
+            start: Math.max(0, ev.start),
+            x: box.x,
+            y: box.y,
+            scale: box.scale,
+            crop: { l: 0, t: 0, r: 0, b: 0 },
+            zoomStart: 1,
+            zoomEnd: 1,
+            overlayRuleId: asset.id,
+            overlayAnimation: ev.animation,
+            overlayReason: ev.reason
+          })
+        }
+        get().clearGeneratedOverlays()
+        if (newClips.length) {
+          set((s) => ({
+            project: {
+              ...s.project,
+              tracks: s.project.tracks.map((tr) => (tr.index === 1 ? { ...tr, clips: [...tr.clips, ...newClips] } : tr))
+            }
+          }))
+        }
+        placed = newClips.length
       }
-      res.log.forEach((l) => console.log('[overlays]', l))
+
+      log.forEach((l) => console.log('[overlays]', l))
       set({
-        overlayLog: res.log,
+        overlayLog: log,
         job: {
           active: false,
           percent: 100,
-          message: newClips.length ? `Placed ${newClips.length} overlay(s) via ${res.via}` : 'No overlay matches found'
+          message: placed ? `Placed ${placed} overlay(s) via ${res.via}` : 'No overlay matches found'
         }
       })
     } catch (e) {
-      set({ job: { active: false, percent: 0, message: (e as Error).message } })
+      set({ job: { active: false, percent: 0, message: safeErrMessage(e) } })
     }
   },
 

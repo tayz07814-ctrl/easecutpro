@@ -93,8 +93,10 @@ export function keywordFallback(rules: OverlayRule[], sentences: Sentence[]): Ov
     const keys = extractKeywords(rule.instruction)
     if (keys.length === 0) continue
     for (const s of sentences) {
-      const hay = ' ' + s.text.toLowerCase() + ' '
-      const hit = keys.find((k) => hay.includes(' ' + k + ' ') || hay.includes(k))
+      // Normalize punctuation to spaces so padded lookup is a true WORD match —
+      // a bare substring fallback made "art" hit "start" and "tea" hit "instead".
+      const hay = ' ' + s.text.toLowerCase().replace(/[^a-z0-9%]+/g, ' ') + ' '
+      const hit = keys.find((k) => hay.includes(' ' + k + ' '))
       if (hit) {
         events.push({
           overlayId: rule.overlayId,
