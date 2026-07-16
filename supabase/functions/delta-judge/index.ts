@@ -20,7 +20,7 @@
 //                     delta_judge_key() RPC. NEVER hardcoded.
 //   DELTA_BASE_URL  — optional. OpenAI-compatible base. Default is OpenRouter
 //                     (https://openrouter.ai/api/v1).
-//   DELTA_MODEL     — optional. Default qwen/qwen-2.5-72b-instruct. Any OpenRouter
+//   DELTA_MODEL     — optional. Default openai/gpt-5.6-luna-pro. Any OpenRouter
 //                     model id ("<provider>/<model>") works.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
@@ -42,7 +42,7 @@ function preflight(req: Request): Response | null {
 
 // OpenRouter (openrouter.ai) — OpenAI-compatible chat-completions gateway.
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'qwen/qwen-2.5-72b-instruct'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'openai/gpt-5.6-luna-pro'
 
 // The key is NEVER hardcoded. Prefer an edge secret (DELTA_JUDGE_KEY); otherwise
 // read it from the Supabase Vault via the service-role-only delta_judge_key() RPC.
