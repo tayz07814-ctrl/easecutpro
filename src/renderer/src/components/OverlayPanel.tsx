@@ -13,7 +13,6 @@ export default function OverlayPanel(): JSX.Element {
   const rules = useStore((s) => s.project.overlayRules ?? [])
   const library = useStore((s) => s.library)
   const job = useStore((s) => s.job)
-  const hasTranscript = useStore((s) => (s.project.transcript?.segments?.length ?? 0) > 0)
   const overlayLog = useStore((s) => s.overlayLog)
   const addOverlayAsset = useStore((s) => s.addOverlayAsset)
   const updateOverlayRule = useStore((s) => s.updateOverlayRule)
@@ -119,12 +118,7 @@ export default function OverlayPanel(): JSX.Element {
               AI overlay placement isn't in the cloud version yet — drag images onto the timeline instead.
             </span>
           ) : (
-            <button
-              className="primary"
-              disabled={job.active || !hasTranscript}
-              title={hasTranscript ? 'Match each rule to the transcript and place the overlays' : 'Needs a transcript — the AI reads it to find when you say things'}
-              onClick={() => void generateOverlays()}
-            >
+            <button className="primary" disabled={job.active} onClick={() => void generateOverlays()}>
               ✨ Generate overlays
             </button>
           )}
@@ -132,11 +126,6 @@ export default function OverlayPanel(): JSX.Element {
             Clear placed
           </button>
         </div>
-      )}
-      {assets.length > 0 && !hasTranscript && !IS_CLOUD && (
-        <p className="muted small">
-          No transcript yet — run ⚡ FastCut, ✂ ProCut or 📝 Transcribe first so the AI knows when you say things.
-        </p>
       )}
 
       {overlayLog.length > 0 && (
