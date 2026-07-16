@@ -2622,28 +2622,40 @@ export const useStore = create<AppState>((set, get) => ({
       //    moments (deictic language + repeated identical lines — same words, different
       //    visual). We look at the actual frame, since the transcript can't tell them
       //    apart. Best-effort: a frame we can't read (e.g. desktop taint) is skipped.
-      const mediaUrl = get().mediaUrl
-      if (mediaUrl) {
-        const moments = findShowMoments(chunkTranscript(t))
-        if (moments.length) {
-          set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Looking at what you show on screen…' } })
-          let li = 0
-          for (const m of moments) {
-            const at = m.start + Math.min(0.4, Math.max(0, (m.end - m.start) / 2))
-            const frame = await grabFrame(mediaUrl, at)
-            if (!frame) { log.push(`moment ${m.start.toFixed(1)}s: couldn't read the frame`); continue }
-            let label = ''
-            try { label = (await window.api.labelMoment(frame.base64, frame.mediaType, m.text)).label || '' } catch { /* skip */ }
-            if (!label) continue
-            suggestions.push({
-              id: `lb_${li++}`, kind: 'label', overlayId: '', label,
-              start: m.start, end: Math.min(dur || m.start + 3, m.start + 3),
-              position: 'bottom_center', animation: 'pop',
-              reason: `You show this while saying “${m.text.slice(0, 48)}”`,
-              sentence: m.text.slice(0, 200), confidence: 0.8
-            })
-          }
+      //    Resolve the base video URL robustly — doc-native projects have NO
+      //    project.media (mediaUrl is null), so fall back to the main-lane video source.
+      let baseUrl = get().mediaUrl
+      if (!baseUrl) {
+        const p = get().project
+        const doc = getSharedEngine()?.document ?? p.timeline
+        const mainClip = doc?.tracks.find((tr) => tr.isMain)?.clips.find((c) => c.sourcePath && c.kind === 'video')
+        const src = p.media?.path || mainClip?.sourcePath || p.baseSequence?.[0]?.sourcePath
+        if (src) baseUrl = mediaSrc(src)
+      }
+      const moments = baseUrl ? findShowMoments(chunkTranscript(t)) : []
+      log.push(`moment vision: ${moments.length} show-moment(s)${baseUrl ? '' : ' — no base video, skipped'}`)
+      if (baseUrl && moments.length) {
+        set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Looking at what you show on screen…' } })
+        let li = 0
+        let labeled = 0
+        for (const m of moments) {
+          const at = m.start + Math.min(0.4, Math.max(0, (m.end - m.start) / 2))
+          const frame = await grabFrame(baseUrl, at)
+          if (!frame) { log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}": couldn't read the frame`); continue }
+          let label = ''
+          try { label = (await window.api.labelMoment(frame.base64, frame.mediaType, m.text)).label || '' } catch (e) { log.push(`  labelMoment error: ${(e as Error).message}`) }
+          log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}" -> ${label ? `label "${label}"` : '(no label)'}`)
+          if (!label) continue
+          labeled++
+          suggestions.push({
+            id: `lb_${li++}`, kind: 'label', overlayId: '', label,
+            start: m.start, end: Math.min(dur || m.start + 3, m.start + 3),
+            position: 'bottom_center', animation: 'pop',
+            reason: `You show this while saying “${m.text.slice(0, 48)}”`,
+            sentence: m.text.slice(0, 200), confidence: 0.8
+          })
         }
+        log.push(`moment vision: placed ${labeled} auto-label(s)`)
       }
 
       suggestions.sort((a, b) => a.start - b.start)
