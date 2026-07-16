@@ -1,39 +1,32 @@
 // EaseCutPro — Retake δ (Delta) cloud judge edge function.
 //
-// The finalizer is the creator's OWN model over an OpenAI-compatible API.
-// Currently: OpenRouter (openrouter.ai) — a unified gateway to many models.
-// Provider-neutral by design — swapping providers only changes DELTA_BASE_URL /
-// DELTA_MODEL / the stored key, never the wiring.
-//
-// Retake β (procut-judge / Claude Opus) is left completely UNTOUCHED; only the
+// The finalizer is the creator's OWN model over an OpenAI-compatible API
+// (OpenRouter). Retake β (procut-judge / Claude Opus) is left UNTOUCHED; only the
 // Retake δ button calls this, so production is unaffected.
 //
-// Same request/response shape as procut-judge (ProcutJudgeReq/Res): the browser
-// sends the index-anchored transcript payload + an empty first-pass proposal and
-// gets back the model's raw EDL text, parsed client-side with the SAME validateEdl
-// as Retake β. raw:null on any failure so the cut job always completes.
+// MODEL CHOICE / LATENCY — this is the crux. Supabase edge functions have a hard
+// 150s wall-clock limit, and the whole "press δ → cuts" flow must stay ~40s incl.
+// ~23s of transcription, so the judge has ~15s. deepseek/deepseek-v4-pro (1.6T
+// params) reasons for ~172s on a real transcript → HTTP 546 (killed) → no cuts, on
+// ANY provider. Its fast sibling deepseek/deepseek-v4-flash returns the SAME cuts
+// WITH reasoning in ~4-8s. So the default model is the flash variant, and reasoning
+// is kept ON (effort=high) — quality AND speed. Benchmarked head-to-head: flash@high
+// solved the same hard overlapping-retake tangle as pro, in 4s vs 150s+.
 //
-// IMPORTANT — reasoning is BOUNDED to a 4000-token budget. DELTA_MODEL
-// (deepseek/deepseek-v4-pro) is a heavy reasoning model: left unbounded it burned
-// ~8.9k reasoning tokens / ~172s on a real transcript and blew past Supabase's 150s
-// edge wall-clock limit (HTTP 546 → the function was killed before the model replied
-// → no cuts). Fully disabling reasoning was fast (~2-3s) but produced lower-quality
-// cuts on real messy footage. A 4000-token cap keeps cut quality while holding the
-// call to ~80-110s, safely under 150s. Tune via DELTA_REASONING_MAX_TOKENS.
+// Same request/response shape as procut-judge (ProcutJudgeReq/Res); raw:null on any
+// failure so the cut job always completes.
 //
 // Config:
-//   DELTA_JUDGE_KEY — required. The provider API key (an OpenRouter sk-or-… key).
-//                     Read from an edge secret OR the Supabase Vault (secret name
-//                     DELTA_JUDGE_KEY) via the service-role-only public
-//                     delta_judge_key() RPC. NEVER hardcoded.
-//   DELTA_BASE_URL  — optional. OpenAI-compatible base. Default is OpenRouter.
-//   DELTA_MODEL     — optional. Default deepseek/deepseek-v4-pro.
-//   DELTA_REASONING_MAX_TOKENS — optional. If set to a positive integer, gives the
-//                     model that many reasoning tokens instead of disabling reasoning.
+//   DELTA_JUDGE_KEY  — required. OpenRouter sk-or-… key. Edge secret OR Supabase
+//                      Vault via the service-role-only delta_judge_key() RPC.
+//   DELTA_BASE_URL   — optional. Default https://openrouter.ai/api/v1.
+//   DELTA_MODEL      — optional. Default deepseek/deepseek-v4-flash.
+//   DELTA_REASONING_EFFORT      — optional. low|medium|high|off. Default high.
+//   DELTA_REASONING_MAX_TOKENS  — optional alt. Positive int caps reasoning tokens;
+//                                 0 disables. (effort takes precedence if both set.)
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
-// ---- inlined http helpers (self-contained so this deploys as a single file) ----
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
@@ -48,22 +41,22 @@ function preflight(req: Request): Response | null {
   return req.method === 'OPTIONS' ? new Response('ok', { headers: corsHeaders }) : null
 }
 
-// OpenRouter (openrouter.ai) — OpenAI-compatible chat-completions gateway.
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'deepseek/deepseek-v4-pro'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'deepseek/deepseek-v4-flash'
 
-// Reasoning budget. Real (messy, long) transcripts need SOME reasoning for cut
-// QUALITY, but DELTA_MODEL left unbounded burned ~8.9k tokens / ~172s and blew the
-// 150s edge limit. A 4000-token cap is the sweet spot: enough reasoning for good
-// cuts, bounded so the call stays ~80-110s worst case (well under 150s). Override
-// with DELTA_REASONING_MAX_TOKENS — a positive int sets the budget; 0 disables.
+// Reasoning control. Default effort=high — on the flash model that is still ~4-8s
+// while keeping full cut quality. `off` disables reasoning entirely. A positive
+// DELTA_REASONING_MAX_TOKENS caps reasoning by token budget instead (0 disables).
 function reasoningConfig(): Record<string, unknown> {
+  const effort = Deno.env.get('DELTA_REASONING_EFFORT')?.toLowerCase()
+  if (effort === 'off') return { enabled: false }
+  if (effort === 'low' || effort === 'medium' || effort === 'high') return { effort }
   const raw = Deno.env.get('DELTA_REASONING_MAX_TOKENS')
   if (raw !== undefined && raw !== '') {
     const n = parseInt(raw, 10)
     if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
   }
-  return { max_tokens: 4000 }
+  return { effort: 'high' }
 }
 
 function admin() {
@@ -79,13 +72,13 @@ async function getApiKey(): Promise<string> {
     const { data } = await admin().rpc('delta_judge_key')
     if (typeof data === 'string' && data) return data
   } catch {
-    /* vault not configured — fall through to unconfigured */
+    /* vault not configured */
   }
   return ''
 }
 
 // Pull the JSON EDL out of a model reply: drop <think> reasoning and ```fences```,
-// then keep the outermost {...} object. Reasoning models rarely return bare JSON.
+// then keep the outermost {...} object.
 function extractEdl(raw: string): string {
   let t = raw.replace(/<think>[\s\S]*?<\/think>/gi, '')
   t = t.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim()
@@ -98,9 +91,6 @@ const EDL_SHAPE = `Reply with VALID JSON ONLY (no prose, no markdown fences), ex
  "pause_cuts":[{"pause_id":"p3","keep_ms":150,"reason":"dead air; keep a beat"}]}
 word_cuts use INCLUSIVE word indices from the list. pause_cuts reference pause ids; keep_ms=0 removes the pause entirely, otherwise that many ms remain.`
 
-// Mirrored from procut-judge SYSTEM (kept in sync). The first pass is always empty
-// in the cloud, so the "perform the full analysis yourself" clause makes the model
-// do the whole cut from the transcript map.
 const SYSTEM = `You are the SECOND PASS (verification + finalization) of a professional video cutting pipeline. GOAL: after your cuts the kept transcript must contain ZERO repeated sentences/lines and read as one coherent script. You receive the index-anchored VERBATIM transcript map and the FIRST PASS's proposed EDL.
 
 Finalize it:
@@ -133,13 +123,11 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
     headers: {
       authorization: `Bearer ${apiKey}`,
       'content-type': 'application/json',
-      // Optional OpenRouter attribution (harmless / ignored by other providers).
       'HTTP-Referer': 'https://easecutpro.com',
       'X-Title': 'EaseCutPro Retake delta'
     },
-    // reasoning disabled by default — the analysis quality is identical and it keeps
-    // the call ~2-3s, well under Supabase's 150s edge limit. No `temperature` —
-    // reasoning models reject non-default values.
+    // reasoning kept ON but on the fast flash model (see reasoningConfig / header).
+    // No `temperature` — reasoning models reject non-default values.
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 16000,
@@ -157,13 +145,12 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
     try {
       content = (JSON.parse(bodyText) as { choices?: { message?: { content?: string } }[] }).choices?.[0]?.message?.content ?? ''
     } catch {
-      /* non-JSON body — leave content empty; captured below */
+      /* non-JSON body */
     }
   }
   const cleaned = extractEdl(content)
 
-  // DIAGNOSTIC (temporary): record what the model returned, so the first real run
-  // post-fix can be confirmed. Removed in the cleanup pass once δ is verified.
+  // DIAGNOSTIC (temporary): confirm the first real run post-fix. Removed in cleanup.
   try {
     await admin().rpc('log_delta_debug', {
       payload: {
