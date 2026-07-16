@@ -75,6 +75,14 @@ const IcGrid = (): JSX.Element => (
     <rect x="7.4" y="7.4" width="3.6" height="3.6" rx="0.8" />
   </svg>
 )
+// "Add all to timeline": two clip rows + a plus. Distinct from IcList (even bars).
+const IcAddAll = (): JSX.Element => (
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={icoStyle}>
+    <rect x="2" y="3" width="9" height="2.4" rx="0.9" fill="currentColor" />
+    <rect x="2" y="9.6" width="5.5" height="2.4" rx="0.9" fill="currentColor" />
+    <path d="M12.4 8.4v4M10.4 10.4h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+)
 
 // saveState → the design's status dot + label (green Saved / amber Saving / red failed).
 const SAVE_UI: Record<string, { c: string; t: string }> = {
@@ -302,10 +310,14 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
         </div>
       </div>
       <div style={css('padding:0 16px 12px;display:flex;flex-direction:column;gap:8px')}>
-        <button onClick={addToLibrary} style={css('background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer;width:100%')}>＋ Import media</button>
-        {canSequence && (
-          <button onClick={addAllToTimeline} title="Add every video/image to the timeline as one sequence, in order" style={css('background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:550;border-radius:9px;padding:8px 0;cursor:pointer;width:100%')}>▦ Add all to timeline</button>
-        )}
+        {/* Import stays the primary action; "Add all" rides alongside as an icon
+            so the two share one row instead of stacking (option 1 — split row). */}
+        <div style={css('display:flex;gap:8px')}>
+          <button onClick={addToLibrary} style={css('flex:1;background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer')}>＋ Import media</button>
+          {canSequence && (
+            <button onClick={addAllToTimeline} title="Add all to timeline — every video/image as one sequence, in order" aria-label="Add all to timeline" style={css('flex:none;width:38px;display:grid;place-items:center;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;border-radius:9px;padding:0;cursor:pointer;appearance:none;-webkit-appearance:none')}><IcAddAll /></button>
+          )}
+        </div>
         <div style={css('display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:#1E2026;border:1px solid rgba(255,255,255,.06);border-radius:8px')}>
           <div style={css('width:10px;height:10px;border:1.5px solid #686E7B;border-radius:50%;position:relative')}>
             <div style={css('position:absolute;width:4px;height:1.5px;background:#686E7B;bottom:-2px;right:-2px;transform:rotate(45deg)')} />
