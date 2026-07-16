@@ -13,14 +13,13 @@
 // gets back the model's raw EDL text, parsed client-side with the SAME validateEdl
 // as Retake β. raw:null on any failure so the cut job always completes.
 //
-// IMPORTANT — reasoning is DISABLED. DELTA_MODEL (deepseek/deepseek-v4-pro) is a
-// heavy reasoning model: left unbounded it burned ~8.9k reasoning tokens / ~172s
-// on a real transcript and blew past Supabase's 150s edge wall-clock limit
-// (HTTP 546 → the function was killed before the model replied → no cuts). Tested
-// head-to-head, the reasoning did NOT change the cuts on easy OR hard transcripts —
-// it was pure latency. `reasoning: { enabled: false }` returns the identical EDL in
-// ~2-3s. If a future model needs some reasoning, set DELTA_REASONING_MAX_TOKENS to a
-// small budget (e.g. 2000) instead of re-enabling unbounded reasoning.
+// IMPORTANT — reasoning is BOUNDED to a 4000-token budget. DELTA_MODEL
+// (deepseek/deepseek-v4-pro) is a heavy reasoning model: left unbounded it burned
+// ~8.9k reasoning tokens / ~172s on a real transcript and blew past Supabase's 150s
+// edge wall-clock limit (HTTP 546 → the function was killed before the model replied
+// → no cuts). Fully disabling reasoning was fast (~2-3s) but produced lower-quality
+// cuts on real messy footage. A 4000-token cap keeps cut quality while holding the
+// call to ~80-110s, safely under 150s. Tune via DELTA_REASONING_MAX_TOKENS.
 //
 // Config:
 //   DELTA_JUDGE_KEY — required. The provider API key (an OpenRouter sk-or-… key).
@@ -53,11 +52,18 @@ function preflight(req: Request): Response | null {
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
 const MODEL = Deno.env.get('DELTA_MODEL') ?? 'deepseek/deepseek-v4-pro'
 
-// Reasoning control. Default: disabled (see header note). A positive
-// DELTA_REASONING_MAX_TOKENS opts back into a BOUNDED reasoning budget.
+// Reasoning budget. Real (messy, long) transcripts need SOME reasoning for cut
+// QUALITY, but DELTA_MODEL left unbounded burned ~8.9k tokens / ~172s and blew the
+// 150s edge limit. A 4000-token cap is the sweet spot: enough reasoning for good
+// cuts, bounded so the call stays ~80-110s worst case (well under 150s). Override
+// with DELTA_REASONING_MAX_TOKENS — a positive int sets the budget; 0 disables.
 function reasoningConfig(): Record<string, unknown> {
-  const n = parseInt(Deno.env.get('DELTA_REASONING_MAX_TOKENS') ?? '', 10)
-  return Number.isFinite(n) && n > 0 ? { max_tokens: n } : { enabled: false }
+  const raw = Deno.env.get('DELTA_REASONING_MAX_TOKENS')
+  if (raw !== undefined && raw !== '') {
+    const n = parseInt(raw, 10)
+    if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
+  }
+  return { max_tokens: 4000 }
 }
 
 function admin() {
