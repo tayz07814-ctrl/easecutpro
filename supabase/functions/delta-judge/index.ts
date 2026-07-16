@@ -50,16 +50,36 @@ function admin() {
 
 // The key is NEVER hardcoded. Prefer an edge secret (DELTA_JUDGE_KEY); otherwise
 // read it from the Supabase Vault via the service-role-only delta_judge_key() RPC.
-async function getApiKey(): Promise<string> {
-  const env = Deno.env.get('DELTA_JUDGE_KEY')
-  if (env) return env
-  try {
-    const { data } = await admin().rpc('delta_judge_key')
-    if (typeof data === 'string' && data) return data
-  } catch {
-    /* vault not configured — fall through to unconfigured */
+// Returns diagnostics (lengths / flags only, NEVER the key value) so a failed
+// resolution can be traced without ever logging the secret itself.
+type KeyResolution = {
+  key: string
+  source: 'env' | 'vault' | 'none'
+  env_len: number
+  vault_len: number
+  vault_err: string | null
+}
+async function resolveApiKey(): Promise<KeyResolution> {
+  const env = Deno.env.get('DELTA_JUDGE_KEY') ?? ''
+  let vault = ''
+  let vault_err: string | null = null
+  if (!env) {
+    try {
+      const { data, error } = await admin().rpc('delta_judge_key')
+      if (error) vault_err = error.message ?? String(error)
+      else if (typeof data === 'string') vault = data
+    } catch (e) {
+      vault_err = (e as Error).message
+    }
   }
-  return ''
+  const key = env || vault
+  return {
+    key,
+    source: env ? 'env' : vault ? 'vault' : 'none',
+    env_len: env.length,
+    vault_len: vault.length,
+    vault_err
+  }
 }
 
 // Pull the JSON EDL out of a model reply: drop <think> reasoning and ```fences```,
@@ -168,7 +188,27 @@ Deno.serve(async (req) => {
     const { payload, proposal } = await req.json().catch(() => ({ payload: null, proposal: null }))
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
 
-    const apiKey = await getApiKey()
+    const kr = await resolveApiKey()
+    // DIAGNOSTIC (temporary): record HOW the key resolved — source + lengths only,
+    // NEVER the value. http_status:-1 marks a key-resolution row (vs a model row),
+    // so one tap reveals whether the edge runtime can reach the key at all.
+    try {
+      await admin().rpc('log_delta_debug', {
+        payload: {
+          model: MODEL,
+          http_status: -1,
+          ok: kr.source !== 'none',
+          content_len: kr.env_len,
+          cleaned_len: kr.vault_len,
+          content_snippet: `key source=${kr.source}`,
+          err_body: kr.vault_err,
+          raw_body: null
+        }
+      })
+    } catch {
+      /* never let the diagnostic break the run */
+    }
+    const apiKey = kr.key
     if (!apiKey) return json({ raw: null, judge: 'none' })
     try {
       return json({ raw: await finalize(apiKey, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: `delta:${MODEL}` })
