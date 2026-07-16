@@ -13,15 +13,24 @@
 // gets back the model's raw EDL text, parsed client-side with the SAME validateEdl
 // as Retake β. raw:null on any failure so the cut job always completes.
 //
+// IMPORTANT — reasoning is DISABLED. DELTA_MODEL (deepseek/deepseek-v4-pro) is a
+// heavy reasoning model: left unbounded it burned ~8.9k reasoning tokens / ~172s
+// on a real transcript and blew past Supabase's 150s edge wall-clock limit
+// (HTTP 546 → the function was killed before the model replied → no cuts). Tested
+// head-to-head, the reasoning did NOT change the cuts on easy OR hard transcripts —
+// it was pure latency. `reasoning: { enabled: false }` returns the identical EDL in
+// ~2-3s. If a future model needs some reasoning, set DELTA_REASONING_MAX_TOKENS to a
+// small budget (e.g. 2000) instead of re-enabling unbounded reasoning.
+//
 // Config:
 //   DELTA_JUDGE_KEY — required. The provider API key (an OpenRouter sk-or-… key).
 //                     Read from an edge secret OR the Supabase Vault (secret name
 //                     DELTA_JUDGE_KEY) via the service-role-only public
 //                     delta_judge_key() RPC. NEVER hardcoded.
-//   DELTA_BASE_URL  — optional. OpenAI-compatible base. Default is OpenRouter
-//                     (https://openrouter.ai/api/v1).
-//   DELTA_MODEL     — optional. Default deepseek/deepseek-v4-pro. Any OpenRouter
-//                     model id ("<provider>/<model>") works.
+//   DELTA_BASE_URL  — optional. OpenAI-compatible base. Default is OpenRouter.
+//   DELTA_MODEL     — optional. Default deepseek/deepseek-v4-pro.
+//   DELTA_REASONING_MAX_TOKENS — optional. If set to a positive integer, gives the
+//                     model that many reasoning tokens instead of disabling reasoning.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -44,42 +53,29 @@ function preflight(req: Request): Response | null {
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
 const MODEL = Deno.env.get('DELTA_MODEL') ?? 'deepseek/deepseek-v4-pro'
 
+// Reasoning control. Default: disabled (see header note). A positive
+// DELTA_REASONING_MAX_TOKENS opts back into a BOUNDED reasoning budget.
+function reasoningConfig(): Record<string, unknown> {
+  const n = parseInt(Deno.env.get('DELTA_REASONING_MAX_TOKENS') ?? '', 10)
+  return Number.isFinite(n) && n > 0 ? { max_tokens: n } : { enabled: false }
+}
+
 function admin() {
   return createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 }
 
 // The key is NEVER hardcoded. Prefer an edge secret (DELTA_JUDGE_KEY); otherwise
 // read it from the Supabase Vault via the service-role-only delta_judge_key() RPC.
-// Returns diagnostics (lengths / flags only, NEVER the key value) so a failed
-// resolution can be traced without ever logging the secret itself.
-type KeyResolution = {
-  key: string
-  source: 'env' | 'vault' | 'none'
-  env_len: number
-  vault_len: number
-  vault_err: string | null
-}
-async function resolveApiKey(): Promise<KeyResolution> {
-  const env = Deno.env.get('DELTA_JUDGE_KEY') ?? ''
-  let vault = ''
-  let vault_err: string | null = null
-  if (!env) {
-    try {
-      const { data, error } = await admin().rpc('delta_judge_key')
-      if (error) vault_err = error.message ?? String(error)
-      else if (typeof data === 'string') vault = data
-    } catch (e) {
-      vault_err = (e as Error).message
-    }
+async function getApiKey(): Promise<string> {
+  const env = Deno.env.get('DELTA_JUDGE_KEY')
+  if (env) return env
+  try {
+    const { data } = await admin().rpc('delta_judge_key')
+    if (typeof data === 'string' && data) return data
+  } catch {
+    /* vault not configured — fall through to unconfigured */
   }
-  const key = env || vault
-  return {
-    key,
-    source: env ? 'env' : vault ? 'vault' : 'none',
-    env_len: env.length,
-    vault_len: vault.length,
-    vault_err
-  }
+  return ''
 }
 
 // Pull the JSON EDL out of a model reply: drop <think> reasoning and ```fences```,
@@ -133,13 +129,16 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
       'content-type': 'application/json',
       // Optional OpenRouter attribution (harmless / ignored by other providers).
       'HTTP-Referer': 'https://easecutpro.com',
-      'X-Title': 'EaseCutPro Retake δ'
+      'X-Title': 'EaseCutPro Retake delta'
     },
-    // NOTE: no `temperature` — reasoning models (GPT-5.x) reject non-default values.
+    // reasoning disabled by default — the analysis quality is identical and it keeps
+    // the call ~2-3s, well under Supabase's 150s edge limit. No `temperature` —
+    // reasoning models reject non-default values.
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 16000,
       stream: false,
+      reasoning: reasoningConfig(),
       messages: [
         { role: 'system', content: SYSTEM },
         { role: 'user', content: userText }
@@ -157,8 +156,8 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
   }
   const cleaned = extractEdl(content)
 
-  // DIAGNOSTIC (temporary): record exactly what the model returned via an RPC —
-  // reliable, since supabase-js .insert() silently swallows schema-cache errors.
+  // DIAGNOSTIC (temporary): record what the model returned, so the first real run
+  // post-fix can be confirmed. Removed in the cleanup pass once δ is verified.
   try {
     await admin().rpc('log_delta_debug', {
       payload: {
@@ -188,27 +187,7 @@ Deno.serve(async (req) => {
     const { payload, proposal } = await req.json().catch(() => ({ payload: null, proposal: null }))
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
 
-    const kr = await resolveApiKey()
-    // DIAGNOSTIC (temporary): record HOW the key resolved — source + lengths only,
-    // NEVER the value. http_status:-1 marks a key-resolution row (vs a model row),
-    // so one tap reveals whether the edge runtime can reach the key at all.
-    try {
-      await admin().rpc('log_delta_debug', {
-        payload: {
-          model: MODEL,
-          http_status: -1,
-          ok: kr.source !== 'none',
-          content_len: kr.env_len,
-          cleaned_len: kr.vault_len,
-          content_snippet: `key source=${kr.source}`,
-          err_body: kr.vault_err,
-          raw_body: null
-        }
-      })
-    } catch {
-      /* never let the diagnostic break the run */
-    }
-    const apiKey = kr.key
+    const apiKey = await getApiKey()
     if (!apiKey) return json({ raw: null, judge: 'none' })
     try {
       return json({ raw: await finalize(apiKey, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: `delta:${MODEL}` })
