@@ -4,26 +4,32 @@
 // (OpenRouter). Retake β (procut-judge / Claude Opus) is left UNTOUCHED; only the
 // Retake δ button calls this, so production is unaffected.
 //
-// MODEL CHOICE / LATENCY — this is the crux. Supabase edge functions have a hard
-// 150s wall-clock limit, and the whole "press δ → cuts" flow must stay ~40s incl.
-// ~23s of transcription, so the judge has ~15s. deepseek/deepseek-v4-pro (1.6T
-// params) reasons for ~172s on a real transcript → HTTP 546 (killed) → no cuts, on
-// ANY provider. Its fast sibling deepseek/deepseek-v4-flash returns the SAME cuts
-// WITH reasoning in ~4-8s. So the default model is the flash variant, and reasoning
-// is kept ON (effort=high) — quality AND speed. Benchmarked head-to-head: flash@high
-// solved the same hard overlapping-retake tangle as pro, in 4s vs 150s+.
+// MODEL / LATENCY / QUALITY — the whole "press δ → cuts" flow must stay ~40s incl.
+// ~23s transcription, so the judge has ~15s, and Supabase's edge wall-clock hard
+// limit is 150s. Benchmarked head-to-head on a real transcript:
+//   • deepseek-v4-pro   — reasons ~172s → HTTP 546 (killed) → no cuts. Too slow.
+//   • deepseek-v4-flash — reasoning ON explodes to ~4.5k tokens / 55-88s (over
+//                         budget); reasoning OFF is fast (~2s) but UNRELIABLE
+//                         (misses cuts or over-cuts run-to-run).
+//   • google/gemini-3.5-flash — reasons ~4x more efficiently: ~1-1.6k tokens in
+//                         ~7s, and RELIABLY emits clean whole-take span cuts.
+// So the default is gemini-3.5-flash with effort=low reasoning + throughput
+// provider routing. Any model still works via DELTA_MODEL.
 //
-// Same request/response shape as procut-judge (ProcutJudgeReq/Res); raw:null on any
-// failure so the cut job always completes.
+// The SYSTEM prompt forces WHOLE-TAKE SPAN cuts (not scattered word/filler removal),
+// which is what makes a fast model produce pro-quality edits.
+//
+// Same request/response shape as procut-judge; raw:null on any failure so the cut
+// job always completes.
 //
 // Config:
 //   DELTA_JUDGE_KEY  — required. OpenRouter sk-or-… key. Edge secret OR Supabase
 //                      Vault via the service-role-only delta_judge_key() RPC.
 //   DELTA_BASE_URL   — optional. Default https://openrouter.ai/api/v1.
-//   DELTA_MODEL      — optional. Default deepseek/deepseek-v4-flash.
-//   DELTA_REASONING_EFFORT      — optional. low|medium|high|off. Default high.
-//   DELTA_REASONING_MAX_TOKENS  — optional alt. Positive int caps reasoning tokens;
-//                                 0 disables. (effort takes precedence if both set.)
+//   DELTA_MODEL      — optional. Default google/gemini-3.5-flash.
+//   DELTA_REASONING_EFFORT      — optional. low|medium|high|off. Default low.
+//   DELTA_REASONING_MAX_TOKENS  — optional alt cap (effort wins if both set).
+//   DELTA_PROVIDER_SORT         — optional. throughput|latency|price|off. Default throughput.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -42,11 +48,10 @@ function preflight(req: Request): Response | null {
 }
 
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'deepseek/deepseek-v4-flash'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.5-flash'
 
-// Reasoning control. Default effort=high — on the flash model that is still ~4-8s
-// while keeping full cut quality. `off` disables reasoning entirely. A positive
-// DELTA_REASONING_MAX_TOKENS caps reasoning by token budget instead (0 disables).
+// Reasoning control. Default effort=low — enough to reliably find take boundaries,
+// fast on gemini-flash (~7s). `off` disables (fast but unreliable on this task).
 function reasoningConfig(): Record<string, unknown> {
   const effort = Deno.env.get('DELTA_REASONING_EFFORT')?.toLowerCase()
   if (effort === 'off') return { enabled: false }
@@ -56,7 +61,16 @@ function reasoningConfig(): Record<string, unknown> {
     const n = parseInt(raw, 10)
     if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
   }
-  return { effort: 'high' }
+  return { effort: 'low' }
+}
+
+// Provider routing. Default: route to the highest-throughput provider (fastest
+// tokens). `off` lets OpenRouter pick its default.
+function providerConfig(): Record<string, unknown> | undefined {
+  const sort = Deno.env.get('DELTA_PROVIDER_SORT')?.toLowerCase()
+  if (sort === 'off') return undefined
+  if (sort === 'throughput' || sort === 'latency' || sort === 'price') return { sort }
+  return { sort: 'throughput' }
 }
 
 function admin() {
@@ -86,25 +100,27 @@ function extractEdl(raw: string): string {
   return (m ? m[0] : t).trim()
 }
 
-const EDL_SHAPE = `Reply with VALID JSON ONLY (no prose, no markdown fences), exactly:
-{"word_cuts":[{"from":12,"to":18,"reason":"earlier take of this line; kept the later one"}],
- "pause_cuts":[{"pause_id":"p3","keep_ms":150,"reason":"dead air; keep a beat"}]}
-word_cuts use INCLUSIVE word indices from the list. pause_cuts reference pause ids; keep_ms=0 removes the pause entirely, otherwise that many ms remain.`
+// Whole-take-span prompt — the key to pro-quality cuts from a fast model. Forces
+// contiguous span cuts of entire earlier takes, never scattered word/filler removal.
+const SYSTEM = `You are a video RETAKE editor. The speaker recorded the same lines MULTIPLE times — false starts, restarts, repeated/aborted takes. Delete EVERY earlier/aborted attempt so only the final clean take of each line remains and the kept words read as one smooth script.
 
-const SYSTEM = `You are the SECOND PASS (verification + finalization) of a professional video cutting pipeline. GOAL: after your cuts the kept transcript must contain ZERO repeated sentences/lines and read as one coherent script. You receive the index-anchored VERBATIM transcript map and the FIRST PASS's proposed EDL.
+SCAN THE WHOLE TRANSCRIPT from index 0 to the last index, IN ORDER. A real recording usually has SEVERAL fix points — find them ALL, do not stop after the first. Two kinds:
 
-Finalize it:
-- Re-scan the WHOLE transcript for any repeated take or line the first pass missed or only partially cut. For every group of duplicate takes, make sure ONLY THE LAST take survives — the last occurrence IN TIME, never an earlier one, even if the earlier take reads cleaner. Add or extend word_cuts to delete the earlier copies ENTIRELY (their opening words included).
-- Remove any PRODUCTION ARTIFACTS the first pass missed: slates/count-ins/take markers ("skip 10, hook one", "take three"), the speaker talking ABOUT the recording instead of TO the audience (planning a take out loud, directing someone off-camera), and session wrap markers at the very start/end ("okay, that's it", "cut"). Audience-facing outros ("that's it for today, thanks for watching") are content — keep them.
-- Remove any leftover stutters or double-spoken words.
-- Never leave a broken or dangling half-sentence: the words that remain must flow as a script.
-- CUT WHOLE TAKES ONLY: retake cuts run from the earlier take's first word to the word before the surviving take begins — never splice half of one take onto half of another; never start or end a cut mid-sentence. REMOVE any first-pass cut that violates this by EXTENDING it to the full take boundary.
-- THE ONLY COPY of an idea is untouchable: verbal mistakes, hedges and filler words inside the only take of a line are NOT cuts — DELETE any first-pass cut whose reason is just "filler"/"cleaner delivery"/"incomplete thought" unless a later take of the same line survives.
-- Keep the first pass's correct cuts; only add/adjust what's needed to reach zero repeats.
-- If the proposed EDL is empty, perform the full analysis yourself.
-Return the DEFINITIVE final EDL (same ids/indices; your reply FULLY REPLACES the proposal).
+1) SHORT false-starts / stutters: 1-4 words abandoned and immediately re-started — e.g. "this is— this," then "this is probably…" (cut the abandoned "this is— this,"); "I'm," then "I'm glad…" (cut "I'm,"). Small, but you MUST catch every one.
+2) LONG repeated-take tangles: the same sentence attempted several times with restarts before a final clean version — cut the WHOLE messy run of attempts as ONE span, keeping only the final complete take.
 
-${EDL_SHAPE}`
+RULES:
+- For EACH group of attempts, emit ONE contiguous word_cut from the first word of the earliest attempt to the last word right before the final good take begins. Prefer wide spans; to should be greater than from except for a lone stutter word.
+- NEVER scatter single-word cuts across a take (do NOT delete "literally"/"like"/"which" one-by-one). Cut the whole earlier take as one span; leave the surviving take VERBATIM.
+- Keep the LAST take in time. Never trim/split/reword the surviving take.
+- Never delete filler/"um"/"like" inside the ONLY take of a line. Said once = keep 100%.
+- Never cut non-repeated content, intros, or outros.
+
+PAUSES: leave them alone unless one is dead air exactly at a cut boundary you created; then you may shorten it (keep_ms).
+
+Return VALID JSON ONLY (no prose, no markdown fences), exactly:
+{"word_cuts":[{"from":11,"to":25,"reason":"earlier aborted takes; kept the final take"}],"pause_cuts":[{"pause_id":"p3","keep_ms":150,"reason":"dead air at a cut"}]}
+word_cuts use INCLUSIVE word indices. pause_cuts reference pause ids; keep_ms=0 removes the pause. If the first-pass EDL is empty, do the full analysis yourself.`
 
 async function requireUser(req: Request): Promise<boolean> {
   const auth = req.headers.get('Authorization') ?? ''
@@ -118,6 +134,18 @@ async function requireUser(req: Request): Promise<boolean> {
 async function finalize(apiKey: string, payload: string, proposal: unknown): Promise<string> {
   const userText =
     `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
+  const provider = providerConfig()
+  const body: Record<string, unknown> = {
+    model: MODEL,
+    max_tokens: 16000,
+    stream: false,
+    reasoning: reasoningConfig(),
+    messages: [
+      { role: 'system', content: SYSTEM },
+      { role: 'user', content: userText }
+    ]
+  }
+  if (provider) body.provider = provider
   const r = await fetch(`${BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -126,18 +154,7 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
       'HTTP-Referer': 'https://easecutpro.com',
       'X-Title': 'EaseCutPro Retake delta'
     },
-    // reasoning kept ON but on the fast flash model (see reasoningConfig / header).
-    // No `temperature` — reasoning models reject non-default values.
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 16000,
-      stream: false,
-      reasoning: reasoningConfig(),
-      messages: [
-        { role: 'system', content: SYSTEM },
-        { role: 'user', content: userText }
-      ]
-    })
+    body: JSON.stringify(body)
   })
   const bodyText = await r.text()
   let content = ''
