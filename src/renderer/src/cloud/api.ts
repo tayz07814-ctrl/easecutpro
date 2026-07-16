@@ -93,7 +93,7 @@ const cloudApi: Window['api'] = {
     return f ? registerLocalFile(f) : null
   },
   openMediaDialogMulti: async () => {
-    const files = await pickFiles('video/*')
+    const files = await pickFiles('video/*,audio/*,image/*')
     return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
   },
   importFolder: async () => {
