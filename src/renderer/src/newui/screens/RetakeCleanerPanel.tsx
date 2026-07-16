@@ -129,11 +129,10 @@ export default function RetakeCleanerPanel(): JSX.Element {
         {/* Compact executed header: count status on the left, actions on the
             right (Silence Settings collapses to a gear icon to save vertical space). */}
         <div style={css('display:flex;align-items:center;gap:10px;margin-top:14px;flex:none')}>
-          <div style={css('display:flex;align-items:center;gap:8px;min-width:0')}>
-            <div style={css('width:18px;height:18px;flex:none;border-radius:50%;background:#2E9C6A;display:grid;place-items:center;color:#fff;font-size:10px')}>✓</div>
-            <div style={css('font-size:13px;font-weight:600;color:#E9EAEE;white-space:nowrap')}>{r.deletedCount} cut{r.deletedCount === 1 ? '' : 's'}</div>
-            <div style={css('font-size:11px;color:#7E8393;white-space:nowrap')}>· undoable</div>
-          </div>
+          <span style={css('display:flex;align-items:center;gap:7px;flex:none;background:rgba(46,156,106,.12);border:1px solid rgba(46,156,106,.3);border-radius:999px;padding:6px 12px 6px 8px;font-size:12px;font-weight:600;color:#E9EAEE;white-space:nowrap')}>
+            <span style={css('width:16px;height:16px;flex:none;border-radius:50%;background:#2E9C6A;display:grid;place-items:center;color:#fff;font-size:9px')}>✓</span>
+            {r.deletedCount} cut{r.deletedCount === 1 ? '' : 's'} applied
+          </span>
           <div style={css('flex:1')} />
           <button onClick={r.find} style={css('flex:none;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 16px;cursor:pointer;white-space:nowrap')}>Run again</button>
           <button onClick={r.openSilenceSettings} title="Silence Settings" aria-label="Silence Settings" style={css('flex:none;width:36px;height:36px;background:none;border:1px solid rgba(255,255,255,.14);border-radius:9px;color:#C6C9D2;display:grid;place-items:center;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none')}>
