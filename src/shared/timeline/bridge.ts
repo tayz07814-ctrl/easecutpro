@@ -5,8 +5,9 @@
 // STRUCTURE (tracks + clips with correct source refs + timing) so the media
 // managers can pull real waveforms/thumbnails by sourcePath. Pure & headless.
 
-import type { Project, TextClip, SequenceClip, ExtraAudioClip, Clip as LegacyClip, Track as LegacyTrack } from '../types'
+import type { Project, TextClip, SequenceClip, ExtraAudioClip, Clip as LegacyClip, Track as LegacyTrack, OverlayAsset, OverlayEvent } from '../types'
 import type { Clip, TextContent, TimelineDocument } from './types'
+import { positionToBox } from '../overlay'
 import {
   createTimeline,
   createTrack,
@@ -445,6 +446,68 @@ export function removedRangesToMainFrames(
     }
   }
   return frames
+}
+
+/**
+ * Turn AI overlay events (SOURCE seconds, from the transcript matcher) into
+ * image clips on the document's first overlay lane, positioned in EDITED frames.
+ * Each event's start is located on the main lane through the same source→edited
+ * mapping the cut engine uses, so placements stay glued to the sentence that
+ * triggered them no matter what has been cut. Events whose footage is no longer
+ * on the main lane (cut out or manually deleted) are skipped with a note.
+ * Pure — the caller wraps the clips in engine commands.
+ */
+export function overlayEventsToDocClips(
+  doc: TimelineDocument,
+  project: Project,
+  events: OverlayEvent[],
+  assets: OverlayAsset[]
+): { clips: Clip[]; skipped: string[] } {
+  const skipped: string[] = []
+  const lane = doc.tracks
+    .filter((t) => t.kind === 'video' && !t.isMain)
+    .sort((a, b) => a.order - b.order)[0]
+  if (!lane) return { clips: [], skipped: ['no overlay lane in the timeline'] }
+
+  const assetById = new Map(assets.map((a) => [a.id, a]))
+  const clips: Clip[] = []
+  for (const ev of events) {
+    const asset = assetById.get(ev.overlayId)
+    if (!asset) continue
+    const mapped = removedRangesToMainFrames(doc, project, [{ start: ev.start, end: ev.end }])
+    if (mapped.length === 0) {
+      skipped.push(`${asset.name}: moment at ${ev.start.toFixed(1)}s is cut from the timeline`)
+      continue
+    }
+    const len = Math.max(0.5, ev.end - ev.start)
+    const durFrames = Math.max(1, secondsToFrames(len, doc.timebase))
+    const box = positionToBox(ev.position)
+    clips.push(
+      createClip({
+        kind: 'image',
+        trackId: lane.id,
+        start: Math.max(0, Math.round(mapped[0].start)),
+        duration: durFrames,
+        sourcePath: asset.file,
+        sourceIn: 0,
+        sourceOut: len,
+        sourceDuration: len,
+        name: asset.name,
+        hasAudio: false,
+        metadata: {
+          ovX: box.x,
+          ovY: box.y,
+          ovScale: box.scale,
+          ovZoomStart: 1,
+          ovZoomEnd: 1,
+          overlayRuleId: asset.id,
+          overlayAnimation: ev.animation,
+          overlayReason: ev.reason
+        }
+      })
+    )
+  }
+  return { clips, skipped }
 }
 
 /** A compact key of the project's STRUCTURE, so the timeline only rebuilds on
