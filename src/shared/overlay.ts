@@ -5,7 +5,9 @@
 
 import type {
   OverlayAnimation,
+  OverlayAsset,
   OverlayEvent,
+  OverlayGenResult,
   OverlayPosition,
   OverlayRule,
   Transcript
@@ -190,4 +192,49 @@ export function validateAndCleanEvents(
     lastEnd = e.end
   }
   return { events: kept, rejected }
+}
+
+/** A rule participates with just a NAMED image — no instruction required. An
+ *  empty instruction becomes "talk about <name>", so a creator who uploads
+ *  Bloating / CTA / Hairfall cards and clicks Generate gets suggestions. Pure,
+ *  so both the desktop matcher and the cloud (browser) matcher share it. */
+export function deriveInstructions(rules: OverlayRule[], assets: OverlayAsset[]): OverlayRule[] {
+  const nameById = new Map(assets.map((a) => [a.id, a.name]))
+  const out: OverlayRule[] = []
+  for (const r of rules) {
+    if (r.instruction.trim()) { out.push(r); continue }
+    const topic = (r.name || nameById.get(r.overlayId) || '').trim()
+    if (!topic) continue
+    out.push({ ...r, instruction: `Show this when I talk about ${topic}.` })
+  }
+  return out
+}
+
+/**
+ * Browser-safe, keyword-only overlay placement (no LLM, no Node deps) — the cloud
+ * build's matcher and the offline fallback. Mirrors the keyword path of
+ * generateOverlayTimeline (src/main/overlay-rules.ts) so cloud and desktop place
+ * identically when neither has an API key. Occurrence selection runs inside
+ * validateAndCleanEvents, deterministically.
+ */
+export function keywordOverlayTimeline(
+  transcript: Transcript,
+  assets: OverlayAsset[],
+  rules: OverlayRule[],
+  opts: CleanOpts
+): OverlayGenResult {
+  const log: string[] = []
+  const sentences = chunkTranscript(transcript)
+  const assetIds = new Set(assets.map((a) => a.id))
+  const activeRules = deriveInstructions(rules.filter((r) => assetIds.has(r.overlayId)), assets)
+  log.push(`overlay rules received: ${rules.length} (active: ${activeRules.length})`)
+  log.push(`transcript chunks processed: ${sentences.length}`)
+  if (activeRules.length === 0 || sentences.length === 0) {
+    return { events: [], via: 'none', log }
+  }
+  const raw = keywordFallback(activeRules, sentences)
+  const cleaned = validateAndCleanEvents(raw, activeRules, opts)
+  log.push(`keyword match: ${raw.length} candidate(s), kept ${cleaned.events.length}`)
+  for (const r of cleaned.rejected.slice(0, 25)) log.push(`  rejected: ${r}`)
+  return { events: cleaned.events, via: cleaned.events.length ? 'keyword' : 'none', log }
 }

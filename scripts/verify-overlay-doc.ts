@@ -2,7 +2,7 @@
 // word-boundary fix) and Phase 1 (occurrence selection, name-only rules).
 // Run: npx tsx scripts/verify-overlay-doc.ts
 import { projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips } from '../src/shared/timeline/bridge'
-import { keywordFallback, validateAndCleanEvents } from '../src/shared/overlay'
+import { keywordFallback, validateAndCleanEvents, keywordOverlayTimeline } from '../src/shared/overlay'
 import { generateOverlayTimeline } from '../src/main/overlay-rules'
 import { framesToSeconds } from '../src/shared/timeline/time'
 import type { OverlayAsset, OverlayEvent, OverlayRule, Project, Segment, Transcript, Word } from '../src/shared/types'
@@ -108,6 +108,11 @@ const nameRules: OverlayRule[] = [{ overlayId: 'a1', name: 'Bloating', instructi
 const gen = await generateOverlayTimeline(transcript, nameAssets, nameRules, { duration: 12, cuts: [] })
 check('empty-instruction rule matches via its NAME (keyword path, no API key)',
   gen.events.length === 1 && gen.events[0].start >= 4, `${gen.events.length} event(s) via ${gen.via}`)
+
+console.log('\n=== cloud matcher: keywordOverlayTimeline (browser path) matches the desktop keyword path ===')
+const cloud = keywordOverlayTimeline(transcript, nameAssets, nameRules, { duration: 12, cuts: [] })
+check('cloud keyword matcher places the same single name-only event',
+  cloud.events.length === 1 && cloud.events[0].start >= 4 && cloud.via === 'keyword', `${cloud.events.length} via ${cloud.via}`)
 
 console.log(fails === 0 ? '\nAll checks passed.' : `\n${fails} CHECK(S) FAILED`)
 process.exit(fails === 0 ? 0 : 1)

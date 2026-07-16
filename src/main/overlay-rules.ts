@@ -5,7 +5,7 @@
 // or the call fails, so generation is reliable and never blocks a render.
 
 import { getAnthropic, claudeAvailable } from './claude'
-import { chunkTranscript, keywordFallback, validateAndCleanEvents } from '../shared/overlay'
+import { chunkTranscript, keywordFallback, validateAndCleanEvents, deriveInstructions } from '../shared/overlay'
 import type { CleanOpts } from '../shared/overlay'
 import type {
   OverlayAsset, OverlayEvent, OverlayGenResult, OverlayRule, Transcript
@@ -94,21 +94,6 @@ async function callLLMForOverlayRules(
   return { events: out, lowConfidence }
 }
 
-/** A rule participates with just a NAMED image — no instruction required. An
- *  empty instruction becomes "talk about <name>", so a creator who uploads
- *  Bloating / CTA / Hairfall cards and clicks Generate gets suggestions. */
-function withDerivedInstructions(rules: OverlayRule[], assets: OverlayAsset[]): OverlayRule[] {
-  const nameById = new Map(assets.map((a) => [a.id, a.name]))
-  const out: OverlayRule[] = []
-  for (const r of rules) {
-    if (r.instruction.trim()) { out.push(r); continue }
-    const topic = (r.name || nameById.get(r.overlayId) || '').trim()
-    if (!topic) continue
-    out.push({ ...r, instruction: `Show this when I talk about ${topic}.` })
-  }
-  return out
-}
-
 /**
  * Turn overlay assets + rules + a transcript into validated overlay events.
  * The LLM (semantic matcher) is PREFERRED when a key is present — it matches by
@@ -128,7 +113,7 @@ export async function generateOverlayTimeline(
   const log: string[] = []
   const sentences = chunkTranscript(transcript)
   const assetIds = new Set(assets.map((a) => a.id))
-  const activeRules = withDerivedInstructions(rules.filter((r) => assetIds.has(r.overlayId)), assets)
+  const activeRules = deriveInstructions(rules.filter((r) => assetIds.has(r.overlayId)), assets)
   log.push(`overlay rules received: ${rules.length} (active: ${activeRules.length})`)
   log.push(`transcript chunks processed: ${sentences.length}`)
   if (activeRules.length === 0 || sentences.length === 0) {
