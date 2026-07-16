@@ -115,16 +115,49 @@ function legacyOverlays(clips: Clip[], playhead: number): OverlayView[] {
  *  the timeline document when the project is document-driven, else the legacy tracks. */
 export default function OverlayLayer({ frame }: { frame: Rect }): JSX.Element {
   const project = useStore((s) => s.project)
-  const playhead = useStore((s) => s.project.playhead)
+  const storePlayhead = useStore((s) => s.project.playhead)
+  const playing = useStore((s) => s.playing)
   const selectedClipId = useStore((s) => s.selectedClipId)
   const selectClip = useStore((s) => s.selectClip)
   const updateClip = useStore((s) => s.updateClip)
   const snap = useSharedEngineSnapshot()
   const docMode = !!project.timeline && !!snap?.doc
 
+  // While playing, follow the base video's 60fps play clock: the store playhead is
+  // written only ~8Hz and STALLS over a main-lane gap (e.g. a clip split off to an
+  // overlay track with magnet OFF), so overlays gated on it never appear/hide in
+  // time. Re-render only when the visible overlay SET changes; each overlay's own
+  // A/V + zoom sync reads playClock per frame.
+  const legacyClips = docMode ? [] : project.tracks.flatMap((t) => (t.index === 0 ? [] : t.clips))
+  const idsAt = (t: number): string =>
+    (docMode ? docOverlays(snap!.doc, t) : legacyOverlays(legacyClips, t)).map((o) => o.id).join(',')
+  const timeRef = useRef(storePlayhead)
+  const [, bump] = useState(0)
+  useEffect(() => {
+    if (!playing) {
+      timeRef.current = storePlayhead
+      return undefined
+    }
+    let raf = 0
+    let key = idsAt(playClock.t)
+    const tick = (): void => {
+      timeRef.current = playClock.t
+      const k = idsAt(playClock.t)
+      if (k !== key) {
+        key = k
+        bump((n) => (n + 1) % 1000000)
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, storePlayhead, docMode, snap])
+  const playhead = playing ? timeRef.current : storePlayhead
+
   const active: OverlayView[] = docMode
     ? docOverlays(snap!.doc, playhead)
-    : legacyOverlays(project.tracks.flatMap((t) => (t.index === 0 ? [] : t.clips)), playhead)
+    : legacyOverlays(legacyClips, playhead)
 
   // Commit a placement change: an undoable engine edit in doc mode, else the store.
   const commit = (id: string, patch: { x?: number; y?: number; scale?: number }): void => {
@@ -196,20 +229,29 @@ function OverlayBox({
   const zs = view.zoomStart ?? 1
   const ze = view.zoomEnd ?? 1
 
-  // Sync overlay video time to the timeline (videos only) + its own audio.
+  // Sync overlay video time to the timeline (videos only) + its own audio. While
+  // playing, drive off the 60fps play clock — the store playhead is throttled ~8Hz
+  // and stalls over a main-lane gap, which left overlay video frozen + silent.
   useEffect(() => {
     const v = ref.current
     if (!v || isImage) return
     v.muted = view.muted
     v.volume = Math.min(1, Math.max(0, view.gain))
-    const target = view.sourceIn + (playhead - view.start)
     if (playing) {
-      if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = target
-      v.play().catch(() => undefined)
-    } else {
-      v.pause()
-      if (Math.abs(v.currentTime - target) > 0.05) v.currentTime = target
+      let raf = 0
+      const loop = (): void => {
+        const target = view.sourceIn + (playClock.t - view.start)
+        if (Math.abs(v.currentTime - target) > 0.3) v.currentTime = target
+        if (v.paused) v.play().catch(() => undefined)
+        raf = requestAnimationFrame(loop)
+      }
+      raf = requestAnimationFrame(loop)
+      return () => cancelAnimationFrame(raf)
     }
+    v.pause()
+    const target = view.sourceIn + (playhead - view.start)
+    if (Math.abs(v.currentTime - target) > 0.05) v.currentTime = target
+    return undefined
   }, [playing, playhead, view.sourceIn, view.start, view.muted, view.gain, isImage])
 
   // Smooth Ken Burns zoom across the clip.

@@ -172,19 +172,30 @@ function DocAudioClip({
     const a = ref.current
     if (!a) return
     a.volume = clamp(clip.gain ?? 1, 0, 1)
-    const inRange = playhead >= startSec && playhead < endSec
-    if (!inRange) {
-      if (!a.paused) a.pause()
-      return
-    }
-    const target = clip.sourceIn + (playhead - startSec)
     if (playing) {
-      if (Math.abs(a.currentTime - target) > 0.3) a.currentTime = target
-      a.play().catch(() => undefined)
-    } else {
-      a.pause()
+      // Follow the 60fps play clock: the store playhead is throttled ~8Hz and
+      // stalls over a main-lane gap, which left detached / music audio silent.
+      let raf = 0
+      const loop = (): void => {
+        const tt = playClock.t
+        if (tt < startSec || tt >= endSec) {
+          if (!a.paused) a.pause()
+        } else {
+          const target = clip.sourceIn + (tt - startSec)
+          if (Math.abs(a.currentTime - target) > 0.3) a.currentTime = target
+          if (a.paused) a.play().catch(() => undefined)
+        }
+        raf = requestAnimationFrame(loop)
+      }
+      raf = requestAnimationFrame(loop)
+      return () => cancelAnimationFrame(raf)
+    }
+    a.pause()
+    if (playhead >= startSec && playhead < endSec) {
+      const target = clip.sourceIn + (playhead - startSec)
       if (Math.abs(a.currentTime - target) > 0.05) a.currentTime = target
     }
+    return undefined
   }, [playing, playhead, startSec, endSec, clip.sourceIn, clip.gain])
   return <audio ref={ref} src={resolveMedia(clip.sourcePath as string).url} preload="auto" />
 }
