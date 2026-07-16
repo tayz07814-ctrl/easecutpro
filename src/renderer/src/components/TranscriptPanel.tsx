@@ -63,7 +63,8 @@ function ClutterCleaner(): JSX.Element {
   const setSmartCutPreset = useStore((s) => s.setSmartCutPreset)
   const runFastCutLord = useStore((s) => s.runFastCutLord)
   const runProCut = useStore((s) => s.runProCut)
-  const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
+  // Retake δ replaces Retake β behind "Find Retakes & Silence" (β disabled).
+  const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
   const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
   const showSilenceSettings = useStore((s) => s.showSilenceSettings)
   const executeCuts = useStore((s) => s.executeCuts)
@@ -171,7 +172,7 @@ function ClutterCleaner(): JSX.Element {
       )}
       <button
         className={IS_CLOUD ? 'primary' : ''}
-        onClick={() => void runRetakeCutBeta()}
+        onClick={() => void runRetakeCutDelta()}
         disabled={jobActive}
         title="Cut Lord — verbatim transcript, whole-take retake removal (never splices takes), filler triage, AND conservative transcript-gap silence tightening. Highlights + silence chips only; nothing is cut until Execute."
       >

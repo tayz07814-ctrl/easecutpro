@@ -37,7 +37,8 @@ export default function RetakeCleanerPanel(): JSX.Element {
   const stagedSel = useStore((s) => s.stagedSilenceSel)
   const toggleStagedSilence = useStore((s) => s.toggleStagedSilence)
   const executeCuts = useStore((s) => s.executeCuts)
-  const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
+  // Retake δ replaces Retake β behind "Find Retakes & Silence" (β disabled).
+  const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
   const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
   const showSilenceSettings = useStore((s) => s.showSilenceSettings)
   const setPlayhead = useStore((s) => s.setPlayhead)
@@ -225,7 +226,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
           <button className="primary" onClick={() => setShowExportModal(true)}>Export</button>
         </div>
         <div className="rc-hint">Run again after more edits to catch new pauses.</div>
-        <button className="rc-run-again" onClick={() => void runRetakeCutBeta()} disabled={jobActive}>
+        <button className="rc-run-again" onClick={() => void runRetakeCutDelta()} disabled={jobActive}>
           🧪 Find Retakes &amp; Silence
         </button>
         {modal}
@@ -246,7 +247,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
             <div className="rc-error-msg">{job.message || 'Something went wrong. Your project is untouched.'}</div>
           </div>
         </div>
-        <button className="primary rc-hero" onClick={() => void runRetakeCutBeta()} disabled={jobActive}>
+        <button className="primary rc-hero" onClick={() => void runRetakeCutDelta()} disabled={jobActive}>
           Try again
         </button>
         {modal}
@@ -259,7 +260,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
     return (
       <div className="rc-panel">
         {header}
-        <button className="primary rc-hero" onClick={() => void runRetakeCutBeta()} disabled={jobActive}>
+        <button className="primary rc-hero" onClick={() => void runRetakeCutDelta()} disabled={jobActive}>
           🧪 Find Retakes &amp; Silence
         </button>
         <button className="rc-secondary" onClick={() => setShowSilenceSettings(true)} disabled={jobActive}>

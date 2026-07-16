@@ -56,7 +56,9 @@ export function useRetake(): RetakeModel {
   const stagedSel = useStore((s) => s.stagedSilenceSel)
   const smartSilence = useStore((s) => s.smartSilenceCutter)
   const setSmartSilence = useStore((s) => s.setSmartSilenceCutter)
-  const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
+  // Retake δ is now THE engine behind "Find Retakes & Silence"; Retake β is
+  // disabled (its store action stays defined but no button routes to it).
+  const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
   const clearSelection = useStore((s) => s.clearSelection)
@@ -126,7 +128,7 @@ export function useRetake(): RetakeModel {
     isDeleted: (id) => deletedIds.has(id),
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
     smartSilence,
-    find: () => { setExecuted(false); void runRetakeCutBeta() },
+    find: () => { setExecuted(false); void runRetakeCutDelta() },
     execute: () => { setExecuted(true); void executeCuts() },
     restore: () => restoreSelected(),
     clear: () => clearSelection(),
