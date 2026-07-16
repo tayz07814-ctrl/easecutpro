@@ -44,19 +44,31 @@ function preflight(req: Request): Response | null {
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
 const MODEL = Deno.env.get('DELTA_MODEL') ?? 'openai/gpt-5.6-luna-pro'
 
+function admin() {
+  return createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+}
+
 // The key is NEVER hardcoded. Prefer an edge secret (DELTA_JUDGE_KEY); otherwise
 // read it from the Supabase Vault via the service-role-only delta_judge_key() RPC.
 async function getApiKey(): Promise<string> {
   const env = Deno.env.get('DELTA_JUDGE_KEY')
   if (env) return env
   try {
-    const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-    const { data } = await admin.rpc('delta_judge_key')
+    const { data } = await admin().rpc('delta_judge_key')
     if (typeof data === 'string' && data) return data
   } catch {
     /* vault not configured — fall through to unconfigured */
   }
   return ''
+}
+
+// Pull the JSON EDL out of a model reply: drop <think> reasoning and ```fences```,
+// then keep the outermost {...} object. Reasoning models rarely return bare JSON.
+function extractEdl(raw: string): string {
+  let t = raw.replace(/<think>[\s\S]*?<\/think>/gi, '')
+  t = t.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim()
+  const m = t.match(/\{[\s\S]*\}/)
+  return (m ? m[0] : t).trim()
 }
 
 const EDL_SHAPE = `Reply with VALID JSON ONLY (no prose, no markdown fences), exactly:
@@ -103,10 +115,10 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
       'HTTP-Referer': 'https://easecutpro.com',
       'X-Title': 'EaseCutPro Retake δ'
     },
+    // NOTE: no `temperature` — reasoning models (GPT-5.x) reject non-default values.
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 16000,
-      temperature: 0,
       stream: false,
       messages: [
         { role: 'system', content: SYSTEM },
@@ -114,13 +126,35 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
       ]
     })
   })
-  if (!r.ok) throw new Error(`model API: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`)
-  const d = (await r.json()) as { choices?: { message?: { content?: string } }[] }
-  let text = d.choices?.[0]?.message?.content ?? ''
-  // Reasoning models (Qwen3 etc.) wrap their chain-of-thought in <think>…</think>;
-  // strip it so only the JSON EDL reaches the client's validateEdl parser.
-  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-  return text
+  const bodyText = await r.text()
+  let content = ''
+  if (r.ok) {
+    try {
+      content = (JSON.parse(bodyText) as { choices?: { message?: { content?: string } }[] }).choices?.[0]?.message?.content ?? ''
+    } catch {
+      /* non-JSON body — leave content empty; captured below */
+    }
+  }
+  const cleaned = extractEdl(content)
+
+  // DIAGNOSTIC (temporary): record exactly what the model returned so a failed
+  // δ run can be inspected server-side without exposing the key. Best-effort.
+  try {
+    await admin().from('delta_debug').insert({
+      model: MODEL,
+      http_status: r.status,
+      ok: r.ok,
+      content_len: content.length,
+      cleaned_len: cleaned.length,
+      content_snippet: content.slice(0, 3000),
+      err_body: r.ok ? null : bodyText.slice(0, 2000)
+    })
+  } catch {
+    /* never let the diagnostic break the run */
+  }
+
+  if (!r.ok) throw new Error(`model API: HTTP ${r.status} ${bodyText.slice(0, 200)}`)
+  return cleaned
 }
 
 Deno.serve(async (req) => {
