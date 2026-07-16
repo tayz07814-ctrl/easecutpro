@@ -178,7 +178,8 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
         cleaned_len: cleaned.length,
         content_snippet: content.slice(0, 3000),
         err_body: r.ok ? null : bodyText.slice(0, 2000),
-        raw_body: bodyText.slice(0, 8000)
+        raw_body: bodyText.slice(0, 8000),
+        req_payload: payload.slice(0, 16000)
       }
     })
   } catch {
