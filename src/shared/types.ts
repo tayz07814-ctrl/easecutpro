@@ -504,8 +504,13 @@ export interface OverlayGenResult {
 export interface OverlaySuggestion {
   /** ephemeral id for the review list (not persisted). */
   id: string
-  /** which library overlay this proposes. */
+  /** 'overlay' = place a library image card; 'label' = place an auto-generated text
+   *  label of what the creator is SHOWING on screen (moment vision). */
+  kind: 'overlay' | 'label'
+  /** which library overlay this proposes (empty for 'label'). */
   overlayId: string
+  /** the on-screen text for a 'label' suggestion (what the frame vision saw). */
+  label?: string
   /** the proposed moment, SOURCE-time seconds. */
   start: number
   end: number

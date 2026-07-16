@@ -1,7 +1,8 @@
 // Headless tests for the overlay revamp: Phase 0 (doc-native placement + keyword
 // word-boundary fix) and Phase 1 (occurrence selection, name-only rules).
 // Run: npx tsx scripts/verify-overlay-doc.ts
-import { projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips } from '../src/shared/timeline/bridge'
+import { projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips, labelSuggestionsToDocTextClips } from '../src/shared/timeline/bridge'
+import { findShowMoments } from '../src/shared/overlay'
 import { keywordFallback, validateAndCleanEvents, keywordOverlayTimeline, parseOverlayLlmResponse, chunkTranscript, parseOverlaySuggestions, buildOverlayUserMessage, buildSuggestUserMessage } from '../src/shared/overlay'
 import { generateOverlayTimeline } from '../src/main/overlay-rules'
 import { framesToSeconds } from '../src/shared/timeline/time'
@@ -158,6 +159,36 @@ const mMsgNo = buildOverlayUserMessage([{ index: 0, text: 'hi' }], [{ overlayId:
 check('match prompt omits "shows:" when there is no description', !mMsgNo.includes('shows:'))
 const sMsg = buildSuggestUserMessage([{ index: 0, text: 'hi' }], [{ overlayId: 'a1', name: 'Card', description: 'a smiling before/after photo' }])
 check('suggest prompt includes the overlay vision description', sMsg.includes('shows: a smiling before/after photo'))
+
+console.log('\n=== moment vision: find "point-and-show" moments (deictic + repeated lines) ===')
+const showSents = [
+  { index: 0, text: 'Welcome to my skincare routine.', start: 0, end: 3 },       // neither -> skip
+  { index: 1, text: 'This is not acne.', start: 4, end: 6 },                       // deictic + repeated
+  { index: 2, text: 'This is not acne.', start: 8, end: 10 },                      // deictic + repeated
+  { index: 3, text: 'This is not acne.', start: 12, end: 14 },                     // deictic + repeated
+  { index: 4, text: 'Look right here at my elbow.', start: 16, end: 19 },          // deictic
+  { index: 5, text: 'Anyway that is the whole story today.', start: 20, end: 24 }  // neither -> skip
+]
+const moments = findShowMoments(showSents)
+check('flags the repeated "this is not acne" lines + the deictic "look here"',
+  moments.length === 4 && moments.every((m) => [1, 2, 3, 4].includes(m.index)), `indices ${moments.map((m) => m.index).join(',')}`)
+check('does NOT flag ordinary narration', !moments.some((m) => m.index === 0 || m.index === 5))
+
+console.log('\n=== accept a moment label -> a doc TEXT clip on the text lane, mapped to time ===')
+const labelDoc = normalizeDefaultLanes(projectToDocument(project)) // 60s media, cut 10-20
+const { clips: textClips, skipped: textSkipped } = labelSuggestionsToDocTextClips(labelDoc, project, [
+  { start: 5, end: 8, label: 'Armpit', position: 'bottom_center' },   // before the cut -> edited 5s
+  { start: 25, end: 28, label: 'Legs', position: 'top_center' },      // after 10s cut -> edited 15s
+  { start: 13, end: 16, label: 'Chest', position: 'bottom_center' }   // inside the cut -> skipped
+])
+check('places the two labels whose moment survives the cut', textClips.length === 2, `${textClips.length}`)
+check('skips a label whose moment is cut', textSkipped.length === 1 && textSkipped[0].includes('Chest'))
+check('label clips are TEXT clips on the text lane carrying the label text',
+  textClips.every((c) => c.kind === 'text') && textClips[0].name === 'Armpit' && (textClips[0].text as { text: string }).text === 'Armpit')
+const tLane = labelDoc.tracks.find((t) => t.kind === 'text')
+check('label clips land on the text lane', textClips.every((c) => c.trackId === tLane?.id))
+const tArmpit = framesToSeconds(textClips[0].start, labelDoc.timebase)
+check('label at source 5s maps to edited 5s', Math.abs(tArmpit - 5) < 0.05, `${tArmpit.toFixed(2)}s`)
 
 console.log(fails === 0 ? '\nAll checks passed.' : `\n${fails} CHECK(S) FAILED`)
 process.exit(fails === 0 ? 0 : 1)

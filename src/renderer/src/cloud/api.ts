@@ -152,6 +152,14 @@ const cloudApi: Window['api'] = {
       return { description: '' } // graceful: matching falls back to the overlay name
     }
   },
+  // Moment vision: label what the creator is showing in a frame, via the moment-vision edge fn.
+  labelMoment: async (imageBase64, mediaType, line) => {
+    try {
+      return await invokeEdge<{ label: string }>('moment-vision', { image: imageBase64, mediaType, line })
+    } catch {
+      return { label: '' }
+    }
+  },
 
   retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
     retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),

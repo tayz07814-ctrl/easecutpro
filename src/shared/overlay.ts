@@ -411,7 +411,7 @@ export function parseOverlaySuggestions(
     if (midInCuts(start, end, o.cuts)) { log.push(`dropped: moment at ${sentences[idx].start.toFixed(1)}s is cut`); continue }
     const position = POSITIONS.has(e?.position) ? (e.position as OverlayPosition) : 'top_center'
     raw.push({
-      id: '', overlayId, start, end, position, animation: 'pop',
+      id: '', kind: 'overlay', overlayId, start, end, position, animation: 'pop',
       reason: String(e?.reason ?? '').slice(0, 160), sentence: sentences[idx].text.slice(0, 200),
       confidence, _conf: confidence
     })
@@ -423,8 +423,44 @@ export function parseOverlaySuggestions(
   for (const s of raw) {
     if (suggestions.length >= o.maxEvents) { log.push('hit suggestion cap'); break }
     if (s.start < lastEnd + o.minGap) { log.push(`dropped: too close to a kept suggestion (${s.start.toFixed(1)}s)`); continue }
-    suggestions.push({ id: uid(), overlayId: s.overlayId, start: s.start, end: s.end, position: s.position, animation: s.animation, reason: s.reason, sentence: s.sentence, confidence: s.confidence })
+    suggestions.push({ id: uid(), kind: 'overlay', overlayId: s.overlayId, start: s.start, end: s.end, position: s.position, animation: s.animation, reason: s.reason, sentence: s.sentence, confidence: s.confidence })
     lastEnd = s.end
   }
   return { suggestions, log }
+}
+
+// ---- Moment vision: "point-and-show" detection. When the creator points at
+//      something ("this is not acne" over an armpit, then legs, then chest) the
+//      transcript is identical — the differentiator is the FRAME. We flag the
+//      moments worth LOOKING at, cheaply and with no vision, so the app only
+//      samples a handful of frames. ----
+
+// Strong pointing/showing signals only. "that/those/there" are deliberately
+// excluded — they're common non-deictic filler ("that is the whole story") and
+// caused false positives.
+const DEICTIC = /\b(this|these|here|look|watch|notice|showing|show\s+you|check\s+(it|this|these)\s+out|you\s+can\s+see|right\s+here|over\s+here|see\s+this)\b/i
+
+function normalizeLine(t: string): string {
+  return t.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Sentences where the creator is likely SHOWING something on camera — worth a
+ * frame-look. Two cheap signals: (1) deictic/pointing language ("this", "here",
+ * "look", "you can see"); (2) near-identical repeated lines (the classic
+ * "this is not acne" × 3 — same words, different visual each time). Capped to
+ * bound how many frames get sent to vision.
+ */
+export function findShowMoments(sentences: Sentence[], max = 8): Sentence[] {
+  const counts = new Map<string, number>()
+  for (const s of sentences) {
+    const n = normalizeLine(s.text)
+    if (n) counts.set(n, (counts.get(n) ?? 0) + 1)
+  }
+  const picked = new Map<number, Sentence>()
+  for (const s of sentences) {
+    const repeated = (counts.get(normalizeLine(s.text)) ?? 0) >= 2
+    if (repeated || DEICTIC.test(s.text)) picked.set(s.index, s)
+  }
+  return [...picked.values()].sort((a, b) => a.start - b.start).slice(0, max)
 }

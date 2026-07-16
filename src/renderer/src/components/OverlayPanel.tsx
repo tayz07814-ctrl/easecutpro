@@ -187,24 +187,26 @@ export default function OverlayPanel(): JSX.Element {
             </span>
           </div>
           {suggestions.map((s) => {
+            const isLabel = s.kind === 'label'
             const a = assetById(s.overlayId)
             const conf = Math.round(s.confidence * 100)
             return (
               <div key={s.id} className="ov-sugg-card">
                 <button className="ov-sugg-seek" title="Preview this moment" onClick={() => seek(s.start)}>
-                  {a?.file ? <img src={mediaSrc(a.file)} alt="" /> : <span>🖼</span>}
+                  {isLabel ? <span className="ov-sugg-ic">📝</span> : a?.file ? <img src={mediaSrc(a.file)} alt="" /> : <span className="ov-sugg-ic">🖼</span>}
                   <span className="ov-sugg-time">▶ {mmss(s.start)}</span>
                 </button>
                 <div className="ov-sugg-body">
                   <div className="ov-sugg-title">
-                    <b>{a?.name ?? 'Overlay'}</b>
+                    <b>{isLabel ? s.label : a?.name ?? 'Overlay'}</b>
+                    {isLabel && <span className="ov-sugg-tag">auto-label</span>}
                     <span className={`ov-sugg-conf ${conf >= 75 ? 'hi' : conf >= 55 ? 'mid' : 'lo'}`}>{conf}%</span>
                   </div>
                   <div className="ov-sugg-why">{s.reason || '—'}</div>
                   <div className="ov-sugg-quote">“{s.sentence}”</div>
                 </div>
                 <div className="ov-sugg-acts">
-                  <button className="primary small" disabled={job.active} title="Place this overlay" onClick={() => acceptSuggestions([s.id])}>✓</button>
+                  <button className="primary small" disabled={job.active} title={isLabel ? 'Place this text label' : 'Place this overlay'} onClick={() => acceptSuggestions([s.id])}>✓</button>
                   <button className="small" title="Dismiss" onClick={() => dismissSuggestion(s.id)}>✕</button>
                 </div>
               </div>

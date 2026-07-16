@@ -173,3 +173,31 @@ export async function describeOverlayImage(imageBase64: string, mediaType: strin
     return { description: '' }
   }
 }
+
+/** Moment vision: given a VIDEO FRAME where the creator is pointing/showing and
+ *  the line they say, return a SHORT on-screen label of what's shown ("Armpit",
+ *  "Legs"). Empty string on any problem. */
+export async function labelMoment(imageBase64: string, mediaType: string, line: string): Promise<{ label: string }> {
+  if (!claudeAvailable() || !imageBase64) return { label: '' }
+  try {
+    const client = getAnthropic()
+    const media = /^image\/(png|jpeg|gif|webp)$/.test(mediaType) ? mediaType : 'image/jpeg'
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 60,
+      system: 'You caption what a video creator is SHOWING on camera. Given a frame and the line they speak, reply with a SHORT on-screen label (1-3 words, Title Case) naming the thing being shown/pointed at — e.g. "Armpit", "Left Leg", "Product Label". If nothing specific is being shown, reply with an empty string. No punctuation, no sentence, just the label.',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: media as 'image/jpeg', data: imageBase64 } },
+          { type: 'text', text: `They say: "${line}". What are they showing? Give the short label.` }
+        ]
+      }]
+    })
+    const block = res.content.find((b) => b.type === 'text')
+    const label = (block && block.type === 'text' ? block.text : '').trim().replace(/^["']|["'.]+$/g, '').slice(0, 40)
+    return { label }
+  } catch {
+    return { label: '' }
+  }
+}

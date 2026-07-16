@@ -83,6 +83,12 @@ const api = {
     imageBase64: string,
     mediaType: string
   ): Promise<{ description: string }> => ipcRenderer.invoke(IPC.describeOverlayImage, imageBase64, mediaType),
+  /** Moment vision: label what the creator is SHOWING in a video frame at a spoken line. */
+  labelMoment: (
+    imageBase64: string,
+    mediaType: string,
+    line: string
+  ): Promise<{ label: string }> => ipcRenderer.invoke(IPC.labelMoment, imageBase64, mediaType, line),
   openaiStatus: (): Promise<{ available: boolean }> => ipcRenderer.invoke(IPC.openaiStatus),
   whisperModels: (): Promise<WhisperModelInfo[]> => ipcRenderer.invoke(IPC.whisperModels),
   detectSilence: (path: string, opts: SilenceDetectOptions): Promise<SilenceRegion[]> =>
