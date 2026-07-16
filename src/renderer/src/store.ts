@@ -20,7 +20,8 @@ import type {
   WhisperModelInfo,
   OverlayAsset,
   OverlayRule,
-  OverlayEvent
+  OverlayEvent,
+  OverlaySuggestion
 } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 import { documentToProject, projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips } from '@shared/timeline/bridge'
@@ -419,6 +420,8 @@ interface AppState {
   library: LibraryItem[]
   /** last overlay-generation log (transient; shown in the overlay panel). */
   overlayLog: string[]
+  /** pending "Suggest" proposals awaiting the creator's accept/reject (transient). */
+  overlaySuggestions: OverlaySuggestion[]
   /** object URL for the imported base media, for <video> playback. */
   mediaUrl: string | null
   waveform: Waveform | null
@@ -618,6 +621,14 @@ interface AppState {
   generateOverlays: () => Promise<void>
   /** remove all AI-generated overlay clips (keeps assets/rules). */
   clearGeneratedOverlays: () => void
+  /** "Suggest": AI proposes overlay placements from the library into a review list. */
+  suggestOverlays: () => Promise<void>
+  /** place the given suggestions (or all pending) as overlay clips; removes them from review. */
+  acceptSuggestions: (ids?: string[]) => void
+  /** dismiss one pending suggestion without placing it. */
+  dismissSuggestion: (id: string) => void
+  /** clear the whole pending-suggestion review list. */
+  clearSuggestions: () => void
   clearSelection: () => void
   deleteSelected: () => void
   restoreSelected: () => void
@@ -725,6 +736,7 @@ export const useStore = create<AppState>((set, get) => ({
   project: newProject(),
   library: loadLibrary(),
   overlayLog: [],
+  overlaySuggestions: [],
   mediaUrl: null,
   waveform: null,
   musicWaveform: null,
@@ -2466,6 +2478,102 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  // "Suggest": the AI reads the whole transcript + the overlay library and proposes
+  // placements into a REVIEW list. Nothing is placed until the creator accepts.
+  suggestOverlays: async () => {
+    if (!get().requireServer('Suggest overlays')) return
+    const { project } = get()
+    if ((project.baseSequence?.length ?? 0) > 0 && !project.media) {
+      set({ job: { active: false, percent: 0, message: 'Suggest runs per clip — double-click a clip on the timeline to edit it.' } })
+      return
+    }
+    const t = project.transcript
+    if (!t?.segments?.length) {
+      set({ job: { active: false, percent: 0, message: 'Transcribe first so Suggest can read the video' } })
+      return
+    }
+    const assets = project.overlayAssets ?? []
+    if (assets.length === 0) {
+      set({ job: { active: false, percent: 0, message: 'Add overlay images first' } })
+      return
+    }
+    const dur = project.media?.duration ?? 0
+    const cuts = subtractRanges([{ start: 0, end: dur }], computeKeepRanges(project, get().waveform))
+    set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Suggesting overlays…' }, overlaySuggestions: [] })
+    try {
+      const res = await window.api.suggestOverlays(t, assets, { duration: dur, cuts })
+      res.log.forEach((l) => console.log('[suggest]', l))
+      set({
+        overlaySuggestions: res.suggestions,
+        overlayLog: res.log,
+        job: {
+          active: false,
+          percent: 100,
+          message: res.suggestions.length ? `${res.suggestions.length} suggestion(s) — review below` : 'No overlay suggestions found'
+        }
+      })
+    } catch (e) {
+      set({ job: { active: false, percent: 0, message: safeErrMessage(e) } })
+    }
+  },
+
+  acceptSuggestions: (ids) => {
+    const pending = get().overlaySuggestions
+    const accept = ids ? pending.filter((s) => ids.includes(s.id)) : pending
+    if (accept.length === 0) return
+    const assets = get().project.overlayAssets ?? []
+    // A suggestion is a proposed OverlayEvent — place it exactly like Generate does.
+    const events: OverlayEvent[] = accept.map((s) => ({
+      overlayId: s.overlayId, start: s.start, end: s.end,
+      position: s.position, animation: s.animation, reason: s.reason, source: 'llm'
+    }))
+    const docMode = !!get().project.timeline
+    const engine = docMode ? getSharedEngine() : null
+    if (docMode && !engine) {
+      set({ job: { active: false, percent: 0, message: 'Timeline is still loading — try again' } })
+      return
+    }
+    let placed = 0
+    if (engine) {
+      // ADDITIVE: accepted suggestions add to whatever is already placed (unlike
+      // Generate, which replaces its own batch), so the creator can accept in steps.
+      const doc = engine.document
+      const { clips, skipped } = overlayEventsToDocClips(doc, get().project, events, assets)
+      if (clips.length) engine.batch('Accept overlay suggestions', clips.map((c) => TimelineCommands.addClip(c)))
+      placed = clips.length
+      if (skipped.length) console.log('[suggest] skipped:', skipped.join('; '))
+    } else {
+      const assetById = new Map(assets.map((a) => [a.id, a]))
+      const newClips: Clip[] = []
+      for (const ev of events) {
+        const asset = assetById.get(ev.overlayId)
+        if (!asset) continue
+        const len = Math.max(0.5, ev.end - ev.start)
+        const box = positionToBox(ev.position)
+        newClips.push({
+          id: uid(), name: asset.name, sourcePath: asset.file, sourceIn: 0, sourceOut: len, sourceDuration: len,
+          isImage: true, start: Math.max(0, ev.start), x: box.x, y: box.y, scale: box.scale,
+          crop: { l: 0, t: 0, r: 0, b: 0 }, zoomStart: 1, zoomEnd: 1,
+          overlayRuleId: asset.id, overlayAnimation: ev.animation, overlayReason: ev.reason
+        })
+      }
+      if (newClips.length) {
+        set((s) => ({ project: { ...s.project, tracks: s.project.tracks.map((tr) => (tr.index === 1 ? { ...tr, clips: [...tr.clips, ...newClips] } : tr)) } }))
+      }
+      placed = newClips.length
+    }
+    const acceptedIds = new Set(accept.map((s) => s.id))
+    set((s) => ({
+      overlaySuggestions: s.overlaySuggestions.filter((x) => !acceptedIds.has(x.id)),
+      job: { active: false, percent: 100, message: `Placed ${placed} overlay(s)` }
+    }))
+  },
+
+  dismissSuggestion: (id) =>
+    set((s) => ({ overlaySuggestions: s.overlaySuggestions.filter((x) => x.id !== id) })),
+
+  clearSuggestions: () => set({ overlaySuggestions: [] }),
+
   deleteSelected: () => {
     const { selectedWordIds } = get()
     if (selectedWordIds.size === 0) return
@@ -3198,3 +3306,7 @@ useStore.subscribe((state, prev) => {
   if (history.timer) clearTimeout(history.timer)
   history.timer = setTimeout(flushHistory, 400)
 })
+
+// Debug/support bridge: expose the store on window so overlay/suggest state can be
+// inspected or driven from the console (client-only state; no secrets). Harmless.
+if (typeof window !== 'undefined') (window as unknown as { ecStore?: typeof useStore }).ecStore = useStore

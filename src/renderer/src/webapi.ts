@@ -279,6 +279,8 @@ const webApi: Window['api'] = {
   },
   generateOverlays: (transcript, assets, rules, opts) =>
     runJob(() => call('/api/generate-overlays', { transcript, assets, rules, opts })),
+  suggestOverlays: (transcript, assets, opts) =>
+    runJob(() => call('/api/suggest-overlays', { transcript, assets, opts })),
   openaiStatus: () => call('/api/openai-status'),
   whisperModels: async () => (await call('/api/whisper-models')).models,
   detectSilence: async (path, opts) => {

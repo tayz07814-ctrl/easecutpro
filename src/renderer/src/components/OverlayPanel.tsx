@@ -1,5 +1,7 @@
 import { useStore } from '../store'
 import { mediaSrc, IS_CLOUD } from '../platform'
+import { useSharedEngineSnapshot } from '../timelineEngine'
+import { docSourceToEdited } from '../docTime'
 import type { OverlayAnimation, OverlayOccurrence, OverlayPosition } from '@shared/types'
 
 const POSITIONS: OverlayPosition[] = [
@@ -11,6 +13,11 @@ const OCCURRENCES: { value: OverlayOccurrence; label: string }[] = [
   { value: 'first', label: 'first mention only' },
   { value: 'last', label: 'last mention only' }
 ]
+
+function mmss(sec: number): string {
+  const s = Math.max(0, Math.round(sec))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
 
 /** Author overlay images + natural-language placement rules; run AI placement. */
 export default function OverlayPanel(): JSX.Element {
@@ -26,9 +33,26 @@ export default function OverlayPanel(): JSX.Element {
   const generateOverlays = useStore((s) => s.generateOverlays)
   const clearGeneratedOverlays = useStore((s) => s.clearGeneratedOverlays)
 
+  // Suggest (proactive review flow)
+  const suggestions = useStore((s) => s.overlaySuggestions)
+  const suggestOverlays = useStore((s) => s.suggestOverlays)
+  const acceptSuggestions = useStore((s) => s.acceptSuggestions)
+  const dismissSuggestion = useStore((s) => s.dismissSuggestion)
+  const clearSuggestions = useStore((s) => s.clearSuggestions)
+  const setPlayhead = useStore((s) => s.setPlayhead)
+  const setPlaying = useStore((s) => s.setPlaying)
+  const hasTimeline = useStore((s) => !!s.project.timeline)
+  const snap = useSharedEngineSnapshot()
+  const doc = hasTimeline ? snap?.doc : undefined
+
   const used = new Set(assets.map((a) => a.libraryItemId))
   const images = library.filter((i) => i.kind === 'image' && !used.has(i.id))
   const ruleFor = (id: string) => rules.find((r) => r.overlayId === id)
+  const assetById = (id: string) => assets.find((a) => a.id === id)
+  const seek = (srcStart: number): void => {
+    setPlayhead(hasTimeline ? docSourceToEdited(doc, srcStart) : srcStart)
+    setPlaying(true)
+  }
 
   return (
     <div className="overlay-panel">
@@ -133,14 +157,58 @@ export default function OverlayPanel(): JSX.Element {
           <button
             className="primary"
             disabled={job.active || !hasTranscript}
-            title={hasTranscript ? 'Match each rule to the transcript and place the overlays' : 'Needs a transcript — the AI reads it to find when you say things'}
+            title={hasTranscript ? 'Match your rules to the transcript and place the overlays' : 'Needs a transcript — the AI reads it to find when you say things'}
             onClick={() => void generateOverlays()}
           >
-            ✨ Generate overlays
+            ✨ Generate
+          </button>
+          <button
+            className="ov-suggest-btn"
+            disabled={job.active || !hasTranscript}
+            title={hasTranscript ? 'Let the AI read the whole video and propose what overlay goes where' : 'Needs a transcript first'}
+            onClick={() => void suggestOverlays()}
+          >
+            🪄 Suggest
           </button>
           <button disabled={job.active} onClick={() => clearGeneratedOverlays()}>
             Clear placed
           </button>
+        </div>
+      )}
+
+      {suggestions.length > 0 && (
+        <div className="ov-suggest">
+          <div className="ov-suggest-head">
+            <span><b>{suggestions.length}</b> suggestion{suggestions.length > 1 ? 's' : ''} — review &amp; accept</span>
+            <span className="ov-suggest-bulk">
+              <button className="primary small" disabled={job.active} onClick={() => acceptSuggestions()}>Accept all</button>
+              <button className="small" onClick={() => clearSuggestions()}>Dismiss all</button>
+            </span>
+          </div>
+          {suggestions.map((s) => {
+            const a = assetById(s.overlayId)
+            const conf = Math.round(s.confidence * 100)
+            return (
+              <div key={s.id} className="ov-sugg-card">
+                <button className="ov-sugg-seek" title="Preview this moment" onClick={() => seek(s.start)}>
+                  {a?.file ? <img src={mediaSrc(a.file)} alt="" /> : <span>🖼</span>}
+                  <span className="ov-sugg-time">▶ {mmss(s.start)}</span>
+                </button>
+                <div className="ov-sugg-body">
+                  <div className="ov-sugg-title">
+                    <b>{a?.name ?? 'Overlay'}</b>
+                    <span className={`ov-sugg-conf ${conf >= 75 ? 'hi' : conf >= 55 ? 'mid' : 'lo'}`}>{conf}%</span>
+                  </div>
+                  <div className="ov-sugg-why">{s.reason || '—'}</div>
+                  <div className="ov-sugg-quote">“{s.sentence}”</div>
+                </div>
+                <div className="ov-sugg-acts">
+                  <button className="primary small" disabled={job.active} title="Place this overlay" onClick={() => acceptSuggestions([s.id])}>✓</button>
+                  <button className="small" title="Dismiss" onClick={() => dismissSuggestion(s.id)}>✕</button>
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
       {assets.length > 0 && !hasTranscript && (

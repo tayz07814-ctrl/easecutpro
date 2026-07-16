@@ -2,7 +2,7 @@
 // word-boundary fix) and Phase 1 (occurrence selection, name-only rules).
 // Run: npx tsx scripts/verify-overlay-doc.ts
 import { projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips } from '../src/shared/timeline/bridge'
-import { keywordFallback, validateAndCleanEvents, keywordOverlayTimeline, parseOverlayLlmResponse, chunkTranscript } from '../src/shared/overlay'
+import { keywordFallback, validateAndCleanEvents, keywordOverlayTimeline, parseOverlayLlmResponse, chunkTranscript, parseOverlaySuggestions } from '../src/shared/overlay'
 import { generateOverlayTimeline } from '../src/main/overlay-rules'
 import { framesToSeconds } from '../src/shared/timeline/time'
 import type { OverlayAsset, OverlayEvent, OverlayRule, Project, Segment, Transcript, Word } from '../src/shared/types'
@@ -126,6 +126,30 @@ check('drops a below-threshold-confidence match (logged)', parseOverlayLlmRespon
 const rawBad = JSON.stringify({ events: [{ overlayId: 'a1', sentenceIndex: 99, confidence: 1 }] })
 check('drops a hallucinated (out-of-range) sentence index', parseOverlayLlmResponse(rawBad, sents).events.length === 0)
 check('tolerates junk / non-JSON without throwing', parseOverlayLlmResponse('not json', sents).events.length === 0)
+
+console.log('\n=== Suggest parser: proposals -> reviewable suggestions (index->time, gate, pace, cut-avoid) ===')
+let sid = 0
+const sUid = (): string => `s${sid++}`
+const sOpts = { duration: 30, cuts: [] as { start: number; end: number }[] }
+const sugRaw = JSON.stringify({ suggestions: [
+  { overlayId: 'a1', sentenceIndex: 1, position: 'bottom_center', confidence: 0.9, reason: 'bloating result' },
+  { overlayId: 'a1', sentenceIndex: 0, position: 'garbage', confidence: 0.2, reason: 'too weak' },       // low conf -> dropped
+  { overlayId: 'nope', sentenceIndex: 1, position: 'top_center', confidence: 0.9, reason: 'unknown id' }  // unknown overlay -> dropped
+] })
+const sug = parseOverlaySuggestions(sugRaw, sents, nameAssets, sOpts, sUid)
+check('keeps the strong, known-overlay suggestion', sug.suggestions.length === 1 && sug.suggestions[0].overlayId === 'a1', `${sug.suggestions.length}`)
+check('maps sentenceIndex -> real moment time', Math.abs(sug.suggestions[0].start - sents[1].start) < 0.01, `${sug.suggestions[0]?.start}`)
+check('carries the triggering sentence + reason + confidence for the review card',
+  !!sug.suggestions[0].sentence && !!sug.suggestions[0].reason && sug.suggestions[0].confidence === 0.9)
+check('sanitizes an invalid position to a safe default', sug.suggestions[0].position === 'bottom_center')
+check('assigns review ids', sug.suggestions[0].id === 's0')
+// pacing: two very close strong proposals -> the crowding one is dropped
+const closeRaw = JSON.stringify({ suggestions: [
+  { overlayId: 'a1', sentenceIndex: 0, position: 'top_center', confidence: 0.9, reason: 'a' },
+  { overlayId: 'a1', sentenceIndex: 1, position: 'top_center', confidence: 0.9, reason: 'b' }
+] })
+const closeSug = parseOverlaySuggestions(closeRaw, [{ index: 0, text: 'x', start: 0, end: 1 }, { index: 1, text: 'y', start: 1.0, end: 2 }], nameAssets, { duration: 30, cuts: [] }, () => 'z')
+check('paces out proposals that would crowd each other', closeSug.suggestions.length === 1, `${closeSug.suggestions.length}`)
 
 console.log(fails === 0 ? '\nAll checks passed.' : `\n${fails} CHECK(S) FAILED`)
 process.exit(fails === 0 ? 0 : 1)

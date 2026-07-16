@@ -19,7 +19,8 @@ import type {
   WhisperModelInfo,
   OverlayAsset,
   OverlayRule,
-  OverlayGenResult
+  OverlayGenResult,
+  OverlaySuggestResult
 } from '../shared/types'
 import type { ToolStatus } from '../main/binaries'
 import type { CutCutProResult } from '../shared/cutcutpro'
@@ -71,6 +72,12 @@ const api = {
     rules: OverlayRule[],
     opts: { duration: number; cuts: { start: number; end: number }[] }
   ): Promise<OverlayGenResult> => ipcRenderer.invoke(IPC.generateOverlays, transcript, assets, rules, opts),
+  /** "Suggest": AI proposes overlay↔moment placements from the library, for review. */
+  suggestOverlays: (
+    transcript: Transcript,
+    assets: OverlayAsset[],
+    opts: { duration: number; cuts: { start: number; end: number }[] }
+  ): Promise<OverlaySuggestResult> => ipcRenderer.invoke(IPC.suggestOverlays, transcript, assets, opts),
   openaiStatus: (): Promise<{ available: boolean }> => ipcRenderer.invoke(IPC.openaiStatus),
   whisperModels: (): Promise<WhisperModelInfo[]> => ipcRenderer.invoke(IPC.whisperModels),
   detectSilence: (path: string, opts: SilenceDetectOptions): Promise<SilenceRegion[]> =>

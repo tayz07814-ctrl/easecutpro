@@ -7,11 +7,12 @@
 import { getAnthropic, claudeAvailable } from './claude'
 import {
   chunkTranscript, keywordFallback, validateAndCleanEvents, deriveInstructions,
-  OVERLAY_MATCH_SYSTEM, buildOverlayUserMessage, parseOverlayLlmResponse
+  OVERLAY_MATCH_SYSTEM, buildOverlayUserMessage, parseOverlayLlmResponse,
+  OVERLAY_SUGGEST_SYSTEM, buildSuggestUserMessage, parseOverlaySuggestions
 } from '../shared/overlay'
 import type { CleanOpts, Sentence } from '../shared/overlay'
 import type {
-  OverlayAsset, OverlayEvent, OverlayGenResult, OverlayRule, Transcript
+  OverlayAsset, OverlayEvent, OverlayGenResult, OverlayRule, OverlaySuggestResult, Transcript
 } from '../shared/types'
 
 type ProgressFn = (pct: number, msg?: string) => void
@@ -93,4 +94,50 @@ export async function generateOverlayTimeline(
   for (const r of cleaned.rejected.slice(0, 25)) log.push(`  rejected: ${r}`)
   onProgress?.(100, cleaned.events.length ? `Placed ${cleaned.events.length} overlay(s)` : 'No overlay matches')
   return { events: cleaned.events, via: cleaned.events.length ? via : 'none', log }
+}
+
+/**
+ * "Suggest": read the whole transcript + the overlay library and PROPOSE
+ * overlay↔moment placements for the creator to review. No rules required — the
+ * model chooses which cards fit and where. Prompt + parsing are shared with the
+ * cloud edge function. Never throws: returns an empty list on any problem so the
+ * UI degrades gracefully. The model only proposes sentence indices; time mapping,
+ * cut-avoidance, pacing and caps are deterministic (parseOverlaySuggestions).
+ */
+export async function suggestOverlayTimeline(
+  transcript: Transcript,
+  assets: OverlayAsset[],
+  opts: CleanOpts,
+  onProgress?: ProgressFn
+): Promise<OverlaySuggestResult> {
+  const log: string[] = []
+  const sentences = chunkTranscript(transcript)
+  const library = assets.map((a) => ({ overlayId: a.id, name: a.name }))
+  log.push(`suggest: ${sentences.length} sentence(s), ${library.length} overlay(s) in library`)
+  if (sentences.length === 0 || library.length === 0) return { suggestions: [], via: 'none', log }
+  if (!claudeAvailable()) {
+    log.push('Suggest needs an AI key (no local fallback)')
+    return { suggestions: [], via: 'none', log }
+  }
+  try {
+    onProgress?.(30, 'Reading the video…')
+    const client = getAnthropic()
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 4096,
+      system: OVERLAY_SUGGEST_SYSTEM,
+      messages: [{ role: 'user', content: buildSuggestUserMessage(sentences, library) }]
+    })
+    const block = res.content.find((b) => b.type === 'text')
+    let i = 0
+    const { suggestions, log: plog } = parseOverlaySuggestions(
+      block && block.type === 'text' ? block.text : '', sentences, assets, opts, () => `sg_${i++}`
+    )
+    log.push(...plog)
+    onProgress?.(100, suggestions.length ? `${suggestions.length} suggestion(s)` : 'No suggestions')
+    return { suggestions, via: suggestions.length ? 'llm' : 'none', log }
+  } catch (e) {
+    log.push(`suggest failed: ${(e as Error).message}`)
+    return { suggestions: [], via: 'none', log }
+  }
 }

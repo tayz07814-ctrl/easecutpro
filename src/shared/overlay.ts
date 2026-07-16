@@ -10,6 +10,7 @@ import type {
   OverlayGenResult,
   OverlayPosition,
   OverlayRule,
+  OverlaySuggestion,
   Transcript
 } from './types'
 
@@ -321,4 +322,99 @@ export function parseOverlayLlmResponse(
     })
   }
   return { events, lowConfidence }
+}
+
+// ---- "Suggest": proactive, whole-transcript placement PROPOSALS. Unlike the
+//      matcher (which places rules the creator wrote), Suggest reads the entire
+//      transcript + the overlay library and proposes overlay↔moment pairs for the
+//      creator to review. Shared by the desktop suggester and the cloud edge fn. ----
+
+/** Minimum confidence for a suggestion to survive into the review list. */
+export const MIN_SUGGEST_CONFIDENCE = 0.45
+
+/** System prompt for the Suggest engine. MIRRORED in
+ *  supabase/functions/overlay-suggest/index.ts (Deno can't import this) — keep in sync. */
+export const OVERLAY_SUGGEST_SYSTEM = `You are a video editor's overlay assistant. You read a full talking-head transcript and a LIBRARY of the creator's own overlay image cards, and you PROPOSE where each card should appear — like a creative director planning B-roll.
+
+You receive numbered SENTENCES (the whole video, in order) and an OVERLAY LIBRARY (each item has an overlayId and a name). Propose placements.
+
+HOW TO THINK:
+1. Read the whole video as a story and find its BEATS — the hook, the problem, the product/point, proof or examples, and the call-to-action at the end.
+2. Find the OVERLAY-WORTHY moments: a specific claim, a number/price, a product or feature mention, an emotional peak, or the CTA. Not every sentence deserves an overlay.
+3. For each such moment, pick the library card whose NAME best fits it (judge by meaning; a card named "No Bloating" fits a sentence about a flatter stomach). A call-to-action card (CTA, subscribe, link, discount) belongs on the closing lines.
+
+RULES:
+- Only propose a card when it genuinely fits the moment. Precision over recall — a few great placements beat many weak ones.
+- Space them out across the video; do not stack overlays or crowd one section.
+- Return the SENTENCE INDEX of the moment, never a timestamp.
+- Choose a POSITION that won't cover the speaker's face: prefer top_center or bottom_center (use a corner only when it clearly fits).
+- Give each proposal a confidence 0..1 and a short reason a creator would understand ("you introduce the discount here").
+- Do NOT propose a card for a sentence that only mentions the topic in passing or negatively.
+
+OUTPUT: return ONLY a JSON object, no prose:
+{"suggestions":[{"overlayId":"<id>","sentenceIndex":<int>,"position":"top_center|bottom_center|center|top_left|top_right|bottom_left|bottom_right","confidence":<0..1>,"reason":"<why here>"}]}
+If nothing is worth an overlay, return {"suggestions":[]}.`
+
+/** Format the SENTENCES + LIBRARY payload the Suggest engine reasons over. */
+export function buildSuggestUserMessage(
+  sentences: { index: number; text: string }[],
+  library: { overlayId: string; name: string }[]
+): string {
+  const s = sentences.map((x) => `[${x.index}] ${x.text}`).join('\n')
+  const l = library.map((x) => `- overlayId=${x.overlayId} | "${x.name}"`).join('\n')
+  return `SENTENCES:\n${s}\n\nOVERLAY LIBRARY:\n${l}\n\nReturn JSON only.`
+}
+
+const POSITIONS = new Set<OverlayPosition>([
+  'top_center', 'center', 'bottom_center', 'top_left', 'top_right', 'bottom_left', 'bottom_right'
+])
+
+/**
+ * Parse a Suggest reply into reviewable suggestions: map sentenceIndex -> real
+ * time, drop hallucinated indices / low confidence / cut-section landings, then
+ * pace (min gap) and cap. Deterministic — the model only proposes; this makes it
+ * safe. `uid` supplies review-list ids (kept out so this stays pure/testable).
+ */
+export function parseOverlaySuggestions(
+  rawText: string,
+  sentences: Sentence[],
+  assets: OverlayAsset[],
+  opts: CleanOpts,
+  uid: () => string
+): { suggestions: OverlaySuggestion[]; log: string[] } {
+  const o = { ...DEFAULTS, maxEvents: 12, ...opts }
+  const assetIds = new Set(assets.map((a) => a.id))
+  const parsed = extractFirstJsonObject(rawText || '')
+  const log: string[] = []
+  const raw: Array<OverlaySuggestion & { _conf: number }> = []
+  for (const e of parsed?.suggestions ?? []) {
+    const overlayId = String(e?.overlayId ?? '')
+    if (!assetIds.has(overlayId)) { log.push(`dropped: unknown overlay ${overlayId}`); continue }
+    const idx = Number(e?.sentenceIndex)
+    if (!Number.isInteger(idx) || idx < 0 || idx >= sentences.length) continue // no hallucinated times
+    const confidence = typeof e?.confidence === 'number' ? Math.max(0, Math.min(1, e.confidence)) : 0.6
+    if (confidence < MIN_SUGGEST_CONFIDENCE) { log.push(`dropped low confidence @ sentence ${idx} (${confidence.toFixed(2)})`); continue }
+    const dur = Math.min(o.maxDur, Math.max(o.minDur, 3))
+    const start = Math.max(0, Math.min(sentences[idx].start, Math.max(0, o.duration - dur)))
+    const end = Math.min(o.duration, start + dur)
+    if (end - start < 0.5) continue
+    if (midInCuts(start, end, o.cuts)) { log.push(`dropped: moment at ${sentences[idx].start.toFixed(1)}s is cut`); continue }
+    const position = POSITIONS.has(e?.position) ? (e.position as OverlayPosition) : 'top_center'
+    raw.push({
+      id: '', overlayId, start, end, position, animation: 'pop',
+      reason: String(e?.reason ?? '').slice(0, 160), sentence: sentences[idx].text.slice(0, 200),
+      confidence, _conf: confidence
+    })
+  }
+  // pace + cap: sort by time, drop ones that crowd a kept suggestion, cap total.
+  raw.sort((a, b) => a.start - b.start)
+  const suggestions: OverlaySuggestion[] = []
+  let lastEnd = -Infinity
+  for (const s of raw) {
+    if (suggestions.length >= o.maxEvents) { log.push('hit suggestion cap'); break }
+    if (s.start < lastEnd + o.minGap) { log.push(`dropped: too close to a kept suggestion (${s.start.toFixed(1)}s)`); continue }
+    suggestions.push({ id: uid(), overlayId: s.overlayId, start: s.start, end: s.end, position: s.position, animation: s.animation, reason: s.reason, sentence: s.sentence, confidence: s.confidence })
+    lastEnd = s.end
+  }
+  return { suggestions, log }
 }

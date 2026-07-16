@@ -17,7 +17,7 @@ import { cutCutPro } from './cutcutpro'
 import { retakeAwareCut } from './retakeaware/engine'
 import type { RetakeBetaSilenceSettings } from '../shared/retakeaware/silence'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from './fast-cut'
-import { generateOverlayTimeline } from './overlay-rules'
+import { generateOverlayTimeline, suggestOverlayTimeline } from './overlay-rules'
 import { openaiAvailable } from './openai'
 import {
   saveProject,
@@ -321,6 +321,21 @@ app.whenReady().then(() => {
     ) => {
       const jobId = randomUUID()
       return generateOverlayTimeline(transcript, assets, rules, opts, (pct, msg) =>
+        emitProgress('transcribe', jobId, pct, msg)
+      )
+    }
+  )
+
+  ipcMain.handle(
+    IPC.suggestOverlays,
+    async (
+      _e,
+      transcript: Transcript,
+      assets: OverlayAsset[],
+      opts: { duration: number; cuts: { start: number; end: number }[] }
+    ) => {
+      const jobId = randomUUID()
+      return suggestOverlayTimeline(transcript, assets, opts, (pct, msg) =>
         emitProgress('transcribe', jobId, pct, msg)
       )
     }

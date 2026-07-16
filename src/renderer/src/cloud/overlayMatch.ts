@@ -9,12 +9,42 @@
 import { invokeEdge } from './supabase'
 import {
   chunkTranscript, deriveInstructions, keywordOverlayTimeline,
-  parseOverlayLlmResponse, validateAndCleanEvents
+  parseOverlayLlmResponse, validateAndCleanEvents, parseOverlaySuggestions
 } from '@shared/overlay'
 import type { CleanOpts } from '@shared/overlay'
-import type { OverlayAsset, OverlayGenResult, OverlayRule, Transcript } from '@shared/types'
+import type { OverlayAsset, OverlayGenResult, OverlayRule, OverlaySuggestResult, Transcript } from '@shared/types'
 
 interface EdgeRes { raw: string | null; judge?: string }
+
+let suggestUidN = 0
+const suggestUid = (): string => `sg_${suggestUidN++}`
+
+/** Cloud "Suggest": proactive placements via the overlay-suggest edge function.
+ *  No local fallback — Suggest is an AI-only, discovery feature. */
+export async function suggestOverlaysCloud(
+  transcript: Transcript,
+  assets: OverlayAsset[],
+  opts: CleanOpts
+): Promise<OverlaySuggestResult> {
+  const log: string[] = []
+  const sentences = chunkTranscript(transcript)
+  const library = assets.map((a) => ({ overlayId: a.id, name: a.name }))
+  log.push(`suggest: ${sentences.length} sentence(s), ${library.length} overlay(s) in library`)
+  if (sentences.length === 0 || library.length === 0) return { suggestions: [], via: 'none', log }
+  try {
+    const res = await invokeEdge<EdgeRes>('overlay-suggest', {
+      payload: { sentences: sentences.map((s) => ({ index: s.index, text: s.text })), library }
+    })
+    if (!res?.raw) { log.push('Suggest unavailable (no key/provider)'); return { suggestions: [], via: 'none', log } }
+    const { suggestions, log: plog } = parseOverlaySuggestions(res.raw, sentences, assets, opts, suggestUid)
+    log.push(`AI suggest (${res.judge ?? 'edge'}): ${suggestions.length} suggestion(s)`)
+    log.push(...plog)
+    return { suggestions, via: suggestions.length ? 'llm' : 'none', log }
+  } catch (e) {
+    log.push(`Suggest failed: ${(e as Error).message}`)
+    return { suggestions: [], via: 'none', log }
+  }
+}
 
 export async function generateOverlaysCloud(
   transcript: Transcript,

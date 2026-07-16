@@ -5,7 +5,7 @@
 // the Supabase edge functions; the other engines are desktop/self-host-only
 // and their UI is hidden by IS_CLOUD gates.
 import type { Project, ProgressEvent } from '@shared/types'
-import { generateOverlaysCloud } from './overlayMatch'
+import { generateOverlaysCloud, suggestOverlaysCloud } from './overlayMatch'
 import {
   registerLocalFile,
   isWebMediaId,
@@ -140,6 +140,9 @@ const cloudApi: Window['api'] = {
   // (Claude Opus), with deterministic keyword matching as the offline fallback.
   generateOverlays: async (transcript, assets, rules, opts) =>
     generateOverlaysCloud(transcript, assets, rules, opts),
+  // "Suggest" (paid/discovery): AI proposes placements from the library, for review.
+  suggestOverlays: async (transcript, assets, opts) =>
+    suggestOverlaysCloud(transcript, assets, opts),
 
   retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
     retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),

@@ -493,4 +493,33 @@ export interface OverlayGenResult {
   log: string[]
 }
 
+/** A proactive placement PROPOSAL from "Suggest" — the AI reads the whole
+ *  transcript + the overlay library and proposes overlay↔moment pairs the
+ *  creator reviews (accept/reject) before anything is placed. Unlike an
+ *  OverlayEvent (already committed) a suggestion is pending review. */
+export interface OverlaySuggestion {
+  /** ephemeral id for the review list (not persisted). */
+  id: string
+  /** which library overlay this proposes. */
+  overlayId: string
+  /** the proposed moment, SOURCE-time seconds. */
+  start: number
+  end: number
+  position: OverlayPosition
+  animation: OverlayAnimation
+  /** why here (the beat / what the creator says) — shown on the review card. */
+  reason: string
+  /** the transcript sentence that triggered it — shown on the review card. */
+  sentence: string
+  /** model confidence 0..1. */
+  confidence: number
+}
+
+export interface OverlaySuggestResult {
+  suggestions: OverlaySuggestion[]
+  /** 'llm' when the model produced suggestions, else 'none'. */
+  via: 'llm' | 'none'
+  log: string[]
+}
+
 export const TIMELINE_TRACK_COUNT = 3
