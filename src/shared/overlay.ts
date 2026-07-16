@@ -145,16 +145,42 @@ export function validateAndCleanEvents(
       position: rule.position,
       animation: rule.animation,
       reason: String(e.reason ?? '').slice(0, 160),
-      source: e.source === 'keyword' ? 'keyword' : 'llm'
+      source: e.source === 'keyword' ? 'keyword' : 'llm',
+      confidence: typeof e.confidence === 'number' ? Math.max(0, Math.min(1, e.confidence)) : undefined
     })
   }
 
-  // 2) sort, then greedily drop time-overlaps + enforce per-overlay and global caps.
+  // 2) sort, then apply each rule's OCCURRENCE deterministically ("only the first
+  //    time, not the second"). Selection happens here — on validated, time-ordered
+  //    candidates — never in the matcher: LLMs are unreliable at counting, so they
+  //    find every mention and this picks. Runs before the overlap/cap pass so a
+  //    kept 'first' can't be starved out by an earlier overlay's placement.
   normalized.sort((a, b) => a.start - b.start)
+  let selected: OverlayEvent[] = normalized
+  if (rules.some((r) => r.occurrence === 'first' || r.occurrence === 'last')) {
+    const byOverlay = new Map<string, OverlayEvent[]>()
+    for (const e of normalized) {
+      const arr = byOverlay.get(e.overlayId) ?? []
+      arr.push(e)
+      byOverlay.set(e.overlayId, arr)
+    }
+    selected = []
+    for (const [id, arr] of byOverlay) {
+      const occ = rulesById.get(id)?.occurrence ?? 'every'
+      if (occ === 'every' || arr.length <= 1) selected.push(...arr)
+      else {
+        selected.push(occ === 'first' ? arr[0] : arr[arr.length - 1])
+        rejected.push(`${id}: kept ${occ} of ${arr.length} mention(s)`)
+      }
+    }
+    selected.sort((a, b) => a.start - b.start)
+  }
+
+  // 3) greedily drop time-overlaps + enforce per-overlay and global caps.
   const perOverlay = new Map<string, number>()
   const kept: OverlayEvent[] = []
   let lastEnd = -Infinity
-  for (const e of normalized) {
+  for (const e of selected) {
     if (kept.length >= o.maxEvents) { rejected.push('hit max overlay events'); break }
     if (e.start < lastEnd + o.minGap) { rejected.push(`${e.overlayId} overlaps a kept overlay`); continue }
     const n = perOverlay.get(e.overlayId) ?? 0

@@ -1,9 +1,11 @@
-// Headless test for DOC-NATIVE overlay placement (Phase 0 plumbing) + the keyword
-// word-boundary fix. Run: npx tsx scripts/verify-overlay-doc.ts
+// Headless tests for the overlay revamp: Phase 0 (doc-native placement + keyword
+// word-boundary fix) and Phase 1 (occurrence selection, name-only rules).
+// Run: npx tsx scripts/verify-overlay-doc.ts
 import { projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips } from '../src/shared/timeline/bridge'
-import { keywordFallback } from '../src/shared/overlay'
+import { keywordFallback, validateAndCleanEvents } from '../src/shared/overlay'
+import { generateOverlayTimeline } from '../src/main/overlay-rules'
 import { framesToSeconds } from '../src/shared/timeline/time'
-import type { OverlayAsset, OverlayEvent, OverlayRule, Project } from '../src/shared/types'
+import type { OverlayAsset, OverlayEvent, OverlayRule, Project, Segment, Transcript, Word } from '../src/shared/types'
 
 let fails = 0
 function check(name: string, ok: boolean, detail = ''): void {
@@ -68,6 +70,44 @@ check('"art"/"tea" do NOT match inside "start"/"instead"/"team"', falseHits.leng
 
 const realHits = keywordFallback(rules, mkSentences(['I love art, honestly.', 'Drinking tea helps me.']))
 check('"art" and "tea" still match as real words (with punctuation)', realHits.length === 2, `${realHits.length} hit(s)`)
+
+console.log('\n=== occurrence selection: deterministic "first / last / every mention" ===')
+const occOpts = { duration: 60, cuts: [] }
+const mkRule = (occurrence?: OverlayRule['occurrence']): OverlayRule[] => [
+  { overlayId: 'ov1', name: 'Card', instruction: 'x', position: 'top_center', durationSeconds: 3, animation: 'pop', occurrence }
+]
+const threeMentions: Array<Partial<OverlayEvent>> = [
+  { overlayId: 'ov1', start: 5, end: 8, reason: 'mention 1' },
+  { overlayId: 'ov1', start: 20, end: 23, reason: 'mention 2' },
+  { overlayId: 'ov1', start: 40, end: 43, reason: 'mention 3' }
+]
+const first = validateAndCleanEvents(threeMentions, mkRule('first'), occOpts)
+check("'first' keeps only the earliest mention", first.events.length === 1 && first.events[0].start === 5,
+  first.events.map((e) => e.start).join(','))
+const last = validateAndCleanEvents(threeMentions, mkRule('last'), occOpts)
+check("'last' keeps only the latest mention", last.events.length === 1 && last.events[0].start === 40,
+  last.events.map((e) => e.start).join(','))
+const every = validateAndCleanEvents(threeMentions, mkRule('every'), occOpts)
+check("'every' keeps all mentions (within caps)", every.events.length === 3, `${every.events.length}`)
+// 'first' means first mention the VIEWER hears: a mention whose footage is cut
+// is rejected at normalization, so the next surviving mention is promoted.
+const firstCut = validateAndCleanEvents(threeMentions, mkRule('first'), { duration: 60, cuts: [{ start: 4, end: 10 }] })
+check("'first' promotes the next surviving mention when mention 1 is cut",
+  firstCut.events.length === 1 && firstCut.events[0].start === 20, firstCut.events.map((e) => e.start).join(','))
+
+console.log('\n=== name-only rules: a named image with no instruction still matches ===')
+let wid = 0
+const mkSeg = (text: string, start: number): Segment => {
+  const words: Word[] = text.split(' ').map((t, k) => ({ id: `w${wid++}`, text: t, start: +(start + k * 0.3).toFixed(2), end: +(start + k * 0.3 + 0.3).toFixed(2) }))
+  return { id: `s${start}`, start, end: words[words.length - 1].end, words }
+}
+const segs = [mkSeg('Welcome back to another video everyone.', 0), mkSeg('My bloating is finally gone after two weeks.', 4)]
+const transcript: Transcript = { segments: segs, words: segs.flatMap((s) => s.words) }
+const nameAssets: OverlayAsset[] = [{ id: 'a1', file: 'b.png', name: 'Bloating' }]
+const nameRules: OverlayRule[] = [{ overlayId: 'a1', name: 'Bloating', instruction: '', position: 'top_center', durationSeconds: 3, animation: 'pop', occurrence: 'first' }]
+const gen = await generateOverlayTimeline(transcript, nameAssets, nameRules, { duration: 12, cuts: [] })
+check('empty-instruction rule matches via its NAME (keyword path, no API key)',
+  gen.events.length === 1 && gen.events[0].start >= 4, `${gen.events.length} event(s) via ${gen.via}`)
 
 console.log(fails === 0 ? '\nAll checks passed.' : `\n${fails} CHECK(S) FAILED`)
 process.exit(fails === 0 ? 0 : 1)
