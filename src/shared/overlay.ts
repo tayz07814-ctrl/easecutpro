@@ -238,3 +238,87 @@ export function keywordOverlayTimeline(
   for (const r of cleaned.rejected.slice(0, 25)) log.push(`  rejected: ${r}`)
   return { events: cleaned.events, via: cleaned.events.length ? 'keyword' : 'none', log }
 }
+
+// ---- Semantic (LLM) matching: prompt + response parsing, shared by the desktop
+//      matcher (src/main/overlay-rules.ts) and the cloud edge-function path. The
+//      LLM only proposes sentence indices + confidence; time mapping, occurrence
+//      selection and validation all stay deterministic in code. ----
+
+/** Below this confidence an LLM match is dropped (logged, not placed). */
+export const MIN_OVERLAY_CONFIDENCE = 0.35
+
+/** System prompt for the overlay matcher. MIRRORED in
+ *  supabase/functions/overlay-match/index.ts (Deno can't import this) — keep in sync. */
+export const OVERLAY_MATCH_SYSTEM = `You place product-overlay image cards onto a talking-head video by matching each card's RULE to the transcript sentences where that topic is actually discussed.
+
+You receive numbered SENTENCES (with an index) and a list of overlay RULES (each with an overlayId, a name, and a natural-language instruction describing when to show it). Return the sentences where each rule clearly applies.
+
+RULES (precision over recall):
+- Match a rule to a sentence ONLY when the sentence clearly discusses what the instruction describes. Judge by MEANING (paraphrases count), not just keywords. When unsure, do NOT match.
+- Some rules carry only a NAME (e.g. "No Bloating", "Hairfall", "CTA") — treat the name as the topic and match sentences that discuss it.
+- Names that read as a call to action (CTA, subscribe, link, discount, buy) usually belong on the closing lines where the speaker asks the viewer to act — prefer those.
+- Return EVERY clearly-matching sentence for a rule, in order — the app itself decides which occurrences to keep (first/last/all). Do not do that selection.
+- Return the SENTENCE INDEX, never a timestamp.
+- Do not match a rule to a sentence that only mentions the topic in passing or negatively.
+- Give each match a confidence from 0 to 1 (1 = the sentence is unmistakably about the topic).
+
+OUTPUT: return ONLY a JSON object, no prose:
+{"events":[{"overlayId":"<id>","sentenceIndex":<int>,"confidence":<0..1>,"reason":"<short quote/why>"}]}
+If nothing matches, return {"events":[]}.`
+
+/** Format the SENTENCES + RULES payload the matcher reasons over. */
+export function buildOverlayUserMessage(
+  sentences: { index: number; text: string }[],
+  rules: OverlayRule[]
+): string {
+  const s = sentences.map((x) => `[${x.index}] ${x.text}`).join('\n')
+  const r = rules.map((x) => `- overlayId=${x.overlayId} | "${x.name}" | ${x.instruction}`).join('\n')
+  return `SENTENCES:\n${s}\n\nOVERLAY RULES:\n${r}\n\nReturn JSON only.`
+}
+
+/** First balanced {…} JSON object in a string, or null. */
+export function extractFirstJsonObject(text: string): any | null {
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  let depth = 0
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '{') depth++
+    else if (text[i] === '}' && --depth === 0) {
+      try { return JSON.parse(text.slice(start, i + 1)) } catch { return null }
+    }
+  }
+  return null
+}
+
+/**
+ * Parse an overlay matcher's raw JSON reply into sentence-anchored partial events.
+ * Drops hallucinated indices and below-threshold confidences (returned separately
+ * for logging). Maps the returned SENTENCE INDEX to that sentence's real time —
+ * the model never emits timestamps, so it can't invent one.
+ */
+export function parseOverlayLlmResponse(
+  rawText: string,
+  sentences: Sentence[]
+): { events: Array<Partial<OverlayEvent>>; lowConfidence: string[] } {
+  const parsed = extractFirstJsonObject(rawText || '')
+  const events: Array<Partial<OverlayEvent>> = []
+  const lowConfidence: string[] = []
+  for (const e of parsed?.events ?? []) {
+    const idx = Number(e?.sentenceIndex)
+    if (!Number.isInteger(idx) || idx < 0 || idx >= sentences.length) continue // no hallucinated times
+    const confidence = typeof e?.confidence === 'number' ? Math.max(0, Math.min(1, e.confidence)) : 1
+    if (confidence < MIN_OVERLAY_CONFIDENCE) {
+      lowConfidence.push(`${e?.overlayId} @ sentence ${idx} (${confidence.toFixed(2)})`)
+      continue
+    }
+    events.push({
+      overlayId: String(e?.overlayId ?? ''),
+      start: sentences[idx].start,
+      end: sentences[idx].end,
+      reason: String(e?.reason ?? ''),
+      source: 'llm',
+      confidence
+    })
+  }
+  return { events, lowConfidence }
+}

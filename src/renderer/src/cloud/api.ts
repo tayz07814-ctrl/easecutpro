@@ -5,7 +5,7 @@
 // the Supabase edge functions; the other engines are desktop/self-host-only
 // and their UI is hidden by IS_CLOUD gates.
 import type { Project, ProgressEvent } from '@shared/types'
-import { keywordOverlayTimeline } from '@shared/overlay'
+import { generateOverlaysCloud } from './overlayMatch'
 import {
   registerLocalFile,
   isWebMediaId,
@@ -136,11 +136,10 @@ const cloudApi: Window['api'] = {
     cutCutProCloud(needLocal(path), transcript ?? null, runVad ?? true, script, vadSilenceSettings, (pct, msg) => emit('transcribe', pct, msg)),
   cutJudge: async () => desktopOnly('Smart Smooth Cut'),
   saveSmartCutDebug: async () => desktopOnly('Smart Smooth Cut'),
-  // Cloud overlay placement runs entirely in the browser: deterministic keyword
-  // matching over the (edge-function) transcript, no server or API key. Semantic
-  // Claude matching stays desktop/self-host-only; the panel notes this.
+  // Cloud overlay placement: SEMANTIC matching via the overlay-match edge function
+  // (Claude Opus), with deterministic keyword matching as the offline fallback.
   generateOverlays: async (transcript, assets, rules, opts) =>
-    keywordOverlayTimeline(transcript, assets, rules, opts),
+    generateOverlaysCloud(transcript, assets, rules, opts),
 
   retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
     retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),

@@ -2,7 +2,7 @@
 // word-boundary fix) and Phase 1 (occurrence selection, name-only rules).
 // Run: npx tsx scripts/verify-overlay-doc.ts
 import { projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips } from '../src/shared/timeline/bridge'
-import { keywordFallback, validateAndCleanEvents, keywordOverlayTimeline } from '../src/shared/overlay'
+import { keywordFallback, validateAndCleanEvents, keywordOverlayTimeline, parseOverlayLlmResponse, chunkTranscript } from '../src/shared/overlay'
 import { generateOverlayTimeline } from '../src/main/overlay-rules'
 import { framesToSeconds } from '../src/shared/timeline/time'
 import type { OverlayAsset, OverlayEvent, OverlayRule, Project, Segment, Transcript, Word } from '../src/shared/types'
@@ -113,6 +113,19 @@ console.log('\n=== cloud matcher: keywordOverlayTimeline (browser path) matches 
 const cloud = keywordOverlayTimeline(transcript, nameAssets, nameRules, { duration: 12, cuts: [] })
 check('cloud keyword matcher places the same single name-only event',
   cloud.events.length === 1 && cloud.events[0].start >= 4 && cloud.via === 'keyword', `${cloud.events.length} via ${cloud.via}`)
+
+console.log('\n=== semantic parse (shared by desktop LLM + cloud edge): index->time, confidence gate ===')
+const sents = chunkTranscript(transcript) // [0]=0s "Welcome...", [1]=4s "My bloating..."
+const rawGood = JSON.stringify({ events: [{ overlayId: 'a1', sentenceIndex: 1, confidence: 0.9, reason: 'bloating' }] })
+const parsedGood = parseOverlayLlmResponse(rawGood, sents)
+check('parses a match and maps sentenceIndex -> that sentence start time',
+  parsedGood.events.length === 1 && Math.abs((parsedGood.events[0].start ?? -1) - sents[1].start) < 0.01,
+  `start=${parsedGood.events[0]?.start}`)
+const rawLow = JSON.stringify({ events: [{ overlayId: 'a1', sentenceIndex: 1, confidence: 0.2 }] })
+check('drops a below-threshold-confidence match (logged)', parseOverlayLlmResponse(rawLow, sents).events.length === 0)
+const rawBad = JSON.stringify({ events: [{ overlayId: 'a1', sentenceIndex: 99, confidence: 1 }] })
+check('drops a hallucinated (out-of-range) sentence index', parseOverlayLlmResponse(rawBad, sents).events.length === 0)
+check('tolerates junk / non-JSON without throwing', parseOverlayLlmResponse('not json', sents).events.length === 0)
 
 console.log(fails === 0 ? '\nAll checks passed.' : `\n${fails} CHECK(S) FAILED`)
 process.exit(fails === 0 ? 0 : 1)

@@ -150,7 +150,7 @@ export default function OverlayPanel(): JSX.Element {
       )}
       {assets.length > 0 && hasTranscript && IS_CLOUD && (
         <p className="muted small">
-          Cloud matches overlays by keyword. The desktop app also does semantic AI matching (paraphrases, negation).
+          Overlays are matched by AI (understands paraphrases &amp; negation), with keyword matching as an offline fallback.
         </p>
       )}
 
