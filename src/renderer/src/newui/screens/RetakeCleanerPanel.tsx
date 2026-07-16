@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { css } from '../css'
 import { useRetake } from '../data/useRetake'
 import { useSmoothProgress } from '../../useSmoothProgress'
@@ -33,13 +34,17 @@ function Header(): JSX.Element {
   )
 }
 
-// `stage` (results): strike STAGED words, click toggles the staged selection.
-// `applied` (executed): strike COMMITTED cuts (word.deleted), click toggles the
-// committed cut live (restore a struck word / cut a kept one) — the timeline,
-// preview and export all follow word.deleted, so the edit updates immediately.
+// Words respond to two gestures:
+//  • single-click → cut / restore. `stage` (results) toggles the staged
+//    selection; `applied` (executed) toggles the committed cut live (the
+//    timeline, preview and export all follow word.deleted, so it updates at once).
+//  • double-click → seek the preview to that word and play, WITHOUT cutting it.
+// A short timer disambiguates: the pending single-click cut is cancelled when a
+// second click lands on the same word (so double-click never leaves a stray cut).
 function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage' | 'applied' }): JSX.Element {
   const isCut = mode === 'applied' ? r.isDeleted : r.isSelected
   const onWord = mode === 'applied' ? r.toggleWord : (id: string) => r.selectWord(id, true)
+  const pendingCut = useRef<number | null>(null)
   return (
     <div style={css('flex:1;min-height:0;overflow:auto;margin:10px -18px 0;padding:2px 18px 18px;font-size:13.5px;line-height:2.1;color:#C6C9D2;-webkit-mask-image:linear-gradient(#000 82%,transparent)')}>
       {r.segments.map((seg) => (
@@ -49,7 +54,22 @@ function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage
             return (
               <span key={w.id}>
                 <span
-                  onMouseDown={(e) => { e.preventDefault(); onWord(w.id) }}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    if (e.detail >= 2) {
+                      // Double-click: jump to the word (cancel the queued cut).
+                      if (pendingCut.current !== null) { clearTimeout(pendingCut.current); pendingCut.current = null }
+                      r.seekWord(w.start)
+                      return
+                    }
+                    // Single-click: cut / restore, deferred briefly so a follow-up
+                    // click can cancel it and seek instead.
+                    const timer = window.setTimeout(() => {
+                      if (pendingCut.current === timer) pendingCut.current = null
+                      onWord(w.id)
+                    }, 250)
+                    pendingCut.current = timer
+                  }}
                   style={isCut(w.id) ? css(CUT) : css('cursor:pointer')}
                 >
                   {w.text}
@@ -146,7 +166,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
           <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review cuts</div>
           <div style={css('flex:1')} />
-          <div style={css('font-size:11px;color:#686E7B')}>tap a word to restore or cut</div>
+          <div style={css('font-size:11px;color:#686E7B')}>click to cut · double-click to play</div>
         </div>
         <Transcript r={r} mode="applied" />
       </>

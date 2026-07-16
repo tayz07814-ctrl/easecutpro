@@ -6,6 +6,8 @@
 import { useState } from 'react'
 import { useStore } from '../../store'
 import { buildSilenceChips } from '@shared/cutlord'
+import { getSharedEngine } from '../../timelineEngine'
+import { docSourceToEdited } from '../../docTime'
 
 export type RetakeState = 'idle' | 'analyzing' | 'results' | 'executed' | 'error'
 
@@ -39,6 +41,8 @@ export interface RetakeModel {
   toggleChip: (id: string) => void
   /** toggle a committed cut (restore a struck word, or cut a kept one) — live. */
   toggleWord: (id: string) => void
+  /** seek the preview to a word's SOURCE start time (double-click) and play. */
+  seekWord: (sourceStartS: number) => void
   openSilenceSettings: () => void
   setSmartSilence: (v: boolean) => void
 }
@@ -60,6 +64,9 @@ export function useRetake(): RetakeModel {
   const toggleStagedSilence = useStore((s) => s.toggleStagedSilence)
   const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
   const toggleWordDeleted = useStore((s) => s.toggleWordDeleted)
+  const setPlayhead = useStore((s) => s.setPlayhead)
+  const setPlaying = useStore((s) => s.setPlaying)
+  const hasTimeline = useStore((s) => !!s.project.timeline)
 
   // "executed" and "error" aren't distinct store flags, so the panel tracks the
   // last terminal transition locally (reset when a new analysis starts).
@@ -126,6 +133,13 @@ export function useRetake(): RetakeModel {
     selectWord,
     toggleChip: (id) => toggleStagedSilence(id),
     toggleWord: (id) => toggleWordDeleted(id),
+    // Words carry SOURCE time; a single-source doc runs the playhead in EDITED
+    // time, so map through the main lane (no-op in montage / legacy).
+    seekWord: (sourceStartS) => {
+      const doc = hasTimeline ? getSharedEngine()?.document : undefined
+      setPlayhead(docSourceToEdited(doc, sourceStartS))
+      setPlaying(true)
+    },
     openSilenceSettings: () => setShowSilenceSettings(true),
     setSmartSilence
   }
