@@ -194,12 +194,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 700;
-  color: #fff;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  color: #9ba0ac;
+  background: #20222a;
   flex-shrink: 0;
 }
 .ec-tl-tname {
@@ -226,23 +225,37 @@
   gap: 1px;
   flex-shrink: 0;
 }
+/* Control icons: quiet by default so the panel stays calm, brighten when the row
+   is hovered, and always show (in an accent colour) when their state is active. */
 .ec-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   background: none;
   border: none;
-  padding: 2px 3px;
-  font-size: 12px;
-  line-height: 1;
+  line-height: 0;
   cursor: pointer;
-  opacity: 0.6;
-  border-radius: 4px;
+  color: #6b7280;
+  opacity: 0.32;
+  border-radius: 6px;
+  transition: opacity 0.12s, color 0.12s, background 0.12s;
 }
+.ec-tl-header:hover .ec-ic { opacity: 1; }
 .ec-ic:hover {
   opacity: 1;
-  background: var(--bg3, #1a1d29);
+  color: #e9eaee;
+  background: rgba(255, 255, 255, 0.06);
 }
-.ec-ic.on {
-  opacity: 1;
-}
+.ec-ic.on { opacity: 1; }
+.ec-ic.lock.on { color: #b7b5f4; background: rgba(110, 106, 232, 0.14); }
+.ec-ic.mute.on { color: #d98a8a; }
+.ec-ic.hide.on { color: #c6c9d2; }
+/* A hidden track recedes; its eye-off control stays visible so it can be un-hidden. */
+.ec-tl-header.is-hidden .ec-tl-kind,
+.ec-tl-header.is-hidden .ec-tl-tname { opacity: 0.45; }
 
 /* ---- lanes ---- */
 .ec-tl-lane {
