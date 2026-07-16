@@ -137,17 +137,20 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
   }
   const cleaned = extractEdl(content)
 
-  // DIAGNOSTIC (temporary): record exactly what the model returned so a failed
-  // δ run can be inspected server-side without exposing the key. Best-effort.
+  // DIAGNOSTIC (temporary): record exactly what the model returned via an RPC —
+  // reliable, since supabase-js .insert() silently swallows schema-cache errors.
   try {
-    await admin().from('delta_debug').insert({
-      model: MODEL,
-      http_status: r.status,
-      ok: r.ok,
-      content_len: content.length,
-      cleaned_len: cleaned.length,
-      content_snippet: content.slice(0, 3000),
-      err_body: r.ok ? null : bodyText.slice(0, 2000)
+    await admin().rpc('log_delta_debug', {
+      payload: {
+        model: MODEL,
+        http_status: r.status,
+        ok: r.ok,
+        content_len: content.length,
+        cleaned_len: cleaned.length,
+        content_snippet: content.slice(0, 3000),
+        err_body: r.ok ? null : bodyText.slice(0, 2000),
+        raw_body: bodyText.slice(0, 8000)
+      }
     })
   } catch {
     /* never let the diagnostic break the run */
