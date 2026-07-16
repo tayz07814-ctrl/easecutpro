@@ -2383,7 +2383,7 @@ export const useStore = create<AppState>((set, get) => ({
       const asset: OverlayAsset = { id, libraryItemId, file: item.path, name: pretty || 'Overlay' }
       const rule: OverlayRule = {
         overlayId: id, name: asset.name, instruction: '',
-        position: 'top_center', durationSeconds: 3, animation: 'pop'
+        position: 'top_center', durationSeconds: 3, animation: 'pop', occurrence: 'every'
       }
       return {
         project: {
