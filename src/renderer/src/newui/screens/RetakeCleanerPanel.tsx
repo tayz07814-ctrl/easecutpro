@@ -126,16 +126,22 @@ export default function RetakeCleanerPanel(): JSX.Element {
   if (r.state === 'executed') {
     return shell(
       <>
-        <div style={css('margin-top:14px;background:rgba(70,165,124,.08);border:1px solid rgba(70,165,124,.25);border-radius:12px;padding:14px;display:flex;gap:12px;flex:none')}>
-          <div style={css('width:26px;height:26px;flex:none;border-radius:50%;background:rgba(70,165,124,.18);display:grid;place-items:center;color:#5FBF94;font-size:12px')}>✓</div>
-          <div>
-            <div style={css('font-size:13px;font-weight:600;color:#7FCBA8')}>{r.deletedCount} cut{r.deletedCount === 1 ? '' : 's'} applied</div>
-            <div style={css('font-size:12px;color:#9BA0AC;margin-top:4px;line-height:1.5')}>Every cut is on the timeline and can be undone.</div>
+        {/* Compact executed header: count status on the left, actions on the
+            right (Silence Settings collapses to a gear icon to save vertical space). */}
+        <div style={css('display:flex;align-items:center;gap:10px;margin-top:14px;flex:none')}>
+          <div style={css('display:flex;align-items:center;gap:8px;min-width:0')}>
+            <div style={css('width:18px;height:18px;flex:none;border-radius:50%;background:#2E9C6A;display:grid;place-items:center;color:#fff;font-size:10px')}>✓</div>
+            <div style={css('font-size:13px;font-weight:600;color:#E9EAEE;white-space:nowrap')}>{r.deletedCount} cut{r.deletedCount === 1 ? '' : 's'}</div>
+            <div style={css('font-size:11px;color:#7E8393;white-space:nowrap')}>· undoable</div>
           </div>
-        </div>
-        <div style={css('display:flex;gap:8px;margin-top:12px;flex:none')}>
-          <button onClick={r.find} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer')}>Run again</button>
-          <button onClick={r.openSilenceSettings} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 14px;cursor:pointer')}>Silence Settings</button>
+          <div style={css('flex:1')} />
+          <button onClick={r.find} style={css('flex:none;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 16px;cursor:pointer;white-space:nowrap')}>Run again</button>
+          <button onClick={r.openSilenceSettings} title="Silence Settings" aria-label="Silence Settings" style={css('flex:none;width:36px;height:36px;background:none;border:1px solid rgba(255,255,255,.14);border-radius:9px;color:#C6C9D2;display:grid;place-items:center;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none')}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
         </div>
         {smartRow}
         <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
