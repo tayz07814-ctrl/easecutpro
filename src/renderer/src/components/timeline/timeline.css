@@ -61,6 +61,61 @@
   flex: 1;
 }
 
+/* Segmented clusters (Snapping · Add · Tools · History) — related controls
+   grouped into pill clusters so the toolbar reads as sections, not a flat run. */
+.ec-tl-grp {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: #14161c;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 9px;
+}
+.ec-tl-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #c6c9d2;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ec-tl-seg:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+}
+.ec-tl-seg.on {
+  background: rgba(110, 106, 232, 0.18);
+  color: #b7b5f4;
+}
+.ec-tl-seg:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.ec-tl-seg.icon {
+  width: 34px;
+  padding: 0;
+  justify-content: center;
+}
+.ec-tl-ghair {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  flex: none;
+}
+.ec-tl-pct {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: #9ba0ac;
+}
+
 .ec-tl-scroll {
   position: relative;
   flex: 1;
