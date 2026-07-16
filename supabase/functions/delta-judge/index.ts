@@ -1,23 +1,28 @@
 // EaseCutPro — Retake δ (Delta) cloud judge edge function.
 //
-// A COPY of procut-judge's contract, but the finalizer is the creator's OWN
-// model served over the Hugging Face Inference Router (OpenAI-compatible) instead
-// of Claude. Retake β (procut-judge / Claude Opus) is left completely UNTOUCHED;
-// this is a separate function that only the Retake δ button calls, so production
-// is unaffected.
+// The finalizer is the creator's OWN model over an OpenAI-compatible API.
+// Currently: the Qwen official API (Alibaba Cloud Model Studio / DashScope,
+// "compatible-mode"). Provider-neutral by design — swapping providers only
+// changes DELTA_BASE_URL / DELTA_MODEL / the stored key, never the wiring.
+//
+// Retake β (procut-judge / Claude Opus) is left completely UNTOUCHED; only the
+// Retake δ button calls this, so production is unaffected.
 //
 // Same request/response shape as procut-judge (ProcutJudgeReq/Res): the browser
 // sends the index-anchored transcript payload + an empty first-pass proposal and
 // gets back the model's raw EDL text, parsed client-side with the SAME validateEdl
-// as Retake β. raw:null on any failure so the cut job always completes (nothing
-// staged rather than a hard error).
+// as Retake β. raw:null on any failure so the cut job always completes.
 //
-// Config (Supabase secrets):
-//   HF_TOKEN  — required. Hugging Face access token (hf_…). Without it this
-//               returns judge:'none' and nothing is cut.
-//   HF_MODEL  — optional. Router model id in `<org>/<model>:<provider>` form.
-//               Defaults to Qwen/Qwen3-4B:featherless-ai. Swap it to any
-//               router-served model (bigger = better cuts).
+// Config:
+//   DELTA_JUDGE_KEY — required. The provider API key (e.g. a DashScope sk-… key).
+//                     Read from an edge secret OR the Supabase Vault (secret name
+//                     DELTA_JUDGE_KEY) via the service-role-only public
+//                     delta_judge_key() RPC. NEVER hardcoded.
+//   DELTA_BASE_URL  — optional. OpenAI-compatible base. Default is Qwen's
+//                     international endpoint. Mainland China:
+//                     https://dashscope.aliyuncs.com/compatible-mode/v1
+//   DELTA_MODEL     — optional. Default qwen-plus. Any Model Studio chat model
+//                     (qwen-max, qwen-turbo, qwen3-…) works.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -36,18 +41,18 @@ function preflight(req: Request): Response | null {
   return req.method === 'OPTIONS' ? new Response('ok', { headers: corsHeaders }) : null
 }
 
-// Hugging Face Inference Router — OpenAI-compatible chat completions.
-const HF_BASE = 'https://router.huggingface.co/v1'
-const HF_MODEL = Deno.env.get('HF_MODEL') ?? 'Qwen/Qwen3-4B:featherless-ai'
+// Qwen official API (DashScope compatible-mode) — OpenAI-compatible chat completions.
+const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'qwen-plus'
 
-// The token is NEVER hardcoded. Prefer an edge secret (HF_TOKEN); otherwise read
-// it from the Supabase Vault via the service-role-only public.hf_secret() RPC.
-async function getHfToken(): Promise<string> {
-  const env = Deno.env.get('HF_TOKEN')
+// The key is NEVER hardcoded. Prefer an edge secret (DELTA_JUDGE_KEY); otherwise
+// read it from the Supabase Vault via the service-role-only delta_judge_key() RPC.
+async function getApiKey(): Promise<string> {
+  const env = Deno.env.get('DELTA_JUDGE_KEY')
   if (env) return env
   try {
     const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-    const { data } = await admin.rpc('hf_secret')
+    const { data } = await admin.rpc('delta_judge_key')
     if (typeof data === 'string' && data) return data
   } catch {
     /* vault not configured — fall through to unconfigured */
@@ -87,14 +92,14 @@ async function requireUser(req: Request): Promise<boolean> {
   return !!data.user
 }
 
-async function hfFinalize(token: string, payload: string, proposal: unknown): Promise<string> {
+async function finalize(apiKey: string, payload: string, proposal: unknown): Promise<string> {
   const userText =
     `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
-  const r = await fetch(`${HF_BASE}/chat/completions`, {
+  const r = await fetch(`${BASE_URL}/chat/completions`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: HF_MODEL,
+      model: MODEL,
       max_tokens: 16000,
       temperature: 0,
       stream: false,
@@ -104,7 +109,7 @@ async function hfFinalize(token: string, payload: string, proposal: unknown): Pr
       ]
     })
   })
-  if (!r.ok) throw new Error(`HF router: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`)
+  if (!r.ok) throw new Error(`model API: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`)
   const d = (await r.json()) as { choices?: { message?: { content?: string } }[] }
   let text = d.choices?.[0]?.message?.content ?? ''
   // Reasoning models (Qwen3 etc.) wrap their chain-of-thought in <think>…</think>;
@@ -121,13 +126,13 @@ Deno.serve(async (req) => {
     const { payload, proposal } = await req.json().catch(() => ({ payload: null, proposal: null }))
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
 
-    const token = await getHfToken()
-    if (!token) return json({ raw: null, judge: 'none' })
+    const apiKey = await getApiKey()
+    if (!apiKey) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await hfFinalize(token, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: `hf:${HF_MODEL}` })
+      return json({ raw: await finalize(apiKey, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: `delta:${MODEL}` })
     } catch (e) {
-      console.warn('[hf-judge] HF router failed:', (e as Error).message)
-      return json({ raw: null, judge: `hf:${HF_MODEL}` })
+      console.warn('[delta-judge] model API failed:', (e as Error).message)
+      return json({ raw: null, judge: `delta:${MODEL}` })
     }
   } catch (e) {
     return json({ error: (e as Error).message }, 500)
