@@ -1,9 +1,9 @@
 // EaseCutPro — Retake δ (Delta) cloud judge edge function.
 //
 // The finalizer is the creator's OWN model over an OpenAI-compatible API.
-// Currently: the Qwen official API (Alibaba Cloud Model Studio / DashScope,
-// "compatible-mode"). Provider-neutral by design — swapping providers only
-// changes DELTA_BASE_URL / DELTA_MODEL / the stored key, never the wiring.
+// Currently: OpenRouter (openrouter.ai) — a unified gateway to many models.
+// Provider-neutral by design — swapping providers only changes DELTA_BASE_URL /
+// DELTA_MODEL / the stored key, never the wiring.
 //
 // Retake β (procut-judge / Claude Opus) is left completely UNTOUCHED; only the
 // Retake δ button calls this, so production is unaffected.
@@ -14,15 +14,14 @@
 // as Retake β. raw:null on any failure so the cut job always completes.
 //
 // Config:
-//   DELTA_JUDGE_KEY — required. The provider API key (e.g. a DashScope sk-… key).
+//   DELTA_JUDGE_KEY — required. The provider API key (an OpenRouter sk-or-… key).
 //                     Read from an edge secret OR the Supabase Vault (secret name
 //                     DELTA_JUDGE_KEY) via the service-role-only public
 //                     delta_judge_key() RPC. NEVER hardcoded.
-//   DELTA_BASE_URL  — optional. OpenAI-compatible base. Default is Qwen's
-//                     international endpoint. Mainland China:
-//                     https://dashscope.aliyuncs.com/compatible-mode/v1
-//   DELTA_MODEL     — optional. Default qwen-plus. Any Model Studio chat model
-//                     (qwen-max, qwen-turbo, qwen3-…) works.
+//   DELTA_BASE_URL  — optional. OpenAI-compatible base. Default is OpenRouter
+//                     (https://openrouter.ai/api/v1).
+//   DELTA_MODEL     — optional. Default qwen/qwen-2.5-72b-instruct. Any OpenRouter
+//                     model id ("<provider>/<model>") works.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -41,9 +40,9 @@ function preflight(req: Request): Response | null {
   return req.method === 'OPTIONS' ? new Response('ok', { headers: corsHeaders }) : null
 }
 
-// Qwen official API (DashScope compatible-mode) — OpenAI-compatible chat completions.
-const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'qwen-plus'
+// OpenRouter (openrouter.ai) — OpenAI-compatible chat-completions gateway.
+const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'qwen/qwen-2.5-72b-instruct'
 
 // The key is NEVER hardcoded. Prefer an edge secret (DELTA_JUDGE_KEY); otherwise
 // read it from the Supabase Vault via the service-role-only delta_judge_key() RPC.
@@ -97,7 +96,13 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
     `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
   const r = await fetch(`${BASE_URL}/chat/completions`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+      // Optional OpenRouter attribution (harmless / ignored by other providers).
+      'HTTP-Referer': 'https://easecutpro.com',
+      'X-Title': 'EaseCutPro Retake δ'
+    },
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 16000,

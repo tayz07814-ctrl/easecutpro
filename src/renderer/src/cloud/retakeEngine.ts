@@ -212,7 +212,7 @@ export async function retakeAwareCutCloud(
 
 /** Retake δ (Delta) — a COPY of retakeAwareCutCloud whose ONLY difference is the
  *  judge: the cut EDL comes from the creator's OWN model over an OpenAI-
- *  compatible API — Qwen's official API by default (the `delta-judge` edge fn) —
+ *  compatible API — OpenRouter by default (the `delta-judge` edge fn) —
  *  instead of Claude Opus (`procut-judge`). Retake β above is untouched. The result shape
  *  (RetakeAwareResult) is identical, so the store's review-first contract, the
  *  transcript/highlight UX and Execute all reuse the exact beta path. */
