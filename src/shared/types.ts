@@ -454,23 +454,16 @@ export interface OverlayAsset {
   name: string
 }
 
-/** Which mentions of a matched topic actually get the overlay. Deterministic —
- *  applied in code AFTER matching, never left to the AI to count. */
-export type OverlayOccurrence = 'every' | 'first' | 'last'
-
 /** A natural-language rule: when should this overlay appear, and how. */
 export interface OverlayRule {
   overlayId: string
   name: string
-  /** "Show this when I talk about bloating, digestion, gut health…".
-   *  OPTIONAL — when empty, the overlay's NAME is used as the topic to match. */
+  /** "Show this when I talk about bloating, digestion, gut health…". */
   instruction: string
   position: OverlayPosition
   /** seconds the overlay stays on screen (clamped 2.5–4 at generation). */
   durationSeconds: number
   animation: OverlayAnimation
-  /** which matched mentions to keep (default 'every', capped per overlay). */
-  occurrence?: OverlayOccurrence
 }
 
 /** A concrete placement the AI/keyword matcher produced (SOURCE-time seconds). */
@@ -484,8 +477,6 @@ export interface OverlayEvent {
   reason: string
   /** which matcher produced it. */
   source?: 'llm' | 'keyword'
-  /** matcher confidence 0..1 (LLM only) — for logs today, review UI later. */
-  confidence?: number
 }
 
 export interface OverlayGenResult {

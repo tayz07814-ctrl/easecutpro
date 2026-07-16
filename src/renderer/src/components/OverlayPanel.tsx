@@ -1,16 +1,11 @@
 import { useStore } from '../store'
 import { mediaSrc, IS_CLOUD } from '../platform'
-import type { OverlayAnimation, OverlayOccurrence, OverlayPosition } from '@shared/types'
+import type { OverlayAnimation, OverlayPosition } from '@shared/types'
 
 const POSITIONS: OverlayPosition[] = [
   'top_center', 'center', 'bottom_center', 'top_left', 'top_right', 'bottom_left', 'bottom_right'
 ]
 const ANIMS: OverlayAnimation[] = ['none', 'pop', 'fade']
-const OCCURRENCES: { value: OverlayOccurrence; label: string }[] = [
-  { value: 'every', label: 'every mention' },
-  { value: 'first', label: 'first mention only' },
-  { value: 'last', label: 'last mention only' }
-]
 
 /** Author overlay images + natural-language placement rules; run AI placement. */
 export default function OverlayPanel(): JSX.Element {
@@ -33,9 +28,8 @@ export default function OverlayPanel(): JSX.Element {
   return (
     <div className="overlay-panel">
       <p className="muted small">
-        Import overlay images in the Media Library and add them here. A well-named overlay
-        (Bloating, CTA, Hairfall…) is enough — the AI matches its name to the transcript; add
-        an instruction only to say it differently. Placed on overlay track 1 — drag or delete after.
+        Import overlay images in the Media Library, add them here, and write when each should appear.
+        The AI places them on overlay track 1 — you can drag or delete them after.
       </p>
 
       {images.length > 0 && (
@@ -74,22 +68,11 @@ export default function OverlayPanel(): JSX.Element {
             </div>
             <textarea
               className="ov-instr"
-              placeholder={`Optional — matches the name "${r.name}" by itself. Or describe it: show this when I talk about bloating, my stomach feeling lighter…`}
+              placeholder="Show this when I talk about bloating, digestion, my stomach feeling lighter…"
               value={r.instruction}
               onChange={(e) => updateOverlayRule(a.id, { instruction: e.target.value })}
             />
             <div className="ov-opts">
-              <label>
-                Shows on
-                <select
-                  value={r.occurrence ?? 'every'}
-                  onChange={(e) => updateOverlayRule(a.id, { occurrence: e.target.value as OverlayOccurrence })}
-                >
-                  {OCCURRENCES.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
-              </label>
               <label>
                 Position
                 <select
