@@ -11,6 +11,7 @@ import SettingsModal from '../../components/SettingsModal'
 import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../../components/timeline/TimelinePanel'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
+import { addDocTexts, countCaptionTexts } from '../../docTextClips'
 import { resolveMedia } from '../../media/resolver'
 import { primePlayback } from '../../clock'
 import { framesToSeconds, secondsToFrames } from '@shared/timeline/time'
@@ -414,51 +415,15 @@ function AudioTab(): JSX.Element {
   )
 }
 
-// Small toggle chip used by the Text tab (no hooks — safe to call as a helper).
-function styleChip(label: string, on: boolean, onClick: () => void): JSX.Element {
-  return (
-    <button onClick={onClick} style={css(`flex:1;text-align:center;border-radius:8px;padding:7px 0;font-family:inherit;font-size:12px;cursor:pointer;border:1px solid ${on ? '#6E6AE8' : 'rgba(255,255,255,.08)'};background:${on ? 'rgba(110,106,232,.16)' : '#1E2026'};color:${on ? '#B7B5F4' : '#C6C9D2'}`)}>{label}</button>
-  )
-}
-
 function TextTab(): JSX.Element {
-  const addText = useStore((s) => s.addText)
-  const texts = useStore((s) => s.project.texts)
-  const selectedTextId = useStore((s) => s.selectedTextId)
-  const updateText = useStore((s) => s.updateText)
-  const removeText = useStore((s) => s.removeText)
-  const sel = (texts ?? []).find((t) => t.id === selectedTextId) ?? null
+  const playhead = useStore((s) => s.project.playhead)
+  // Add a real timeline text clip at the playhead and select it — the Edit tab
+  // (auto-opens on selection) is where its full style controls live.
+  const add = (): void => void addDocTexts([{ text: 'Your text', startS: playhead, endS: playhead + 3 }], true)
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 16px')}>
-      <button onClick={addText} style={css('width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 18px rgba(110,106,232,.3)')}>＋ Add text</button>
-      {sel ? (
-        <div style={css('margin-top:16px;display:flex;flex-direction:column;gap:14px')}>
-          <div>
-            <div style={css('font-size:11px;color:#9BA0AC;margin-bottom:6px')}>Text</div>
-            <textarea value={sel.text} onChange={(e) => updateText(sel.id, { text: e.target.value })} rows={2} style={css('width:100%;box-sizing:border-box;resize:none;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;color:#E9EAEE;font-size:12.5px;font-family:inherit;outline:none')} />
-          </div>
-          <div>
-            <div style={css('font-size:11px;color:#9BA0AC;margin-bottom:6px')}>Style</div>
-            <div style={css('display:flex;gap:8px')}>
-              {styleChip('Bold', sel.bold, () => updateText(sel.id, { bold: !sel.bold }))}
-              {styleChip('Italic', sel.italic, () => updateText(sel.id, { italic: !sel.italic }))}
-              {styleChip('Outline', sel.strokeWidth > 0, () => updateText(sel.id, { strokeWidth: sel.strokeWidth > 0 ? 0 : 0.08 }))}
-            </div>
-          </div>
-          <div>
-            <div style={css('display:flex;justify-content:space-between;font-size:11px;color:#9BA0AC;margin-bottom:6px')}><span>Size</span><span>{Math.round(sel.fontSize * 100)}</span></div>
-            <input type="range" min={2} max={20} value={Math.round(sel.fontSize * 100)} onChange={(e) => updateText(sel.id, { fontSize: Number(e.target.value) / 100 })} style={css('width:100%')} />
-          </div>
-          <div style={css('display:flex;align-items:center;gap:10px')}>
-            <div style={css('font-size:11px;color:#9BA0AC')}>Colour</div>
-            <input type="color" value={sel.color} onChange={(e) => updateText(sel.id, { color: e.target.value })} style={css('width:36px;height:26px;border:none;background:none;padding:0;cursor:pointer')} />
-            <div style={css('flex:1')} />
-            <button onClick={() => removeText(sel.id)} style={css('background:none;border:1px solid rgba(217,104,110,.4);color:#D9868B;font-family:inherit;font-size:12px;border-radius:8px;padding:6px 12px;cursor:pointer')}>Delete</button>
-          </div>
-        </div>
-      ) : (
-        <div style={css('margin-top:18px;color:#686E7B;font-size:12px;line-height:1.6;text-align:center')}>Add a text element, then select it on the preview or timeline to style it here.</div>
-      )}
+      <button onClick={add} style={css('width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 18px rgba(110,106,232,.3)')}>＋ Add text</button>
+      <div style={css('margin-top:16px;color:#686E7B;font-size:12px;line-height:1.6;text-align:center')}>Adds a text layer at the playhead and opens it in the Edit tab. Drag it on the preview to position, or restyle it there.</div>
     </div>
   )
 }
@@ -492,7 +457,8 @@ function CaptionsTab(): JSX.Element {
   const generateCaptions = useStore((s) => s.generateCaptions)
   const clearCaptions = useStore((s) => s.clearCaptions)
   const hasTranscript = useStore((s) => !!s.project.transcript?.words?.length)
-  const capCount = useStore((s) => (s.project.texts ?? []).filter((t) => t.caption).length)
+  const snap = useSharedEngineSnapshot()
+  const capCount = countCaptionTexts(snap?.doc)
   const jobActive = useStore((s) => s.job.active)
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 16px')}>
@@ -504,7 +470,7 @@ function CaptionsTab(): JSX.Element {
           <button onClick={clearCaptions} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;font-family:inherit;font-size:12px;border-radius:8px;padding:6px 12px;cursor:pointer')}>Clear</button>
         </div>
       )}
-      <div style={css('margin-top:16px;font-size:11.5px;color:#686E7B;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle lines at the bottom of the video. Edit any line in the Text tab.' : 'Run Find Retakes & Silence (or Transcribe) first to get a transcript, then generate captions.'}</div>
+      <div style={css('margin-top:16px;font-size:11.5px;color:#686E7B;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle clips on a text track. Click any line to restyle it in the Edit tab.' : 'Run Find Retakes & Silence (or Transcribe) first to get a transcript, then generate captions.'}</div>
     </div>
   )
 }

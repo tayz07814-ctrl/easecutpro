@@ -15,11 +15,9 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { css } from '../css'
-import { useStore } from '../../store'
 import { useSharedEngineSnapshot, getSharedEngine } from '../../timelineEngine'
 import * as C from '@shared/timeline/commands'
-import type { Clip as DocClip, Track } from '@shared/timeline/types'
-import type { TextClip } from '@shared/types'
+import type { Clip as DocClip, Track, TextContent } from '@shared/timeline/types'
 
 const clampN = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
 const mnum = (v: unknown, d: number): number => (typeof v === 'number' ? v : d)
@@ -163,77 +161,70 @@ function ClipControls({ clip, isMain }: { clip: DocClip; isMain: boolean }): JSX
   )
 }
 
-// ---- text / caption ----
-function TextControls({ text }: { text: TextClip }): JSX.Element {
-  const updateText = useStore((s) => s.updateText)
-  const removeText = useStore((s) => s.removeText)
-  const up = (patch: Partial<TextClip>): void => updateText(text.id, patch)
+// ---- text / caption (document text clip) ----
+function DocTextControls({ clip }: { clip: DocClip }): JSX.Element {
+  const t = clip.text as TextContent
+  const isCaption = !!clip.metadata?.caption
+  const setC = (patch: Partial<TextContent>): void => void getSharedEngine()?.dispatch(C.setClipText(clip.id, patch))
+  const setX = (v: number): void => void getSharedEngine()?.dispatch(C.setClipTransform(clip.id, { x: v / 100 - 0.5 }))
+  const setY = (v: number): void => void getSharedEngine()?.dispatch(C.setClipTransform(clip.id, { y: v / 100 - 0.5 }))
   const [strokeOpen, setStrokeOpen] = useState(false)
   const [bgOpen, setBgOpen] = useState(false)
+  const bg = t.background
 
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:2px 16px 20px')}>
-      <div style={css('font-size:13px;font-weight:650;color:#E9EAEE;margin-top:14px')}>{text.caption ? 'Caption' : 'Text'}</div>
+      <div style={css('font-size:13px;font-weight:650;color:#E9EAEE;margin-top:14px')}>{isCaption ? 'Caption' : 'Text'}</div>
 
       <div style={css(LABEL)}>Content</div>
-      <textarea value={text.text} onChange={(e) => up({ text: e.target.value })} rows={2} style={css('width:100%;box-sizing:border-box;resize:none;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;color:#E9EAEE;font-size:12.5px;font-family:inherit;outline:none;margin-top:4px')} />
+      <textarea value={t.text} onChange={(e) => setC({ text: e.target.value })} rows={2} style={css('width:100%;box-sizing:border-box;resize:none;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;color:#E9EAEE;font-size:12.5px;font-family:inherit;outline:none;margin-top:4px')} />
 
       <div style={css('display:flex;gap:8px;margin-top:12px')}>
-        <Chip label="Bold" on={text.bold} onClick={() => up({ bold: !text.bold })} />
-        <Chip label="Italic" on={text.italic} onClick={() => up({ italic: !text.italic })} />
-        <Chip label="Outline" on={text.strokeWidth > 0} onClick={() => up({ strokeWidth: text.strokeWidth > 0 ? 0 : 0.08 })} />
+        <Chip label="Bold" on={t.bold} onClick={() => setC({ bold: !t.bold })} />
+        <Chip label="Italic" on={t.italic} onClick={() => setC({ italic: !t.italic })} />
+        <Chip label="Outline" on={t.strokeWidth > 0} onClick={() => setC({ strokeWidth: t.strokeWidth > 0 ? 0 : 0.08 })} />
       </div>
       <div style={css('display:flex;gap:8px;margin-top:8px')}>
         {(['left', 'center', 'right'] as const).map((a) => (
-          <Chip key={a} label={a[0].toUpperCase() + a.slice(1)} on={text.align === a} onClick={() => up({ align: a })} />
+          <Chip key={a} label={a[0].toUpperCase() + a.slice(1)} on={t.align === a} onClick={() => setC({ align: a })} />
         ))}
       </div>
 
-      <Row label="Size" value={Math.round(text.fontSize * 100)} min={2} max={40} unit="" onChange={(v) => up({ fontSize: v / 100 })} />
-      <ColorField label="Colour" value={text.color} onChange={(v) => up({ color: v })} />
-      <PairRow label="Position" ax={Math.round(text.x * 100)} ay={Math.round(text.y * 100)} min={0} max={100} unit="%" onX={(v) => up({ x: v / 100 })} onY={(v) => up({ y: v / 100 })} />
+      <Row label="Size" value={Math.round(t.fontSize * 100)} min={2} max={40} unit="" onChange={(v) => setC({ fontSize: v / 100 })} />
+      <ColorField label="Colour" value={t.color} onChange={(v) => setC({ color: v })} />
+      <PairRow label="Position" ax={Math.round((0.5 + clip.transform.x.static) * 100)} ay={Math.round((0.5 + clip.transform.y.static) * 100)} min={0} max={100} unit="%" onX={setX} onY={setY} />
 
-      <Section title="Outline" open={strokeOpen} onToggleOpen={() => setStrokeOpen((o) => !o)} enabled={text.strokeWidth > 0} onToggleEnabled={() => up({ strokeWidth: text.strokeWidth > 0 ? 0 : 0.08 })}>
-        <Row label="Width" value={Math.round(text.strokeWidth * 100)} min={0} max={40} unit="" onChange={(v) => up({ strokeWidth: v / 100 })} />
-        <ColorField label="Colour" value={text.strokeColor} onChange={(v) => up({ strokeColor: v })} />
+      <Section title="Outline" open={strokeOpen} onToggleOpen={() => setStrokeOpen((o) => !o)} enabled={t.strokeWidth > 0} onToggleEnabled={() => setC({ strokeWidth: t.strokeWidth > 0 ? 0 : 0.08 })}>
+        <Row label="Width" value={Math.round(t.strokeWidth * 100)} min={0} max={40} unit="" onChange={(v) => setC({ strokeWidth: v / 100 })} />
+        <ColorField label="Colour" value={t.strokeColor} onChange={(v) => setC({ strokeColor: v })} />
       </Section>
 
-      <Section title="Background" open={bgOpen} onToggleOpen={() => setBgOpen((o) => !o)} enabled={text.bgEnabled} onToggleEnabled={() => up({ bgEnabled: !text.bgEnabled })}>
-        <ColorField label="Colour" value={text.bgColor} onChange={(v) => up({ bgColor: v })} />
-        <Row label="Opacity" value={Math.round(text.bgOpacity * 100)} min={0} max={100} unit="%" onChange={(v) => up({ bgOpacity: v / 100 })} />
-        <Row label="Radius" value={Math.round(text.bgRadius * 100)} min={0} max={100} unit="" onChange={(v) => up({ bgRadius: v / 100 })} />
-        <Row label="Padding" value={Math.round(text.bgPadding * 100)} min={0} max={100} unit="" onChange={(v) => up({ bgPadding: v / 100 })} />
+      <Section title="Background" open={bgOpen} onToggleOpen={() => setBgOpen((o) => !o)} enabled={bg.enabled} onToggleEnabled={() => setC({ background: { ...bg, enabled: !bg.enabled } })}>
+        <ColorField label="Colour" value={bg.color} onChange={(v) => setC({ background: { ...bg, color: v } })} />
+        <Row label="Opacity" value={Math.round(bg.opacity * 100)} min={0} max={100} unit="%" onChange={(v) => setC({ background: { ...bg, opacity: v / 100 } })} />
+        <Row label="Radius" value={Math.round(bg.radius * 100)} min={0} max={100} unit="" onChange={(v) => setC({ background: { ...bg, radius: v / 100 } })} />
+        <Row label="Padding" value={Math.round(bg.padding * 100)} min={0} max={100} unit="" onChange={(v) => setC({ background: { ...bg, padding: v / 100 } })} />
       </Section>
 
-      <button onClick={() => removeText(text.id)} style={css('width:100%;margin-top:18px;background:none;border:1px solid rgba(217,104,110,.4);color:#D9868B;font-family:inherit;font-size:12px;border-radius:9px;padding:8px 0;cursor:pointer')}>Delete text</button>
+      <button onClick={() => getSharedEngine()?.deleteSelection(false)} style={css('width:100%;margin-top:18px;background:none;border:1px solid rgba(217,104,110,.4);color:#D9868B;font-family:inherit;font-size:12px;border-radius:9px;padding:8px 0;cursor:pointer')}>Delete text</button>
     </div>
   )
 }
 
 export default function EditPanel(): JSX.Element {
-  const texts = useStore((s) => s.project.texts)
-  const selectedTextId = useStore((s) => s.selectedTextId)
   const snap = useSharedEngineSnapshot()
-  // Selection lives in the engine (the timeline/preview publish it there), so read
-  // it straight from the snapshot — no dependence on the legacy project.timeline.
+  // Selection lives in the engine (the timeline + preview publish it there).
   const engineSel = snap?.interaction.selection[0] ?? null
-
-  // A text overlay can be selected via the engine (clicking it on the preview)
-  // or via selectedTextId (the Text tab's Add text); a document clip only via
-  // the engine. Text wins so a stale clip id never masks the selected text.
-  const list = texts ?? []
-  const textId = engineSel && list.some((t) => t.id === engineSel) ? engineSel : selectedTextId && list.some((t) => t.id === selectedTextId) ? selectedTextId : null
-  const selText = textId ? list.find((t) => t.id === textId) ?? null : null
   let selClip: DocClip | null = null
   let selTrack: Track | null = null
-  if (!selText && engineSel && snap?.doc) {
-    for (const t of snap.doc.tracks) {
-      const c = t.clips.find((cl) => cl.id === engineSel)
-      if (c) { selClip = c; selTrack = t; break }
+  if (engineSel && snap?.doc) {
+    for (const tr of snap.doc.tracks) {
+      const c = tr.clips.find((cl) => cl.id === engineSel)
+      if (c) { selClip = c; selTrack = tr; break }
     }
   }
 
-  if (selText) return <TextControls text={selText} />
+  if (selClip && selClip.kind === 'text' && selClip.text) return <DocTextControls clip={selClip} />
   if (selClip) return <ClipControls clip={selClip} isMain={!!selTrack?.isMain} />
   return <EmptyHint />
 }

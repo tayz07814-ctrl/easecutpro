@@ -26,6 +26,7 @@ import type { TimelineDocument } from '@shared/timeline/types'
 import { documentToProject, projectToDocument, normalizeDefaultLanes } from '@shared/timeline/bridge'
 import { getSharedEngine } from './timelineEngine'
 import { docSourceToEdited } from './docTime'
+import { addDocTexts, removeCaptionTexts } from './docTextClips'
 import { insertLibraryItemAtPlayhead } from './timelineInsert'
 import { exportOnDevice } from './export/localExport'
 import { renderTextPng } from './textRender'
@@ -2861,43 +2862,35 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Nothing to caption.' } })
       return
     }
-    // Words carry SOURCE time; the playhead + text clips run in EDITED time, so map
-    // each line through the main lane (a no-op with no cuts / in legacy mode).
+    // Text lives as clips on the timeline DOCUMENT in the new UI (project.texts
+    // only render in the legacy preview), so emit doc text clips. Words carry
+    // SOURCE time; the playhead + doc run in EDITED time, so map through the main
+    // lane (a no-op with no cuts).
     const doc = getSharedEngine()?.document
-    const caps: TextClip[] = lines.map((ln) => {
-      const start = docSourceToEdited(doc, ln.start)
+    if (!doc) {
+      set({ job: { active: false, percent: 0, message: 'Open a project timeline first, then generate captions.' } })
+      return
+    }
+    removeCaptionTexts() // replace any prior batch
+    const specs = lines.map((ln) => {
+      const startS = docSourceToEdited(doc, ln.start)
       return {
-        id: uid(),
         text: ln.text,
-        start,
-        end: Math.max(start + 0.3, docSourceToEdited(doc, ln.end)),
+        startS,
+        endS: Math.max(startS + 0.3, docSourceToEdited(doc, ln.end)),
         x: 0.5,
         y: 0.85,
-        fontFamily: 'Arial Black',
-        fontSize: 0.058,
-        color: '#ffffff',
-        align: 'center',
-        bold: true,
-        italic: false,
-        strokeWidth: 0.09,
-        strokeColor: '#000000',
-        bgEnabled: false,
-        bgColor: '#000000',
-        bgRadius: 0.3,
-        bgPadding: 0.3,
-        bgOpacity: 0.6,
-        caption: true
+        caption: true,
+        content: { bold: true, fontSize: 0.058, strokeWidth: 0.09, strokeColor: '#000000', color: '#ffffff' }
       }
     })
-    set((st) => ({
-      project: { ...st.project, texts: [...(st.project.texts ?? []).filter((x) => !x.caption), ...caps] },
-      selectedTextId: null,
-      job: { active: false, percent: 100, message: `Added ${caps.length} caption line(s) — tweak them in the Text tab.` }
-    }))
+    addDocTexts(specs)
+    set({ job: { active: false, percent: 100, message: `Added ${specs.length} caption line(s) — tweak them in the Edit tab.` } })
   },
 
-  clearCaptions: () =>
-    set((s) => ({ project: { ...s.project, texts: (s.project.texts ?? []).filter((x) => !x.caption) } })),
+  clearCaptions: () => {
+    removeCaptionTexts()
+  },
 
   updateText: (id, patch) =>
     set((s) => ({
