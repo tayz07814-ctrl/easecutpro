@@ -1,6 +1,7 @@
 import { css } from '../css'
 import { useRetake } from '../data/useRetake'
 import { useSmoothProgress } from '../../useSmoothProgress'
+import { IS_CLOUD } from '../../platform'
 
 // Stage C — production Retake Cleaner panel (editor right rail). Renders the
 // approved design's state-appropriate content (idle / analyzing / results /
@@ -78,6 +79,20 @@ export default function RetakeCleanerPanel(): JSX.Element {
   // transcribe step) so it never freezes at one number.
   const shownPct = Math.round(useSmoothProgress(r.job.active, r.job.percent))
 
+  // Retake δ (Delta) — runs the SAME review flow through the creator's own model
+  // on the HF router (hf-judge) instead of Claude. Cloud-only; gold to set it
+  // apart from β's purple. Leaves every Retake β control untouched.
+  const deltaBtn = (label: string, extra: string): JSX.Element | null =>
+    IS_CLOUD ? (
+      <button
+        onClick={r.findDelta}
+        title="Run the analysis with your own model (Retake δ · HF router)"
+        style={css(`background:none;border:1px solid rgba(217,164,74,.5);color:#D9A44A;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;cursor:pointer;${extra}`)}
+      >
+        {label}
+      </button>
+    ) : null
+
   const shell = (children: JSX.Element): JSX.Element => (
     <div style={css('flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;padding:18px 18px 0')}>
       <Header />
@@ -99,6 +114,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
       <>
         <div style={css('font-size:12.5px;line-height:1.5;color:#9BA0AC;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
         <button onClick={r.find} style={css('width:100%;margin-top:16px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>Find Retakes &amp; Silence</button>
+        {deltaBtn('Find with Retake δ (your model)', 'width:100%;margin-top:8px;padding:10px 0')}
         <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 0;cursor:pointer')}>Silence Settings</button>
         <div style={css('display:flex;align-items:center;gap:9px;margin-top:14px')}>
           <Toggle on={r.smartSilence} onClick={() => r.setSmartSilence(!r.smartSilence)} />
@@ -135,6 +151,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
         </div>
         <div style={css('display:flex;gap:8px;margin-top:12px;flex:none')}>
           <button onClick={r.find} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer')}>Run again</button>
+          {deltaBtn('δ', 'padding:10px 14px')}
           <button onClick={r.openSilenceSettings} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 14px;cursor:pointer')}>Silence Settings</button>
         </div>
         {smartRow}
@@ -177,6 +194,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
       </div>
       <div style={css('display:flex;gap:8px;margin-top:12px')}>
         <button onClick={r.execute} disabled={!r.executable} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.3)')}>Execute {r.executable} cuts</button>
+        {deltaBtn('δ', 'padding:10px 14px')}
         <button onClick={r.openSilenceSettings} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 14px;cursor:pointer')}>Silence Settings</button>
       </div>
       {smartRow}

@@ -32,6 +32,8 @@ export interface RetakeModel {
   deletedCount: number
   // actions
   find: () => void
+  /** Retake δ (Delta): run the analysis with the creator's own HF-router model. */
+  findDelta: () => void
   execute: () => void
   restore: () => void
   clear: () => void
@@ -53,6 +55,7 @@ export function useRetake(): RetakeModel {
   const smartSilence = useStore((s) => s.smartSilenceCutter)
   const setSmartSilence = useStore((s) => s.setSmartSilenceCutter)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
+  const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
   const clearSelection = useStore((s) => s.clearSelection)
@@ -120,6 +123,7 @@ export function useRetake(): RetakeModel {
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
     smartSilence,
     find: () => { setExecuted(false); void runRetakeCutBeta() },
+    findDelta: () => { setExecuted(false); void runRetakeCutDelta() },
     execute: () => { setExecuted(true); void executeCuts() },
     restore: () => restoreSelected(),
     clear: () => clearSelection(),
