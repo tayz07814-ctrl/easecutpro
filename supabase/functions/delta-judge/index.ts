@@ -20,7 +20,7 @@
 //                     delta_judge_key() RPC. NEVER hardcoded.
 //   DELTA_BASE_URL  — optional. OpenAI-compatible base. Default is OpenRouter
 //                     (https://openrouter.ai/api/v1).
-//   DELTA_MODEL     — optional. Default openai/gpt-5.6-luna-pro. Any OpenRouter
+//   DELTA_MODEL     — optional. Default deepseek/deepseek-v4-pro. Any OpenRouter
 //                     model id ("<provider>/<model>") works.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
@@ -42,7 +42,7 @@ function preflight(req: Request): Response | null {
 
 // OpenRouter (openrouter.ai) — OpenAI-compatible chat-completions gateway.
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'openai/gpt-5.6-luna-pro'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'deepseek/deepseek-v4-pro'
 
 function admin() {
   return createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
