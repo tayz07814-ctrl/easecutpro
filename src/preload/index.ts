@@ -78,6 +78,11 @@ const api = {
     assets: OverlayAsset[],
     opts: { duration: number; cuts: { start: number; end: number }[] }
   ): Promise<OverlaySuggestResult> => ipcRenderer.invoke(IPC.suggestOverlays, transcript, assets, opts),
+  /** Vision: describe what an overlay image DEPICTS (cached, fed into matching). */
+  describeOverlayImage: (
+    imageBase64: string,
+    mediaType: string
+  ): Promise<{ description: string }> => ipcRenderer.invoke(IPC.describeOverlayImage, imageBase64, mediaType),
   openaiStatus: (): Promise<{ available: boolean }> => ipcRenderer.invoke(IPC.openaiStatus),
   whisperModels: (): Promise<WhisperModelInfo[]> => ipcRenderer.invoke(IPC.whisperModels),
   detectSilence: (path: string, opts: SilenceDetectOptions): Promise<SilenceRegion[]> =>

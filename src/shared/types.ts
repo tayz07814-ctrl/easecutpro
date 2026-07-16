@@ -449,6 +449,10 @@ export interface OverlayAsset {
   file: string
   /** display name, e.g. "No Bloating". */
   name: string
+  /** AI vision description of what the image DEPICTS (e.g. "a red '50% OFF' badge").
+   *  Cached after one vision pass; fed into matching/suggestion so placement keys
+   *  on the overlay's CONTENT, not just its name. */
+  description?: string
 }
 
 /** Which mentions of a matched topic actually get the overlay. Deterministic —

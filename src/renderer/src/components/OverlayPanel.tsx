@@ -96,6 +96,7 @@ export default function OverlayPanel(): JSX.Element {
               />
               <button className="ov-del" title="Remove overlay" onClick={() => removeOverlayAsset(a.id)}>✕</button>
             </div>
+            {a.description ? <div className="ov-desc" title="What the AI sees in this image">👁 {a.description}</div> : null}
             <textarea
               className="ov-instr"
               placeholder={`Optional — matches the name "${r.name}" by itself. Or describe it: show this when I talk about bloating, my stomach feeling lighter…`}

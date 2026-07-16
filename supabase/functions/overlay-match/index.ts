@@ -42,6 +42,7 @@ You receive numbered SENTENCES (with an index) and a list of overlay RULES (each
 RULES (precision over recall):
 - Match a rule to a sentence ONLY when the sentence clearly discusses what the instruction describes. Judge by MEANING (paraphrases count), not just keywords. When unsure, do NOT match.
 - Some rules carry only a NAME (e.g. "No Bloating", "Hairfall", "CTA") — treat the name as the topic and match sentences that discuss it.
+- A rule may include "shows: …" describing what the overlay image visually DEPICTS (its text/product/subject). Judge fit by that content too — a card that shows "50% OFF" fits a sentence about a sale even if its name doesn't say so.
 - Names that read as a call to action (CTA, subscribe, link, discount, buy) usually belong on the closing lines where the speaker asks the viewer to act — prefer those.
 - Return EVERY clearly-matching sentence for a rule, in order — the app itself decides which occurrences to keep (first/last/all). Do not do that selection.
 - Return the SENTENCE INDEX, never a timestamp.
@@ -53,11 +54,13 @@ OUTPUT: return ONLY a JSON object, no prose:
 If nothing matches, return {"events":[]}.`
 
 interface Sentence { index: number; text: string }
-interface Rule { overlayId: string; name: string; instruction: string }
+interface Rule { overlayId: string; name: string; instruction: string; description?: string }
 
 function buildUserMessage(sentences: Sentence[], rules: Rule[]): string {
   const s = sentences.map((x) => `[${x.index}] ${x.text}`).join('\n')
-  const r = rules.map((x) => `- overlayId=${x.overlayId} | "${x.name}" | ${x.instruction}`).join('\n')
+  const r = rules
+    .map((x) => `- overlayId=${x.overlayId} | "${x.name}"${x.description ? ` | shows: ${x.description}` : ''} | ${x.instruction}`)
+    .join('\n')
   return `SENTENCES:\n${s}\n\nOVERLAY RULES:\n${r}\n\nReturn JSON only.`
 }
 

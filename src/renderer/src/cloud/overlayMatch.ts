@@ -28,7 +28,7 @@ export async function suggestOverlaysCloud(
 ): Promise<OverlaySuggestResult> {
   const log: string[] = []
   const sentences = chunkTranscript(transcript)
-  const library = assets.map((a) => ({ overlayId: a.id, name: a.name }))
+  const library = assets.map((a) => ({ overlayId: a.id, name: a.name, description: a.description }))
   log.push(`suggest: ${sentences.length} sentence(s), ${library.length} overlay(s) in library`)
   if (sentences.length === 0 || library.length === 0) return { suggestions: [], via: 'none', log }
   try {
@@ -62,10 +62,11 @@ export async function generateOverlaysCloud(
 
   // SEMANTIC FIRST: the edge function reasons over the transcript by meaning.
   try {
+    const descById = new Map(assets.map((a) => [a.id, a.description]))
     const res = await invokeEdge<EdgeRes>('overlay-match', {
       payload: {
         sentences: sentences.map((s) => ({ index: s.index, text: s.text })),
-        rules: activeRules.map((r) => ({ overlayId: r.overlayId, name: r.name, instruction: r.instruction }))
+        rules: activeRules.map((r) => ({ overlayId: r.overlayId, name: r.name, instruction: r.instruction, description: descById.get(r.overlayId) }))
       }
     })
     if (res?.raw) {

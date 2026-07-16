@@ -2,7 +2,7 @@
 // word-boundary fix) and Phase 1 (occurrence selection, name-only rules).
 // Run: npx tsx scripts/verify-overlay-doc.ts
 import { projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips } from '../src/shared/timeline/bridge'
-import { keywordFallback, validateAndCleanEvents, keywordOverlayTimeline, parseOverlayLlmResponse, chunkTranscript, parseOverlaySuggestions } from '../src/shared/overlay'
+import { keywordFallback, validateAndCleanEvents, keywordOverlayTimeline, parseOverlayLlmResponse, chunkTranscript, parseOverlaySuggestions, buildOverlayUserMessage, buildSuggestUserMessage } from '../src/shared/overlay'
 import { generateOverlayTimeline } from '../src/main/overlay-rules'
 import { framesToSeconds } from '../src/shared/timeline/time'
 import type { OverlayAsset, OverlayEvent, OverlayRule, Project, Segment, Transcript, Word } from '../src/shared/types'
@@ -150,6 +150,14 @@ const closeRaw = JSON.stringify({ suggestions: [
 ] })
 const closeSug = parseOverlaySuggestions(closeRaw, [{ index: 0, text: 'x', start: 0, end: 1 }, { index: 1, text: 'y', start: 1.0, end: 2 }], nameAssets, { duration: 30, cuts: [] }, () => 'z')
 check('paces out proposals that would crowd each other', closeSug.suggestions.length === 1, `${closeSug.suggestions.length}`)
+
+console.log('\n=== v1.5 vision: overlay description flows into the match + suggest prompts ===')
+const mMsg = buildOverlayUserMessage([{ index: 0, text: 'hi' }], [{ overlayId: 'a1', name: 'Card', instruction: 'x', description: 'a red 50% OFF badge' }])
+check('match prompt includes the overlay vision description', mMsg.includes('shows: a red 50% OFF badge'))
+const mMsgNo = buildOverlayUserMessage([{ index: 0, text: 'hi' }], [{ overlayId: 'a1', name: 'Card', instruction: 'x' }])
+check('match prompt omits "shows:" when there is no description', !mMsgNo.includes('shows:'))
+const sMsg = buildSuggestUserMessage([{ index: 0, text: 'hi' }], [{ overlayId: 'a1', name: 'Card', description: 'a smiling before/after photo' }])
+check('suggest prompt includes the overlay vision description', sMsg.includes('shows: a smiling before/after photo'))
 
 console.log(fails === 0 ? '\nAll checks passed.' : `\n${fails} CHECK(S) FAILED`)
 process.exit(fails === 0 ? 0 : 1)

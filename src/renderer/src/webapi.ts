@@ -281,6 +281,8 @@ const webApi: Window['api'] = {
     runJob(() => call('/api/generate-overlays', { transcript, assets, rules, opts })),
   suggestOverlays: (transcript, assets, opts) =>
     runJob(() => call('/api/suggest-overlays', { transcript, assets, opts })),
+  describeOverlayImage: (imageBase64, mediaType) =>
+    call('/api/describe-overlay', { imageBase64, mediaType }),
   openaiStatus: () => call('/api/openai-status'),
   whisperModels: async () => (await call('/api/whisper-models')).models,
   detectSilence: async (path, opts) => {

@@ -17,7 +17,7 @@ import { cutCutPro } from './cutcutpro'
 import { retakeAwareCut } from './retakeaware/engine'
 import type { RetakeBetaSilenceSettings } from '../shared/retakeaware/silence'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from './fast-cut'
-import { generateOverlayTimeline, suggestOverlayTimeline } from './overlay-rules'
+import { generateOverlayTimeline, suggestOverlayTimeline, describeOverlayImage } from './overlay-rules'
 import { openaiAvailable } from './openai'
 import {
   saveProject,
@@ -339,6 +339,11 @@ app.whenReady().then(() => {
         emitProgress('transcribe', jobId, pct, msg)
       )
     }
+  )
+
+  ipcMain.handle(
+    IPC.describeOverlayImage,
+    async (_e, imageBase64: string, mediaType: string) => describeOverlayImage(imageBase64, mediaType)
   )
 
   // ---- OpenAI availability (is a key configured?) ----

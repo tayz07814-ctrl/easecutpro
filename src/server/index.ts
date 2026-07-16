@@ -32,7 +32,7 @@ import { judgeCuts } from '../main/ai-cut-judge'
 import { cutCutPro } from '../main/cutcutpro'
 import { retakeAwareCut } from '../main/retakeaware/engine'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from '../main/fast-cut'
-import { generateOverlayTimeline, suggestOverlayTimeline } from '../main/overlay-rules'
+import { generateOverlayTimeline, suggestOverlayTimeline, describeOverlayImage } from '../main/overlay-rules'
 import { openaiAvailable } from '../main/openai'
 import type { Project, Transcript, TranscribeBackend, OverlayAsset, OverlayRule } from '../shared/types'
 
@@ -516,6 +516,16 @@ app.post('/api/suggest-overlays', (req, res) => {
       suggestOverlayTimeline(transcript, assets, opts, (pct, msg) => op(pct, msg))
     )
     res.json({ jobId })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+app.post('/api/describe-overlay', async (req, res) => {
+  try {
+    const imageBase64 = String(req.body?.imageBase64 ?? '')
+    const mediaType = String(req.body?.mediaType ?? 'image/png')
+    res.json(await describeOverlayImage(imageBase64, mediaType))
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }

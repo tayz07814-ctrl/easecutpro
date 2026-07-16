@@ -169,6 +169,7 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .ov-opts label { display: flex; flex-direction: column; font-size: 10px; color: #8a94b0; gap: 2px; }
 .ov-opts select, .ov-opts input { font-size: 11px; }
 .ov-opts input[type=number] { width: 60px; }
+.ov-desc { font-size: 11px; color: #8ea0c8; font-style: italic; padding: 1px 2px; }
 .ov-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .ov-suggest-btn { border: 1px solid #6c5ce7; color: #cdc6ff; background: rgba(108,92,231,0.12); }
 .ov-suggest-btn:hover:not(:disabled) { background: rgba(108,92,231,0.24); }

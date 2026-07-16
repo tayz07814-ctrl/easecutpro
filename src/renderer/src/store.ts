@@ -64,6 +64,28 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
 }
 
+/** Load an overlay image and return it as base64 + media type (for the vision pass).
+ *  Uses fetch + FileReader (no canvas, so no cross-origin taint on any protocol);
+ *  returns null on any problem so the vision pass degrades to name-only matching. */
+async function imageToBase64(file: string): Promise<{ base64: string; mediaType: string } | null> {
+  try {
+    const res = await fetch(mediaSrc(file))
+    const blob = await res.blob()
+    if (!blob.size || !/^image\//.test(blob.type || '')) return null
+    const dataUrl: string = await new Promise((resolve, reject) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(String(fr.result))
+      fr.onerror = () => reject(new Error('read failed'))
+      fr.readAsDataURL(blob)
+    })
+    const comma = dataUrl.indexOf(',')
+    if (comma < 0) return null
+    return { base64: dataUrl.slice(comma + 1), mediaType: blob.type || 'image/png' }
+  } catch {
+    return null
+  }
+}
+
 /** Remove AI-generated overlay clips (metadata.overlayRuleId) from the live
  *  timeline document as ONE undoable engine edit. No-op without an engine (legacy
  *  mode / timeline unmounted); the callers also clean the legacy tracks. */
@@ -621,6 +643,10 @@ interface AppState {
   generateOverlays: () => Promise<void>
   /** remove all AI-generated overlay clips (keeps assets/rules). */
   clearGeneratedOverlays: () => void
+  /** update an overlay asset's fields (e.g. cache its vision description). */
+  updateOverlayAsset: (overlayId: string, patch: Partial<OverlayAsset>) => void
+  /** vision pass: fill in any missing overlay descriptions (cached on the asset). */
+  ensureOverlayDescriptions: () => Promise<void>
   /** "Suggest": AI proposes overlay placements from the library into a review list. */
   suggestOverlays: () => Promise<void>
   /** place the given suggestions (or all pending) as overlay clips; removes them from review. */
@@ -2388,7 +2414,9 @@ export const useStore = create<AppState>((set, get) => ({
     const cuts = subtractRanges([{ start: 0, end: dur }], computeKeepRanges(project, get().waveform))
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Generating overlays…' } })
     try {
-      const res = await window.api.generateOverlays(t, assets, rules, { duration: dur, cuts })
+      await get().ensureOverlayDescriptions() // v1.5: cache vision descriptions first
+      const freshAssets = get().project.overlayAssets ?? assets
+      const res = await window.api.generateOverlays(t, freshAssets, rules, { duration: dur, cuts })
       const events = res.events as OverlayEvent[]
       const log = [...res.log]
       let placed = 0
@@ -2478,6 +2506,37 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  updateOverlayAsset: (overlayId, patch) =>
+    set((s) => ({
+      project: {
+        ...s.project,
+        overlayAssets: (s.project.overlayAssets ?? []).map((a) => (a.id === overlayId ? { ...a, ...patch } : a))
+      }
+    })),
+
+  // Vision pass (v1.5): describe what each overlay image DEPICTS so matching/
+  // suggestion keys on the card's content, not just its name. Cached on the asset;
+  // only newly-added overlays are analyzed. Best-effort — a failure just leaves the
+  // description empty and matching falls back to the name.
+  ensureOverlayDescriptions: async () => {
+    const assets = get().project.overlayAssets ?? []
+    const missing = assets.filter((a) => a.description === undefined)
+    if (missing.length === 0) return
+    set({ job: { active: true, kind: 'transcribe', percent: 0, message: `Looking at your overlay${missing.length > 1 ? 's' : ''}…` } })
+    for (const a of missing) {
+      const img = await imageToBase64(a.file)
+      if (!img) continue // image bytes not loadable right now (e.g. not yet hydrated) — retry next run, don't cache
+      try {
+        const r = await window.api.describeOverlayImage(img.base64, img.mediaType)
+        // Cache the API's answer — even '' — so a genuinely undescribable image (or a
+        // no-key backend) isn't re-analyzed every run. Matching falls back to the name.
+        get().updateOverlayAsset(a.id, { description: r.description || '' })
+      } catch {
+        /* transient API failure — leave undefined so it retries next run */
+      }
+    }
+  },
+
   // "Suggest": the AI reads the whole transcript + the overlay library and proposes
   // placements into a REVIEW list. Nothing is placed until the creator accepts.
   suggestOverlays: async () => {
@@ -2501,7 +2560,9 @@ export const useStore = create<AppState>((set, get) => ({
     const cuts = subtractRanges([{ start: 0, end: dur }], computeKeepRanges(project, get().waveform))
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Suggesting overlays…' }, overlaySuggestions: [] })
     try {
-      const res = await window.api.suggestOverlays(t, assets, { duration: dur, cuts })
+      await get().ensureOverlayDescriptions() // v1.5: cache vision descriptions first
+      const freshAssets = get().project.overlayAssets ?? assets
+      const res = await window.api.suggestOverlays(t, freshAssets, { duration: dur, cuts })
       res.log.forEach((l) => console.log('[suggest]', l))
       set({
         overlaySuggestions: res.suggestions,

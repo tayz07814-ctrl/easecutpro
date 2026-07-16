@@ -20,17 +20,20 @@ type ProgressFn = (pct: number, msg?: string) => void
 const MODEL = 'claude-opus-4-8'
 
 /** Provider-isolated LLM call: sentences + rules -> raw events (sentence-anchored).
- *  Prompt + parsing are shared with the cloud edge function (src/shared/overlay.ts). */
+ *  Prompt + parsing are shared with the cloud edge function (src/shared/overlay.ts).
+ *  `descById` carries each overlay's vision description (v1.5) into the prompt. */
 async function callLLMForOverlayRules(
   sentences: Sentence[],
-  rules: OverlayRule[]
+  rules: OverlayRule[],
+  descById: Map<string, string | undefined>
 ): Promise<{ events: Array<Partial<OverlayEvent>>; lowConfidence: string[] }> {
   const client = getAnthropic()
+  const view = rules.map((r) => ({ overlayId: r.overlayId, name: r.name, instruction: r.instruction, description: descById.get(r.overlayId) }))
   const res = await client.messages.create({
     model: MODEL,
     max_tokens: 4096,
     system: OVERLAY_MATCH_SYSTEM,
-    messages: [{ role: 'user', content: buildOverlayUserMessage(sentences, rules) }]
+    messages: [{ role: 'user', content: buildOverlayUserMessage(sentences, view) }]
   })
   const block = res.content.find((b) => b.type === 'text')
   return parseOverlayLlmResponse(block && block.type === 'text' ? block.text : '', sentences)
@@ -64,13 +67,14 @@ export async function generateOverlayTimeline(
 
   let cleaned: ReturnType<typeof validateAndCleanEvents> | null = null
   let via: 'llm' | 'keyword' = 'keyword'
+  const descById = new Map(assets.map((a) => [a.id, a.description]))
 
   // SEMANTIC FIRST when a key is available: paraphrases, name-only topics and
   // negative mentions are exactly what keywords get wrong.
   if (claudeAvailable()) {
     try {
       onProgress?.(30, 'Matching overlays with the AI…')
-      const llm = await callLLMForOverlayRules(sentences, activeRules)
+      const llm = await callLLMForOverlayRules(sentences, activeRules, descById)
       const llmCleaned = validateAndCleanEvents(llm.events, activeRules, opts)
       log.push(`AI match: ${llm.events.length} candidate(s), kept ${llmCleaned.events.length}`)
       for (const l of llm.lowConfidence.slice(0, 10)) log.push(`  low confidence, dropped: ${l}`)
@@ -112,7 +116,7 @@ export async function suggestOverlayTimeline(
 ): Promise<OverlaySuggestResult> {
   const log: string[] = []
   const sentences = chunkTranscript(transcript)
-  const library = assets.map((a) => ({ overlayId: a.id, name: a.name }))
+  const library = assets.map((a) => ({ overlayId: a.id, name: a.name, description: a.description }))
   log.push(`suggest: ${sentences.length} sentence(s), ${library.length} overlay(s) in library`)
   if (sentences.length === 0 || library.length === 0) return { suggestions: [], via: 'none', log }
   if (!claudeAvailable()) {
@@ -139,5 +143,33 @@ export async function suggestOverlayTimeline(
   } catch (e) {
     log.push(`suggest failed: ${(e as Error).message}`)
     return { suggestions: [], via: 'none', log }
+  }
+}
+
+/** Vision pass: describe what an overlay IMAGE depicts, so matching/suggestion can
+ *  key on the card's CONTENT (a "50% OFF" badge) not just its filename. One short
+ *  sentence; empty string on any problem so callers fall back to the name. */
+export async function describeOverlayImage(imageBase64: string, mediaType: string): Promise<{ description: string }> {
+  if (!claudeAvailable() || !imageBase64) return { description: '' }
+  try {
+    const client = getAnthropic()
+    const media = /^image\/(png|jpeg|gif|webp)$/.test(mediaType) ? mediaType : 'image/png'
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 200,
+      system: 'You label overlay graphics for a video editor. Describe what the image DEPICTS in ONE short phrase a matcher can use — the visible text, product, or subject (e.g. "a red \'50% OFF\' discount badge", "a smiling before/after skincare photo"). No preamble, just the phrase.',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: media as 'image/png', data: imageBase64 } },
+          { type: 'text', text: 'Describe this overlay in one short phrase.' }
+        ]
+      }]
+    })
+    const block = res.content.find((b) => b.type === 'text')
+    const description = (block && block.type === 'text' ? block.text : '').trim().slice(0, 200)
+    return { description }
+  } catch {
+    return { description: '' }
   }
 }

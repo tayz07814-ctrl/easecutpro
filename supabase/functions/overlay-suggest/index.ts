@@ -35,7 +35,7 @@ You receive numbered SENTENCES (the whole video, in order) and an OVERLAY LIBRAR
 HOW TO THINK:
 1. Read the whole video as a story and find its BEATS — the hook, the problem, the product/point, proof or examples, and the call-to-action at the end.
 2. Find the OVERLAY-WORTHY moments: a specific claim, a number/price, a product or feature mention, an emotional peak, or the CTA. Not every sentence deserves an overlay.
-3. For each such moment, pick the library card whose NAME best fits it (judge by meaning; a card named "No Bloating" fits a sentence about a flatter stomach). A call-to-action card (CTA, subscribe, link, discount) belongs on the closing lines.
+3. For each such moment, pick the library card whose NAME best fits it (judge by meaning; a card named "No Bloating" fits a sentence about a flatter stomach). A library item may include "shows: …" describing what the card visually depicts — match on that content too, not just the name. A call-to-action card (CTA, subscribe, link, discount) belongs on the closing lines.
 
 RULES:
 - Only propose a card when it genuinely fits the moment. Precision over recall — a few great placements beat many weak ones.
@@ -50,11 +50,13 @@ OUTPUT: return ONLY a JSON object, no prose:
 If nothing is worth an overlay, return {"suggestions":[]}.`
 
 interface Sentence { index: number; text: string }
-interface LibItem { overlayId: string; name: string }
+interface LibItem { overlayId: string; name: string; description?: string }
 
 function buildUserMessage(sentences: Sentence[], library: LibItem[]): string {
   const s = sentences.map((x) => `[${x.index}] ${x.text}`).join('\n')
-  const l = library.map((x) => `- overlayId=${x.overlayId} | "${x.name}"`).join('\n')
+  const l = library
+    .map((x) => `- overlayId=${x.overlayId} | "${x.name}"${x.description ? ` | shows: ${x.description}` : ''}`)
+    .join('\n')
   return `SENTENCES:\n${s}\n\nOVERLAY LIBRARY:\n${l}\n\nReturn JSON only.`
 }
 

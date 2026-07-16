@@ -257,6 +257,7 @@ You receive numbered SENTENCES (with an index) and a list of overlay RULES (each
 RULES (precision over recall):
 - Match a rule to a sentence ONLY when the sentence clearly discusses what the instruction describes. Judge by MEANING (paraphrases count), not just keywords. When unsure, do NOT match.
 - Some rules carry only a NAME (e.g. "No Bloating", "Hairfall", "CTA") — treat the name as the topic and match sentences that discuss it.
+- A rule may include "shows: …" describing what the overlay image visually DEPICTS (its text/product/subject). Judge fit by that content too — a card that shows "50% OFF" fits a sentence about a sale even if its name doesn't say so.
 - Names that read as a call to action (CTA, subscribe, link, discount, buy) usually belong on the closing lines where the speaker asks the viewer to act — prefer those.
 - Return EVERY clearly-matching sentence for a rule, in order — the app itself decides which occurrences to keep (first/last/all). Do not do that selection.
 - Return the SENTENCE INDEX, never a timestamp.
@@ -267,13 +268,20 @@ OUTPUT: return ONLY a JSON object, no prose:
 {"events":[{"overlayId":"<id>","sentenceIndex":<int>,"confidence":<0..1>,"reason":"<short quote/why>"}]}
 If nothing matches, return {"events":[]}.`
 
+/** An overlay's identity as the matchers/suggester see it: name, optional free-text
+ *  instruction, and the optional vision `description` of what the image DEPICTS. */
+export interface OverlayRuleView { overlayId: string; name: string; instruction: string; description?: string }
+export interface OverlayLibView { overlayId: string; name: string; description?: string }
+
 /** Format the SENTENCES + RULES payload the matcher reasons over. */
 export function buildOverlayUserMessage(
   sentences: { index: number; text: string }[],
-  rules: OverlayRule[]
+  rules: OverlayRuleView[]
 ): string {
   const s = sentences.map((x) => `[${x.index}] ${x.text}`).join('\n')
-  const r = rules.map((x) => `- overlayId=${x.overlayId} | "${x.name}" | ${x.instruction}`).join('\n')
+  const r = rules
+    .map((x) => `- overlayId=${x.overlayId} | "${x.name}"${x.description ? ` | shows: ${x.description}` : ''} | ${x.instruction}`)
+    .join('\n')
   return `SENTENCES:\n${s}\n\nOVERLAY RULES:\n${r}\n\nReturn JSON only.`
 }
 
@@ -341,7 +349,7 @@ You receive numbered SENTENCES (the whole video, in order) and an OVERLAY LIBRAR
 HOW TO THINK:
 1. Read the whole video as a story and find its BEATS — the hook, the problem, the product/point, proof or examples, and the call-to-action at the end.
 2. Find the OVERLAY-WORTHY moments: a specific claim, a number/price, a product or feature mention, an emotional peak, or the CTA. Not every sentence deserves an overlay.
-3. For each such moment, pick the library card whose NAME best fits it (judge by meaning; a card named "No Bloating" fits a sentence about a flatter stomach). A call-to-action card (CTA, subscribe, link, discount) belongs on the closing lines.
+3. For each such moment, pick the library card whose NAME best fits it (judge by meaning; a card named "No Bloating" fits a sentence about a flatter stomach). A library item may include "shows: …" describing what the card visually depicts — match on that content too, not just the name. A call-to-action card (CTA, subscribe, link, discount) belongs on the closing lines.
 
 RULES:
 - Only propose a card when it genuinely fits the moment. Precision over recall — a few great placements beat many weak ones.
@@ -358,10 +366,12 @@ If nothing is worth an overlay, return {"suggestions":[]}.`
 /** Format the SENTENCES + LIBRARY payload the Suggest engine reasons over. */
 export function buildSuggestUserMessage(
   sentences: { index: number; text: string }[],
-  library: { overlayId: string; name: string }[]
+  library: OverlayLibView[]
 ): string {
   const s = sentences.map((x) => `[${x.index}] ${x.text}`).join('\n')
-  const l = library.map((x) => `- overlayId=${x.overlayId} | "${x.name}"`).join('\n')
+  const l = library
+    .map((x) => `- overlayId=${x.overlayId} | "${x.name}"${x.description ? ` | shows: ${x.description}` : ''}`)
+    .join('\n')
   return `SENTENCES:\n${s}\n\nOVERLAY LIBRARY:\n${l}\n\nReturn JSON only.`
 }
 

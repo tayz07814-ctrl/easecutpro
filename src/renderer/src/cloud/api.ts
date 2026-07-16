@@ -6,6 +6,7 @@
 // and their UI is hidden by IS_CLOUD gates.
 import type { Project, ProgressEvent } from '@shared/types'
 import { generateOverlaysCloud, suggestOverlaysCloud } from './overlayMatch'
+import { invokeEdge } from './supabase'
 import {
   registerLocalFile,
   isWebMediaId,
@@ -143,6 +144,14 @@ const cloudApi: Window['api'] = {
   // "Suggest" (paid/discovery): AI proposes placements from the library, for review.
   suggestOverlays: async (transcript, assets, opts) =>
     suggestOverlaysCloud(transcript, assets, opts),
+  // Vision (v1.5): describe what an overlay image depicts, via the overlay-vision edge fn.
+  describeOverlayImage: async (imageBase64, mediaType) => {
+    try {
+      return await invokeEdge<{ description: string }>('overlay-vision', { image: imageBase64, mediaType })
+    } catch {
+      return { description: '' } // graceful: matching falls back to the overlay name
+    }
+  },
 
   retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
     retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
