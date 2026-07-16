@@ -64,6 +64,7 @@ function ClutterCleaner(): JSX.Element {
   const runFastCutLord = useStore((s) => s.runFastCutLord)
   const runProCut = useStore((s) => s.runProCut)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
+  const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
   const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
   const showSilenceSettings = useStore((s) => s.showSilenceSettings)
   const executeCuts = useStore((s) => s.executeCuts)
@@ -177,6 +178,18 @@ function ClutterCleaner(): JSX.Element {
       >
         🧪 Find Retakes &amp; Silence
       </button>
+      {/* Retake δ — cloud-only: same review flow, judged by the creator's OWN
+          model (GPT-5.6 Luna Pro via OpenRouter, delta-judge) instead of Retake β. */}
+      {IS_CLOUD && (
+        <button
+          onClick={() => void runRetakeCutDelta()}
+          disabled={jobActive}
+          title="Retake δ — same review flow, but judged by YOUR model (GPT-5.6 Luna Pro via OpenRouter) instead of Retake β."
+          style={{ color: '#D9A44A', borderColor: 'rgba(217,164,74,.5)' }}
+        >
+          🧪 Find with Retake δ
+        </button>
+      )}
       <button
         onClick={() => setShowSilenceSettings(true)}
         disabled={jobActive}
