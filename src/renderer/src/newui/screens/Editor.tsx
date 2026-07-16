@@ -4,6 +4,7 @@ import { css } from '../css'
 import { useStore } from '../../store'
 import type { LibraryItem } from '@shared/types'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
+import EditPanel from './EditPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
@@ -528,6 +529,17 @@ const AI_TABS = ['AI Cut', 'Edit', 'Text', 'Overlays', 'Audio'] as const
 
 function AiPanel({ width }: { width: number }): JSX.Element {
   const [tab, setTab] = useState<(typeof AI_TABS)[number]>('AI Cut')
+  // Jump to the Edit tab when the user selects a clip / text / overlay, so its
+  // settings appear right away (inspector behaviour). Only fires on a *new*
+  // selection — clicking transcript words (not an engine selection) never yanks
+  // you out of AI Cut.
+  const snap = useSharedEngineSnapshot()
+  const selId = snap?.interaction.selection[0] ?? null
+  const prevSel = useRef<string | null>(selId)
+  useEffect(() => {
+    if (selId && selId !== prevSel.current) setTab('Edit')
+    prevSel.current = selId
+  }, [selId])
   return (
     <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#191B20;overflow:hidden`)}>
       <div style={css(`display:flex;padding:0 8px;border-bottom:1px solid ${HAIR};flex:none`)}>
@@ -541,6 +553,8 @@ function AiPanel({ width }: { width: number }): JSX.Element {
       </div>
       {tab === 'AI Cut' ? (
         <RetakeCleanerPanel />
+      ) : tab === 'Edit' ? (
+        <EditPanel />
       ) : (
         <div style={css('flex:1;display:grid;place-items:center;padding:24px;text-align:center')}>
           <div style={css('font-size:12.5px;color:#686E7B;line-height:1.6')}>{tab} tools are coming to the new editor.</div>
