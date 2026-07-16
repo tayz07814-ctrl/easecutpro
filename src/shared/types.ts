@@ -235,6 +235,9 @@ export interface TextClip {
   bgRadius: number
   bgPadding: number
   bgOpacity: number
+  /** true = auto-generated from the transcript (Captions tab); lets a regenerate
+   *  replace the previous batch without touching hand-added text. */
+  caption?: boolean
 }
 
 export interface Track {

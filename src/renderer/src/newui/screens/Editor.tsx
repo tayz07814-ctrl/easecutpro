@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { css } from '../css'
 import { useStore } from '../../store'
@@ -83,6 +83,21 @@ const IcAddAll = (): JSX.Element => (
     <path d="M12.4 8.4v4M10.4 10.4h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
   </svg>
 )
+
+// Left-dock tab glyphs (flat stroke, 17px) — one per CapCut-style tab.
+function TabSvg({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={icoStyle}>
+      {children}
+    </svg>
+  )
+}
+const IcTabMedia = (): JSX.Element => <TabSvg><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none" /></TabSvg>
+const IcTabAudio = (): JSX.Element => <TabSvg><circle cx="6.5" cy="17" r="2.6" /><circle cx="17.5" cy="15" r="2.6" /><path d="M9.1 17V6l11-2v11" /></TabSvg>
+const IcTabText = (): JSX.Element => <TabSvg><path d="M5 6h14M12 6v13" /></TabSvg>
+const IcTabTransition = (): JSX.Element => <TabSvg><path d="M4 8h10m0 0-3-3m3 3-3 3M20 16H10m0 0 3-3m-3 3 3 3" /></TabSvg>
+const IcTabCaption = (): JSX.Element => <TabSvg><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M8.5 11.2a2 2 0 1 0 0 2.6M15.5 11.2a2 2 0 1 0 0 2.6" /></TabSvg>
+const IcTabSticker = (): JSX.Element => <TabSvg><path d="M12 3l2.4 5 5.6.6-4.2 3.9 1.2 5.5L12 20.6 6.9 18l1.3-5.5L4 8.6 9.6 8z" /></TabSvg>
 
 // saveState → the design's status dot + label (green Saved / amber Saving / red failed).
 const SAVE_UI: Record<string, { c: string; t: string }> = {
@@ -240,12 +255,12 @@ function MediaThumb({ item, radius = 0 }: { item: LibraryItem; radius?: number }
 // A library clip. CLICK appends it to the timeline (main/base lane) and DRAG drops
 // it onto a specific lane/position — both preserve existing clips. Renders as a
 // list row or a grid tile.
-function MediaClip({ item, isBase, grid, onRemove }: { item: LibraryItem; isBase: boolean; grid?: boolean; onRemove: () => void }): JSX.Element {
+function MediaClip({ item, isBase, grid, onRemove, onAdd }: { item: LibraryItem; isBase: boolean; grid?: boolean; onRemove: () => void; onAdd?: () => void }): JSX.Element {
   const onDragStart = (e: React.DragEvent): void => {
     e.dataTransfer.setData('application/x-ec-media', item.id)
     e.dataTransfer.effectAllowed = 'copy'
   }
-  const onClick = (): void => addMediaToTimeline(item)
+  const onClick = onAdd ?? ((): void => addMediaToTimeline(item))
   const meta = item.width && item.height ? `${fmtDur(item.duration)} · ${item.width}×${item.height}` : fmtDur(item.duration)
 
   if (grid) {
@@ -284,7 +299,45 @@ function MediaClip({ item, isBase, grid, onRemove }: { item: LibraryItem; isBase
   )
 }
 
-function MediaPanel({ width }: { width: number }): JSX.Element {
+// ---- Left dock: CapCut-style tabbed panel. Media is selected on launch; each
+// tab swaps the body to its own "add content" tools. The right AiPanel keeps
+// AI Cut, so the left is the asset/tools dock and the right is the AI workspace.
+type LeftTab = 'media' | 'audio' | 'text' | 'transitions' | 'captions' | 'stickers'
+const LEFT_TABS: { key: LeftTab; label: string; Icon: () => JSX.Element }[] = [
+  { key: 'media', label: 'Media', Icon: IcTabMedia },
+  { key: 'audio', label: 'Audio', Icon: IcTabAudio },
+  { key: 'text', label: 'Text', Icon: IcTabText },
+  { key: 'transitions', label: 'Transitions', Icon: IcTabTransition },
+  { key: 'captions', label: 'Captions', Icon: IcTabCaption },
+  { key: 'stickers', label: 'Stickers', Icon: IcTabSticker }
+]
+
+function LeftDock({ width }: { width: number }): JSX.Element {
+  const [tab, setTab] = useState<LeftTab>('media')
+  return (
+    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#191B20;overflow:hidden`)}>
+      <div style={css('display:flex;gap:2px;padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.06);flex:none;overflow-x:auto')}>
+        {LEFT_TABS.map(({ key, label, Icon }) => {
+          const on = key === tab
+          return (
+            <button key={key} onClick={() => setTab(key)} title={label} style={css(`flex:none;width:52px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;border:none;border-radius:8px;cursor:pointer;font-family:inherit;appearance:none;-webkit-appearance:none;background:${on ? 'rgba(110,106,232,.16)' : 'transparent'};color:${on ? '#B7B5F4' : '#8890A0'}`)}>
+              <Icon />
+              <span style={css('font-size:9.5px;font-weight:500')}>{label}</span>
+            </button>
+          )
+        })}
+      </div>
+      {tab === 'media' && <MediaTab />}
+      {tab === 'audio' && <AudioTab />}
+      {tab === 'text' && <TextTab />}
+      {tab === 'transitions' && <ComingSoon title="Transitions" note="Crossfades and clip transitions are coming soon." Icon={IcTabTransition} />}
+      {tab === 'captions' && <CaptionsTab />}
+      {tab === 'stickers' && <StickersTab />}
+    </div>
+  )
+}
+
+function MediaTab(): JSX.Element {
   const library = useStore((s) => s.library)
   const basePath = useStore((s) => s.project.media?.path)
   const addToLibrary = useStore((s) => s.addToLibrary)
@@ -292,59 +345,177 @@ function MediaPanel({ width }: { width: number }): JSX.Element {
   const addAllToTimeline = useStore((s) => s.addAllToTimeline)
   const [filter, setFilter] = useState('')
   const [view, setView] = useState<'list' | 'grid'>('list')
-
   const q = filter.trim().toLowerCase()
   const items = q ? library.filter((it) => it.name.toLowerCase().includes(q)) : library
   const canSequence = library.some((it) => it.kind === 'video' || it.kind === 'image')
-
   return (
-    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#191B20;overflow:hidden`)}>
-      <div style={css('display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px')}>
-        <div style={css('font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Media</div>
-        <div style={css('display:flex;align-items:center;gap:8px')}>
-          <div style={css('display:flex;gap:2px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:7px;padding:2px')}>
-            <button onClick={() => setView('list')} title="List view" style={css(`width:24px;height:20px;border:none;border-radius:5px;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;background:${view === 'list' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'list' ? '#B7B5F4' : '#9BA0AC'}`)}><IcList /></button>
-            <button onClick={() => setView('grid')} title="Grid view" style={css(`width:24px;height:20px;border:none;border-radius:5px;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;background:${view === 'grid' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'grid' ? '#B7B5F4' : '#9BA0AC'}`)}><IcGrid /></button>
-          </div>
-          <div style={css('font-size:13px;color:#686E7B;cursor:pointer')}>⟨</div>
-        </div>
-      </div>
-      <div style={css('padding:0 16px 12px;display:flex;flex-direction:column;gap:8px')}>
-        {/* Import stays the primary action; "Add all" rides alongside as an icon
-            so the two share one row instead of stacking (option 1 — split row). */}
+    <>
+      <div style={css('padding:12px 16px 0;display:flex;flex-direction:column;gap:8px')}>
         <div style={css('display:flex;gap:8px')}>
           <button onClick={addToLibrary} style={css('flex:1;background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer')}>＋ Import media</button>
           {canSequence && (
             <button onClick={addAllToTimeline} title="Add all to timeline — every video/image as one sequence, in order" aria-label="Add all to timeline" style={css('flex:none;width:38px;display:grid;place-items:center;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;border-radius:9px;padding:0;cursor:pointer;appearance:none;-webkit-appearance:none')}><IcAddAll /></button>
           )}
         </div>
-        <div style={css('display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:#1E2026;border:1px solid rgba(255,255,255,.06);border-radius:8px')}>
-          <div style={css('width:10px;height:10px;border:1.5px solid #686E7B;border-radius:50%;position:relative')}>
-            <div style={css('position:absolute;width:4px;height:1.5px;background:#686E7B;bottom:-2px;right:-2px;transform:rotate(45deg)')} />
+        <div style={css('display:flex;gap:8px;align-items:stretch')}>
+          <div style={css('flex:1;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:#1E2026;border:1px solid rgba(255,255,255,.06);border-radius:8px')}>
+            <div style={css('width:10px;height:10px;border:1.5px solid #686E7B;border-radius:50%;position:relative')}>
+              <div style={css('position:absolute;width:4px;height:1.5px;background:#686E7B;bottom:-2px;right:-2px;transform:rotate(45deg)')} />
+            </div>
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter media" style={css('font-size:12px;color:#E9EAEE;flex:1;min-width:0;background:none;border:none;outline:none;font-family:inherit;padding:0;margin:0')} />
           </div>
-          <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter media" style={css('font-size:12px;color:#E9EAEE;flex:1;min-width:0;background:none;border:none;outline:none;font-family:inherit;padding:0;margin:0')} />
+          <div style={css('display:flex;gap:2px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:7px;padding:2px;flex:none')}>
+            <button onClick={() => setView('list')} title="List view" style={css(`width:24px;border:none;border-radius:5px;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;background:${view === 'list' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'list' ? '#B7B5F4' : '#9BA0AC'}`)}><IcList /></button>
+            <button onClick={() => setView('grid')} title="Grid view" style={css(`width:24px;border:none;border-radius:5px;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;background:${view === 'grid' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'grid' ? '#B7B5F4' : '#9BA0AC'}`)}><IcGrid /></button>
+          </div>
         </div>
       </div>
-      <div style={css('flex:1;min-height:0;padding:0 12px 12px;overflow-y:auto')}>
+      <div style={css('flex:1;min-height:0;padding:10px 12px 12px;overflow-y:auto')}>
         {items.length === 0 ? (
-          <div style={css('color:#686E7B;font-size:12px;text-align:center;padding:24px 8px')}>
-            {library.length === 0 ? 'No media yet — tap ＋ Import media to add clips.' : 'No clips match your filter.'}
-          </div>
+          <div style={css('color:#686E7B;font-size:12px;text-align:center;padding:24px 8px')}>{library.length === 0 ? 'No media yet — tap ＋ Import media to add clips.' : 'No clips match your filter.'}</div>
         ) : view === 'grid' ? (
           <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:8px')}>
-            {items.map((it) => (
-              <MediaClip key={it.id} item={it} grid isBase={!!basePath && it.path === basePath} onRemove={() => removeFromLibrary(it.id)} />
-            ))}
+            {items.map((it) => (<MediaClip key={it.id} item={it} grid isBase={!!basePath && it.path === basePath} onRemove={() => removeFromLibrary(it.id)} />))}
           </div>
         ) : (
           <div style={css('display:flex;flex-direction:column;gap:8px')}>
-            {items.map((it) => (
-              <MediaClip key={it.id} item={it} isBase={!!basePath && it.path === basePath} onRemove={() => removeFromLibrary(it.id)} />
-            ))}
+            {items.map((it) => (<MediaClip key={it.id} item={it} isBase={!!basePath && it.path === basePath} onRemove={() => removeFromLibrary(it.id)} />))}
           </div>
         )}
       </div>
-      <div style={css('flex:none;padding:14px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Drag a clip onto the timeline to add it. Drag clips on the timeline to reorder them.</div>
+      <div style={css('flex:none;padding:12px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Drag a clip onto the timeline, or click to add it.</div>
+    </>
+  )
+}
+
+function AudioTab(): JSX.Element {
+  const library = useStore((s) => s.library)
+  const basePath = useStore((s) => s.project.media?.path)
+  const addToLibrary = useStore((s) => s.addToLibrary)
+  const removeFromLibrary = useStore((s) => s.removeFromLibrary)
+  const audio = library.filter((it) => it.kind === 'audio')
+  return (
+    <>
+      <div style={css('padding:12px 16px 0')}>
+        <button onClick={addToLibrary} style={css('width:100%;background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 0;cursor:pointer')}>＋ Import audio</button>
+      </div>
+      <div style={css('flex:1;min-height:0;padding:10px 12px 12px;overflow-y:auto')}>
+        {audio.length === 0 ? (
+          <div style={css('color:#686E7B;font-size:12px;text-align:center;padding:24px 8px;line-height:1.6')}>No audio yet. Import a music or voiceover file — it drops onto an audio track.</div>
+        ) : (
+          <div style={css('display:flex;flex-direction:column;gap:8px')}>
+            {audio.map((it) => (<MediaClip key={it.id} item={it} isBase={!!basePath && it.path === basePath} onRemove={() => removeFromLibrary(it.id)} />))}
+          </div>
+        )}
+      </div>
+      <div style={css('flex:none;padding:12px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Click an audio clip to add it on an audio track at the playhead.</div>
+    </>
+  )
+}
+
+// Small toggle chip used by the Text tab (no hooks — safe to call as a helper).
+function styleChip(label: string, on: boolean, onClick: () => void): JSX.Element {
+  return (
+    <button onClick={onClick} style={css(`flex:1;text-align:center;border-radius:8px;padding:7px 0;font-family:inherit;font-size:12px;cursor:pointer;border:1px solid ${on ? '#6E6AE8' : 'rgba(255,255,255,.08)'};background:${on ? 'rgba(110,106,232,.16)' : '#1E2026'};color:${on ? '#B7B5F4' : '#C6C9D2'}`)}>{label}</button>
+  )
+}
+
+function TextTab(): JSX.Element {
+  const addText = useStore((s) => s.addText)
+  const texts = useStore((s) => s.project.texts)
+  const selectedTextId = useStore((s) => s.selectedTextId)
+  const updateText = useStore((s) => s.updateText)
+  const removeText = useStore((s) => s.removeText)
+  const sel = (texts ?? []).find((t) => t.id === selectedTextId) ?? null
+  return (
+    <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 16px')}>
+      <button onClick={addText} style={css('width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 18px rgba(110,106,232,.3)')}>＋ Add text</button>
+      {sel ? (
+        <div style={css('margin-top:16px;display:flex;flex-direction:column;gap:14px')}>
+          <div>
+            <div style={css('font-size:11px;color:#9BA0AC;margin-bottom:6px')}>Text</div>
+            <textarea value={sel.text} onChange={(e) => updateText(sel.id, { text: e.target.value })} rows={2} style={css('width:100%;box-sizing:border-box;resize:none;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;color:#E9EAEE;font-size:12.5px;font-family:inherit;outline:none')} />
+          </div>
+          <div>
+            <div style={css('font-size:11px;color:#9BA0AC;margin-bottom:6px')}>Style</div>
+            <div style={css('display:flex;gap:8px')}>
+              {styleChip('Bold', sel.bold, () => updateText(sel.id, { bold: !sel.bold }))}
+              {styleChip('Italic', sel.italic, () => updateText(sel.id, { italic: !sel.italic }))}
+              {styleChip('Outline', sel.strokeWidth > 0, () => updateText(sel.id, { strokeWidth: sel.strokeWidth > 0 ? 0 : 0.08 }))}
+            </div>
+          </div>
+          <div>
+            <div style={css('display:flex;justify-content:space-between;font-size:11px;color:#9BA0AC;margin-bottom:6px')}><span>Size</span><span>{Math.round(sel.fontSize * 100)}</span></div>
+            <input type="range" min={2} max={20} value={Math.round(sel.fontSize * 100)} onChange={(e) => updateText(sel.id, { fontSize: Number(e.target.value) / 100 })} style={css('width:100%')} />
+          </div>
+          <div style={css('display:flex;align-items:center;gap:10px')}>
+            <div style={css('font-size:11px;color:#9BA0AC')}>Colour</div>
+            <input type="color" value={sel.color} onChange={(e) => updateText(sel.id, { color: e.target.value })} style={css('width:36px;height:26px;border:none;background:none;padding:0;cursor:pointer')} />
+            <div style={css('flex:1')} />
+            <button onClick={() => removeText(sel.id)} style={css('background:none;border:1px solid rgba(217,104,110,.4);color:#D9868B;font-family:inherit;font-size:12px;border-radius:8px;padding:6px 12px;cursor:pointer')}>Delete</button>
+          </div>
+        </div>
+      ) : (
+        <div style={css('margin-top:18px;color:#686E7B;font-size:12px;line-height:1.6;text-align:center')}>Add a text element, then select it on the preview or timeline to style it here.</div>
+      )}
+    </div>
+  )
+}
+
+function StickersTab(): JSX.Element {
+  const library = useStore((s) => s.library)
+  const addToLibrary = useStore((s) => s.addToLibrary)
+  const removeFromLibrary = useStore((s) => s.removeFromLibrary)
+  const addLibraryToOverlay = useStore((s) => s.addLibraryToOverlay)
+  const images = library.filter((it) => it.kind === 'image')
+  return (
+    <>
+      <div style={css('padding:12px 16px 0')}>
+        <button onClick={addToLibrary} style={css('width:100%;background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 0;cursor:pointer')}>＋ Import image</button>
+      </div>
+      <div style={css('flex:1;min-height:0;padding:10px 12px 12px;overflow-y:auto')}>
+        {images.length === 0 ? (
+          <div style={css('color:#686E7B;font-size:12px;text-align:center;padding:24px 8px;line-height:1.6')}>No stickers yet. Import a PNG, logo or graphic — click it to drop it on an overlay track.</div>
+        ) : (
+          <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:8px')}>
+            {images.map((it) => (<MediaClip key={it.id} item={it} grid isBase={false} onAdd={() => addLibraryToOverlay(it.id)} onRemove={() => removeFromLibrary(it.id)} />))}
+          </div>
+        )}
+      </div>
+      <div style={css('flex:none;padding:12px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Click a graphic to add it as an overlay at the playhead.</div>
+    </>
+  )
+}
+
+function CaptionsTab(): JSX.Element {
+  const generateCaptions = useStore((s) => s.generateCaptions)
+  const clearCaptions = useStore((s) => s.clearCaptions)
+  const hasTranscript = useStore((s) => !!s.project.transcript?.words?.length)
+  const capCount = useStore((s) => (s.project.texts ?? []).filter((t) => t.caption).length)
+  const jobActive = useStore((s) => s.job.active)
+  return (
+    <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 16px')}>
+      <div style={css('font-size:10px;font-weight:700;letter-spacing:.08em;color:#686E7B;text-transform:uppercase;margin-bottom:10px')}>Auto captions</div>
+      <button onClick={generateCaptions} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;box-shadow:0 6px 18px rgba(110,106,232,.3);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>Generate captions</button>
+      {capCount > 0 && (
+        <div style={css('margin-top:10px;display:flex;align-items:center;gap:8px')}>
+          <div style={css('flex:1;font-size:12px;color:#7FCBA8')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>
+          <button onClick={clearCaptions} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;font-family:inherit;font-size:12px;border-radius:8px;padding:6px 12px;cursor:pointer')}>Clear</button>
+        </div>
+      )}
+      <div style={css('margin-top:16px;font-size:11.5px;color:#686E7B;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle lines at the bottom of the video. Edit any line in the Text tab.' : 'Run Find Retakes & Silence (or Transcribe) first to get a transcript, then generate captions.'}</div>
+    </div>
+  )
+}
+
+function ComingSoon({ title, note, Icon }: { title: string; note: string; Icon: () => JSX.Element }): JSX.Element {
+  return (
+    <div style={css('flex:1;min-height:0;display:grid;place-items:center;padding:24px;text-align:center')}>
+      <div>
+        <div style={css('width:44px;height:44px;border-radius:12px;background:#1E2026;display:grid;place-items:center;margin:0 auto 12px;color:#6b7280')}><Icon /></div>
+        <div style={css('font-size:13px;font-weight:600;color:#C6C9D2')}>{title}</div>
+        <div style={css('font-size:12px;color:#686E7B;line-height:1.6;margin-top:6px;max-width:200px')}>{note}</div>
+      </div>
     </div>
   )
 }
@@ -523,7 +694,7 @@ export default function Editor(): JSX.Element {
     <div ref={rootRef} style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-editor">
       <TopBar />
       <div ref={middleRef} style={css('display:flex;flex:1;min-height:0;min-width:0')}>
-        <MediaPanel width={leftW} />
+        <LeftDock width={leftW} />
         <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'left')} title="Drag to resize" />
         {/* Live editor core — the production preview. `.ec-legacy` restores the
             app's border-box model (the .ec-newui content-box reset would leak in

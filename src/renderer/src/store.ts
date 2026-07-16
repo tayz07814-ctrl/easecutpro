@@ -27,6 +27,7 @@ import { documentToProject, projectToDocument, normalizeDefaultLanes, overlayEve
 import * as TimelineCommands from '@shared/timeline/commands'
 import type { Command } from '@shared/timeline/commands'
 import { getSharedEngine } from './timelineEngine'
+import { docSourceToEdited } from './docTime'
 import { insertLibraryItemAtPlayhead } from './timelineInsert'
 import { exportOnDevice } from './export/localExport'
 import { renderTextPng } from './textRender'
@@ -680,6 +681,11 @@ interface AppState {
   addText: () => void
   updateText: (id: string, patch: Partial<TextClip>) => void
   removeText: (id: string) => void
+  /** Captions tab: turn the transcript into styled subtitle TextClips (bottom-
+   *  centre, one short line at a time). Replaces any previous caption batch. */
+  generateCaptions: () => void
+  /** remove every auto-generated caption clip (leaves hand-added text). */
+  clearCaptions: () => void
   selectText: (id: string | null) => void
   moveText: (id: string, start: number) => void
   /** split the selected text clip at the playhead. */
@@ -2886,6 +2892,72 @@ export const useStore = create<AppState>((set, get) => ({
       toolsTab: 'text'
     })
   },
+
+  generateCaptions: () => {
+    const s = get()
+    const words = (s.project.transcript?.words ?? []).filter((w) => !w.deleted && w.text.trim())
+    if (!words.length) {
+      set({ job: { active: false, percent: 0, message: 'No transcript yet — run Find Retakes or Transcribe first, then generate captions.' } })
+      return
+    }
+    // Group words into short caption lines: break on sentence-ending punctuation,
+    // or when a line reaches ~6 words / ~2.8s.
+    const MAX_WORDS = 6
+    const MAX_DUR = 2.8
+    const lines: { text: string; start: number; end: number }[] = []
+    let cur: typeof words = []
+    const flush = (): void => {
+      if (!cur.length) return
+      const text = cur.map((w) => w.text.trim()).join(' ').replace(/\s+([,.!?;:])/g, '$1').trim()
+      if (text) lines.push({ text, start: cur[0].start, end: cur[cur.length - 1].end })
+      cur = []
+    }
+    for (const w of words) {
+      cur.push(w)
+      if (cur.length >= MAX_WORDS || w.end - cur[0].start >= MAX_DUR || /[.!?]$/.test(w.text.trim())) flush()
+    }
+    flush()
+    if (!lines.length) {
+      set({ job: { active: false, percent: 0, message: 'Nothing to caption.' } })
+      return
+    }
+    // Words carry SOURCE time; the playhead + text clips run in EDITED time, so map
+    // each line through the main lane (a no-op with no cuts / in legacy mode).
+    const doc = getSharedEngine()?.document
+    const caps: TextClip[] = lines.map((ln) => {
+      const start = docSourceToEdited(doc, ln.start)
+      return {
+        id: uid(),
+        text: ln.text,
+        start,
+        end: Math.max(start + 0.3, docSourceToEdited(doc, ln.end)),
+        x: 0.5,
+        y: 0.85,
+        fontFamily: 'Arial Black',
+        fontSize: 0.058,
+        color: '#ffffff',
+        align: 'center',
+        bold: true,
+        italic: false,
+        strokeWidth: 0.09,
+        strokeColor: '#000000',
+        bgEnabled: false,
+        bgColor: '#000000',
+        bgRadius: 0.3,
+        bgPadding: 0.3,
+        bgOpacity: 0.6,
+        caption: true
+      }
+    })
+    set((st) => ({
+      project: { ...st.project, texts: [...(st.project.texts ?? []).filter((x) => !x.caption), ...caps] },
+      selectedTextId: null,
+      job: { active: false, percent: 100, message: `Added ${caps.length} caption line(s) — tweak them in the Text tab.` }
+    }))
+  },
+
+  clearCaptions: () =>
+    set((s) => ({ project: { ...s.project, texts: (s.project.texts ?? []).filter((x) => !x.caption) } })),
 
   updateText: (id, patch) =>
     set((s) => ({
