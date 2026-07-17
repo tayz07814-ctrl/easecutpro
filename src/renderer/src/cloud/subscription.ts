@@ -36,10 +36,16 @@ export interface Subscription {
   cancel_at_period_end: boolean
 }
 
-const clientToken = import.meta.env.VITE_PADDLE_CLIENT_TOKEN as string | undefined
-const env = (import.meta.env.VITE_PADDLE_ENV as PaddleEnv | undefined) ?? 'sandbox'
-const priceMonthly = import.meta.env.VITE_PADDLE_PRICE_MONTHLY as string | undefined
-const priceAnnual = import.meta.env.VITE_PADDLE_PRICE_ANNUAL as string | undefined
+// Sandbox defaults are committed on purpose: the client token and price IDs are
+// PUBLIC (they ship in the browser regardless), so this lets the sandbox test run
+// with no env setup. For production, set VITE_PADDLE_* (live token, price IDs and
+// VITE_PADDLE_ENV=production) — env vars always win. See PAYMENTS.md.
+const clientToken =
+  (import.meta.env.VITE_PADDLE_CLIENT_TOKEN as string | undefined) || 'test_2115f33a332b4eaa8bdc588748e'
+const env = (import.meta.env.VITE_PADDLE_ENV as PaddleEnv | undefined) || 'sandbox'
+const priceMonthly =
+  (import.meta.env.VITE_PADDLE_PRICE_MONTHLY as string | undefined) || 'pri_01kxrsngzrp7x128pz2cjsb7hw'
+const priceAnnual = (import.meta.env.VITE_PADDLE_PRICE_ANNUAL as string | undefined) || undefined
 
 /** True once a client token and at least one price are configured. The Upgrade
  *  UI stays hidden until then, so a half-configured build never shows a button
