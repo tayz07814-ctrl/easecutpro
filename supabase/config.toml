@@ -8,3 +8,9 @@ verify_jwt = true
 
 [functions.llm-judge]
 verify_jwt = true
+
+# Paddle calls this server-to-server with its own HMAC signature, not a Supabase
+# JWT — JWT verification must be OFF or the gateway rejects every webhook before
+# our signature check runs. The function verifies PADDLE_WEBHOOK_SECRET itself.
+[functions.paddle-webhook]
+verify_jwt = false

@@ -21,14 +21,18 @@ function cloudCsp(supabaseUrl: string | undefined): Plugin {
   const wss = https.replace(/^https/, 'wss')
   const CSP = [
     "default-src 'self'",
-    `connect-src 'self' blob: data: ${https} ${wss}`,
-    "img-src 'self' data: blob:",
+    // *.paddle.com: Paddle.js posts to Paddle's checkout services.
+    `connect-src 'self' blob: data: ${https} ${wss} https://*.paddle.com`,
+    "img-src 'self' data: blob: https://*.paddle.com",
     "media-src 'self' blob: data:",
     "style-src 'self' 'unsafe-inline'",
-    // wasm-unsafe-eval: onnxruntime-web (Silero VAD) compiles wasm at runtime
-    "script-src 'self' 'wasm-unsafe-eval'",
+    // wasm-unsafe-eval: onnxruntime-web (Silero VAD) compiles wasm at runtime.
+    // *.paddle.com: Paddle.js is served from cdn.paddle.com.
+    "script-src 'self' 'wasm-unsafe-eval' https://*.paddle.com",
     // ort spawns blob: workers for its wasm proxy/threads
-    "worker-src 'self' blob:"
+    "worker-src 'self' blob:",
+    // Paddle renders its hosted checkout in an iframe ((sandbox-)buy.paddle.com)
+    "frame-src https://*.paddle.com"
   ].join('; ')
   return {
     name: 'cloud-csp',

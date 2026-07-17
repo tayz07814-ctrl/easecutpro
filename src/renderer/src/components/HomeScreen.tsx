@@ -4,6 +4,15 @@ import { IS_WEB, IS_CLOUD } from '../platform'
 import { authLogout } from '../webapi'
 import { cloudLogout } from '../cloud/auth'
 import { listProjects, createProject, getProject, deleteProject, saveProject, type ProjectMeta } from '../projectsApi'
+import {
+  openProCheckout,
+  getSubscription,
+  isProNow,
+  paddleConfigured,
+  waitForPro,
+  onPaddleEvent,
+  type Subscription
+} from '../cloud/subscription'
 
 function fmtDate(t: number): string {
   const d = new Date(t)
@@ -28,6 +37,8 @@ export default function HomeScreen(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [batching, setBatching] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
+  const [sub, setSub] = useState<Subscription | null>(null)
+  const [upgrading, setUpgrading] = useState(false)
 
   async function commitRename(id: string, name: string): Promise<void> {
     setRenaming(null)
@@ -53,6 +64,38 @@ export default function HomeScreen(): JSX.Element {
     if (batchJobs.length) refresh(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchJobs.length, doneCount])
+
+  // Pro subscription (cloud only). Load current status, and after a Paddle
+  // checkout completes, poll until the webhook flips entitlement on.
+  useEffect(() => {
+    if (!IS_CLOUD || !paddleConfigured()) return
+    let active = true
+    void getSubscription().then((s) => {
+      if (active) setSub(s)
+    })
+    const off = onPaddleEvent(async (name) => {
+      if (name === 'checkout.completed') {
+        await waitForPro()
+        if (active) setSub(await getSubscription())
+      }
+      if (active && (name === 'checkout.completed' || name === 'checkout.closed')) setUpgrading(false)
+    })
+    return () => {
+      active = false
+      off()
+    }
+  }, [])
+
+  async function upgrade(): Promise<void> {
+    if (!user || upgrading) return
+    setUpgrading(true)
+    try {
+      await openProCheckout({ id: user.id, email: user.email }, 'monthly')
+    } catch (e) {
+      setUpgrading(false)
+      window.alert(e instanceof Error ? e.message : 'Could not open checkout')
+    }
+  }
 
   async function batchClean(): Promise<void> {
     if (batching) return
@@ -106,6 +149,20 @@ export default function HomeScreen(): JSX.Element {
         {IS_WEB && (
           <>
             <span className="home-user muted">{user?.email}</span>
+            {IS_CLOUD && paddleConfigured() && user &&
+              (isProNow(sub) ? (
+                <span
+                  className="home-pro-badge"
+                  title={sub?.cancel_at_period_end ? 'Pro — cancels at period end' : 'Pro subscription active'}
+                  style={{ color: '#f5c518', fontWeight: 600, fontSize: 13 }}
+                >
+                  ★ Pro
+                </span>
+              ) : (
+                <button onClick={upgrade} disabled={upgrading}>
+                  {upgrading ? 'Opening…' : '★ Upgrade to Pro'}
+                </button>
+              ))}
             <button onClick={logout}>Log out</button>
           </>
         )}
