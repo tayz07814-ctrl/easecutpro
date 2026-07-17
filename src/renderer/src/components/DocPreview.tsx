@@ -29,7 +29,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { playClock, easeInOut, primePlayback } from '../clock'
+import { playClock, primePlayback } from '../clock'
+import { kenBurnsTransform, kenBurnsOrigin } from '../kenBurns'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -442,13 +443,16 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           // Anti-click: dip the volume toward 0 across each real cut seam.
           v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
           v.playbackRate = clamp(shown.speed, 0.25, 4)
-          const size = shown.ovScale ?? 1
-          const zs = shown.ovZoomStart ?? 1
-          const ze = shown.ovZoomEnd ?? 1
           const prog = shown.len > 0 ? clamp((t - shown.start) / shown.len, 0, 1) : 0
-          const scale = size * (zs + (ze - zs) * easeInOut(prog))
-          v.style.transformOrigin = `${50 + (shown.ovX ?? 0) * 100}% ${50 + (shown.ovY ?? 0) * 100}%`
-          v.style.transform = Math.abs(scale - 1) > 0.001 ? `scale(${scale})` : ''
+          v.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
+          // ALWAYS a GPU-composited 3D transform (even at scale 1) so the layer
+          // never promotes/demotes mid-zoom — the source of the subtle-zoom hitch.
+          v.style.transform = kenBurnsTransform({
+            size: shown.ovScale ?? 1,
+            zoomStart: shown.ovZoomStart,
+            zoomEnd: shown.ovZoomEnd,
+            progress: prog
+          })
         } else if (!isShown && !v.paused && isPlaying && shown?.src !== src) {
           v.pause() // never let a hidden element keep playing audio
         }
@@ -507,7 +511,9 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                 preload="auto"
                 playsInline
                 data-ec-base
-                style={{ visibility: 'hidden', position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+                // will-change keeps the element on its own GPU layer so the
+                // Ken Burns transform composites without a per-frame CPU repaint.
+                style={{ visibility: 'hidden', position: 'absolute', inset: 0, width: '100%', height: '100%', willChange: 'transform', backfaceVisibility: 'hidden' }}
                 onError={() => badRef.current.add(src)}
                 ref={(el) => {
                   if (el) poolRef.current.set(src, el)

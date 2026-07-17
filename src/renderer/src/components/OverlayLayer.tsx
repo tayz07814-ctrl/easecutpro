@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
-import { playClock, easeInOut } from '../clock'
+import { playClock } from '../clock'
+import { kenBurnsTransform } from '../kenBurns'
 import { mediaSrc } from '../platform'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
 import { framesToSeconds, secondsToFrames } from '@shared/timeline/time'
@@ -254,25 +255,23 @@ function OverlayBox({
     return undefined
   }, [playing, playhead, view.sourceIn, view.start, view.muted, view.gain, isImage])
 
-  // Smooth Ken Burns zoom across the clip.
+  // Smooth Ken Burns zoom across the clip — GPU-composited (translateZ + scale3d,
+  // full float), driven off the shared 60fps play clock for BOTH images and
+  // videos so it keeps ramping even over a magnet-off gap on the base lane.
   useEffect(() => {
     const el: HTMLElement | null = isImage ? imgRef.current : ref.current
     if (!el) return
-    const zoomFromProg = (prog: number): number => zs + (ze - zs) * easeInOut(prog)
-    // Drive progress off the shared play clock (edited time) for BOTH images and
-    // videos: it advances even while the base <video> is paused traversing a
-    // magnet-off gap, so the Ken Burns zoom keeps ramping over dead space too.
-    const progAt = (): number => (len > 0 ? (playClock.t - view.start) / len : 0)
+    const at = (prog: number): string => kenBurnsTransform({ zoomStart: zs, zoomEnd: ze, progress: prog })
     if (playing) {
       let raf = 0
       const loop = (): void => {
-        el.style.transform = `scale(${zoomFromProg(progAt())})`
+        el.style.transform = at(len > 0 ? (playClock.t - view.start) / len : 0)
         raf = requestAnimationFrame(loop)
       }
       raf = requestAnimationFrame(loop)
       return () => cancelAnimationFrame(raf)
     }
-    el.style.transform = `scale(${zoomFromProg(len > 0 ? (playhead - view.start) / len : 0)})`
+    el.style.transform = at(len > 0 ? (playhead - view.start) / len : 0)
     return undefined
   }, [playing, playhead, view.start, view.sourceIn, len, zs, ze, isImage])
 
@@ -325,14 +324,14 @@ function OverlayBox({
           ref={imgRef}
           src={ecurl(view.sourcePath)}
           draggable={false}
-          style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center' }}
+          style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center', willChange: 'transform', backfaceVisibility: 'hidden' }}
         />
       ) : (
         <video
           ref={ref}
           playsInline
           src={ecurl(view.sourcePath)}
-          style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center' }}
+          style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center', willChange: 'transform', backfaceVisibility: 'hidden' }}
         />
       )}
       {selected && <div className="ov-resize" onPointerDown={startResize} />}

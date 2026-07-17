@@ -15,7 +15,7 @@
 // the main thread pauses feeding when the queue runs deep.
 
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
-import { easeInOut } from '../clock'
+import { kenBurnsEase } from '../kenBurns'
 import type { OverlayRect, ZoomRamp } from './overlays'
 
 interface InitMsg {
@@ -214,7 +214,7 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
       for (const s of sprites) {
         if (t < s.start || t >= s.end) continue
         const zm = s.zoom
-        const zoom = zm ? zm.zs + (zm.ze - zm.zs) * easeInOut(zm.len > 0 ? (t - zm.start) / zm.len : 1) : 1
+        const zoom = zm ? zm.zs + (zm.ze - zm.zs) * kenBurnsEase(zm.len > 0 ? (t - zm.start) / zm.len : 1) : 1
         draws.push({ z: s.z, run: () => paint(s.bitmap, s.rect, s.clip, zoom) })
       }
       for (const o of msg.ovs ?? []) draws.push({ z: o.z, run: () => paint(o.frame, o.rect, true, o.scale) })

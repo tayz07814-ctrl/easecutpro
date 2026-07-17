@@ -22,7 +22,7 @@ import { framesToSeconds } from '@shared/timeline/time'
 import { resolveMedia } from '../media/resolver'
 import { isWebMediaId, getFile, mp4AudioStartOffset } from '../webmedia'
 import { IS_WEB } from '../platform'
-import { easeInOut } from '../clock'
+import { kenBurnsEase } from '../kenBurns'
 import {
   planOverlays,
   planTexts,
@@ -690,7 +690,7 @@ export async function exportOnDevice(
       dy: (H - dh) / 2,
       dw,
       dh,
-      scale: seg.size * (seg.zs + (seg.ze - seg.zs) * easeInOut(prog)),
+      scale: seg.size * (seg.zs + (seg.ze - seg.zs) * kenBurnsEase(prog)),
       ox: W * (0.5 + seg.ox),
       oy: H * (0.5 + seg.oy)
     }
@@ -777,7 +777,7 @@ export async function exportOnDevice(
             z: sp.z,
             rect: o.rect,
             // eased Ken Burns for this frame (preview twin: OverlayBox zoomFromProg)
-            scale: sp.zs + (sp.ze - sp.zs) * easeInOut((t - sp.start) / sp.rampLen)
+            scale: sp.zs + (sp.ze - sp.zs) * kenBurnsEase((t - sp.start) / sp.rampLen)
           })
         } catch {
           /* decoder hiccup — drop this overlay for one frame, not the export */
