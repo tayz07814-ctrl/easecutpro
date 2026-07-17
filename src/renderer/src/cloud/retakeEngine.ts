@@ -258,7 +258,10 @@ export async function retakeDeltaCutCloud(
   try {
     const res = await invokeEdge<ProcutJudgeRes>('delta-judge', {
       payload,
-      proposal: { word_cuts: [], pause_cuts: [] }
+      proposal: { word_cuts: [], pause_cuts: [] },
+      // easecut0.01 A/B: route this branch's Retake δ to GLM 5.2 (whitelisted
+      // server-side). Other branches omit `model` and get the safe default.
+      model: 'z-ai/glm-5.2'
     } satisfies ProcutJudgeReq)
     modelRaw = res.raw
     if (res.judge === 'none') {

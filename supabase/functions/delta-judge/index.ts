@@ -13,11 +13,8 @@
 //                         (misses cuts or over-cuts run-to-run).
 //   • google/gemini-3.5-flash — reasons ~4x more efficiently: ~1-1.6k tokens in
 //                         ~7s, and RELIABLY emits clean whole-take span cuts.
-// Default is now z-ai/glm-5.2 (creator's choice). GLM 5.2 is a large-scale
-// REASONING model, so watch the latency budget: effort=low + throughput routing
-// keep it as fast as possible, but if runs get slow / fall back to β, set
-// DELTA_REASONING_EFFORT=off. Any model still works via DELTA_MODEL
-// (e.g. google/gemini-3.5-flash or qwen/qwen3.7-plus for a lighter/cheaper judge).
+// So the default is gemini-3.5-flash with effort=low reasoning + throughput
+// provider routing. Any model still works via DELTA_MODEL.
 //
 // The SYSTEM prompt forces WHOLE-TAKE SPAN cuts (not scattered word/filler removal),
 // which is what makes a fast model produce pro-quality edits.
@@ -29,7 +26,7 @@
 //   DELTA_JUDGE_KEY  — required. OpenRouter sk-or-… key. Edge secret OR Supabase
 //                      Vault via the service-role-only delta_judge_key() RPC.
 //   DELTA_BASE_URL   — optional. Default https://openrouter.ai/api/v1.
-//   DELTA_MODEL      — optional. Default z-ai/glm-5.2.
+//   DELTA_MODEL      — optional. Default google/gemini-3.5-flash.
 //   DELTA_REASONING_EFFORT      — optional. low|medium|high|off. Default low.
 //   DELTA_REASONING_MAX_TOKENS  — optional alt cap (effort wins if both set).
 //   DELTA_PROVIDER_SORT         — optional. throughput|latency|price|off. Default throughput.
@@ -51,12 +48,26 @@ function preflight(req: Request): Response | null {
 }
 
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'z-ai/glm-5.2'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.5-flash'
 
-// Reasoning control. Default effort=low — GLM 5.2 is a reasoning model, so keep
-// the thinking budget SMALL to stay inside the ~15s judge budget. If runs get
-// slow (or fall back to β), set DELTA_REASONING_EFFORT=off; bump to medium/high
-// only if cut quality needs it and you can afford the latency.
+// Per-request model override (A/B testing from a specific branch build) — a branch
+// build sends model:'…' to route ITS runs to a test model while every other branch
+// omits it and gets the safe default. Whitelisted so a signed-in user can't route
+// to an arbitrary (expensive) model. DELTA_MODEL env still wins over the code default.
+//   • easecut0.03 → google/gemini-3.1-pro-preview
+//   • easecut0.01 → z-ai/glm-5.2 (also allows qwen/qwen3.7-plus for A/B)
+const MODEL_WHITELIST = new Set([
+  'google/gemini-3.5-flash',
+  'google/gemini-3.1-pro-preview',
+  'z-ai/glm-5.2',
+  'qwen/qwen3.7-plus'
+])
+function resolveModel(requested: unknown): string {
+  return typeof requested === 'string' && MODEL_WHITELIST.has(requested) ? requested : MODEL
+}
+
+// Reasoning control. Default effort=low — enough to reliably find take boundaries,
+// fast on gemini-flash (~7s). `off` disables (fast but unreliable on this task).
 function reasoningConfig(): Record<string, unknown> {
   const effort = Deno.env.get('DELTA_REASONING_EFFORT')?.toLowerCase()
   if (effort === 'off') return { enabled: false }
@@ -136,12 +147,12 @@ async function requireUser(req: Request): Promise<boolean> {
   return !!data.user
 }
 
-async function finalize(apiKey: string, payload: string, proposal: unknown): Promise<string> {
+async function finalize(apiKey: string, model: string, payload: string, proposal: unknown): Promise<string> {
   const userText =
     `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
   const provider = providerConfig()
   const body: Record<string, unknown> = {
-    model: MODEL,
+    model,
     max_tokens: 16000,
     stream: false,
     reasoning: reasoningConfig(),
@@ -176,7 +187,7 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
   try {
     await admin().rpc('log_delta_debug', {
       payload: {
-        model: MODEL,
+        model,
         http_status: r.status,
         ok: r.ok,
         content_len: content.length,
@@ -200,16 +211,19 @@ Deno.serve(async (req) => {
   if (pf) return pf
   try {
     if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const { payload, proposal } = await req.json().catch(() => ({ payload: null, proposal: null }))
+    const { payload, proposal, model: requestedModel } = await req
+      .json()
+      .catch(() => ({ payload: null, proposal: null, model: null }))
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
+    const model = resolveModel(requestedModel)
 
     const apiKey = await getApiKey()
     if (!apiKey) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await finalize(apiKey, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: `delta:${MODEL}` })
+      return json({ raw: await finalize(apiKey, model, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: `delta:${model}` })
     } catch (e) {
       console.warn('[delta-judge] model API failed:', (e as Error).message)
-      return json({ raw: null, judge: `delta:${MODEL}` })
+      return json({ raw: null, judge: `delta:${model}` })
     }
   } catch (e) {
     return json({ error: (e as Error).message }, 500)
