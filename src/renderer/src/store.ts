@@ -2567,10 +2567,10 @@ export const useStore = create<AppState>((set, get) => ({
   generateOverlays: async () => {
     if (!get().requireServer('Auto overlays')) return
     const { project } = get()
-    // Multi-clip base: the transcript is per-clip, not a single project.transcript.
-    // Overlay matching over the whole montage is out of scope for now — guide the
-    // user to per-clip editing rather than showing a misleading "transcribe first".
-    if ((project.baseSequence?.length ?? 0) > 0 && !project.media) {
+    // The new (doc-native) editor keeps the video as timeline clips — project.media is
+    // unset but there IS a unified project.transcript, so overlays work. Only a LEGACY
+    // montage WITHOUT a unified transcript needs per-clip editing; block just that.
+    if ((project.baseSequence?.length ?? 0) > 0 && !project.media && !project.transcript?.segments?.length) {
       set({ job: { active: false, percent: 0, message: 'Overlays run per clip — double-click a clip on the timeline to edit it (or combine the montage first).' } })
       return
     }
@@ -2585,7 +2585,8 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Add overlay images first' } })
       return
     }
-    const dur = project.media?.duration ?? 0
+    // Doc-native projects have no project.media — fall back to the base clip's source length.
+    const dur = project.media?.duration ?? project.baseSequence?.[0]?.sourceDuration ?? 0
     const cuts = subtractRanges([{ start: 0, end: dur }], computeKeepRanges(project, get().waveform))
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Generating overlays…' } })
     try {
@@ -2717,7 +2718,9 @@ export const useStore = create<AppState>((set, get) => ({
   suggestOverlays: async () => {
     if (!get().requireServer('Suggest overlays')) return
     const { project } = get()
-    if ((project.baseSequence?.length ?? 0) > 0 && !project.media) {
+    // Doc-native (new editor): no project.media, but a UNIFIED project.transcript, so
+    // Suggest works. Only a legacy montage WITHOUT a unified transcript runs per-clip.
+    if ((project.baseSequence?.length ?? 0) > 0 && !project.media && !project.transcript?.segments?.length) {
       set({ job: { active: false, percent: 0, message: 'Suggest runs per clip — double-click a clip on the timeline to edit it.' } })
       return
     }
@@ -2727,7 +2730,8 @@ export const useStore = create<AppState>((set, get) => ({
       return
     }
     const assets = project.overlayAssets ?? []
-    const dur = project.media?.duration ?? 0
+    // Doc-native projects have no project.media — fall back to the base clip's source length.
+    const dur = project.media?.duration ?? project.baseSequence?.[0]?.sourceDuration ?? 0
     const cuts = subtractRanges([{ start: 0, end: dur }], computeKeepRanges(project, get().waveform))
     if (assets.length === 0 && !project.media) {
       set({ job: { active: false, percent: 0, message: 'Add overlay images or load a video first' } })
