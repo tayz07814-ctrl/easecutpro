@@ -173,6 +173,9 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .ov-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .ov-suggest-btn { border: 1px solid #6c5ce7; color: #cdc6ff; background: rgba(108,92,231,0.12); }
 .ov-suggest-btn:hover:not(:disabled) { background: rgba(108,92,231,0.24); }
+.ov-status { font-size: 11.5px; line-height: 1.5; margin: 8px 0 2px; padding: 7px 10px; border-radius: 7px;
+  background: rgba(110,106,232,0.10); border: 1px solid rgba(110,106,232,0.22); color: #cfd2ee; }
+.ov-status.busy { background: rgba(110,106,232,0.16); }
 .ov-log { font-size: 11px; color: #8a94b0; }
 .ov-log-head { display: flex; justify-content: flex-end; margin: 4px 0 2px; }
 .ov-log-copy { font-size: 11px; color: #cfd6ea; background: rgba(255,255,255,0.06);

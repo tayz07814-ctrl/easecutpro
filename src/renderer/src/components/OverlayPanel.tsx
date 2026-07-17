@@ -29,6 +29,9 @@ export default function OverlayPanel(): JSX.Element {
   const hasTranscript = useStore((s) => (s.project.transcript?.segments?.length ?? 0) > 0)
   const overlayLog = useStore((s) => s.overlayLog)
   const [logCopied, setLogCopied] = useState(false)
+  // true once the creator has run Generate/Suggest this session — gates the status
+  // line so it shows the overlay job's message (not a stale unrelated one on mount).
+  const [ranOp, setRanOp] = useState(false)
   const addOverlayAsset = useStore((s) => s.addOverlayAsset)
   const updateOverlayRule = useStore((s) => s.updateOverlayRule)
   const removeOverlayAsset = useStore((s) => s.removeOverlayAsset)
@@ -161,7 +164,7 @@ export default function OverlayPanel(): JSX.Element {
             className="primary"
             disabled={job.active || !hasTranscript}
             title={hasTranscript ? 'Match your rules to the transcript and place the overlays' : 'Needs a transcript — the AI reads it to find when you say things'}
-            onClick={() => void generateOverlays()}
+            onClick={() => { setRanOp(true); void generateOverlays() }}
           >
             ✨ Generate
           </button>
@@ -169,7 +172,7 @@ export default function OverlayPanel(): JSX.Element {
             className="ov-suggest-btn"
             disabled={job.active || !hasTranscript}
             title={hasTranscript ? 'Let the AI read the whole video and propose what overlay goes where' : 'Needs a transcript first'}
-            onClick={() => void suggestOverlays()}
+            onClick={() => { setRanOp(true); void suggestOverlays() }}
           >
             🪄 Suggest
           </button>
@@ -177,6 +180,15 @@ export default function OverlayPanel(): JSX.Element {
             Clear placed
           </button>
         </div>
+      )}
+
+      {/* Feedback line: the new editor has no global status bar, so surface the
+          overlay job's progress/result (and any guard message / error) here — else
+          a run that finds nothing or hits "transcribe first" looks like a dead button. */}
+      {ranOp && job.message && (
+        <p className={`ov-status${job.active ? ' busy' : ''}`} role="status">
+          {job.active ? '⏳ ' : ''}{job.message}
+        </p>
       )}
 
       {suggestions.length > 0 && (
