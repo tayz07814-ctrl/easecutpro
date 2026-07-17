@@ -15,7 +15,7 @@ export const IPC = {
   generateOverlays: 'media:generateOverlays',
   suggestOverlays: 'media:suggestOverlays',
   describeOverlayImage: 'media:describeOverlayImage',
-  labelMoment: 'media:labelMoment',
+  matchMoment: 'media:matchMoment',
   openaiStatus: 'tools:openaiStatus',
   whisperModels: 'tools:whisperModels',
   detectSilence: 'media:detectSilence',

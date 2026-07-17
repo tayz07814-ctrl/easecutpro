@@ -19,6 +19,7 @@ import type {
   TranscribeBackend,
   WhisperModelInfo,
   OverlayAsset,
+  OverlayThumb,
   OverlayRule,
   OverlayEvent,
   OverlaySuggestion
@@ -81,6 +82,44 @@ async function imageToBase64(file: string): Promise<{ base64: string; mediaType:
     const comma = dataUrl.indexOf(',')
     if (comma < 0) return null
     return { base64: dataUrl.slice(comma + 1), mediaType: blob.type || 'image/png' }
+  } catch {
+    return null
+  }
+}
+
+/** Downscale an overlay image to a small JPEG (base64) for moment-vision image-to-image
+ *  matching — keeps the vision payload cheap. Overlays are same-origin, so the canvas is
+ *  untainted; returns null on any problem (that overlay is just skipped from matching). */
+async function imageToThumb(file: string, max = 256): Promise<{ base64: string; mediaType: string } | null> {
+  try {
+    const img = document.createElement('img')
+    img.crossOrigin = 'anonymous'
+    img.decoding = 'async'
+    img.src = mediaSrc(file)
+    await new Promise<void>((resolve, reject) => {
+      const to = setTimeout(() => reject(new Error('image timeout')), 8000)
+      img.onload = () => { clearTimeout(to); resolve() }
+      img.onerror = () => { clearTimeout(to); reject(new Error('image load error')) }
+    })
+    const iw = img.naturalWidth || max
+    const ih = img.naturalHeight || max
+    const scale = Math.min(1, max / Math.max(iw, ih))
+    const w = Math.max(2, Math.round(iw * scale))
+    const h = Math.max(2, Math.round(ih * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    // Overlays may be transparent PNGs; JPEG can't carry alpha, so composite on white
+    // (a neutral background the model reads fine) instead of the canvas default black.
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
+    ctx.drawImage(img, 0, 0, w, h)
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+    const comma = dataUrl.indexOf(',')
+    if (comma < 0) return null
+    return { base64: dataUrl.slice(comma + 1), mediaType: 'image/jpeg' }
   } catch {
     return null
   }
@@ -2608,6 +2647,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const log: string[] = []
       let suggestions: OverlaySuggestion[] = []
+      let matchedFromShow = 0
 
       // 1) CARD suggestions from the overlay library (needs overlay images).
       if (assets.length > 0) {
@@ -2618,12 +2658,13 @@ export const useStore = create<AppState>((set, get) => ({
         log.push(...res.log)
       }
 
-      // 2) MOMENT VISION: auto-label what the creator is SHOWING at "point-and-show"
-      //    moments (deictic language + repeated identical lines — same words, different
-      //    visual). We look at the actual frame, since the transcript can't tell them
-      //    apart. Best-effort: a frame we can't read (e.g. desktop taint) is skipped.
-      //    Resolve the base video URL robustly — doc-native projects have NO
-      //    project.media (mediaUrl is null), so fall back to the main-lane video source.
+      // 2) MOMENT VISION (image-to-image): when the creator SHOWS something on camera
+      //    ("this is not acne" over an armpit, then legs, then chest) the WORDS are
+      //    identical — only the FRAME differs. We grab the frame and ask the model which
+      //    of the creator's OWN overlays depicts what's shown, then place THAT overlay
+      //    (never an invented label). Resolve the base video URL robustly — doc-native
+      //    projects have NO project.media (mediaUrl is null), so fall back to the
+      //    main-lane video source. A frame we can't read (e.g. desktop taint) is skipped.
       let baseUrl = get().mediaUrl
       if (!baseUrl) {
         const p = get().project
@@ -2632,35 +2673,52 @@ export const useStore = create<AppState>((set, get) => ({
         const src = p.media?.path || mainClip?.sourcePath || p.baseSequence?.[0]?.sourcePath
         if (src) baseUrl = mediaSrc(src)
       }
+      const libAssets = get().project.overlayAssets ?? assets
       const moments = baseUrl ? findShowMoments(chunkTranscript(t)) : []
       log.push(`moment vision: ${moments.length} show-moment(s)${baseUrl ? '' : ' — no base video, skipped'}`)
       if (baseUrl && moments.length) {
-        set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Looking at what you show on screen…' } })
-        let li = 0
-        let labeled = 0
-        for (const m of moments) {
-          const at = m.start + Math.min(0.4, Math.max(0, (m.end - m.start) / 2))
-          const frame = await grabFrame(baseUrl, at)
-          if (!frame) { log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}": couldn't read the frame`); continue }
-          let label = ''
-          try { label = (await window.api.labelMoment(frame.base64, frame.mediaType, m.text)).label || '' } catch (e) { log.push(`  labelMoment error: ${(e as Error).message}`) }
-          log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}" -> ${label ? `label "${label}"` : '(no label)'}`)
-          if (!label) continue
-          labeled++
-          suggestions.push({
-            id: `lb_${li++}`, kind: 'label', overlayId: '', label,
-            start: m.start, end: Math.min(dur || m.start + 3, m.start + 3),
-            position: 'bottom_center', animation: 'pop',
-            reason: `You show this while saying “${m.text.slice(0, 48)}”`,
-            sentence: m.text.slice(0, 200), confidence: 0.8
-          })
+        // Downscaled overlay thumbnails to match against (built once; bounded for cost).
+        const thumbs: OverlayThumb[] = []
+        for (const a of libAssets) {
+          const th = await imageToThumb(a.file, 256)
+          if (th) thumbs.push({ id: a.id, name: a.name, image: th.base64, mediaType: th.mediaType })
         }
-        log.push(`moment vision: placed ${labeled} auto-label(s)`)
+        if (!thumbs.length) {
+          log.push('moment vision: no overlay images to match against — skipped')
+        } else {
+          set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Matching what you show to your overlays…' } })
+          let si = 0
+          for (const m of moments) {
+            const span = Math.max(0, m.end - m.start)
+            // Grab LATE in the line — the reveal usually lands on the last word(s); a
+            // start-of-line frame catches a transitional pose (wrong body part / clothing).
+            const at = m.start + (span > 1 ? span * 0.7 : Math.max(0, span - 0.2))
+            const frame = await grabFrame(baseUrl, at)
+            if (!frame) { log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}": couldn't read the frame`); continue }
+            let overlayId = ''
+            try {
+              overlayId = (await window.api.matchMoment(frame.base64, frame.mediaType, m.text, thumbs)).overlayId || ''
+            } catch (e) {
+              log.push(`  matchMoment error: ${(e as Error).message}`)
+            }
+            const hit = libAssets.find((a) => a.id === overlayId)
+            log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}" -> ${hit ? `overlay "${hit.name}"` : '(no match)'}`)
+            if (!hit) continue
+            matchedFromShow++
+            suggestions.push({
+              id: `mv_${si++}`, kind: 'overlay', overlayId,
+              start: m.start, end: Math.min(dur || m.start + 3, m.start + 3),
+              position: 'bottom_center', animation: 'pop',
+              reason: `You show this on camera while saying “${m.text.slice(0, 48)}”`,
+              sentence: m.text.slice(0, 200), confidence: 0.8
+            })
+          }
+          log.push(`moment vision: matched ${matchedFromShow} overlay(s) to what you show`)
+        }
       }
 
       suggestions.sort((a, b) => a.start - b.start)
       log.forEach((l) => console.log('[suggest]', l))
-      const nLabels = suggestions.filter((s) => s.kind === 'label').length
       set({
         overlaySuggestions: suggestions,
         overlayLog: log,
@@ -2668,7 +2726,7 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 100,
           message: suggestions.length
-            ? `${suggestions.length} suggestion(s)${nLabels ? ` (incl. ${nLabels} auto-label${nLabels > 1 ? 's' : ''})` : ''} — review below`
+            ? `${suggestions.length} suggestion(s)${matchedFromShow ? ` (incl. ${matchedFromShow} matched to what you show)` : ''} — review below`
             : 'No suggestions found'
         }
       })

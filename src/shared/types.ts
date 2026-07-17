@@ -455,6 +455,18 @@ export interface OverlayAsset {
   description?: string
 }
 
+/** A downscaled overlay thumbnail (base64) sent to moment vision for image-to-image
+ *  matching: given a video FRAME + these thumbnails, the model picks which overlay
+ *  depicts what the creator is showing on camera. */
+export interface OverlayThumb {
+  id: string
+  name: string
+  /** base64 image bytes (no data: prefix). */
+  image: string
+  /** e.g. "image/jpeg". */
+  mediaType: string
+}
+
 /** Which mentions of a matched topic actually get the overlay. Deterministic —
  *  applied in code AFTER matching, never left to the AI to count. */
 export type OverlayOccurrence = 'every' | 'first' | 'last'

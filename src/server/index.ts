@@ -32,7 +32,7 @@ import { judgeCuts } from '../main/ai-cut-judge'
 import { cutCutPro } from '../main/cutcutpro'
 import { retakeAwareCut } from '../main/retakeaware/engine'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from '../main/fast-cut'
-import { generateOverlayTimeline, suggestOverlayTimeline, describeOverlayImage, labelMoment } from '../main/overlay-rules'
+import { generateOverlayTimeline, suggestOverlayTimeline, describeOverlayImage, matchMoment } from '../main/overlay-rules'
 import { openaiAvailable } from '../main/openai'
 import type { Project, Transcript, TranscribeBackend, OverlayAsset, OverlayRule } from '../shared/types'
 
@@ -531,12 +531,13 @@ app.post('/api/describe-overlay', async (req, res) => {
   }
 })
 
-app.post('/api/label-moment', async (req, res) => {
+app.post('/api/match-moment', async (req, res) => {
   try {
-    const imageBase64 = String(req.body?.imageBase64 ?? '')
-    const mediaType = String(req.body?.mediaType ?? 'image/jpeg')
+    const frameBase64 = String(req.body?.frameBase64 ?? '')
+    const frameMediaType = String(req.body?.frameMediaType ?? 'image/jpeg')
     const line = String(req.body?.line ?? '')
-    res.json(await labelMoment(imageBase64, mediaType, line))
+    const overlays = Array.isArray(req.body?.overlays) ? req.body.overlays : []
+    res.json(await matchMoment(frameBase64, frameMediaType, line, overlays))
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }

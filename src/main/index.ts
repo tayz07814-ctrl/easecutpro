@@ -17,7 +17,7 @@ import { cutCutPro } from './cutcutpro'
 import { retakeAwareCut } from './retakeaware/engine'
 import type { RetakeBetaSilenceSettings } from '../shared/retakeaware/silence'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from './fast-cut'
-import { generateOverlayTimeline, suggestOverlayTimeline, describeOverlayImage, labelMoment } from './overlay-rules'
+import { generateOverlayTimeline, suggestOverlayTimeline, describeOverlayImage, matchMoment } from './overlay-rules'
 import { openaiAvailable } from './openai'
 import {
   saveProject,
@@ -38,7 +38,8 @@ import type {
   Transcript,
   TranscribeBackend,
   OverlayAsset,
-  OverlayRule
+  OverlayRule,
+  OverlayThumb
 } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -347,8 +348,9 @@ app.whenReady().then(() => {
   )
 
   ipcMain.handle(
-    IPC.labelMoment,
-    async (_e, imageBase64: string, mediaType: string, line: string) => labelMoment(imageBase64, mediaType, line)
+    IPC.matchMoment,
+    async (_e, frameBase64: string, frameMediaType: string, line: string, overlays: OverlayThumb[]) =>
+      matchMoment(frameBase64, frameMediaType, line, overlays)
   )
 
   // ---- OpenAI availability (is a key configured?) ----

@@ -12,7 +12,8 @@ import {
 } from '../shared/overlay'
 import type { CleanOpts, Sentence } from '../shared/overlay'
 import type {
-  OverlayAsset, OverlayEvent, OverlayGenResult, OverlayRule, OverlaySuggestResult, Transcript
+  OverlayAsset, OverlayEvent, OverlayGenResult, OverlayRule, OverlaySuggestResult,
+  OverlayThumb, Transcript
 } from '../shared/types'
 
 type ProgressFn = (pct: number, msg?: string) => void
@@ -174,30 +175,63 @@ export async function describeOverlayImage(imageBase64: string, mediaType: strin
   }
 }
 
-/** Moment vision: given a VIDEO FRAME where the creator is pointing/showing and
- *  the line they say, return a SHORT on-screen label of what's shown ("Armpit",
- *  "Legs"). Empty string on any problem. */
-export async function labelMoment(imageBase64: string, mediaType: string, line: string): Promise<{ label: string }> {
-  if (!claudeAvailable() || !imageBase64) return { label: '' }
+/** Moment vision (image-to-image): given a VIDEO FRAME where the creator is
+ *  showing something on camera + the creator's own overlay thumbnails, pick which
+ *  overlay depicts what's being shown (e.g. an armpit frame -> the "Armpit" overlay).
+ *  Returns that overlay's id, or '' when none clearly matches / on any problem.
+ *  The model sees the frame first, then each overlay tagged by a LETTER (opaque ids
+ *  are never shown to it), and replies with just the letter; we map it back. */
+const MOMENT_MATCH_SYSTEM =
+  'You match what a video creator is SHOWING on camera to their overlay graphics. ' +
+  'The FIRST image is a frame from the video. Each following image is one of the ' +
+  "creator's overlay assets, tagged by a letter. Decide which ONE overlay depicts the " +
+  'SAME thing shown or pointed to in the video frame (same body part, product, or ' +
+  'subject). Reply with ONLY that letter. If none clearly matches, reply "none". ' +
+  'Reply with a single token — a letter or "none".'
+
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+export async function matchMoment(
+  frameBase64: string,
+  frameMediaType: string,
+  line: string,
+  overlays: OverlayThumb[]
+): Promise<{ overlayId: string }> {
+  if (!claudeAvailable() || !frameBase64 || !overlays?.length) return { overlayId: '' }
+  const pool = overlays.slice(0, 24) // bound the prompt (letters + cost)
+  const okType = (t: string): t is 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' =>
+    /^image\/(png|jpeg|gif|webp)$/.test(t)
+  const frameType = okType(frameMediaType) ? frameMediaType : 'image/jpeg'
   try {
     const client = getAnthropic()
-    const media = /^image\/(png|jpeg|gif|webp)$/.test(mediaType) ? mediaType : 'image/jpeg'
+    const content: Array<Record<string, unknown>> = [
+      { type: 'text', text: `Video frame (the creator says: "${line}"):` },
+      { type: 'image', source: { type: 'base64', media_type: frameType, data: frameBase64 } }
+    ]
+    pool.forEach((o, i) => {
+      content.push({ type: 'text', text: `Overlay ${LETTERS[i]} — ${o.name || 'untitled'}:` })
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: okType(o.mediaType) ? o.mediaType : 'image/jpeg', data: o.image }
+      })
+    })
+    content.push({
+      type: 'text',
+      text: 'Which overlay letter depicts what is shown in the video frame? Reply with the letter only, or "none".'
+    })
     const res = await client.messages.create({
       model: MODEL,
-      max_tokens: 60,
-      system: 'You caption what a video creator is SHOWING on camera. Given a frame and the line they speak, reply with a SHORT on-screen label (1-3 words, Title Case) naming the thing being shown/pointed at — e.g. "Armpit", "Left Leg", "Product Label". If nothing specific is being shown, reply with an empty string. No punctuation, no sentence, just the label.',
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: media as 'image/jpeg', data: imageBase64 } },
-          { type: 'text', text: `They say: "${line}". What are they showing? Give the short label.` }
-        ]
-      }]
+      max_tokens: 8,
+      system: MOMENT_MATCH_SYSTEM,
+      messages: [{ role: 'user', content: content as never }]
     })
     const block = res.content.find((b) => b.type === 'text')
-    const label = (block && block.type === 'text' ? block.text : '').trim().replace(/^["']|["'.]+$/g, '').slice(0, 40)
-    return { label }
+    const text = (block && block.type === 'text' ? block.text : '').trim()
+    const m = text.match(/[A-Za-z]/)
+    if (!m || /^none/i.test(text)) return { overlayId: '' }
+    const idx = LETTERS.indexOf(m[0].toUpperCase())
+    return { overlayId: idx >= 0 && idx < pool.length ? pool[idx].id : '' }
   } catch {
-    return { label: '' }
+    return { overlayId: '' }
   }
 }
