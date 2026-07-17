@@ -182,13 +182,17 @@ export async function describeOverlayImage(imageBase64: string, mediaType: strin
  *  The model sees the frame first, then each overlay tagged by a LETTER (opaque ids
  *  are never shown to it), and replies with just the letter; we map it back. */
 const MOMENT_MATCH_SYSTEM =
-  'You match what a video creator is SHOWING on camera to their overlay graphics. ' +
-  'The FIRST images are frames sampled across one moment of the video (the creator ' +
-  'reveals what they mean somewhere across them). Each following image is one of the ' +
-  "creator's overlay assets, tagged by a letter. Decide which ONE overlay depicts the " +
-  'SAME thing shown or pointed to in the frames (same body part, product, or subject). ' +
-  'Reply with ONLY that letter. If none clearly matches, reply "none". ' +
-  'Reply with a single token — a letter or "none".'
+  'You match what a video creator SHOWS on camera to their overlay graphics. The FIRST ' +
+  'images are frames sampled across ONE moment of the video. Each later image is one of ' +
+  "the creator's overlay assets, tagged by a LETTER and a NAME — the NAMES (often body " +
+  'parts) are the main discriminator. Work in two steps:\n' +
+  '1) Identify the SPECIFIC body part or thing the creator is showing/pointing to across ' +
+  'the frames (e.g. "left armpit", "legs", "chest", "hand"). If they are only talking and ' +
+  'not clearly showing a specific part, there is NO match.\n' +
+  '2) Choose the overlay whose NAME matches that thing. Different body parts MUST map to ' +
+  'different overlays — never default to one.\n' +
+  'Reply on ONE line exactly as: <what they show> => <LETTER>   (or "<what you see> => none" ' +
+  'if nothing matches).'
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
@@ -196,7 +200,7 @@ export async function matchMoment(
   frames: MomentFrame[],
   line: string,
   overlays: OverlayThumb[]
-): Promise<{ overlayId: string }> {
+): Promise<{ overlayId: string; note?: string }> {
   if (!claudeAvailable() || !frames?.length || !overlays?.length) return { overlayId: '' }
   const pool = overlays.slice(0, 24) // bound the prompt (letters + cost)
   const framePool = frames.slice(0, 3) // a few frames across the moment, bounded for cost
@@ -222,20 +226,24 @@ export async function matchMoment(
     })
     content.push({
       type: 'text',
-      text: 'Which overlay letter depicts what the creator shows in the video frames? Reply with the letter only, or "none".'
+      text: 'Identify what the creator shows across the frames, then give the matching overlay. Reply as: <what they show> => <LETTER> (or "... => none").'
     })
     const res = await client.messages.create({
       model: MODEL,
-      max_tokens: 8,
+      max_tokens: 120,
       system: MOMENT_MATCH_SYSTEM,
       messages: [{ role: 'user', content: content as never }]
     })
     const block = res.content.find((b) => b.type === 'text')
     const text = (block && block.type === 'text' ? block.text : '').trim()
-    const m = text.match(/[A-Za-z]/)
-    if (!m || /^none/i.test(text)) return { overlayId: '' }
-    const idx = LETTERS.indexOf(m[0].toUpperCase())
-    return { overlayId: idx >= 0 && idx < pool.length ? pool[idx].id : '' }
+    // Expected "<phrase> => <LETTER|none>"; parse the token after the last "=>".
+    const arrow = text.lastIndexOf('=>')
+    const note = (arrow >= 0 ? text.slice(0, arrow) : text).trim().replace(/\s+/g, ' ').slice(0, 60)
+    const tail = arrow >= 0 ? text.slice(arrow + 2).trim() : text
+    if (/\bnone\b/i.test(tail)) return { overlayId: '', note }
+    const lm = tail.match(/[A-Za-z]/)
+    const idx = lm ? LETTERS.indexOf(lm[0].toUpperCase()) : -1
+    return { overlayId: idx >= 0 && idx < pool.length ? pool[idx].id : '', note }
   } catch {
     return { overlayId: '' }
   }

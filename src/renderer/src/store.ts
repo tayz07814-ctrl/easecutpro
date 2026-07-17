@@ -2794,13 +2794,16 @@ export const useStore = create<AppState>((set, get) => ({
             if (!grabbed.length) { log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}": couldn't read the frame`); continue }
             const frames = grabbed.map((g) => ({ image: g.base64, mediaType: g.mediaType }))
             let overlayId = ''
+            let note = ''
             try {
-              overlayId = (await window.api.matchMoment(frames, m.text, thumbs)).overlayId || ''
+              const r = await window.api.matchMoment(frames, m.text, thumbs)
+              overlayId = r.overlayId || ''
+              note = r.note || ''
             } catch (e) {
               log.push(`  matchMoment error: ${(e as Error).message}`)
             }
             const hit = libAssets.find((a) => a.id === overlayId)
-            log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}" (${grabbed.length}f) -> ${hit ? `overlay "${hit.name}"` : '(no match)'}`)
+            log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}" (${grabbed.length}f)${note ? ` saw: ${note}` : ''} -> ${hit ? `overlay "${hit.name}"` : '(no match)'}`)
             if (!hit) continue
             matchedFromShow++
             suggestions.push({

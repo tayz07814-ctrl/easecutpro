@@ -91,7 +91,7 @@ const api = {
     frames: MomentFrame[],
     line: string,
     overlays: OverlayThumb[]
-  ): Promise<{ overlayId: string }> =>
+  ): Promise<{ overlayId: string; note?: string }> =>
     ipcRenderer.invoke(IPC.matchMoment, frames, line, overlays),
   openaiStatus: (): Promise<{ available: boolean }> => ipcRenderer.invoke(IPC.openaiStatus),
   whisperModels: (): Promise<WhisperModelInfo[]> => ipcRenderer.invoke(IPC.whisperModels),

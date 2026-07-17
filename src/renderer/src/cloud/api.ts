@@ -156,7 +156,7 @@ const cloudApi: Window['api'] & { retakeDeltaCut: Window['api']['retakeAwareCut'
   // they show across a few video frames, via the moment-vision edge fn.
   matchMoment: async (frames, line, overlays) => {
     try {
-      return await invokeEdge<{ overlayId: string }>('moment-vision', { frames, line, overlays })
+      return await invokeEdge<{ overlayId: string; note?: string }>('moment-vision', { frames, line, overlays })
     } catch {
       return { overlayId: '' } // graceful: moment matching just adds nothing
     }
