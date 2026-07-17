@@ -153,12 +153,10 @@ const cloudApi: Window['api'] = {
     }
   },
   // Moment vision (image-to-image): pick which of the creator's overlays depicts what
-  // they show in a video frame, via the moment-vision edge fn.
-  matchMoment: async (frameBase64, frameMediaType, line, overlays) => {
+  // they show across a few video frames, via the moment-vision edge fn.
+  matchMoment: async (frames, line, overlays) => {
     try {
-      return await invokeEdge<{ overlayId: string }>('moment-vision', {
-        frame: frameBase64, frameMediaType, line, overlays
-      })
+      return await invokeEdge<{ overlayId: string }>('moment-vision', { frames, line, overlays })
     } catch {
       return { overlayId: '' } // graceful: moment matching just adds nothing
     }

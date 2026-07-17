@@ -125,12 +125,13 @@ async function imageToThumb(file: string, max = 256): Promise<{ base64: string; 
   }
 }
 
-/** Grab a downscaled JPEG frame from the media at SOURCE-time `tSec`, as base64.
- *  Uses an offscreen <video>+canvas; returns null on any problem (e.g. cross-origin
- *  taint on desktop) so moment vision degrades gracefully. Cloud/web media are
- *  same-origin blobs, so this works there. */
-async function grabFrame(mediaUrl: string, tSec: number): Promise<{ base64: string; mediaType: string } | null> {
-  if (!mediaUrl) return null
+/** Grab downscaled JPEG frames from the media at several SOURCE-time seconds, as base64.
+ *  Loads the <video> ONCE and seeks to each time (so N frames cost one video load, not N).
+ *  Uses an offscreen <video>+canvas; returns [] on any problem (e.g. cross-origin taint on
+ *  desktop) so moment vision degrades gracefully. Cloud/web media are same-origin blobs. */
+async function grabFrames(mediaUrl: string, times: number[]): Promise<{ base64: string; mediaType: string }[]> {
+  const out: { base64: string; mediaType: string }[] = []
+  if (!mediaUrl || !times.length) return out
   let v: HTMLVideoElement | null = null
   try {
     v = document.createElement('video')
@@ -143,12 +144,7 @@ async function grabFrame(mediaUrl: string, tSec: number): Promise<{ base64: stri
       v!.onloadedmetadata = () => { clearTimeout(to); resolve() }
       v!.onerror = () => { clearTimeout(to); reject(new Error('video load error')) }
     })
-    const t = Math.max(0, Math.min(tSec, (v.duration || tSec) - 0.05))
-    await new Promise<void>((resolve, reject) => {
-      const to = setTimeout(() => reject(new Error('seek timeout')), 8000)
-      v!.onseeked = () => { clearTimeout(to); resolve() }
-      v!.currentTime = t
-    })
+    const dur = v.duration || 0
     const vw = v.videoWidth || 640
     const vh = v.videoHeight || 360
     const scale = Math.min(1, 640 / vw)
@@ -158,14 +154,26 @@ async function grabFrame(mediaUrl: string, tSec: number): Promise<{ base64: stri
     canvas.width = w
     canvas.height = h
     const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-    ctx.drawImage(v, 0, 0, w, h)
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.7) // throws if tainted -> caught below
-    const comma = dataUrl.indexOf(',')
-    if (comma < 0) return null
-    return { base64: dataUrl.slice(comma + 1), mediaType: 'image/jpeg' }
+    if (!ctx) return out
+    for (const tSec of times) {
+      const t = Math.max(0, Math.min(tSec, (dur || tSec) - 0.05))
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const to = setTimeout(() => reject(new Error('seek timeout')), 8000)
+          v!.onseeked = () => { clearTimeout(to); resolve() }
+          v!.currentTime = t
+        })
+        ctx.drawImage(v, 0, 0, w, h)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7) // throws if tainted -> caught below
+        const comma = dataUrl.indexOf(',')
+        if (comma >= 0) out.push({ base64: dataUrl.slice(comma + 1), mediaType: 'image/jpeg' })
+      } catch {
+        /* skip this timestamp; keep any frames we already grabbed */
+      }
+    }
+    return out
   } catch {
-    return null
+    return out
   } finally {
     if (v) { v.src = ''; v.removeAttribute('src') }
   }
@@ -2690,19 +2698,23 @@ export const useStore = create<AppState>((set, get) => ({
           let si = 0
           for (const m of moments) {
             const span = Math.max(0, m.end - m.start)
-            // Grab LATE in the line — the reveal usually lands on the last word(s); a
-            // start-of-line frame catches a transitional pose (wrong body part / clothing).
-            const at = m.start + (span > 1 ? span * 0.7 : Math.max(0, span - 0.2))
-            const frame = await grabFrame(baseUrl, at)
-            if (!frame) { log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}": couldn't read the frame`); continue }
+            // Sample a FEW frames across the line — the reveal can land early or late, and
+            // one snapshot misses it (that's why legs-at-2.4s came back no-match). Matching
+            // against several frames catches it wherever in the line it happens.
+            const times = span > 0.6
+              ? [m.start + span * 0.3, m.start + span * 0.6, m.start + span * 0.85]
+              : [m.start + span * 0.5]
+            const grabbed = await grabFrames(baseUrl, times)
+            if (!grabbed.length) { log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}": couldn't read the frame`); continue }
+            const frames = grabbed.map((g) => ({ image: g.base64, mediaType: g.mediaType }))
             let overlayId = ''
             try {
-              overlayId = (await window.api.matchMoment(frame.base64, frame.mediaType, m.text, thumbs)).overlayId || ''
+              overlayId = (await window.api.matchMoment(frames, m.text, thumbs)).overlayId || ''
             } catch (e) {
               log.push(`  matchMoment error: ${(e as Error).message}`)
             }
             const hit = libAssets.find((a) => a.id === overlayId)
-            log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}" -> ${hit ? `overlay "${hit.name}"` : '(no match)'}`)
+            log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}" (${grabbed.length}f) -> ${hit ? `overlay "${hit.name}"` : '(no match)'}`)
             if (!hit) continue
             matchedFromShow++
             suggestions.push({

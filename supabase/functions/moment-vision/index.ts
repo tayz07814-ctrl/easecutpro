@@ -1,15 +1,16 @@
 // EaseCutPro — MOMENT vision edge function (image-to-image overlay matching).
 // When a creator SHOWS something on camera ("this is not acne" over an armpit,
 // then legs, then chest), the transcript is identical — the differentiator is the
-// FRAME. Given the video frame + the creator's own overlay thumbnails, this picks
-// which overlay depicts what's being shown, so the app can place THAT overlay
-// image (not an invented text label).
+// FRAME. Given a few frames across the moment + the creator's own overlay thumbnails,
+// this picks which overlay depicts what's being shown, so the app can place THAT
+// overlay image (not an invented text label).
 //
-// Input:  { frame: <base64>, frameMediaType, line, overlays: [{ id, name, image, mediaType }] }
+// Input:  { frames: [{ image, mediaType }], line, overlays: [{ id, name, image, mediaType }] }
 // Output: { overlayId: string }   ('' when nothing matches / on error)
 //
-// The model sees the frame first, then each overlay tagged by a LETTER (opaque ids
-// are never sent to it), and replies with just the letter; we map it back to an id.
+// The model sees the frames first (several sampled across the moment so the reveal is
+// caught wherever it lands), then each overlay tagged by a LETTER (opaque ids are never
+// sent to it), and replies with just the letter; we map it back to an id.
 // Reuses the ANTHROPIC_API_KEY secret. Claude Opus is multimodal.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
@@ -27,10 +28,11 @@ function preflight(req: Request): Response | null {
 
 const SYSTEM =
   'You match what a video creator is SHOWING on camera to their overlay graphics. ' +
-  'The FIRST image is a frame from the video. Each following image is one of the ' +
+  'The FIRST images are frames sampled across one moment of the video (the creator ' +
+  'reveals what they mean somewhere across them). Each following image is one of the ' +
   "creator's overlay assets, tagged by a letter. Decide which ONE overlay depicts the " +
-  'SAME thing shown or pointed to in the video frame (same body part, product, or ' +
-  'subject). Reply with ONLY that letter. If none clearly matches, reply "none". ' +
+  'SAME thing shown or pointed to in the frames (same body part, product, or subject). ' +
+  'Reply with ONLY that letter. If none clearly matches, reply "none". ' +
   'Reply with a single token — a letter or "none".'
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -46,6 +48,7 @@ async function requireUser(req: Request): Promise<boolean> {
 }
 
 interface Thumb { id: string; name: string; image: string; mediaType: string }
+interface Frame { image: string; mediaType: string }
 
 Deno.serve(async (req) => {
   const pf = preflight(req)
@@ -53,20 +56,25 @@ Deno.serve(async (req) => {
   try {
     if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
     const body = await req.json().catch(() => ({}))
-    const frame = String(body?.frame ?? '')
     const line = String(body?.line ?? '').slice(0, 300)
-    const frameType = okType(String(body?.frameMediaType ?? '')) ? String(body.frameMediaType) : 'image/jpeg'
+    const framesIn: Frame[] = Array.isArray(body?.frames) ? body.frames : []
+    const framePool = framesIn.filter((f) => f && typeof f.image === 'string' && f.image).slice(0, 3)
     const overlaysIn: Thumb[] = Array.isArray(body?.overlays) ? body.overlays : []
     const pool = overlaysIn.filter((o) => o && typeof o.image === 'string' && o.image).slice(0, 24)
-    if (!frame || !pool.length) return json({ overlayId: '' })
+    if (!framePool.length || !pool.length) return json({ overlayId: '' })
 
     const key = Deno.env.get('ANTHROPIC_API_KEY')
     if (!key) return json({ overlayId: '' })
     try {
       const content: Array<Record<string, unknown>> = [
-        { type: 'text', text: `Video frame (the creator says: "${line}"):` },
-        { type: 'image', source: { type: 'base64', media_type: frameType, data: frame } }
+        { type: 'text', text: `Video frames across the moment (the creator says: "${line}"):` }
       ]
+      framePool.forEach((f) => {
+        content.push({
+          type: 'image',
+          source: { type: 'base64', media_type: okType(f.mediaType) ? f.mediaType : 'image/jpeg', data: f.image }
+        })
+      })
       pool.forEach((o, i) => {
         content.push({ type: 'text', text: `Overlay ${LETTERS[i]} — ${String(o.name || 'untitled').slice(0, 60)}:` })
         content.push({
@@ -76,7 +84,7 @@ Deno.serve(async (req) => {
       })
       content.push({
         type: 'text',
-        text: 'Which overlay letter depicts what is shown in the video frame? Reply with the letter only, or "none".'
+        text: 'Which overlay letter depicts what the creator shows in the video frames? Reply with the letter only, or "none".'
       })
       const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',

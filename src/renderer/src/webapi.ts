@@ -283,8 +283,8 @@ const webApi: Window['api'] = {
     runJob(() => call('/api/suggest-overlays', { transcript, assets, opts })),
   describeOverlayImage: (imageBase64, mediaType) =>
     call('/api/describe-overlay', { imageBase64, mediaType }),
-  matchMoment: (frameBase64, frameMediaType, line, overlays) =>
-    call('/api/match-moment', { frameBase64, frameMediaType, line, overlays }),
+  matchMoment: (frames, line, overlays) =>
+    call('/api/match-moment', { frames, line, overlays }),
   openaiStatus: () => call('/api/openai-status'),
   whisperModels: async () => (await call('/api/whisper-models')).models,
   detectSilence: async (path, opts) => {

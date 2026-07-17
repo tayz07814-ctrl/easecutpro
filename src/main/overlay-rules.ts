@@ -13,7 +13,7 @@ import {
 import type { CleanOpts, Sentence } from '../shared/overlay'
 import type {
   OverlayAsset, OverlayEvent, OverlayGenResult, OverlayRule, OverlaySuggestResult,
-  OverlayThumb, Transcript
+  OverlayThumb, MomentFrame, Transcript
 } from '../shared/types'
 
 type ProgressFn = (pct: number, msg?: string) => void
@@ -183,31 +183,36 @@ export async function describeOverlayImage(imageBase64: string, mediaType: strin
  *  are never shown to it), and replies with just the letter; we map it back. */
 const MOMENT_MATCH_SYSTEM =
   'You match what a video creator is SHOWING on camera to their overlay graphics. ' +
-  'The FIRST image is a frame from the video. Each following image is one of the ' +
+  'The FIRST images are frames sampled across one moment of the video (the creator ' +
+  'reveals what they mean somewhere across them). Each following image is one of the ' +
   "creator's overlay assets, tagged by a letter. Decide which ONE overlay depicts the " +
-  'SAME thing shown or pointed to in the video frame (same body part, product, or ' +
-  'subject). Reply with ONLY that letter. If none clearly matches, reply "none". ' +
+  'SAME thing shown or pointed to in the frames (same body part, product, or subject). ' +
+  'Reply with ONLY that letter. If none clearly matches, reply "none". ' +
   'Reply with a single token — a letter or "none".'
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
 export async function matchMoment(
-  frameBase64: string,
-  frameMediaType: string,
+  frames: MomentFrame[],
   line: string,
   overlays: OverlayThumb[]
 ): Promise<{ overlayId: string }> {
-  if (!claudeAvailable() || !frameBase64 || !overlays?.length) return { overlayId: '' }
+  if (!claudeAvailable() || !frames?.length || !overlays?.length) return { overlayId: '' }
   const pool = overlays.slice(0, 24) // bound the prompt (letters + cost)
+  const framePool = frames.slice(0, 3) // a few frames across the moment, bounded for cost
   const okType = (t: string): t is 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' =>
     /^image\/(png|jpeg|gif|webp)$/.test(t)
-  const frameType = okType(frameMediaType) ? frameMediaType : 'image/jpeg'
   try {
     const client = getAnthropic()
     const content: Array<Record<string, unknown>> = [
-      { type: 'text', text: `Video frame (the creator says: "${line}"):` },
-      { type: 'image', source: { type: 'base64', media_type: frameType, data: frameBase64 } }
+      { type: 'text', text: `Video frames across the moment (the creator says: "${line}"):` }
     ]
+    framePool.forEach((f) => {
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: okType(f.mediaType) ? f.mediaType : 'image/jpeg', data: f.image }
+      })
+    })
     pool.forEach((o, i) => {
       content.push({ type: 'text', text: `Overlay ${LETTERS[i]} — ${o.name || 'untitled'}:` })
       content.push({
@@ -217,7 +222,7 @@ export async function matchMoment(
     })
     content.push({
       type: 'text',
-      text: 'Which overlay letter depicts what is shown in the video frame? Reply with the letter only, or "none".'
+      text: 'Which overlay letter depicts what the creator shows in the video frames? Reply with the letter only, or "none".'
     })
     const res = await client.messages.create({
       model: MODEL,

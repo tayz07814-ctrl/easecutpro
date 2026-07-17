@@ -456,11 +456,20 @@ export interface OverlayAsset {
 }
 
 /** A downscaled overlay thumbnail (base64) sent to moment vision for image-to-image
- *  matching: given a video FRAME + these thumbnails, the model picks which overlay
+ *  matching: given video FRAMES + these thumbnails, the model picks which overlay
  *  depicts what the creator is showing on camera. */
 export interface OverlayThumb {
   id: string
   name: string
+  /** base64 image bytes (no data: prefix). */
+  image: string
+  /** e.g. "image/jpeg". */
+  mediaType: string
+}
+
+/** One sampled video frame (base64) for moment vision. Several are taken across a
+ *  show-moment so the reveal is caught wherever in the line it lands. */
+export interface MomentFrame {
   /** base64 image bytes (no data: prefix). */
   image: string
   /** e.g. "image/jpeg". */

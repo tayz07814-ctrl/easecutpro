@@ -19,6 +19,7 @@ import type {
   WhisperModelInfo,
   OverlayAsset,
   OverlayThumb,
+  MomentFrame,
   OverlayRule,
   OverlayGenResult,
   OverlaySuggestResult
@@ -84,15 +85,14 @@ const api = {
     imageBase64: string,
     mediaType: string
   ): Promise<{ description: string }> => ipcRenderer.invoke(IPC.describeOverlayImage, imageBase64, mediaType),
-  /** Moment vision: given a video FRAME + the creator's overlay thumbnails, pick which
-   *  overlay depicts what they're showing on camera (image-to-image match). */
+  /** Moment vision: given a few video FRAMES across the moment + the creator's overlay
+   *  thumbnails, pick which overlay depicts what they're showing (image-to-image match). */
   matchMoment: (
-    frameBase64: string,
-    frameMediaType: string,
+    frames: MomentFrame[],
     line: string,
     overlays: OverlayThumb[]
   ): Promise<{ overlayId: string }> =>
-    ipcRenderer.invoke(IPC.matchMoment, frameBase64, frameMediaType, line, overlays),
+    ipcRenderer.invoke(IPC.matchMoment, frames, line, overlays),
   openaiStatus: (): Promise<{ available: boolean }> => ipcRenderer.invoke(IPC.openaiStatus),
   whisperModels: (): Promise<WhisperModelInfo[]> => ipcRenderer.invoke(IPC.whisperModels),
   detectSilence: (path: string, opts: SilenceDetectOptions): Promise<SilenceRegion[]> =>

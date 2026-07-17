@@ -39,7 +39,8 @@ import type {
   TranscribeBackend,
   OverlayAsset,
   OverlayRule,
-  OverlayThumb
+  OverlayThumb,
+  MomentFrame
 } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -349,8 +350,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle(
     IPC.matchMoment,
-    async (_e, frameBase64: string, frameMediaType: string, line: string, overlays: OverlayThumb[]) =>
-      matchMoment(frameBase64, frameMediaType, line, overlays)
+    async (_e, frames: MomentFrame[], line: string, overlays: OverlayThumb[]) =>
+      matchMoment(frames, line, overlays)
   )
 
   // ---- OpenAI availability (is a key configured?) ----

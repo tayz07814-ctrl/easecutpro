@@ -533,11 +533,10 @@ app.post('/api/describe-overlay', async (req, res) => {
 
 app.post('/api/match-moment', async (req, res) => {
   try {
-    const frameBase64 = String(req.body?.frameBase64 ?? '')
-    const frameMediaType = String(req.body?.frameMediaType ?? 'image/jpeg')
+    const frames = Array.isArray(req.body?.frames) ? req.body.frames : []
     const line = String(req.body?.line ?? '')
     const overlays = Array.isArray(req.body?.overlays) ? req.body.overlays : []
-    res.json(await matchMoment(frameBase64, frameMediaType, line, overlays))
+    res.json(await matchMoment(frames, line, overlays))
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }
