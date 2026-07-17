@@ -13,10 +13,10 @@
 //                         (misses cuts or over-cuts run-to-run).
 //   • google/gemini-3.5-flash — reasons ~4x more efficiently: ~1-1.6k tokens in
 //                         ~7s, and RELIABLY emits clean whole-take span cuts.
-// Default is now google/gemini-3.1-pro-preview (creator's choice) — a frontier
-// reasoning model for higher-quality take detection; effort=low reasoning +
-// throughput provider routing keep it within the latency budget. Any model still
-// works via DELTA_MODEL (e.g. set it back to google/gemini-3.5-flash for speed/cost).
+// Default is now qwen/qwen3.7-plus (creator's choice) — a fast, cost-effective
+// model; effort=low reasoning + throughput provider routing keep it inside the
+// latency budget while giving enough reasoning for the hard repeated-take tangles.
+// Any model still works via DELTA_MODEL (e.g. google/gemini-3.5-flash).
 //
 // The SYSTEM prompt forces WHOLE-TAKE SPAN cuts (not scattered word/filler removal),
 // which is what makes a fast model produce pro-quality edits.
@@ -28,7 +28,7 @@
 //   DELTA_JUDGE_KEY  — required. OpenRouter sk-or-… key. Edge secret OR Supabase
 //                      Vault via the service-role-only delta_judge_key() RPC.
 //   DELTA_BASE_URL   — optional. Default https://openrouter.ai/api/v1.
-//   DELTA_MODEL      — optional. Default google/gemini-3.1-pro-preview.
+//   DELTA_MODEL      — optional. Default qwen/qwen3.7-plus.
 //   DELTA_REASONING_EFFORT      — optional. low|medium|high|off. Default low.
 //   DELTA_REASONING_MAX_TOKENS  — optional alt cap (effort wins if both set).
 //   DELTA_PROVIDER_SORT         — optional. throughput|latency|price|off. Default throughput.
@@ -50,13 +50,12 @@ function preflight(req: Request): Response | null {
 }
 
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.1-pro-preview'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'qwen/qwen3.7-plus'
 
-// Reasoning control. Default is now OFF — extended thinking on a frontier PRO
-// model (gemini-3.1-pro-preview) would blow the ~15s judge budget; disabling it
-// keeps the "press δ → cuts" flow fast, and a strong model + the whole-take-span
-// forcing prompt still emits clean cuts. Bump DELTA_REASONING_EFFORT to low/medium
-// if cut quality needs it (or set it back to low if reverting to gemini-flash).
+// Reasoning control. Default effort=low — a small reasoning budget is enough for
+// qwen3.7-plus to catch the hard repeated-take tangles while staying fast inside
+// the ~15s judge budget. `off` is fastest but can miss tangles; higher tiers risk
+// the budget. Set via DELTA_REASONING_EFFORT.
 function reasoningConfig(): Record<string, unknown> {
   const effort = Deno.env.get('DELTA_REASONING_EFFORT')?.toLowerCase()
   if (effort === 'off') return { enabled: false }
@@ -66,7 +65,7 @@ function reasoningConfig(): Record<string, unknown> {
     const n = parseInt(raw, 10)
     if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
   }
-  return { enabled: false }
+  return { effort: 'low' }
 }
 
 // Provider routing. Default: route to the highest-throughput provider (fastest
