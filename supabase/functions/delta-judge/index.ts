@@ -48,7 +48,10 @@ function preflight(req: Request): Response | null {
 }
 
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.5-flash'
+// A/B trial: gemini-3.1-pro-preview as the judge ($2/$12 per M vs flash's $1.5/$9 —
+// only ~33% more per token). Watch latency: Pro reasons more than flash's ~7s; if runs
+// blow the ~40s budget or 546, flip back to google/gemini-3.5-flash.
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.1-pro-preview'
 
 // Reasoning control. Default effort=low — enough to reliably find take boundaries,
 // fast on gemini-flash (~7s). `off` disables (fast but unreliable on this task).
