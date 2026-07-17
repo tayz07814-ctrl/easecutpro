@@ -13,6 +13,9 @@ const CHIP = "background:rgba(217,164,74,.14);color:#D9A44A;border:1px solid rgb
 // never looks like a done cut). CUT = the committed strike-through (executed state).
 const SEL = 'background:rgba(217,104,110,.22);color:#F1C4C7;border-radius:4px;padding:1px 3px;box-shadow:inset 0 0 0 1px rgba(217,104,110,.4)'
 const CUT = 'background:rgba(217,104,110,.13);color:#D9868B;border-radius:5px;padding:1px 4px;text-decoration:line-through;text-decoration-color:rgba(217,134,139,.55)'
+// a committed cut that is ALSO selected (→ eligible for Restore): accent highlight
+// over the strike-through so it reads as "selected, currently removed".
+const SELCUT = 'background:rgba(110,106,232,.28);color:#EDECFF;border-radius:4px;padding:1px 3px;box-shadow:inset 0 0 0 1px rgba(110,106,232,.55);text-decoration:line-through;text-decoration-color:rgba(237,236,255,.5)'
 
 /** whole seconds → M:SS */
 const fmtDur = (s: number): string => {
@@ -51,17 +54,19 @@ function Header(): JSX.Element {
   )
 }
 
-// Word gestures (Descript/CapCut-style — NOTHING cuts here; only Execute cuts):
+// Word gestures (Descript/CapCut-style — selection is ALWAYS non-destructive;
+// cuts/restores happen ONLY via the buttons, never on a click):
 //  • single click       → toggle-highlight one word
 //  • click + drag       → highlight a range of words (a whole sentence, etc.)
 //  • drag from a already-highlighted word → UN-highlight the range it covers
 //  • double click       → seek the preview to that word and play (no highlight)
-// In the executed state the same gestures toggle the committed cut live instead.
-// Words are grouped into paragraphs by transcript segment, and — for a multi-clip
-// import — under a labelled divider per source video, in import order.
-function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage' | 'applied' }): JSX.Element {
-  const isMarked = mode === 'applied' ? r.isDeleted : r.isSelected
-  const applyWord = mode === 'applied' ? r.toggleWord : (id: string) => r.selectWord(id, true)
+// `showCuts` adds the committed-cut strike-through (executed review), so you can
+// see what was removed and select those words to Restore them. Words are grouped
+// into paragraphs by segment, and — for a multi-clip import — under a labelled
+// divider per source video, in import order.
+function Transcript({ r, showCuts }: { r: ReturnType<typeof useRetake>; showCuts: boolean }): JSX.Element {
+  const isMarked = r.isSelected // drag paints the SELECTION (never the cut)
+  const applyWord = (id: string): void => r.selectWord(id, true)
   const drag = useRef<{ active: boolean; anchor: string | null; add: boolean; moved: boolean; done: Set<string> }>({
     active: false,
     anchor: null,
@@ -91,7 +96,7 @@ function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage
     window.addEventListener('mouseup', up)
     return () => window.removeEventListener('mouseup', up)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode])
+  }, [])
 
   const bounds = r.clipBounds
   const clipOf = (startS: number): number => {
@@ -142,7 +147,11 @@ function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage
                         }
                         paint(w.id)
                       }}
-                      style={isMarked(w.id) ? css(mode === 'applied' ? CUT : SEL) : css('cursor:pointer;border-radius:4px;padding:1px 3px')}
+                      style={(() => {
+                        const sel = r.isSelected(w.id)
+                        const cut = showCuts && r.isDeleted(w.id)
+                        return css(sel ? (cut ? SELCUT : SEL) : cut ? CUT : 'cursor:pointer;border-radius:4px;padding:1px 3px')
+                      })()}
                     >
                       {w.text}
                     </span>{' '}
@@ -237,9 +246,18 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
           <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review cuts</div>
           <div style={css('flex:1')} />
-          <div style={css('font-size:11px;color:#686E7B')}>click or drag to toggle cuts · double-click to play</div>
+          <div style={css('font-size:11px;color:#686E7B')}>{r.words > 0 ? `${r.words} selected` : 'click or drag to select'}</div>
         </div>
-        <Transcript r={r} mode="applied" />
+        {/* Selection actions — cutting or restoring happens HERE, never on a click.
+            Restore un-cuts the selected words; Cut removes the selected kept ones. */}
+        {r.words > 0 && (
+          <div style={css('display:flex;gap:8px;margin-top:8px;flex:none')}>
+            <button onClick={r.restore} style={css('flex:1;background:rgba(46,156,106,.14);border:1px solid rgba(46,156,106,.4);color:#7FCFAA;font-family:inherit;font-size:12px;font-weight:600;border-radius:8px;padding:8px 0;cursor:pointer')}>↺ Restore selected</button>
+            <button onClick={r.cutSelected} style={css('flex:1;background:rgba(217,104,110,.16);border:1px solid rgba(217,104,110,.4);color:#F1B0B4;font-family:inherit;font-size:12px;font-weight:600;border-radius:8px;padding:8px 0;cursor:pointer')}>✂ Cut selected</button>
+          </div>
+        )}
+        <div style={css('font-size:10.5px;color:#686E7B;margin-top:8px;flex:none')}>Click or drag to select · double-click to play · a click never cuts — use Cut / Restore.</div>
+        <Transcript r={r} showCuts={true} />
       </>
     )
   }
@@ -288,7 +306,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <span onClick={r.clear} style={css('font-size:11.5px;color:#9BA0AC;padding:4px 8px;border-radius:7px;cursor:pointer')}>Clear</span>
       </div>
       <div style={css('font-size:10.5px;color:#686E7B;margin-top:6px;flex:none')}>Click or drag to highlight words to cut · double-click to play · nothing is removed until you press Execute</div>
-      <Transcript r={r} mode="stage" />
+      <Transcript r={r} showCuts={false} />
     </>
   )
 }

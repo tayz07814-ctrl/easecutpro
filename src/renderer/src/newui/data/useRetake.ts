@@ -3,7 +3,6 @@
 // fields; ORCHESTRATES existing actions (runRetakeCutBeta / executeCuts /
 // selectWord / …). Does not touch Retake β or silence-engine internals.
 
-import { useState } from 'react'
 import { useStore } from '../../store'
 import { buildSilenceChips } from '@shared/cutlord'
 import { getSharedEngine } from '../../timelineEngine'
@@ -38,6 +37,8 @@ export interface RetakeModel {
   // actions
   find: () => void
   execute: () => void
+  /** cut the currently-selected words (executed-state "Cut selected"). */
+  cutSelected: () => void
   restore: () => void
   clear: () => void
   selectWord: (id: string, additive: boolean, rangeTo?: string) => void
@@ -64,6 +65,7 @@ export function useRetake(): RetakeModel {
   const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
+  const deleteSelected = useStore((s) => s.deleteSelected)
   const clearSelection = useStore((s) => s.clearSelection)
   const selectWord = useStore((s) => s.selectWord)
   const toggleStagedSilence = useStore((s) => s.toggleStagedSilence)
@@ -73,27 +75,28 @@ export function useRetake(): RetakeModel {
   const setPlaying = useStore((s) => s.setPlaying)
   const hasTimeline = useStore((s) => !!s.project.timeline)
 
-  // "executed" and "error" aren't distinct store flags, so the panel tracks the
-  // last terminal transition locally (reset when a new analysis starts).
-  const [executed, setExecuted] = useState(false)
+  // committed cuts (word.deleted) — struck-through in the executed-state review.
+  const deletedIds = new Set<string>()
+  if (transcript) for (const w of transcript.words) if (w.deleted) deletedIds.add(w.id)
 
   const failed = !job.active && job.percent === 0 && !!job.message && /fail|couldn|could not|didn/i.test(job.message)
   const hasResults = !!transcript && (selected.size > 0 || staged.length > 0)
 
+  // The panel is in the EXECUTED review whenever committed cuts exist — no matter
+  // HOW they were applied (the panel's Execute button, the import wizard, or a
+  // re-opened project). Deriving this from the transcript itself (not a local
+  // flag the wizard never sets) is what makes the applied cuts + the transcript
+  // show up after an import / reopen instead of the empty "Find Retakes" screen.
   let state: RetakeState
   if (job.active) state = 'analyzing'
-  else if (executed) state = 'executed'
   else if (failed && !transcript) state = 'error'
+  else if (deletedIds.size > 0) state = 'executed'
   else if (hasResults) state = 'results'
   else state = 'idle'
 
   const words = selected.size
   const selStaged = staged.filter((r) => stagedSel.has(r.id))
   const pauses = smartSilence ? selStaged.length : 0
-
-  // committed cuts (word.deleted) — struck-through in the executed-state review.
-  const deletedIds = new Set<string>()
-  if (transcript) for (const w of transcript.words) if (w.deleted) deletedIds.add(w.id)
 
   // retakes-found proxy: contiguous runs of staged word cuts across the transcript.
   let retakes = 0
@@ -144,8 +147,10 @@ export function useRetake(): RetakeModel {
     isDeleted: (id) => deletedIds.has(id),
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
     smartSilence,
-    find: () => { setExecuted(false); void runRetakeCutDelta() },
-    execute: () => { setExecuted(true); void executeCuts() },
+    find: () => void runRetakeCutDelta(),
+    execute: () => void executeCuts(),
+    /** cut the currently-selected words (used to add cuts in the executed review). */
+    cutSelected: () => deleteSelected(),
     restore: () => restoreSelected(),
     clear: () => clearSelection(),
     selectWord,
