@@ -3719,19 +3719,28 @@ export const useStore = create<AppState>((set, get) => ({
 
     // 2) One project, clips in sequence: `baseSequence` is the legacy multi-clip
     //    base — projectToDocument derives the main lane (and any cuts) from it on
-    //    open, so the editor shows every file back-to-back without the engine.
+    //    open, so the editor shows every file back-to-back.
     const project = newProject()
     project.name = name
-    project.media = {
-      path: first.path,
-      duration: first.duration,
-      width: first.width,
-      height: first.height,
-      fps: first.fps,
-      hasAudio: first.hasAudio,
-      hasVideo: first.hasVideo
-    }
     project.baseSequence = bases.map(seqClipFromLibrary)
+    // CRITICAL: only a SINGLE-clip import may set project.media. With multiple
+    // files media MUST stay undefined so every engine treats this as a multi-clip
+    // montage: transcribe() combines + transcribes ALL clips, computeKeepRanges
+    // uses the full montage duration, and the derived main lane lays out every
+    // clip. Setting media pins all of them to the FIRST file only — which dropped
+    // clips 2..n from the timeline, transcribed/cut only clip 1, and mis-tagged
+    // file 1 as "Base clip" (the tag is item.path === project.media?.path).
+    if (bases.length === 1) {
+      project.media = {
+        path: first.path,
+        duration: first.duration,
+        width: first.width,
+        height: first.height,
+        fps: first.fps,
+        hasAudio: first.hasAudio,
+        hasVideo: first.hasVideo
+      }
+    }
     // Make it the live project so the enhancement engines operate on it.
     set({
       project,
@@ -3783,7 +3792,10 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: `Import enhancement failed: ${(e as Error).message}` } })
     }
 
-    set({ wizardJob: { active: true, label: 'Opening editor…', base: 85, span: 15 } })
+    // Finish: drive the bar to 100 and let it glide there BEFORE opening, so the
+    // hand-off into the editor completes smoothly instead of jump-cutting at ~85%.
+    set({ wizardJob: { active: true, label: 'Ready!', base: 100, span: 0 } })
+    await new Promise((r) => setTimeout(r, 550))
     await openInEditor(get().project)
   }
 }))

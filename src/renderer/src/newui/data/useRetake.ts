@@ -24,6 +24,9 @@ export interface RetakeModel {
   executable: number
   // review
   segments: { id: string; words: { id: string; text: string; start: number; end: number }[] }[]
+  /** montage-time boundaries of each source clip (empty for a single-clip base),
+   *  so the transcript can stack each video's words under a labelled divider. */
+  clipBounds: { startS: number; name: string }[]
   chipAfter: Map<string, { durS: number; stagedId?: string; applied?: boolean }>
   isSelected: (id: string) => boolean
   /** committed (already-executed) cut — word.deleted in the transcript. */
@@ -111,6 +114,18 @@ export function useRetake(): RetakeModel {
   const chips = transcript ? buildSilenceChips(transcript.words, smartSilence ? staged : [], projSilences) : []
   const chipAfter = new Map(chips.map((c) => [c.afterWordId, c]))
 
+  // Per-video boundaries in montage seconds (cumulative trimmed source durations),
+  // used to group the montage transcript back into each imported video, in order.
+  const baseSeq = useStore.getState().project.baseSequence
+  const clipBounds: { startS: number; name: string }[] = []
+  if (baseSeq && baseSeq.length > 1) {
+    let acc = 0
+    baseSeq.forEach((c, i) => {
+      clipBounds.push({ startS: acc, name: c.name?.replace(/\.[^.]+$/, '') || `Video ${i + 1}` })
+      acc += Math.max(0, (c.sourceOut ?? 0) - (c.sourceIn ?? 0))
+    })
+  }
+
   return {
     state,
     job,
@@ -123,6 +138,7 @@ export function useRetake(): RetakeModel {
     executable: words + pauses,
     deletedCount: deletedIds.size,
     segments: transcript?.segments ?? [],
+    clipBounds,
     chipAfter,
     isSelected: (id) => selected.has(id),
     isDeleted: (id) => deletedIds.has(id),

@@ -1,15 +1,32 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { css } from '../css'
 import { useRetake } from '../data/useRetake'
 import { useSmoothProgress } from '../../useSmoothProgress'
 
 // Stage C — production Retake Cleaner panel (editor right rail). Renders the
-// approved design's state-appropriate content (idle / analyzing / results /
-// executed / error) with the exact 1b + 1c markup, wired to useRetake.
+// state-appropriate content (idle / analyzing / results / executed / error),
+// wired to useRetake.
 
 const HAIR = 'rgba(255,255,255,.06)'
 const CHIP = "background:rgba(217,164,74,.14);color:#D9A44A;border:1px solid rgba(217,164,74,.3);border-radius:6px;padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-size:10px;margin:0 4px;white-space:nowrap"
+// STAGED = highlighted, marked for removal (NOT yet cut — no strike-through, so it
+// never looks like a done cut). CUT = the committed strike-through (executed state).
+const SEL = 'background:rgba(217,104,110,.22);color:#F1C4C7;border-radius:4px;padding:1px 3px;box-shadow:inset 0 0 0 1px rgba(217,104,110,.4)'
 const CUT = 'background:rgba(217,104,110,.13);color:#D9868B;border-radius:5px;padding:1px 4px;text-decoration:line-through;text-decoration-color:rgba(217,134,139,.55)'
+
+/** whole seconds → M:SS */
+const fmtDur = (s: number): string => {
+  const t = Math.max(0, Math.round(s))
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`
+}
+
+// Silence "chip" mouse-down: toggle that staged pause; stop it bubbling to any
+// word-drag. Shared by both transcript modes.
+const chipDown = (r: ReturnType<typeof useRetake>, stagedId?: string) => (e: React.MouseEvent): void => {
+  e.preventDefault()
+  e.stopPropagation()
+  if (stagedId) r.toggleChip(stagedId)
+}
 
 function Toggle({ on, onClick }: { on: boolean; onClick: () => void }): JSX.Element {
   return on ? (
@@ -34,60 +51,114 @@ function Header(): JSX.Element {
   )
 }
 
-// Words respond to two gestures:
-//  • single-click → cut / restore. `stage` (results) toggles the staged
-//    selection; `applied` (executed) toggles the committed cut live (the
-//    timeline, preview and export all follow word.deleted, so it updates at once).
-//  • double-click → seek the preview to that word and play, WITHOUT cutting it.
-// A short timer disambiguates: the pending single-click cut is cancelled when a
-// second click lands on the same word (so double-click never leaves a stray cut).
+// Word gestures (Descript/CapCut-style — NOTHING cuts here; only Execute cuts):
+//  • single click       → toggle-highlight one word
+//  • click + drag       → highlight a range of words (a whole sentence, etc.)
+//  • drag from a already-highlighted word → UN-highlight the range it covers
+//  • double click       → seek the preview to that word and play (no highlight)
+// In the executed state the same gestures toggle the committed cut live instead.
+// Words are grouped into paragraphs by transcript segment, and — for a multi-clip
+// import — under a labelled divider per source video, in import order.
 function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage' | 'applied' }): JSX.Element {
-  const isCut = mode === 'applied' ? r.isDeleted : r.isSelected
-  const onWord = mode === 'applied' ? r.toggleWord : (id: string) => r.selectWord(id, true)
-  const pendingCut = useRef<number | null>(null)
+  const isMarked = mode === 'applied' ? r.isDeleted : r.isSelected
+  const applyWord = mode === 'applied' ? r.toggleWord : (id: string) => r.selectWord(id, true)
+  const drag = useRef<{ active: boolean; anchor: string | null; add: boolean; moved: boolean; done: Set<string> }>({
+    active: false,
+    anchor: null,
+    add: true,
+    moved: false,
+    done: new Set()
+  })
+
+  // Toggle a word toward the drag's direction, once per drag, only if it isn't
+  // already in that state (so dragging never double-flips a word).
+  const paint = (id: string): void => {
+    const d = drag.current
+    if (d.done.has(id)) return
+    d.done.add(id)
+    if (d.add ? !isMarked(id) : isMarked(id)) applyWord(id)
+  }
+
+  useEffect(() => {
+    const up = (): void => {
+      const d = drag.current
+      if (d.active && !d.moved && d.anchor) applyWord(d.anchor) // a pure click = single toggle
+      d.active = false
+      d.anchor = null
+      d.moved = false
+      d.done = new Set()
+    }
+    window.addEventListener('mouseup', up)
+    return () => window.removeEventListener('mouseup', up)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode])
+
+  const bounds = r.clipBounds
+  const clipOf = (startS: number): number => {
+    let idx = 0
+    for (let i = 0; i < bounds.length; i++) if (startS >= bounds[i].startS - 0.01) idx = i
+    return idx
+  }
+  let lastClip = -1
+
   return (
-    <div style={css('flex:1;min-height:0;overflow:auto;margin:10px -18px 0;padding:2px 18px 18px;font-size:13.5px;line-height:2.1;color:#C6C9D2;-webkit-mask-image:linear-gradient(#000 82%,transparent)')}>
-      {r.segments.map((seg) => (
-        <span key={seg.id}>
-          {seg.words.map((w) => {
-            const chip = r.chipAfter.get(w.id)
-            return (
-              <span key={w.id}>
-                <span
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    if (e.detail >= 2) {
-                      // Double-click: jump to the word (cancel the queued cut).
-                      if (pendingCut.current !== null) { clearTimeout(pendingCut.current); pendingCut.current = null }
-                      r.seekWord(w.start)
-                      return
-                    }
-                    // Single-click: cut / restore, deferred briefly so a follow-up
-                    // click can cancel it and seek instead.
-                    const timer = window.setTimeout(() => {
-                      if (pendingCut.current === timer) pendingCut.current = null
-                      onWord(w.id)
-                    }, 250)
-                    pendingCut.current = timer
-                  }}
-                  style={isCut(w.id) ? css(CUT) : css('cursor:pointer')}
-                >
-                  {w.text}
-                </span>{' '}
-                {chip && (
-                  <span
-                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); if (chip.stagedId) r.toggleChip(chip.stagedId) }}
-                    style={css(CHIP)}
-                  >
-                    {chip.durS}s
+    <div style={css('flex:1;min-height:0;overflow:auto;margin:8px -18px 0;padding:2px 18px 18px;font-size:13.5px;line-height:1.9;color:#C6C9D2;-webkit-mask-image:linear-gradient(#000 90%,transparent)')}>
+      {r.segments.map((seg) => {
+        const ci = bounds.length > 1 ? clipOf(seg.words[0]?.start ?? 0) : 0
+        const divider = bounds.length > 1 && ci !== lastClip
+        lastClip = ci
+        return (
+          <div key={seg.id}>
+            {divider && (
+              <div style={css('display:flex;align-items:center;gap:8px;margin:16px 0 9px;color:#8B909C;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase')}>
+                <span style={css("width:16px;height:16px;flex:none;border-radius:5px;background:#2A2D36;display:grid;place-items:center;font-size:9.5px;color:#B9B4FF;font-family:'IBM Plex Mono',monospace")}>{ci + 1}</span>
+                <span style={css('white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px')}>{bounds[ci].name}</span>
+                <span style={css('flex:1;height:1px;background:rgba(255,255,255,.07)')} />
+              </div>
+            )}
+            <p style={css('margin:0 0 11px')}>
+              {seg.words.map((w) => {
+                const chip = r.chipAfter.get(w.id)
+                return (
+                  <span key={w.id}>
+                    <span
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        if (e.detail >= 2) {
+                          // Double-click: undo the single-click's toggle, then seek+play.
+                          applyWord(w.id)
+                          r.seekWord(w.start)
+                          drag.current.active = false
+                          return
+                        }
+                        drag.current = { active: true, anchor: w.id, add: !isMarked(w.id), moved: false, done: new Set() }
+                      }}
+                      onMouseEnter={() => {
+                        const d = drag.current
+                        if (!d.active) return
+                        if (w.id !== d.anchor) {
+                          if (!d.moved && d.anchor) paint(d.anchor) // include the start word once we actually drag
+                          d.moved = true
+                        }
+                        paint(w.id)
+                      }}
+                      style={isMarked(w.id) ? css(mode === 'applied' ? CUT : SEL) : css('cursor:pointer;border-radius:4px;padding:1px 3px')}
+                    >
+                      {w.text}
+                    </span>{' '}
+                    {chip && (
+                      <span onMouseDown={chipDown(r, chip.stagedId)} style={css(CHIP)}>
+                        {chip.durS}s
+                      </span>
+                    )}
+                    {chip && ' '}
                   </span>
-                )}
-                {chip && ' '}
-              </span>
-            )
-          })}
-        </span>
-      ))}
+                )
+              })}
+            </p>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -166,7 +237,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
           <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review cuts</div>
           <div style={css('flex:1')} />
-          <div style={css('font-size:11px;color:#686E7B')}>click to cut · double-click to play</div>
+          <div style={css('font-size:11px;color:#686E7B')}>click or drag to toggle cuts · double-click to play</div>
         </div>
         <Transcript r={r} mode="applied" />
       </>
@@ -188,29 +259,35 @@ export default function RetakeCleanerPanel(): JSX.Element {
     )
   }
 
-  // results / reviewing
+  // results / reviewing — compact so the transcript gets the vertical space.
   return shell(
     <>
-      <div style={css('font-size:12.5px;line-height:1.5;color:#9BA0AC;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
-      <div style={css('margin-top:16px;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px')}>
-        <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:12px 16px')}>
-          <div><div style={css('font-size:17px;font-weight:650')}>{r.retakes}</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>retakes found</div></div>
-          <div><div style={css('font-size:17px;font-weight:650;color:#D9868B')}>{r.words}</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>words to remove</div></div>
-          <div><div style={css('font-size:17px;font-weight:650;color:#D9A44A')}>{r.pauses}</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>pauses shortened</div></div>
-          <div><div style={css('font-size:17px;font-weight:650;color:#46A57C')}>~{Math.round(r.timeSavedS)}s</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>time saved</div></div>
-        </div>
+      {/* single-line status (replaces the big 2×2 stat box) */}
+      <div style={css('display:flex;align-items:center;margin-top:12px;flex:none;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:9px;padding:8px 12px;font-size:11.5px;color:#9BA0AC')}>
+        <span><b style={css('color:#D9868B;font-weight:650')}>{r.words}</b> cuts</span>
+        <span style={css('color:#3A3E48;margin:0 9px')}>·</span>
+        <span><b style={css('color:#D9A44A;font-weight:650')}>{r.pauses}</b> silence</span>
+        <span style={css('color:#3A3E48;margin:0 9px')}>·</span>
+        <span><b style={css('color:#46A57C;font-weight:650')}>{fmtDur(r.timeSavedS)}</b> saved</span>
       </div>
-      <div style={css('display:flex;gap:8px;margin-top:12px')}>
-        <button onClick={r.execute} disabled={!r.executable} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.3)')}>Execute {r.executable} cuts</button>
-        <button onClick={r.openSilenceSettings} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 14px;cursor:pointer')}>Silence Settings</button>
+      {/* compact action row: Execute (primary) + Silence Settings as a gear icon */}
+      <div style={css('display:flex;gap:8px;margin-top:10px;flex:none')}>
+        <button onClick={r.execute} disabled={!r.executable} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12px;font-weight:600;border-radius:8px;padding:8px 0;cursor:pointer', !r.executable && 'opacity:.5;cursor:not-allowed;box-shadow:none')}>Execute {r.executable} cut{r.executable === 1 ? '' : 's'}</button>
+        <button onClick={r.openSilenceSettings} title="Silence Settings" aria-label="Silence Settings" style={css('flex:none;width:34px;height:34px;background:none;border:1px solid rgba(255,255,255,.12);border-radius:8px;color:#C6C9D2;display:grid;place-items:center;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none')}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
       </div>
       {smartRow}
-      <div style={css(`display:flex;align-items:center;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid ${HAIR}`)}>
+      <div style={css(`display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid ${HAIR};flex:none`)}>
         <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review transcript</div>
         <div style={css('flex:1')} />
         <span onClick={r.restore} style={css('font-size:11.5px;color:#9BA0AC;padding:4px 8px;border-radius:7px;cursor:pointer')}>Restore</span>
         <span onClick={r.clear} style={css('font-size:11.5px;color:#9BA0AC;padding:4px 8px;border-radius:7px;cursor:pointer')}>Clear</span>
       </div>
+      <div style={css('font-size:10.5px;color:#686E7B;margin-top:6px;flex:none')}>Click or drag to highlight words to cut · double-click to play · nothing is removed until you press Execute</div>
       <Transcript r={r} mode="stage" />
     </>
   )
