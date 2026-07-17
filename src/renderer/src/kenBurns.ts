@@ -25,9 +25,11 @@ export type Easing = (t: number) => number
 
 const clamp01 = (t: number): number => (t < 0 ? 0 : t > 1 ? 1 : t)
 
-// Easing library — each maps 0..1 → 0..1. Ken Burns defaults to easeInOutCubic:
-// a gentle acceleration, a glide through the middle, and a soft landing, which is
-// what CapCut / Premiere / Resolve use for "smooth" zoom.
+// Easing library — each maps 0..1 → 0..1. Ken Burns defaults to easeOutCubic:
+// the zoom MOVES from the very first frame (non-zero starting velocity), then
+// decelerates to a soft landing. An ease-IN/-in-out curve starts at zero speed,
+// so the first ~0.2–0.3s is imperceptible and the zoom reads as a delayed
+// animation instead of a camera push — easeOut removes that dead start.
 export const Easings = {
   linear: (t: number): number => clamp01(t),
   easeInQuad: (t: number): number => ((t = clamp01(t)), t * t),
@@ -46,8 +48,9 @@ export const Easings = {
 
 export type EasingName = keyof typeof Easings
 
-/** Default Ken Burns easing. Change here to restyle every zoom, preview + export. */
-export const kenBurnsEase: Easing = Easings.easeInOutCubic
+/** Default Ken Burns easing. Change here to restyle every zoom, preview + export.
+ *  easeOutCubic → the zoom starts moving immediately (no dead ease-in start). */
+export const kenBurnsEase: Easing = Easings.easeOutCubic
 
 export interface KenBurnsParams {
   /** base size (1 = fill the frame). */
