@@ -13,10 +13,11 @@
 //                         (misses cuts or over-cuts run-to-run).
 //   • google/gemini-3.5-flash — reasons ~4x more efficiently: ~1-1.6k tokens in
 //                         ~7s, and RELIABLY emits clean whole-take span cuts.
-// Default is now qwen/qwen3.7-plus (creator's choice) — a fast, cost-effective
-// model; effort=low reasoning + throughput provider routing keep it inside the
-// latency budget while giving enough reasoning for the hard repeated-take tangles.
-// Any model still works via DELTA_MODEL (e.g. google/gemini-3.5-flash).
+// Default is now z-ai/glm-5.2 (creator's choice). GLM 5.2 is a large-scale
+// REASONING model, so watch the latency budget: effort=low + throughput routing
+// keep it as fast as possible, but if runs get slow / fall back to β, set
+// DELTA_REASONING_EFFORT=off. Any model still works via DELTA_MODEL
+// (e.g. google/gemini-3.5-flash or qwen/qwen3.7-plus for a lighter/cheaper judge).
 //
 // The SYSTEM prompt forces WHOLE-TAKE SPAN cuts (not scattered word/filler removal),
 // which is what makes a fast model produce pro-quality edits.
@@ -28,7 +29,7 @@
 //   DELTA_JUDGE_KEY  — required. OpenRouter sk-or-… key. Edge secret OR Supabase
 //                      Vault via the service-role-only delta_judge_key() RPC.
 //   DELTA_BASE_URL   — optional. Default https://openrouter.ai/api/v1.
-//   DELTA_MODEL      — optional. Default qwen/qwen3.7-plus.
+//   DELTA_MODEL      — optional. Default z-ai/glm-5.2.
 //   DELTA_REASONING_EFFORT      — optional. low|medium|high|off. Default low.
 //   DELTA_REASONING_MAX_TOKENS  — optional alt cap (effort wins if both set).
 //   DELTA_PROVIDER_SORT         — optional. throughput|latency|price|off. Default throughput.
@@ -50,12 +51,12 @@ function preflight(req: Request): Response | null {
 }
 
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'qwen/qwen3.7-plus'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'z-ai/glm-5.2'
 
-// Reasoning control. Default effort=low — a small reasoning budget is enough for
-// qwen3.7-plus to catch the hard repeated-take tangles while staying fast inside
-// the ~15s judge budget. `off` is fastest but can miss tangles; higher tiers risk
-// the budget. Set via DELTA_REASONING_EFFORT.
+// Reasoning control. Default effort=low — GLM 5.2 is a reasoning model, so keep
+// the thinking budget SMALL to stay inside the ~15s judge budget. If runs get
+// slow (or fall back to β), set DELTA_REASONING_EFFORT=off; bump to medium/high
+// only if cut quality needs it and you can afford the latency.
 function reasoningConfig(): Record<string, unknown> {
   const effort = Deno.env.get('DELTA_REASONING_EFFORT')?.toLowerCase()
   if (effort === 'off') return { enabled: false }
