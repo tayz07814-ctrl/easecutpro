@@ -5,87 +5,49 @@
 // or the call fails, so generation is reliable and never blocks a render.
 
 import { getAnthropic, claudeAvailable } from './claude'
-import { chunkTranscript, keywordFallback, validateAndCleanEvents } from '../shared/overlay'
-import type { CleanOpts } from '../shared/overlay'
+import {
+  chunkTranscript, keywordFallback, validateAndCleanEvents, deriveInstructions,
+  OVERLAY_MATCH_SYSTEM, buildOverlayUserMessage, parseOverlayLlmResponse,
+  OVERLAY_SUGGEST_SYSTEM, buildSuggestUserMessage, parseOverlaySuggestions
+} from '../shared/overlay'
+import type { CleanOpts, Sentence } from '../shared/overlay'
 import type {
-  OverlayAsset, OverlayEvent, OverlayGenResult, OverlayRule, Transcript
+  OverlayAsset, OverlayEvent, OverlayGenResult, OverlayRule, OverlaySuggestResult,
+  OverlayThumb, MomentFrame, Transcript
 } from '../shared/types'
 
 type ProgressFn = (pct: number, msg?: string) => void
 
 const MODEL = 'claude-opus-4-8'
 
-const SYSTEM_PROMPT = `You place product-overlay image cards onto a talking-head video by matching each card's RULE to the transcript sentence where that topic is actually discussed.
-
-You receive numbered SENTENCES (with an index) and a list of overlay RULES (each with an overlayId, a name, and a natural-language instruction describing when to show it). Return the sentences where each rule clearly applies.
-
-RULES (precision over recall):
-- Match a rule to a sentence ONLY when the sentence clearly discusses what the instruction describes. Judge by MEANING (paraphrases count), not just keywords. When unsure, do NOT match.
-- Return the SENTENCE INDEX, never a timestamp.
-- Place each overlay sparingly — usually once, at most a few times for a strongly repeated theme. Never spam.
-- Do not match a rule to a sentence that only mentions the topic in passing or negatively.
-
-OUTPUT: return ONLY a JSON object, no prose:
-{"events":[{"overlayId":"<id>","sentenceIndex":<int>,"reason":"<short quote/why>"}]}
-If nothing matches, return {"events":[]}.`
-
-function buildUserMessage(
-  sentences: { index: number; text: string }[],
-  rules: OverlayRule[]
-): string {
-  const s = sentences.map((x) => `[${x.index}] ${x.text}`).join('\n')
-  const r = rules.map((x) => `- overlayId=${x.overlayId} | "${x.name}" | ${x.instruction}`).join('\n')
-  return `SENTENCES:\n${s}\n\nOVERLAY RULES:\n${r}\n\nReturn JSON only.`
-}
-
-/** First balanced {…} JSON object in a string, or null. */
-function extractJson(text: string): any | null {
-  const start = text.indexOf('{')
-  if (start < 0) return null
-  let depth = 0
-  for (let i = start; i < text.length; i++) {
-    if (text[i] === '{') depth++
-    else if (text[i] === '}' && --depth === 0) {
-      try { return JSON.parse(text.slice(start, i + 1)) } catch { return null }
-    }
-  }
-  return null
-}
-
-/** Provider-isolated LLM call: sentences + rules -> raw events (sentence-anchored). */
+/** Provider-isolated LLM call: sentences + rules -> raw events (sentence-anchored).
+ *  Prompt + parsing are shared with the cloud edge function (src/shared/overlay.ts).
+ *  `descById` carries each overlay's vision description (v1.5) into the prompt. */
 async function callLLMForOverlayRules(
-  sentences: { index: number; text: string; start: number; end: number }[],
-  rules: OverlayRule[]
-): Promise<Array<Partial<OverlayEvent>>> {
+  sentences: Sentence[],
+  rules: OverlayRule[],
+  descById: Map<string, string | undefined>
+): Promise<{ events: Array<Partial<OverlayEvent>>; lowConfidence: string[] }> {
   const client = getAnthropic()
+  const view = rules.map((r) => ({ overlayId: r.overlayId, name: r.name, instruction: r.instruction, description: descById.get(r.overlayId) }))
   const res = await client.messages.create({
     model: MODEL,
     max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: buildUserMessage(sentences, rules) }]
+    system: OVERLAY_MATCH_SYSTEM,
+    messages: [{ role: 'user', content: buildOverlayUserMessage(sentences, view) }]
   })
   const block = res.content.find((b) => b.type === 'text')
-  const parsed = extractJson(block && block.type === 'text' ? block.text : '')
-  const out: Array<Partial<OverlayEvent>> = []
-  for (const e of parsed?.events ?? []) {
-    const idx = Number(e?.sentenceIndex)
-    if (!Number.isInteger(idx) || idx < 0 || idx >= sentences.length) continue // no hallucinated times
-    out.push({
-      overlayId: String(e?.overlayId ?? ''),
-      start: sentences[idx].start,
-      end: sentences[idx].end,
-      reason: String(e?.reason ?? ''),
-      source: 'llm'
-    })
-  }
-  return out
+  return parseOverlayLlmResponse(block && block.type === 'text' ? block.text : '', sentences)
 }
 
 /**
  * Turn overlay assets + rules + a transcript into validated overlay events.
- * Never throws for matching problems — on any LLM failure it falls back to
- * keyword matching, and a total failure returns an empty list so the render
- * still proceeds.
+ * The LLM (semantic matcher) is PREFERRED when a key is present — it matches by
+ * meaning, respects negation, and understands name-only rules; deterministic
+ * keyword matching covers the no-key/offline case and any LLM failure. Never
+ * throws for matching problems — a total failure returns an empty list so the
+ * render still proceeds. Occurrence selection ("first time only") is applied
+ * deterministically inside validateAndCleanEvents, never by the model.
  */
 export async function generateOverlayTimeline(
   transcript: Transcript,
@@ -97,36 +59,184 @@ export async function generateOverlayTimeline(
   const log: string[] = []
   const sentences = chunkTranscript(transcript)
   const assetIds = new Set(assets.map((a) => a.id))
-  const activeRules = rules.filter((r) => assetIds.has(r.overlayId) && r.instruction.trim())
+  const activeRules = deriveInstructions(rules.filter((r) => assetIds.has(r.overlayId)), assets)
   log.push(`overlay rules received: ${rules.length} (active: ${activeRules.length})`)
   log.push(`transcript chunks processed: ${sentences.length}`)
   if (activeRules.length === 0 || sentences.length === 0) {
     return { events: [], via: 'none', log }
   }
 
-  // LOCAL FIRST: deterministic keyword matching, fully offline (no API call).
-  onProgress?.(20, 'Matching overlays locally…')
-  const localRaw = keywordFallback(activeRules, sentences)
-  let cleaned = validateAndCleanEvents(localRaw, activeRules, opts)
+  let cleaned: ReturnType<typeof validateAndCleanEvents> | null = null
   let via: 'llm' | 'keyword' = 'keyword'
-  log.push(`local keyword match: ${localRaw.length} candidate(s), kept ${cleaned.events.length}`)
+  const descById = new Map(assets.map((a) => [a.id, a.description]))
 
-  // FALLBACK TO API only if local placed nothing AND a Claude key is available.
-  if (cleaned.events.length === 0 && claudeAvailable()) {
+  // SEMANTIC FIRST when a key is available: paraphrases, name-only topics and
+  // negative mentions are exactly what keywords get wrong.
+  if (claudeAvailable()) {
     try {
-      onProgress?.(55, 'No local match — asking the AI…')
-      const llmRaw = await callLLMForOverlayRules(sentences, activeRules)
-      const llmCleaned = validateAndCleanEvents(llmRaw, activeRules, opts)
-      log.push(`API fallback: ${llmRaw.length} candidate(s), kept ${llmCleaned.events.length}`)
+      onProgress?.(30, 'Matching overlays with the AI…')
+      const llm = await callLLMForOverlayRules(sentences, activeRules, descById)
+      const llmCleaned = validateAndCleanEvents(llm.events, activeRules, opts)
+      log.push(`AI match: ${llm.events.length} candidate(s), kept ${llmCleaned.events.length}`)
+      for (const l of llm.lowConfidence.slice(0, 10)) log.push(`  low confidence, dropped: ${l}`)
       if (llmCleaned.events.length > 0) { cleaned = llmCleaned; via = 'llm' }
     } catch (e) {
-      log.push(`API fallback failed: ${(e as Error).message}`)
+      log.push(`AI match failed, falling back to keywords: ${(e as Error).message}`)
     }
-  } else if (cleaned.events.length === 0) {
-    log.push('no local match; no API key for fallback')
+  }
+
+  // LOCAL keyword matching: the offline path, and the fallback when the AI
+  // found nothing or errored.
+  if (!cleaned || cleaned.events.length === 0) {
+    onProgress?.(70, 'Matching overlays locally…')
+    const localRaw = keywordFallback(activeRules, sentences)
+    const localCleaned = validateAndCleanEvents(localRaw, activeRules, opts)
+    log.push(`local keyword match: ${localRaw.length} candidate(s), kept ${localCleaned.events.length}`)
+    if (!cleaned || localCleaned.events.length > 0) { cleaned = localCleaned; via = 'keyword' }
+    if (localCleaned.events.length === 0 && !claudeAvailable()) log.push('no local match; no API key for semantic matching')
   }
 
   for (const r of cleaned.rejected.slice(0, 25)) log.push(`  rejected: ${r}`)
   onProgress?.(100, cleaned.events.length ? `Placed ${cleaned.events.length} overlay(s)` : 'No overlay matches')
   return { events: cleaned.events, via: cleaned.events.length ? via : 'none', log }
+}
+
+/**
+ * "Suggest": read the whole transcript + the overlay library and PROPOSE
+ * overlay↔moment placements for the creator to review. No rules required — the
+ * model chooses which cards fit and where. Prompt + parsing are shared with the
+ * cloud edge function. Never throws: returns an empty list on any problem so the
+ * UI degrades gracefully. The model only proposes sentence indices; time mapping,
+ * cut-avoidance, pacing and caps are deterministic (parseOverlaySuggestions).
+ */
+export async function suggestOverlayTimeline(
+  transcript: Transcript,
+  assets: OverlayAsset[],
+  opts: CleanOpts,
+  onProgress?: ProgressFn
+): Promise<OverlaySuggestResult> {
+  const log: string[] = []
+  const sentences = chunkTranscript(transcript)
+  const library = assets.map((a) => ({ overlayId: a.id, name: a.name, description: a.description }))
+  log.push(`suggest: ${sentences.length} sentence(s), ${library.length} overlay(s) in library`)
+  if (sentences.length === 0 || library.length === 0) return { suggestions: [], via: 'none', log }
+  if (!claudeAvailable()) {
+    log.push('Suggest needs an AI key (no local fallback)')
+    return { suggestions: [], via: 'none', log }
+  }
+  try {
+    onProgress?.(30, 'Reading the video…')
+    const client = getAnthropic()
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 4096,
+      system: OVERLAY_SUGGEST_SYSTEM,
+      messages: [{ role: 'user', content: buildSuggestUserMessage(sentences, library) }]
+    })
+    const block = res.content.find((b) => b.type === 'text')
+    let i = 0
+    const { suggestions, log: plog } = parseOverlaySuggestions(
+      block && block.type === 'text' ? block.text : '', sentences, assets, opts, () => `sg_${i++}`
+    )
+    log.push(...plog)
+    onProgress?.(100, suggestions.length ? `${suggestions.length} suggestion(s)` : 'No suggestions')
+    return { suggestions, via: suggestions.length ? 'llm' : 'none', log }
+  } catch (e) {
+    log.push(`suggest failed: ${(e as Error).message}`)
+    return { suggestions: [], via: 'none', log }
+  }
+}
+
+/** Vision pass: describe what an overlay IMAGE depicts, so matching/suggestion can
+ *  key on the card's CONTENT (a "50% OFF" badge) not just its filename. One short
+ *  sentence; empty string on any problem so callers fall back to the name. */
+export async function describeOverlayImage(imageBase64: string, mediaType: string): Promise<{ description: string }> {
+  if (!claudeAvailable() || !imageBase64) return { description: '' }
+  try {
+    const client = getAnthropic()
+    const media = /^image\/(png|jpeg|gif|webp)$/.test(mediaType) ? mediaType : 'image/png'
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 200,
+      system: 'You label overlay graphics for a video editor. Describe what the image DEPICTS in ONE short phrase a matcher can use — the visible text, product, or subject (e.g. "a red \'50% OFF\' discount badge", "a smiling before/after skincare photo"). No preamble, just the phrase.',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: media as 'image/png', data: imageBase64 } },
+          { type: 'text', text: 'Describe this overlay in one short phrase.' }
+        ]
+      }]
+    })
+    const block = res.content.find((b) => b.type === 'text')
+    const description = (block && block.type === 'text' ? block.text : '').trim().slice(0, 200)
+    return { description }
+  } catch {
+    return { description: '' }
+  }
+}
+
+/** Moment vision (image-to-image): given a VIDEO FRAME where the creator is
+ *  showing something on camera + the creator's own overlay thumbnails, pick which
+ *  overlay depicts what's being shown (e.g. an armpit frame -> the "Armpit" overlay).
+ *  Returns that overlay's id, or '' when none clearly matches / on any problem.
+ *  The model sees the frame first, then each overlay tagged by a LETTER (opaque ids
+ *  are never shown to it), and replies with just the letter; we map it back. */
+const MOMENT_MATCH_SYSTEM =
+  'You match what a video creator is SHOWING on camera to their overlay graphics. ' +
+  'The FIRST images are frames sampled across one moment of the video (the creator ' +
+  'reveals what they mean somewhere across them). Each following image is one of the ' +
+  "creator's overlay assets, tagged by a letter. Decide which ONE overlay depicts the " +
+  'SAME thing shown or pointed to in the frames (same body part, product, or subject). ' +
+  'Reply with ONLY that letter. If none clearly matches, reply "none". ' +
+  'Reply with a single token — a letter or "none".'
+
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+export async function matchMoment(
+  frames: MomentFrame[],
+  line: string,
+  overlays: OverlayThumb[]
+): Promise<{ overlayId: string }> {
+  if (!claudeAvailable() || !frames?.length || !overlays?.length) return { overlayId: '' }
+  const pool = overlays.slice(0, 24) // bound the prompt (letters + cost)
+  const framePool = frames.slice(0, 3) // a few frames across the moment, bounded for cost
+  const okType = (t: string): t is 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' =>
+    /^image\/(png|jpeg|gif|webp)$/.test(t)
+  try {
+    const client = getAnthropic()
+    const content: Array<Record<string, unknown>> = [
+      { type: 'text', text: `Video frames across the moment (the creator says: "${line}"):` }
+    ]
+    framePool.forEach((f) => {
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: okType(f.mediaType) ? f.mediaType : 'image/jpeg', data: f.image }
+      })
+    })
+    pool.forEach((o, i) => {
+      content.push({ type: 'text', text: `Overlay ${LETTERS[i]} — ${o.name || 'untitled'}:` })
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: okType(o.mediaType) ? o.mediaType : 'image/jpeg', data: o.image }
+      })
+    })
+    content.push({
+      type: 'text',
+      text: 'Which overlay letter depicts what the creator shows in the video frames? Reply with the letter only, or "none".'
+    })
+    const res = await client.messages.create({
+      model: MODEL,
+      max_tokens: 8,
+      system: MOMENT_MATCH_SYSTEM,
+      messages: [{ role: 'user', content: content as never }]
+    })
+    const block = res.content.find((b) => b.type === 'text')
+    const text = (block && block.type === 'text' ? block.text : '').trim()
+    const m = text.match(/[A-Za-z]/)
+    if (!m || /^none/i.test(text)) return { overlayId: '' }
+    const idx = LETTERS.indexOf(m[0].toUpperCase())
+    return { overlayId: idx >= 0 && idx < pool.length ? pool[idx].id : '' }
+  } catch {
+    return { overlayId: '' }
+  }
 }

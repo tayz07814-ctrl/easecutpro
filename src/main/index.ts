@@ -17,7 +17,7 @@ import { cutCutPro } from './cutcutpro'
 import { retakeAwareCut } from './retakeaware/engine'
 import type { RetakeBetaSilenceSettings } from '../shared/retakeaware/silence'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from './fast-cut'
-import { generateOverlayTimeline } from './overlay-rules'
+import { generateOverlayTimeline, suggestOverlayTimeline, describeOverlayImage, matchMoment } from './overlay-rules'
 import { openaiAvailable } from './openai'
 import {
   saveProject,
@@ -38,7 +38,9 @@ import type {
   Transcript,
   TranscribeBackend,
   OverlayAsset,
-  OverlayRule
+  OverlayRule,
+  OverlayThumb,
+  MomentFrame
 } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -324,6 +326,32 @@ app.whenReady().then(() => {
         emitProgress('transcribe', jobId, pct, msg)
       )
     }
+  )
+
+  ipcMain.handle(
+    IPC.suggestOverlays,
+    async (
+      _e,
+      transcript: Transcript,
+      assets: OverlayAsset[],
+      opts: { duration: number; cuts: { start: number; end: number }[] }
+    ) => {
+      const jobId = randomUUID()
+      return suggestOverlayTimeline(transcript, assets, opts, (pct, msg) =>
+        emitProgress('transcribe', jobId, pct, msg)
+      )
+    }
+  )
+
+  ipcMain.handle(
+    IPC.describeOverlayImage,
+    async (_e, imageBase64: string, mediaType: string) => describeOverlayImage(imageBase64, mediaType)
+  )
+
+  ipcMain.handle(
+    IPC.matchMoment,
+    async (_e, frames: MomentFrame[], line: string, overlays: OverlayThumb[]) =>
+      matchMoment(frames, line, overlays)
   )
 
   // ---- OpenAI availability (is a key configured?) ----

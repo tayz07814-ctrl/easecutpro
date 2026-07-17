@@ -169,9 +169,41 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .ov-opts label { display: flex; flex-direction: column; font-size: 10px; color: #8a94b0; gap: 2px; }
 .ov-opts select, .ov-opts input { font-size: 11px; }
 .ov-opts input[type=number] { width: 60px; }
-.ov-actions { display: flex; gap: 8px; }
+.ov-desc { font-size: 11px; color: #8ea0c8; font-style: italic; padding: 1px 2px; }
+.ov-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ov-suggest-btn { border: 1px solid #6c5ce7; color: #cdc6ff; background: rgba(108,92,231,0.12); }
+.ov-suggest-btn:hover:not(:disabled) { background: rgba(108,92,231,0.24); }
 .ov-log { font-size: 11px; color: #8a94b0; }
-.ov-log pre { white-space: pre-wrap; max-height: 160px; overflow: auto; background: rgba(0,0,0,0.25); padding: 6px; border-radius: 6px; }
+.ov-log-head { display: flex; justify-content: flex-end; margin: 4px 0 2px; }
+.ov-log-copy { font-size: 11px; color: #cfd6ea; background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.ov-log-copy:hover { background: rgba(255,255,255,0.12); }
+/* The panel sets user-select:none on its chrome; the log is data the creator needs to
+   copy, so re-enable text selection on it (and the button stays clickable). */
+.ov-log pre { white-space: pre-wrap; max-height: 160px; overflow: auto; background: rgba(0,0,0,0.25);
+  padding: 6px; border-radius: 6px; user-select: text; -webkit-user-select: text; cursor: text; }
+
+/* Suggest review list */
+.ov-suggest { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; }
+.ov-suggest-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #c7cbe0; }
+.ov-suggest-bulk { display: flex; gap: 6px; }
+button.small { font-size: 11px; padding: 3px 8px; }
+.ov-sugg-card { display: flex; gap: 8px; align-items: stretch; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; padding: 6px; }
+.ov-sugg-seek { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 2px; background: transparent; border: none; cursor: pointer; width: 58px; flex: 0 0 auto; }
+.ov-sugg-seek img { width: 54px; height: 32px; object-fit: cover; border-radius: 4px; background: #000; }
+.ov-sugg-seek .ov-sugg-time { font-size: 10px; color: #9aa3c0; }
+.ov-sugg-seek:hover .ov-sugg-time { color: #cdc6ff; }
+.ov-sugg-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ov-sugg-title { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.ov-sugg-ic { font-size: 22px; display: flex; align-items: center; justify-content: center; width: 54px; height: 32px; }
+.ov-sugg-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: #cdc6ff; background: rgba(108,92,231,0.18); padding: 1px 5px; border-radius: 999px; }
+.ov-sugg-conf { font-size: 10px; padding: 1px 5px; border-radius: 999px; }
+.ov-sugg-conf.hi { background: rgba(46,204,113,0.18); color: #6fe0a0; }
+.ov-sugg-conf.mid { background: rgba(241,196,15,0.16); color: #f1c40f; }
+.ov-sugg-conf.lo { background: rgba(231,76,60,0.16); color: #ff8a7a; }
+.ov-sugg-why { font-size: 11px; color: #aab2cc; }
+.ov-sugg-quote { font-size: 11px; color: #7f88a3; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-sugg-acts { display: flex; flex-direction: column; gap: 4px; justify-content: center; flex: 0 0 auto; }
 
 /* On-screen text overlays (preview) */
 .text-layer { position: absolute; pointer-events: none; }

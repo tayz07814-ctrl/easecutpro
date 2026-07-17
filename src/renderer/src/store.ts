@@ -19,11 +19,15 @@ import type {
   TranscribeBackend,
   WhisperModelInfo,
   OverlayAsset,
+  OverlayThumb,
   OverlayRule,
-  OverlayEvent
+  OverlayEvent,
+  OverlaySuggestion
 } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
-import { documentToProject, projectToDocument, normalizeDefaultLanes } from '@shared/timeline/bridge'
+import { documentToProject, projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips, labelSuggestionsToDocTextClips } from '@shared/timeline/bridge'
+import * as TimelineCommands from '@shared/timeline/commands'
+import type { Command } from '@shared/timeline/commands'
 import { getSharedEngine } from './timelineEngine'
 import { docSourceToEdited } from './docTime'
 import { addDocTexts, removeCaptionTexts } from './docTextClips'
@@ -32,7 +36,7 @@ import { exportOnDevice } from './export/localExport'
 import { renderTextPng } from './textRender'
 import { TIMELINE_TRACK_COUNT } from '@shared/types'
 import { detectFillerIds, detectRepeatIds, snapRetakeFlags, DEFAULT_FILLERS } from '@shared/fillers'
-import { computeKeepRanges, subtractRanges, collapseTime, isMultiBase, stitchMontageWaveform, virtualToClip, baseTimelineDuration } from '@shared/edit'
+import { computeKeepRanges, subtractRanges, isMultiBase, stitchMontageWaveform, virtualToClip, baseTimelineDuration } from '@shared/edit'
 import { runSmartSmoothCut, DEFAULT_SMART_CUT_PRESET, SMART_CUT_PRESETS, type SmartCutPresetName } from '@shared/smartsmooth'
 import {
   DEFAULT_CUTLORD_SETTINGS,
@@ -51,7 +55,7 @@ import {
   type RetakeBetaSilenceSettings
 } from '@shared/retakeaware/silence'
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
-import { positionToBox } from '@shared/overlay'
+import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject } from './projectsApi'
@@ -61,6 +65,136 @@ import { getFile } from './webmedia'
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+}
+
+/** Load an overlay image and return it as base64 + media type (for the vision pass).
+ *  Uses fetch + FileReader (no canvas, so no cross-origin taint on any protocol);
+ *  returns null on any problem so the vision pass degrades to name-only matching. */
+async function imageToBase64(file: string): Promise<{ base64: string; mediaType: string } | null> {
+  try {
+    const res = await fetch(mediaSrc(file))
+    const blob = await res.blob()
+    if (!blob.size || !/^image\//.test(blob.type || '')) return null
+    const dataUrl: string = await new Promise((resolve, reject) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(String(fr.result))
+      fr.onerror = () => reject(new Error('read failed'))
+      fr.readAsDataURL(blob)
+    })
+    const comma = dataUrl.indexOf(',')
+    if (comma < 0) return null
+    return { base64: dataUrl.slice(comma + 1), mediaType: blob.type || 'image/png' }
+  } catch {
+    return null
+  }
+}
+
+/** Downscale an overlay image to a small JPEG (base64) for moment-vision image-to-image
+ *  matching — keeps the vision payload cheap. Overlays are same-origin, so the canvas is
+ *  untainted; returns null on any problem (that overlay is just skipped from matching). */
+async function imageToThumb(file: string, max = 256): Promise<{ base64: string; mediaType: string } | null> {
+  try {
+    const img = document.createElement('img')
+    img.crossOrigin = 'anonymous'
+    img.decoding = 'async'
+    img.src = mediaSrc(file)
+    await new Promise<void>((resolve, reject) => {
+      const to = setTimeout(() => reject(new Error('image timeout')), 8000)
+      img.onload = () => { clearTimeout(to); resolve() }
+      img.onerror = () => { clearTimeout(to); reject(new Error('image load error')) }
+    })
+    const iw = img.naturalWidth || max
+    const ih = img.naturalHeight || max
+    const scale = Math.min(1, max / Math.max(iw, ih))
+    const w = Math.max(2, Math.round(iw * scale))
+    const h = Math.max(2, Math.round(ih * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    // Overlays may be transparent PNGs; JPEG can't carry alpha, so composite on white
+    // (a neutral background the model reads fine) instead of the canvas default black.
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
+    ctx.drawImage(img, 0, 0, w, h)
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+    const comma = dataUrl.indexOf(',')
+    if (comma < 0) return null
+    return { base64: dataUrl.slice(comma + 1), mediaType: 'image/jpeg' }
+  } catch {
+    return null
+  }
+}
+
+/** Grab downscaled JPEG frames from the media at several SOURCE-time seconds, as base64.
+ *  Loads the <video> ONCE and seeks to each time (so N frames cost one video load, not N).
+ *  Uses an offscreen <video>+canvas; returns [] on any problem (e.g. cross-origin taint on
+ *  desktop) so moment vision degrades gracefully. Cloud/web media are same-origin blobs. */
+async function grabFrames(mediaUrl: string, times: number[]): Promise<{ base64: string; mediaType: string }[]> {
+  const out: { base64: string; mediaType: string }[] = []
+  if (!mediaUrl || !times.length) return out
+  let v: HTMLVideoElement | null = null
+  try {
+    v = document.createElement('video')
+    v.crossOrigin = 'anonymous'
+    v.muted = true
+    v.preload = 'auto'
+    v.src = mediaUrl
+    await new Promise<void>((resolve, reject) => {
+      const to = setTimeout(() => reject(new Error('metadata timeout')), 8000)
+      v!.onloadedmetadata = () => { clearTimeout(to); resolve() }
+      v!.onerror = () => { clearTimeout(to); reject(new Error('video load error')) }
+    })
+    const dur = v.duration || 0
+    const vw = v.videoWidth || 640
+    const vh = v.videoHeight || 360
+    const scale = Math.min(1, 640 / vw)
+    const w = Math.max(2, Math.round(vw * scale))
+    const h = Math.max(2, Math.round(vh * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return out
+    for (const tSec of times) {
+      const t = Math.max(0, Math.min(tSec, (dur || tSec) - 0.05))
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const to = setTimeout(() => reject(new Error('seek timeout')), 8000)
+          v!.onseeked = () => { clearTimeout(to); resolve() }
+          v!.currentTime = t
+        })
+        ctx.drawImage(v, 0, 0, w, h)
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7) // throws if tainted -> caught below
+        const comma = dataUrl.indexOf(',')
+        if (comma >= 0) out.push({ base64: dataUrl.slice(comma + 1), mediaType: 'image/jpeg' })
+      } catch {
+        /* skip this timestamp; keep any frames we already grabbed */
+      }
+    }
+    return out
+  } catch {
+    return out
+  } finally {
+    if (v) { v.src = ''; v.removeAttribute('src') }
+  }
+}
+
+/** Remove AI-generated overlay clips (metadata.overlayRuleId) from the live
+ *  timeline document as ONE undoable engine edit. No-op without an engine (legacy
+ *  mode / timeline unmounted); the callers also clean the legacy tracks. */
+function removeGeneratedDocOverlays(label: string, match: (ruleId: string) => boolean): void {
+  const engine = getSharedEngine()
+  if (!engine) return
+  const cmds: Command[] = []
+  for (const t of engine.document.tracks) {
+    for (const c of t.clips) {
+      const rid = c.metadata?.overlayRuleId
+      if (typeof rid === 'string' && match(rid)) cmds.push(TimelineCommands.removeClip(c.id))
+    }
+  }
+  if (cmds.length) engine.batch(label, cmds)
 }
 
 /** Human-facing clip name. Prefer the original filename from the OS file picker;
@@ -403,6 +537,8 @@ interface AppState {
   library: LibraryItem[]
   /** last overlay-generation log (transient; shown in the overlay panel). */
   overlayLog: string[]
+  /** pending "Suggest" proposals awaiting the creator's accept/reject (transient). */
+  overlaySuggestions: OverlaySuggestion[]
   /** object URL for the imported base media, for <video> playback. */
   mediaUrl: string | null
   waveform: Waveform | null
@@ -605,6 +741,18 @@ interface AppState {
   generateOverlays: () => Promise<void>
   /** remove all AI-generated overlay clips (keeps assets/rules). */
   clearGeneratedOverlays: () => void
+  /** update an overlay asset's fields (e.g. cache its vision description). */
+  updateOverlayAsset: (overlayId: string, patch: Partial<OverlayAsset>) => void
+  /** vision pass: fill in any missing overlay descriptions (cached on the asset). */
+  ensureOverlayDescriptions: () => Promise<void>
+  /** "Suggest": AI proposes overlay placements from the library into a review list. */
+  suggestOverlays: () => Promise<void>
+  /** place the given suggestions (or all pending) as overlay clips; removes them from review. */
+  acceptSuggestions: (ids?: string[]) => void
+  /** dismiss one pending suggestion without placing it. */
+  dismissSuggestion: (id: string) => void
+  /** clear the whole pending-suggestion review list. */
+  clearSuggestions: () => void
   clearSelection: () => void
   deleteSelected: () => void
   restoreSelected: () => void
@@ -717,6 +865,7 @@ export const useStore = create<AppState>((set, get) => ({
   project: newProject(),
   library: loadLibrary(),
   overlayLog: [],
+  overlaySuggestions: [],
   mediaUrl: null,
   waveform: null,
   musicWaveform: null,
@@ -2372,7 +2521,7 @@ export const useStore = create<AppState>((set, get) => ({
       const asset: OverlayAsset = { id, libraryItemId, file: item.path, name: pretty || 'Overlay' }
       const rule: OverlayRule = {
         overlayId: id, name: asset.name, instruction: '',
-        position: 'top_center', durationSeconds: 3, animation: 'pop'
+        position: 'top_center', durationSeconds: 3, animation: 'pop', occurrence: 'every'
       }
       return {
         project: {
@@ -2393,7 +2542,8 @@ export const useStore = create<AppState>((set, get) => ({
       }
     })),
 
-  removeOverlayAsset: (overlayId) =>
+  removeOverlayAsset: (overlayId) => {
+    removeGeneratedDocOverlays('Remove overlay', (rid) => rid === overlayId)
     set((s) => ({
       project: {
         ...s.project,
@@ -2401,15 +2551,18 @@ export const useStore = create<AppState>((set, get) => ({
         overlayRules: (s.project.overlayRules ?? []).filter((r) => r.overlayId !== overlayId),
         tracks: s.project.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.overlayRuleId !== overlayId) }))
       }
-    })),
+    }))
+  },
 
-  clearGeneratedOverlays: () =>
+  clearGeneratedOverlays: () => {
+    removeGeneratedDocOverlays('Clear generated overlays', () => true)
     set((s) => ({
       project: {
         ...s.project,
         tracks: s.project.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => !c.overlayRuleId) }))
       }
-    })),
+    }))
+  },
 
   generateOverlays: async () => {
     if (!get().requireServer('Auto overlays')) return
@@ -2436,57 +2589,321 @@ export const useStore = create<AppState>((set, get) => ({
     const cuts = subtractRanges([{ start: 0, end: dur }], computeKeepRanges(project, get().waveform))
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Generating overlays…' } })
     try {
-      const res = await window.api.generateOverlays(t, assets, rules, { duration: dur, cuts })
-      // turn events into image clips on overlay track 1 (source -> edited time).
+      await get().ensureOverlayDescriptions() // v1.5: cache vision descriptions first
+      const freshAssets = get().project.overlayAssets ?? assets
+      const res = await window.api.generateOverlays(t, freshAssets, rules, { duration: dur, cuts })
+      const events = res.events as OverlayEvent[]
+      const log = [...res.log]
+      let placed = 0
+
+      const docMode = !!get().project.timeline
+      const engine = docMode ? getSharedEngine() : null
+      if (docMode && !engine) {
+        // Doc-native project but no live engine (timeline unmounted) — writing the
+        // legacy tracks would silently place clips nothing renders. Be honest.
+        set({ overlayLog: log, job: { active: false, percent: 0, message: 'Timeline is still loading — try Generate again' } })
+        return
+      }
+      if (engine) {
+        // DOCUMENT mode (every new project): place events as image clips on the
+        // doc's overlay lane, replacing prior generated clips in ONE undoable
+        // edit. Events map source→edited frames through the main lane, so they
+        // land on the sentence that triggered them even after cuts. The engine
+        // write persists to project.timeline via TimelinePanel; preview + export
+        // read the same doc lanes, so what's placed is what renders.
+        const doc = engine.document
+        const { clips, skipped } = overlayEventsToDocClips(doc, get().project, events, assets)
+        const cmds: Command[] = []
+        for (const tr of doc.tracks) {
+          for (const c of tr.clips) {
+            if (typeof c.metadata?.overlayRuleId === 'string') cmds.push(TimelineCommands.removeClip(c.id))
+          }
+        }
+        for (const c of clips) cmds.push(TimelineCommands.addClip(c))
+        if (cmds.length) engine.batch('Generate overlays', cmds)
+        placed = clips.length
+        skipped.forEach((s) => log.push(`skipped: ${s}`))
+      } else {
+        // LEGACY mode: overlay clips live on project.tracks in SOURCE seconds —
+        // the preview gate (OverlayLayer) and the ffmpeg export both composite
+        // pre-cut, so ev.start passes through unchanged (collapsing it to edited
+        // time here made every overlay land early by the cut footage before it).
+        const assetById = new Map(assets.map((a) => [a.id, a]))
+        const newClips: Clip[] = []
+        for (const ev of events) {
+          const asset = assetById.get(ev.overlayId)
+          if (!asset) continue
+          const len = Math.max(0.5, ev.end - ev.start)
+          const box = positionToBox(ev.position)
+          newClips.push({
+            id: uid(),
+            name: asset.name,
+            sourcePath: asset.file,
+            sourceIn: 0,
+            sourceOut: len,
+            sourceDuration: len,
+            isImage: true,
+            start: Math.max(0, ev.start),
+            x: box.x,
+            y: box.y,
+            scale: box.scale,
+            crop: { l: 0, t: 0, r: 0, b: 0 },
+            zoomStart: 1,
+            zoomEnd: 1,
+            overlayRuleId: asset.id,
+            overlayAnimation: ev.animation,
+            overlayReason: ev.reason
+          })
+        }
+        get().clearGeneratedOverlays()
+        if (newClips.length) {
+          set((s) => ({
+            project: {
+              ...s.project,
+              tracks: s.project.tracks.map((tr) => (tr.index === 1 ? { ...tr, clips: [...tr.clips, ...newClips] } : tr))
+            }
+          }))
+        }
+        placed = newClips.length
+      }
+
+      log.forEach((l) => console.log('[overlays]', l))
+      set({
+        overlayLog: log,
+        job: {
+          active: false,
+          percent: 100,
+          message: placed ? `Placed ${placed} overlay(s) via ${res.via}` : 'No overlay matches found'
+        }
+      })
+    } catch (e) {
+      set({ job: { active: false, percent: 0, message: safeErrMessage(e) } })
+    }
+  },
+
+  updateOverlayAsset: (overlayId, patch) =>
+    set((s) => ({
+      project: {
+        ...s.project,
+        overlayAssets: (s.project.overlayAssets ?? []).map((a) => (a.id === overlayId ? { ...a, ...patch } : a))
+      }
+    })),
+
+  // Vision pass (v1.5): describe what each overlay image DEPICTS so matching/
+  // suggestion keys on the card's content, not just its name. Cached on the asset;
+  // only newly-added overlays are analyzed. Best-effort — a failure just leaves the
+  // description empty and matching falls back to the name.
+  ensureOverlayDescriptions: async () => {
+    const assets = get().project.overlayAssets ?? []
+    const missing = assets.filter((a) => a.description === undefined)
+    if (missing.length === 0) return
+    set({ job: { active: true, kind: 'transcribe', percent: 0, message: `Looking at your overlay${missing.length > 1 ? 's' : ''}…` } })
+    for (const a of missing) {
+      const img = await imageToBase64(a.file)
+      if (!img) continue // image bytes not loadable right now (e.g. not yet hydrated) — retry next run, don't cache
+      try {
+        const r = await window.api.describeOverlayImage(img.base64, img.mediaType)
+        // Cache the API's answer — even '' — so a genuinely undescribable image (or a
+        // no-key backend) isn't re-analyzed every run. Matching falls back to the name.
+        get().updateOverlayAsset(a.id, { description: r.description || '' })
+      } catch {
+        /* transient API failure — leave undefined so it retries next run */
+      }
+    }
+  },
+
+  // "Suggest": the AI reads the whole transcript + the overlay library and proposes
+  // placements into a REVIEW list. Nothing is placed until the creator accepts.
+  suggestOverlays: async () => {
+    if (!get().requireServer('Suggest overlays')) return
+    const { project } = get()
+    if ((project.baseSequence?.length ?? 0) > 0 && !project.media) {
+      set({ job: { active: false, percent: 0, message: 'Suggest runs per clip — double-click a clip on the timeline to edit it.' } })
+      return
+    }
+    const t = project.transcript
+    if (!t?.segments?.length) {
+      set({ job: { active: false, percent: 0, message: 'Transcribe first so Suggest can read the video' } })
+      return
+    }
+    const assets = project.overlayAssets ?? []
+    const dur = project.media?.duration ?? 0
+    const cuts = subtractRanges([{ start: 0, end: dur }], computeKeepRanges(project, get().waveform))
+    if (assets.length === 0 && !project.media) {
+      set({ job: { active: false, percent: 0, message: 'Add overlay images or load a video first' } })
+      return
+    }
+    set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Suggesting overlays…' }, overlaySuggestions: [] })
+    try {
+      const log: string[] = []
+      let suggestions: OverlaySuggestion[] = []
+      let matchedFromShow = 0
+
+      // 1) CARD suggestions from the overlay library (needs overlay images).
+      if (assets.length > 0) {
+        await get().ensureOverlayDescriptions() // v1.5: cache vision descriptions first
+        const freshAssets = get().project.overlayAssets ?? assets
+        const res = await window.api.suggestOverlays(t, freshAssets, { duration: dur, cuts })
+        suggestions = [...res.suggestions]
+        log.push(...res.log)
+      }
+
+      // 2) MOMENT VISION (image-to-image): when the creator SHOWS something on camera
+      //    ("this is not acne" over an armpit, then legs, then chest) the WORDS are
+      //    identical — only the FRAME differs. We grab the frame and ask the model which
+      //    of the creator's OWN overlays depicts what's shown, then place THAT overlay
+      //    (never an invented label). Resolve the base video URL robustly — doc-native
+      //    projects have NO project.media (mediaUrl is null), so fall back to the
+      //    main-lane video source. A frame we can't read (e.g. desktop taint) is skipped.
+      let baseUrl = get().mediaUrl
+      if (!baseUrl) {
+        const p = get().project
+        const doc = getSharedEngine()?.document ?? p.timeline
+        const mainClip = doc?.tracks.find((tr) => tr.isMain)?.clips.find((c) => c.sourcePath && c.kind === 'video')
+        const src = p.media?.path || mainClip?.sourcePath || p.baseSequence?.[0]?.sourcePath
+        if (src) baseUrl = mediaSrc(src)
+      }
+      const libAssets = get().project.overlayAssets ?? assets
+      const moments = baseUrl ? findShowMoments(chunkTranscript(t)) : []
+      log.push(`moment vision: ${moments.length} show-moment(s)${baseUrl ? '' : ' — no base video, skipped'}`)
+      if (baseUrl && moments.length) {
+        // Downscaled overlay thumbnails to match against (built once; bounded for cost).
+        const thumbs: OverlayThumb[] = []
+        for (const a of libAssets) {
+          const th = await imageToThumb(a.file, 256)
+          if (th) thumbs.push({ id: a.id, name: a.name, image: th.base64, mediaType: th.mediaType })
+        }
+        if (!thumbs.length) {
+          log.push('moment vision: no overlay images to match against — skipped')
+        } else {
+          set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Matching what you show to your overlays…' } })
+          let si = 0
+          for (const m of moments) {
+            const span = Math.max(0, m.end - m.start)
+            // Sample a FEW frames across the line — the reveal can land early or late, and
+            // one snapshot misses it (that's why legs-at-2.4s came back no-match). Matching
+            // against several frames catches it wherever in the line it happens.
+            const times = span > 0.6
+              ? [m.start + span * 0.3, m.start + span * 0.6, m.start + span * 0.85]
+              : [m.start + span * 0.5]
+            const grabbed = await grabFrames(baseUrl, times)
+            if (!grabbed.length) { log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}": couldn't read the frame`); continue }
+            const frames = grabbed.map((g) => ({ image: g.base64, mediaType: g.mediaType }))
+            let overlayId = ''
+            try {
+              overlayId = (await window.api.matchMoment(frames, m.text, thumbs)).overlayId || ''
+            } catch (e) {
+              log.push(`  matchMoment error: ${(e as Error).message}`)
+            }
+            const hit = libAssets.find((a) => a.id === overlayId)
+            log.push(`  ${m.start.toFixed(1)}s "${m.text.slice(0, 28)}" (${grabbed.length}f) -> ${hit ? `overlay "${hit.name}"` : '(no match)'}`)
+            if (!hit) continue
+            matchedFromShow++
+            suggestions.push({
+              id: `mv_${si++}`, kind: 'overlay', overlayId,
+              start: m.start, end: Math.min(dur || m.start + 3, m.start + 3),
+              position: 'bottom_center', animation: 'pop',
+              reason: `You show this on camera while saying “${m.text.slice(0, 48)}”`,
+              sentence: m.text.slice(0, 200), confidence: 0.8
+            })
+          }
+          log.push(`moment vision: matched ${matchedFromShow} overlay(s) to what you show`)
+        }
+      }
+
+      suggestions.sort((a, b) => a.start - b.start)
+      log.forEach((l) => console.log('[suggest]', l))
+      set({
+        overlaySuggestions: suggestions,
+        overlayLog: log,
+        job: {
+          active: false,
+          percent: 100,
+          message: suggestions.length
+            ? `${suggestions.length} suggestion(s)${matchedFromShow ? ` (incl. ${matchedFromShow} matched to what you show)` : ''} — review below`
+            : 'No suggestions found'
+        }
+      })
+    } catch (e) {
+      set({ job: { active: false, percent: 0, message: safeErrMessage(e) } })
+    }
+  },
+
+  acceptSuggestions: (ids) => {
+    const pending = get().overlaySuggestions
+    const accept = ids ? pending.filter((s) => ids.includes(s.id)) : pending
+    if (accept.length === 0) return
+    const assets = get().project.overlayAssets ?? []
+    const cards = accept.filter((s) => s.kind !== 'label')
+    const labels = accept.filter((s) => s.kind === 'label')
+    // Card suggestions are proposed OverlayEvents — placed exactly like Generate.
+    const events: OverlayEvent[] = cards.map((s) => ({
+      overlayId: s.overlayId, start: s.start, end: s.end,
+      position: s.position, animation: s.animation, reason: s.reason, source: 'llm'
+    }))
+    const labelInputs = labels.map((s) => ({ start: s.start, end: s.end, label: s.label ?? '', position: s.position }))
+    const docMode = !!get().project.timeline
+    const engine = docMode ? getSharedEngine() : null
+    if (docMode && !engine) {
+      set({ job: { active: false, percent: 0, message: 'Timeline is still loading — try again' } })
+      return
+    }
+    let placed = 0
+    if (engine) {
+      // ADDITIVE: accepted suggestions add to whatever is already placed (unlike
+      // Generate, which replaces its own batch), so the creator can accept in steps.
+      // Card overlays become image clips; auto-labels become text clips on the text lane.
+      const doc = engine.document
+      const img = overlayEventsToDocClips(doc, get().project, events, assets)
+      const txt = labelSuggestionsToDocTextClips(doc, get().project, labelInputs)
+      const allClips = [...img.clips, ...txt.clips]
+      if (allClips.length) engine.batch('Accept suggestions', allClips.map((c) => TimelineCommands.addClip(c)))
+      placed = allClips.length
+      const skipped = [...img.skipped, ...txt.skipped]
+      if (skipped.length) console.log('[suggest] skipped:', skipped.join('; '))
+    } else {
       const assetById = new Map(assets.map((a) => [a.id, a]))
       const newClips: Clip[] = []
-      for (const ev of res.events as OverlayEvent[]) {
+      for (const ev of events) {
         const asset = assetById.get(ev.overlayId)
         if (!asset) continue
         const len = Math.max(0.5, ev.end - ev.start)
         const box = positionToBox(ev.position)
         newClips.push({
-          id: uid(),
-          name: asset.name,
-          sourcePath: asset.file,
-          sourceIn: 0,
-          sourceOut: len,
-          sourceDuration: len,
-          isImage: true,
-          start: Math.max(0, collapseTime(ev.start, cuts)),
-          x: box.x,
-          y: box.y,
-          scale: box.scale,
-          crop: { l: 0, t: 0, r: 0, b: 0 },
-          zoomStart: 1,
-          zoomEnd: 1,
-          overlayRuleId: asset.id,
-          overlayAnimation: ev.animation,
-          overlayReason: ev.reason
+          id: uid(), name: asset.name, sourcePath: asset.file, sourceIn: 0, sourceOut: len, sourceDuration: len,
+          isImage: true, start: Math.max(0, ev.start), x: box.x, y: box.y, scale: box.scale,
+          crop: { l: 0, t: 0, r: 0, b: 0 }, zoomStart: 1, zoomEnd: 1,
+          overlayRuleId: asset.id, overlayAnimation: ev.animation, overlayReason: ev.reason
         })
       }
-      get().clearGeneratedOverlays()
-      if (newClips.length) {
-        set((s) => ({
-          project: {
-            ...s.project,
-            tracks: s.project.tracks.map((tr) => (tr.index === 1 ? { ...tr, clips: [...tr.clips, ...newClips] } : tr))
-          }
-        }))
-      }
-      res.log.forEach((l) => console.log('[overlays]', l))
-      set({
-        overlayLog: res.log,
-        job: {
-          active: false,
-          percent: 100,
-          message: newClips.length ? `Placed ${newClips.length} overlay(s) via ${res.via}` : 'No overlay matches found'
+      // Legacy mode: auto-labels become project.texts (the legacy preview reads these).
+      const newTexts: TextClip[] = labels.map((s) => ({
+        id: uid(), text: s.label ?? '', start: Math.max(0, s.start), end: Math.max(0, s.end),
+        x: 0.5, y: s.position.startsWith('top') ? 0.14 : 0.86,
+        fontFamily: 'Arial Black', fontSize: 0.07, color: '#ffffff', align: 'center',
+        bold: true, italic: false, strokeWidth: 0.08, strokeColor: '#000000',
+        bgEnabled: false, bgColor: '#000000', bgRadius: 0.3, bgPadding: 0.3, bgOpacity: 0.6
+      }))
+      set((s) => ({
+        project: {
+          ...s.project,
+          tracks: newClips.length ? s.project.tracks.map((tr) => (tr.index === 1 ? { ...tr, clips: [...tr.clips, ...newClips] } : tr)) : s.project.tracks,
+          texts: newTexts.length ? [...(s.project.texts ?? []), ...newTexts] : s.project.texts
         }
-      })
-    } catch (e) {
-      set({ job: { active: false, percent: 0, message: (e as Error).message } })
+      }))
+      placed = newClips.length + newTexts.length
     }
+    const acceptedIds = new Set(accept.map((s) => s.id))
+    set((s) => ({
+      overlaySuggestions: s.overlaySuggestions.filter((x) => !acceptedIds.has(x.id)),
+      job: { active: false, percent: 100, message: `Placed ${placed} item(s)` }
+    }))
   },
+
+  dismissSuggestion: (id) =>
+    set((s) => ({ overlaySuggestions: s.overlaySuggestions.filter((x) => x.id !== id) })),
+
+  clearSuggestions: () => set({ overlaySuggestions: [] }),
 
   deleteSelected: () => {
     const { selectedWordIds } = get()
@@ -3278,3 +3695,7 @@ useStore.subscribe((state, prev) => {
   if (history.timer) clearTimeout(history.timer)
   history.timer = setTimeout(flushHistory, 400)
 })
+
+// Debug/support bridge: expose the store on window so overlay/suggest state can be
+// inspected or driven from the console (client-only state; no secrets). Harmless.
+if (typeof window !== 'undefined') (window as unknown as { ecStore?: typeof useStore }).ecStore = useStore
