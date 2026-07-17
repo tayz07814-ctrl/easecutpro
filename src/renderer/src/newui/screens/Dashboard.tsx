@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { css } from '../css'
 import { useProjects } from '../data/useProjects'
+import NewProjectWizard from './NewProjectWizard'
 import type { DashCard } from '../mock'
 
 // Screen 1a — Project dashboard (1440). Wired to real projects via useProjects.
@@ -208,6 +209,7 @@ export default function Dashboard(): JSX.Element {
   const [menuId, setMenuId] = useState<string | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [renameId, setRenameId] = useState<string | null>(null)
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   // cards[0] is the "new" tile; cards[i+1] aligns with metas[i].
   const metaFor = (i: number): { id: string } | undefined => (i > 0 ? dash.metas[i - 1] : undefined)
@@ -264,7 +266,7 @@ export default function Dashboard(): JSX.Element {
           </div>
           <div style={css('display:flex;align-items:center;gap:12px')}>
             <button onClick={() => void dash.batch()} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:13px;font-weight:500;border-radius:10px;padding:10px 16px;cursor:pointer')}>Batch clean videos</button>
-            <button onClick={() => void dash.create()} style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:10px 18px;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>＋ New project</button>
+            <button onClick={(e) => { e.stopPropagation(); setWizardOpen(true) }} style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:10px 18px;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>＋ New project</button>
           </div>
         </div>
 
@@ -276,7 +278,7 @@ export default function Dashboard(): JSX.Element {
               <Card
                 key={id ?? `new-${i}`}
                 card={c}
-                onOpen={i === 0 ? () => void dash.create() : id ? () => void dash.open(id) : undefined}
+                onOpen={i === 0 ? () => setWizardOpen(true) : id ? () => void dash.open(id) : undefined}
                 hovered={id ? hoverId === id : false}
                 onHover={id ? (v) => setHoverId(v ? id : (h) => (h === id ? null : h)) : undefined}
                 menuOpen={id ? menuId === id : false}
@@ -291,6 +293,7 @@ export default function Dashboard(): JSX.Element {
           })}
         </div>
       </div>
+      {wizardOpen && <NewProjectWizard onClose={() => setWizardOpen(false)} />}
     </div>
   )
 }

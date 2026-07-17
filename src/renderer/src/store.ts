@@ -514,6 +514,23 @@ export interface BatchJob {
   error?: string
 }
 
+/** Which enhancements the New Project wizard should apply on import. */
+export interface WizardOpts {
+  /** VAD silence removal + Retake δ bad-take cutting, applied to the timeline. */
+  cutSilenceBadTakes: boolean
+  /** Generate styled caption clips from the transcript (runs after the editor opens). */
+  captions: boolean
+}
+
+/** New Project wizard progress. `base`/`span` map the current engine's own 0-100
+ *  `job.percent` into its slice of one continuous 0-100 wizard bar. */
+export interface WizardJob {
+  active: boolean
+  label: string
+  base: number
+  span: number
+}
+
 /** Seam blend ("overlap") at cut joins — a short incoming-only fade that de-clicks
  *  the splice. A global render setting applied at export + preview. */
 export interface SeamFadeSettings {
@@ -859,6 +876,15 @@ interface AppState {
   runBatchClean: (items: { path: string; name: string }[]) => Promise<void>
   /** Clear finished batch-clean jobs from the home screen. */
   dismissBatchJobs: () => void
+  /** New Project wizard: import files (one project, clips in sequence), apply the
+   *  ticked enhancements with a combined progress bar, then open the editor. */
+  startImportWizard: (files: { path: string; name: string }[], opts: WizardOpts) => Promise<void>
+  /** Combined progress for the import wizard (null when idle). */
+  wizardJob: WizardJob | null
+  /** Captions were requested at import — the editor runs them once the engine mounts. */
+  pendingCaptions: boolean
+  /** Editor calls this after generating the post-import captions (or to cancel). */
+  clearPendingCaptions: () => void
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -909,6 +935,8 @@ export const useStore = create<AppState>((set, get) => ({
   showSettings: false,
   showExportModal: false,
   batchJobs: [],
+  wizardJob: null,
+  pendingCaptions: false,
   view: IS_WEB ? 'loading' : 'home',
   user: null,
   editingClipId: null,
@@ -3665,7 +3693,99 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  dismissBatchJobs: () => set({ batchJobs: [] })
+  dismissBatchJobs: () => set({ batchJobs: [] }),
+
+  clearPendingCaptions: () => set({ pendingCaptions: false }),
+
+  startImportWizard: async (files, opts) => {
+    if (!files.length) return
+    set({ wizardJob: { active: true, label: 'Preparing…', base: 0, span: 0 } })
+    // 1) Probe every picked file into a library item; keep videos/images for the base.
+    const items: LibraryItem[] = []
+    for (const f of files) {
+      try {
+        items.push(await buildLibraryItem(f.path, f.name))
+      } catch {
+        /* skip an unreadable file rather than aborting the whole import */
+      }
+    }
+    const bases = items.filter((it) => it.kind === 'video' || it.kind === 'image')
+    if (!bases.length) {
+      set({ wizardJob: null, job: { active: false, percent: 0, message: 'No importable video was selected.' } })
+      return
+    }
+    const first = bases[0]
+    const name = first.name.replace(/\.[^.]+$/, '') || 'Untitled project'
+
+    // 2) One project, clips in sequence: `baseSequence` is the legacy multi-clip
+    //    base — projectToDocument derives the main lane (and any cuts) from it on
+    //    open, so the editor shows every file back-to-back without the engine.
+    const project = newProject()
+    project.name = name
+    project.media = {
+      path: first.path,
+      duration: first.duration,
+      width: first.width,
+      height: first.height,
+      fps: first.fps,
+      hasAudio: first.hasAudio,
+      hasVideo: first.hasVideo
+    }
+    project.baseSequence = bases.map(seqClipFromLibrary)
+    // Make it the live project so the enhancement engines operate on it.
+    set({
+      project,
+      library: items,
+      currentProjectId: null,
+      currentProjectName: name,
+      mediaUrl: mediaUrl(first.path),
+      selectedWordIds: new Set(),
+      stagedSilences: [],
+      stagedSilenceSel: new Set()
+    })
+
+    const openInEditor = async (proj: Project): Promise<void> => {
+      const rec = await createProject(name, proj)
+      // Captions need the mounted timeline engine → the editor runs them on open.
+      set({ pendingCaptions: opts.captions, wizardJob: null })
+      get().openProjectRecord({ id: rec.id, name, project: proj })
+      try {
+        const fp = await serializeProject(get().project)
+        await saveProject(rec.id, { project: fp })
+      } catch {
+        /* autosave in the editor will persist it shortly */
+      }
+    }
+
+    // 3) Nothing to run before opening → straight to the editor.
+    if (!opts.cutSilenceBadTakes && !opts.captions) {
+      await openInEditor(project)
+      return
+    }
+
+    // 4) Pre-open engines on the legacy model, each mapped into its slice of the
+    //    single 0-100 wizard bar. Partial results beat a dead end, so on failure
+    //    we still open with whatever succeeded.
+    try {
+      if (opts.cutSilenceBadTakes) {
+        set({ wizardJob: { active: true, label: 'Transcribing…', base: 0, span: 45 } })
+        await get().transcribe()
+        set({ wizardJob: { active: true, label: 'Finding bad takes & silences…', base: 45, span: 30 } })
+        await get().runRetakeCutDelta()
+        set({ wizardJob: { active: true, label: 'Applying cuts…', base: 75, span: 10 } })
+        await get().executeCuts()
+      } else if (opts.captions) {
+        // Captions still need a transcript even when no cuts were requested.
+        set({ wizardJob: { active: true, label: 'Transcribing…', base: 0, span: 85 } })
+        await get().transcribe()
+      }
+    } catch (e) {
+      set({ job: { active: false, percent: 0, message: `Import enhancement failed: ${(e as Error).message}` } })
+    }
+
+    set({ wizardJob: { active: true, label: 'Opening editor…', base: 85, span: 15 } })
+    await openInEditor(get().project)
+  }
 }))
 
 // ---- Undo/redo history controller ----

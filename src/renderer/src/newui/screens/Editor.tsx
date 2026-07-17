@@ -565,6 +565,34 @@ function TimelineZoom(): JSX.Element | null {
 export default function Editor(): JSX.Element {
   const showExportModal = useStore((s) => s.showExportModal)
   const showSettings = useStore((s) => s.showSettings)
+  const pendingCaptions = useStore((s) => s.pendingCaptions)
+
+  // Captions requested in the New Project wizard run HERE, once the timeline
+  // engine has mounted the document (captions write doc text clips, which need
+  // the live engine). Poll a few seconds for the doc + a transcript, then fire.
+  useEffect(() => {
+    if (!pendingCaptions) return
+    let handle = 0
+    let tries = 0
+    const tick = (): void => {
+      const doc = getSharedEngine()?.document
+      const ready = !!doc && doc.tracks.some((t) => t.isMain && t.clips.length > 0)
+      const hasTranscript = (useStore.getState().project.transcript?.words?.length ?? 0) > 0
+      if (ready && hasTranscript) {
+        useStore.getState().generateCaptions()
+        useStore.getState().clearPendingCaptions()
+        return
+      }
+      if (tries++ > 300) {
+        // Give up quietly (no transcript / no clips) rather than poll forever.
+        useStore.getState().clearPendingCaptions()
+        return
+      }
+      handle = requestAnimationFrame(tick)
+    }
+    handle = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(handle)
+  }, [pendingCaptions])
 
   // Transport keyboard shortcuts (CapCut-style). GLOBAL so Space works the moment
   // the editor loads — no need to click the play button first (clicking only worked

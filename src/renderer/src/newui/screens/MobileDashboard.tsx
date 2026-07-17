@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { css } from '../css'
 import { useProjects } from '../data/useProjects'
+import NewProjectWizard from './NewProjectWizard'
 import type { ProjectMeta } from '../../projectsApi'
 import type { DashCard } from '../mock'
 
@@ -90,6 +91,7 @@ export default function MobileDashboard(): JSX.Element {
   const [menuId, setMenuId] = useState<string | null>(null)
   const [renameId, setRenameId] = useState<string | null>(null)
   const [acct, setAcct] = useState(false)
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   return (
     <div
@@ -136,7 +138,7 @@ export default function MobileDashboard(): JSX.Element {
 
         {/* New project + Batch */}
         <div style={css('display:flex;gap:10px;margin-bottom:22px')}>
-          <button onClick={() => void dash.create()} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:14.5px;font-weight:600;border-radius:12px;padding:14px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>＋ New project</button>
+          <button onClick={() => setWizardOpen(true)} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:14.5px;font-weight:600;border-radius:12px;padding:14px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>＋ New project</button>
           <button onClick={() => void dash.batch()} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:14.5px;font-weight:500;border-radius:12px;padding:14px 20px;cursor:pointer')}>Batch</button>
         </div>
 
@@ -169,6 +171,7 @@ export default function MobileDashboard(): JSX.Element {
           })}
         </div>
       </div>
+      {wizardOpen && <NewProjectWizard onClose={() => setWizardOpen(false)} />}
     </div>
   )
 }
