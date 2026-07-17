@@ -299,37 +299,44 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
       if (e.button !== 0) return
       const t = e.target as HTMLElement
       if (t.closest('.ec-tl-header') || t.closest('.ec-tl-rulerRow') || t.closest('.ec-tl-clip')) return
-      const additive = e.shiftKey || e.ctrlKey || e.metaKey
-      if (!additive) {
-        // scrub — identical to the ruler, just triggered from the lane area
-        engine.clearSelection()
-        const seek = (cx: number): void => engine.setPlayhead(Math.max(0, frameFromClientX(cx)))
-        seek(e.clientX)
-        const move = (ev: PointerEvent): void => seek(ev.clientX)
-        const up = (): void => {
-          window.removeEventListener('pointermove', move)
-          window.removeEventListener('pointerup', up)
-        }
-        window.addEventListener('pointermove', move)
-        window.addEventListener('pointerup', up)
-        return
-      }
+      // Suppress the browser's native text/drag selection on a plain drag —
+      // without this it swallows the pointermove stream and the marquee never
+      // tracks (a Shift-drag dodged it only because the modifier changes native
+      // selection behaviour).
+      e.preventDefault()
       const el = scrollRef.current
       if (!el) return
       const rect = el.getBoundingClientRect()
+      // Standard-editor gesture: DRAG on the empty lane area = marquee (rubber-band)
+      // multi-select across every lane; a plain CLICK (no drag) moves the playhead
+      // there. Shift/Ctrl/Cmd adds the marquee's hits to the current selection;
+      // otherwise the marquee replaces it. (The ruler still owns scrubbing.)
+      const additive = e.shiftKey || e.ctrlKey || e.metaKey
       const startFrame = frameFromClientX(e.clientX)
       const startContentY = el.scrollTop + (e.clientY - rect.top) - RULER_H
-      const baseSel = engine.interactionState.selection.slice()
-      setMarquee({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY })
+      const baseSel = additive ? engine.interactionState.selection.slice() : []
+      const startX = e.clientX
+      const startY = e.clientY
+      let dragging = false
       const move = (ev: PointerEvent): void => {
+        if (!dragging) {
+          if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return
+          dragging = true
+          if (!additive) engine.clearSelection()
+        }
         const f0 = Math.min(startFrame, frameFromClientX(ev.clientX))
         const f1 = Math.max(startFrame, frameFromClientX(ev.clientX))
         const curY = el.scrollTop + (ev.clientY - rect.top) - RULER_H
         const ids = clipsInRect(engine.document, f0, f1, Math.min(startContentY, curY), Math.max(startContentY, curY))
         engine.select([...baseSel, ...ids])
-        setMarquee({ x0: e.clientX, y0: e.clientY, x1: ev.clientX, y1: ev.clientY })
+        setMarquee({ x0: startX, y0: startY, x1: ev.clientX, y1: ev.clientY })
       }
       const up = (): void => {
+        if (!dragging && !additive) {
+          // plain click on empty space → move the playhead there and deselect
+          engine.clearSelection()
+          engine.setPlayhead(Math.max(0, startFrame))
+        }
         setMarquee(null)
         window.removeEventListener('pointermove', move)
         window.removeEventListener('pointerup', up)
