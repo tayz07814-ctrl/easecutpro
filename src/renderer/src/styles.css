@@ -174,7 +174,14 @@ select { background: var(--bg); color: var(--text); border: 1px solid var(--bord
 .ov-suggest-btn { border: 1px solid #6c5ce7; color: #cdc6ff; background: rgba(108,92,231,0.12); }
 .ov-suggest-btn:hover:not(:disabled) { background: rgba(108,92,231,0.24); }
 .ov-log { font-size: 11px; color: #8a94b0; }
-.ov-log pre { white-space: pre-wrap; max-height: 160px; overflow: auto; background: rgba(0,0,0,0.25); padding: 6px; border-radius: 6px; }
+.ov-log-head { display: flex; justify-content: flex-end; margin: 4px 0 2px; }
+.ov-log-copy { font-size: 11px; color: #cfd6ea; background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.ov-log-copy:hover { background: rgba(255,255,255,0.12); }
+/* The panel sets user-select:none on its chrome; the log is data the creator needs to
+   copy, so re-enable text selection on it (and the button stays clickable). */
+.ov-log pre { white-space: pre-wrap; max-height: 160px; overflow: auto; background: rgba(0,0,0,0.25);
+  padding: 6px; border-radius: 6px; user-select: text; -webkit-user-select: text; cursor: text; }
 
 /* Suggest review list */
 .ov-suggest { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; }

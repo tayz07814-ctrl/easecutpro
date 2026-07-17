@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useStore } from '../store'
 import { mediaSrc, IS_CLOUD } from '../platform'
 import { useSharedEngineSnapshot } from '../timelineEngine'
@@ -27,6 +28,7 @@ export default function OverlayPanel(): JSX.Element {
   const job = useStore((s) => s.job)
   const hasTranscript = useStore((s) => (s.project.transcript?.segments?.length ?? 0) > 0)
   const overlayLog = useStore((s) => s.overlayLog)
+  const [logCopied, setLogCopied] = useState(false)
   const addOverlayAsset = useStore((s) => s.addOverlayAsset)
   const updateOverlayRule = useStore((s) => s.updateOverlayRule)
   const removeOverlayAsset = useStore((s) => s.removeOverlayAsset)
@@ -228,6 +230,33 @@ export default function OverlayPanel(): JSX.Element {
       {overlayLog.length > 0 && (
         <details className="ov-log">
           <summary>Last run · {overlayLog.length} log lines</summary>
+          <div className="ov-log-head">
+            <button
+              type="button"
+              className="ov-log-copy"
+              onClick={async () => {
+                const text = overlayLog.join('\n')
+                try {
+                  await navigator.clipboard.writeText(text)
+                } catch {
+                  // clipboard API blocked (insecure ctx / permission) — fall back to a
+                  // hidden textarea + execCommand so copy still works.
+                  const ta = document.createElement('textarea')
+                  ta.value = text
+                  ta.style.position = 'fixed'
+                  ta.style.opacity = '0'
+                  document.body.appendChild(ta)
+                  ta.select()
+                  try { document.execCommand('copy') } catch { /* give up silently */ }
+                  document.body.removeChild(ta)
+                }
+                setLogCopied(true)
+                window.setTimeout(() => setLogCopied(false), 1500)
+              }}
+            >
+              {logCopied ? '✓ Copied' : 'Copy log'}
+            </button>
+          </div>
           <pre>{overlayLog.join('\n')}</pre>
         </details>
       )}
