@@ -5,6 +5,7 @@ import { useStore } from '../../store'
 import type { LibraryItem } from '@shared/types'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
 import EditPanel from './EditPanel'
+import OverlayPanel from '../../components/OverlayPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
@@ -521,6 +522,10 @@ function AiPanel({ width }: { width: number }): JSX.Element {
         <RetakeCleanerPanel />
       ) : tab === 'Edit' ? (
         <EditPanel />
+      ) : tab === 'Overlays' ? (
+        <div style={css('flex:1;min-height:0;overflow:auto;padding:12px')}>
+          <OverlayPanel />
+        </div>
       ) : (
         <div style={css('flex:1;display:grid;place-items:center;padding:24px;text-align:center')}>
           <div style={css('font-size:12.5px;color:#686E7B;line-height:1.6')}>{tab} tools are coming to the new editor.</div>
