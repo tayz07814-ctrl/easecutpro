@@ -52,8 +52,11 @@ function preflight(req: Request): Response | null {
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
 const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.1-pro-preview'
 
-// Reasoning control. Default effort=low — enough to reliably find take boundaries,
-// fast on gemini-flash (~7s). `off` disables (fast but unreliable on this task).
+// Reasoning control. Default is now OFF — extended thinking on a frontier PRO
+// model (gemini-3.1-pro-preview) would blow the ~15s judge budget; disabling it
+// keeps the "press δ → cuts" flow fast, and a strong model + the whole-take-span
+// forcing prompt still emits clean cuts. Bump DELTA_REASONING_EFFORT to low/medium
+// if cut quality needs it (or set it back to low if reverting to gemini-flash).
 function reasoningConfig(): Record<string, unknown> {
   const effort = Deno.env.get('DELTA_REASONING_EFFORT')?.toLowerCase()
   if (effort === 'off') return { enabled: false }
@@ -63,7 +66,7 @@ function reasoningConfig(): Record<string, unknown> {
     const n = parseInt(raw, 10)
     if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
   }
-  return { effort: 'low' }
+  return { enabled: false }
 }
 
 // Provider routing. Default: route to the highest-throughput provider (fastest
