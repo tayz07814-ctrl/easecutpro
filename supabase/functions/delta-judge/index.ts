@@ -48,10 +48,16 @@ function preflight(req: Request): Response | null {
 }
 
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-// A/B trial: gemini-3.1-pro-preview as the judge ($2/$12 per M vs flash's $1.5/$9 —
-// only ~33% more per token). Watch latency: Pro reasons more than flash's ~7s; if runs
-// blow the ~40s budget or 546, flip back to google/gemini-3.5-flash.
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.1-pro-preview'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.5-flash'
+
+// Per-request model override (A/B testing from a specific branch build) — the 0.03
+// build sends model:'google/gemini-3.1-pro-preview' while every other branch omits it
+// and gets the default. Whitelisted so a signed-in user can't route to an arbitrary
+// (expensive) model. DELTA_MODEL env still wins over the code default.
+const MODEL_WHITELIST = new Set(['google/gemini-3.5-flash', 'google/gemini-3.1-pro-preview'])
+function resolveModel(requested: unknown): string {
+  return typeof requested === 'string' && MODEL_WHITELIST.has(requested) ? requested : MODEL
+}
 
 // Reasoning control. Default effort=low — enough to reliably find take boundaries,
 // fast on gemini-flash (~7s). `off` disables (fast but unreliable on this task).
@@ -134,12 +140,12 @@ async function requireUser(req: Request): Promise<boolean> {
   return !!data.user
 }
 
-async function finalize(apiKey: string, payload: string, proposal: unknown): Promise<string> {
+async function finalize(apiKey: string, model: string, payload: string, proposal: unknown): Promise<string> {
   const userText =
     `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
   const provider = providerConfig()
   const body: Record<string, unknown> = {
-    model: MODEL,
+    model,
     max_tokens: 16000,
     stream: false,
     reasoning: reasoningConfig(),
@@ -174,7 +180,7 @@ async function finalize(apiKey: string, payload: string, proposal: unknown): Pro
   try {
     await admin().rpc('log_delta_debug', {
       payload: {
-        model: MODEL,
+        model,
         http_status: r.status,
         ok: r.ok,
         content_len: content.length,
@@ -198,16 +204,19 @@ Deno.serve(async (req) => {
   if (pf) return pf
   try {
     if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const { payload, proposal } = await req.json().catch(() => ({ payload: null, proposal: null }))
+    const { payload, proposal, model: requestedModel } = await req
+      .json()
+      .catch(() => ({ payload: null, proposal: null, model: null }))
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
+    const model = resolveModel(requestedModel)
 
     const apiKey = await getApiKey()
     if (!apiKey) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await finalize(apiKey, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: `delta:${MODEL}` })
+      return json({ raw: await finalize(apiKey, model, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: `delta:${model}` })
     } catch (e) {
       console.warn('[delta-judge] model API failed:', (e as Error).message)
-      return json({ raw: null, judge: `delta:${MODEL}` })
+      return json({ raw: null, judge: `delta:${model}` })
     }
   } catch (e) {
     return json({ error: (e as Error).message }, 500)
