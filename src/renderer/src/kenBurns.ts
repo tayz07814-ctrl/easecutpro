@@ -88,3 +88,112 @@ export function kenBurnsTransform(p: KenBurnsParams): string {
 export function kenBurnsOrigin(ovX = 0, ovY = 0): string {
   return `${50 + ovX * 100}% ${50 + ovY * 100}%`
 }
+
+// ---------------------------------------------------------------------------
+// Compositor-driven playback (Web Animations API)
+// ---------------------------------------------------------------------------
+//
+// Writing `el.style.transform` every rAF frame interpolates the zoom on the
+// MAIN thread from `playClock.t` — which is the base video's currentTime, so it
+// advances at the video's frame cadence, not the display's refresh rate.
+// Resampling that steppy clock each frame (on a thread the editor keeps busy)
+// is what makes a FAST ease-out zoom look choppy; the old ease-in's near-frozen
+// start simply hid it.
+//
+// Instead we hand the whole ramp to the browser as a Web Animation: it runs on
+// the COMPOSITOR at the display refresh rate off its own smooth clock, immune
+// to video-frame stepping and main-thread jank. We only nudge it back into sync
+// on a real discontinuity (play start, loop, seek). Paused/scrubbing still
+// writes the exact static frame, so a dragged playhead lands precisely.
+
+/** Only correct on a genuine jump (seek/loop/play-start), never on the small
+ *  frame-to-frame stepping of the video clock — letting the compositor free-run
+ *  between corrections is the whole point. */
+const DRIFT_RESYNC_MS = 120
+
+export interface ZoomDrive {
+  /** transform-origin (focal point) — see kenBurnsOrigin. */
+  origin: string
+  size?: number
+  zoomStart?: number
+  zoomEnd?: number
+  /** clip start + length in seconds (same time-base as clockSec/playheadSec). */
+  startSec: number
+  lenSec: number
+  playing: boolean
+  /** edited time while playing (playClock.t) — used only to detect drift. */
+  clockSec: number
+  /** exact edited time for a paused / scrubbed frame. */
+  playheadSec: number
+  ease?: Easing
+}
+
+/** Fine-grained keyframes tracing the EXACT Ken Burns scale curve (any easing),
+ *  linearly interpolated by the compositor between samples — so the on-screen
+ *  motion matches the exporters' polynomial to sub-pixel accuracy while still
+ *  rendering at the display refresh rate. */
+function zoomKeyframes(p: ZoomDrive, steps = 60): Keyframe[] {
+  const out: Keyframe[] = []
+  for (let i = 0; i <= steps; i++) {
+    const progress = i / steps
+    out.push({
+      transform: kenBurnsTransform({ size: p.size, zoomStart: p.zoomStart, zoomEnd: p.zoomEnd, progress, ease: p.ease }),
+      offset: progress
+    })
+  }
+  return out
+}
+
+/**
+ * Drives one element's Ken Burns zoom on the compositor. Keep ONE per element
+ * (in a ref) and call `drive` every rAF frame while playing and once per paused
+ * frame. It rebuilds the underlying Web Animation only when the zoom params or
+ * the target element change; ordinary frames just let the compositor run and,
+ * at most, correct a large drift. Falls back to a per-frame static write where
+ * the Web Animations API is unavailable.
+ */
+export class ZoomAnimator {
+  private anim: Animation | null = null
+  private el: HTMLElement | null = null
+  private key = ''
+
+  drive(el: HTMLElement, p: ZoomDrive): void {
+    if (el !== this.el) {
+      this.stop()
+      this.el = el
+    }
+    el.style.transformOrigin = p.origin
+
+    const writeStatic = (): void => {
+      const progress = p.lenSec > 0 ? clamp01((p.playheadSec - p.startSec) / p.lenSec) : 0
+      el.style.transform = kenBurnsTransform({ size: p.size, zoomStart: p.zoomStart, zoomEnd: p.zoomEnd, progress, ease: p.ease })
+    }
+
+    // Paused/scrub, or no WAA support → exact static frame, no animation.
+    if (!p.playing || typeof el.animate !== 'function') {
+      if (this.anim) { this.anim.cancel(); this.anim = null; this.key = '' }
+      writeStatic()
+      return
+    }
+
+    const lenMs = Math.max(1, p.lenSec * 1000)
+    const key = `${p.size ?? 1}|${p.zoomStart ?? 1}|${p.zoomEnd ?? 1}|${lenMs}`
+    if (!this.anim || this.key !== key) {
+      this.anim?.cancel()
+      this.anim = el.animate(zoomKeyframes(p), { duration: lenMs, easing: 'linear', fill: 'both' })
+      this.key = key
+    }
+    const a = this.anim
+    const want = p.lenSec > 0 ? clamp01((p.clockSec - p.startSec) / p.lenSec) * lenMs : 0
+    const cur = typeof a.currentTime === 'number' ? a.currentTime : Number(a.currentTime ?? 0)
+    if (Math.abs(cur - want) > DRIFT_RESYNC_MS) a.currentTime = want
+    if (a.playState !== 'running') a.play()
+  }
+
+  /** Cancel the animation and clear the inline transform on the current element. */
+  stop(): void {
+    if (this.anim) { this.anim.cancel(); this.anim = null }
+    if (this.el) this.el.style.transform = ''
+    this.key = ''
+  }
+}

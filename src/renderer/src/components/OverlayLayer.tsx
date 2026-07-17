@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { playClock } from '../clock'
-import { kenBurnsTransform } from '../kenBurns'
+import { ZoomAnimator } from '../kenBurns'
 import { mediaSrc } from '../platform'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
 import { framesToSeconds, secondsToFrames } from '@shared/timeline/time'
@@ -204,6 +204,8 @@ function OverlayBox({
 }): JSX.Element {
   const ref = useRef<HTMLVideoElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
+  const zoomAnimRef = useRef<ZoomAnimator>()
+  if (!zoomAnimRef.current) zoomAnimRef.current = new ZoomAnimator()
   const isImage = view.isImage
   const playing = useStore((s) => s.playing)
   const playhead = useStore((s) => s.project.playhead)
@@ -255,25 +257,32 @@ function OverlayBox({
     return undefined
   }, [playing, playhead, view.sourceIn, view.start, view.muted, view.gain, isImage])
 
-  // Smooth Ken Burns zoom across the clip — GPU-composited (translateZ + scale3d,
-  // full float), driven off the shared 60fps play clock for BOTH images and
-  // videos so it keeps ramping even over a magnet-off gap on the base lane.
+  // Ken Burns zoom across the clip — handed to the compositor (Web Animations
+  // API) so it renders at the display refresh rate off its own smooth clock,
+  // instead of being re-interpolated on the main thread from the video-derived
+  // playClock each frame (which stepped at the video fps and looked choppy on a
+  // fast ease-out). Overlays zoom about their centre. Paused → exact frame.
   useEffect(() => {
     const el: HTMLElement | null = isImage ? imgRef.current : ref.current
-    if (!el) return
-    const at = (prog: number): string => kenBurnsTransform({ zoomStart: zs, zoomEnd: ze, progress: prog })
+    const anim = zoomAnimRef.current
+    if (!el || !anim) return
+    const drive = (isPlaying: boolean, clockSec: number, playheadSec: number): void =>
+      anim.drive(el, { origin: 'center center', zoomStart: zs, zoomEnd: ze, startSec: view.start, lenSec: len, playing: isPlaying, clockSec, playheadSec })
     if (playing) {
       let raf = 0
       const loop = (): void => {
-        el.style.transform = at(len > 0 ? (playClock.t - view.start) / len : 0)
+        drive(true, playClock.t, playClock.t)
         raf = requestAnimationFrame(loop)
       }
       raf = requestAnimationFrame(loop)
       return () => cancelAnimationFrame(raf)
     }
-    el.style.transform = at(len > 0 ? (playhead - view.start) / len : 0)
+    drive(false, playhead, playhead)
     return undefined
   }, [playing, playhead, view.start, view.sourceIn, len, zs, ze, isImage])
+
+  // Stop the compositor animation when this overlay unmounts.
+  useEffect(() => () => zoomAnimRef.current?.stop(), [])
 
   // One finger = move (centre snaps to the frame's centre lines); two fingers =
   // pinch-resize. Both commit to the doc, so the export matches what you place.

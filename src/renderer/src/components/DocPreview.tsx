@@ -30,7 +30,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { playClock, primePlayback } from '../clock'
-import { kenBurnsTransform, kenBurnsOrigin } from '../kenBurns'
+import { kenBurnsOrigin, ZoomAnimator } from '../kenBurns'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -241,6 +241,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
 
   // element pool: source path -> <video> (callback refs fill it)
   const poolRef = useRef(new Map<string, HTMLVideoElement>())
+  const baseZoomRef = useRef<ZoomAnimator>()
+  if (!baseZoomRef.current) baseZoomRef.current = new ZoomAnimator()
   const pendingRef = useRef(new Map<string, Pending>())
   const badRef = useRef(new Set<string>()) // sources that fired 'error'
 
@@ -435,6 +437,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       // preview reflects the Silence Settings toggle/slider immediately.
       const sf = useStore.getState().seamFade
       const seamFadeS = sf.enabled ? sf.ms / 1000 : 0
+      let droveZoom = false
       for (const [src, v] of pool) {
         const isShown = !!shown && shown.src === src && !badRef.current.has(src)
         v.style.visibility = isShown ? 'visible' : 'hidden'
@@ -443,24 +446,37 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           // Anti-click: dip the volume toward 0 across each real cut seam.
           v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
           v.playbackRate = clamp(shown.speed, 0.25, 4)
-          const prog = shown.len > 0 ? clamp((t - shown.start) / shown.len, 0, 1) : 0
-          v.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
-          // ALWAYS a GPU-composited 3D transform (even at scale 1) so the layer
-          // never promotes/demotes mid-zoom — the source of the subtle-zoom hitch.
-          v.style.transform = kenBurnsTransform({
+          // Ken Burns handed to the compositor (Web Animations API) — renders at
+          // the display refresh rate off its own smooth clock, so it never steps
+          // at the video fps or stutters under main-thread load on a fast
+          // ease-out. Retargets automatically when the shown clip changes; paused
+          // (isPlaying false) writes the exact frame so scrubbing lands precisely.
+          baseZoomRef.current?.drive(v, {
+            origin: kenBurnsOrigin(shown.ovX, shown.ovY),
             size: shown.ovScale ?? 1,
             zoomStart: shown.ovZoomStart,
             zoomEnd: shown.ovZoomEnd,
-            progress: prog
+            startSec: shown.start,
+            lenSec: shown.len,
+            playing: isPlaying,
+            clockSec: t,
+            playheadSec: t
           })
+          droveZoom = true
         } else if (!isShown && !v.paused && isPlaying && shown?.src !== src) {
           v.pause() // never let a hidden element keep playing audio
         }
       }
+      // No base clip on screen (gap / bad source) → drop any held zoom transform.
+      if (!droveZoom) baseZoomRef.current?.stop()
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
+    const animator = baseZoomRef.current
+    return () => {
+      cancelAnimationFrame(raf)
+      animator?.stop()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

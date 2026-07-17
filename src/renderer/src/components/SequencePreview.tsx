@@ -3,7 +3,7 @@ import { useStore } from '../store'
 import { mediaSrc } from '../platform'
 import { computeKeepRanges, virtualKeepsToClipSegments } from '@shared/edit'
 import { playClock, primePlayback } from '../clock'
-import { kenBurnsTransform, kenBurnsOrigin } from '../kenBurns'
+import { kenBurnsOrigin, ZoomAnimator } from '../kenBurns'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -137,6 +137,8 @@ export default function SequencePreview(): JSX.Element {
   const setPlayhead = useStore((s) => s.setPlayhead)
   const waveform = useStore((s) => s.waveform) // valley-snapped cut edges (matches export)
   const ref = useRef<HTMLVideoElement>(null)
+  const zoomAnimRef = useRef<ZoomAnimator>()
+  if (!zoomAnimRef.current) zoomAnimRef.current = new ZoomAnimator()
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageSize, setStageSize] = useState({ w: 0, h: 0 })
 
@@ -543,33 +545,46 @@ export default function SequencePreview(): JSX.Element {
   // motion driven off the active main clip's metadata; ramps on the shared clock.
   useEffect(() => {
     const v = ref.current
-    if (!v) return
-    const applyAt = (): void => {
+    const anim = zoomAnimRef.current
+    if (!v || !anim) return
+    const drive = (isPlaying: boolean, clockSec: number, playheadSec: number): void => {
       const i = coveringIdx(playheadRef.current)
       const seg = segsRef.current[i >= 0 ? i : idxRef.current]
       if (!seg) {
-        v.style.transform = ''
+        anim.stop()
         return
       }
-      const prog = seg.len > 0 ? Math.min(1, Math.max(0, (playClock.t - seg.start) / seg.len)) : 0
-      v.style.transformOrigin = kenBurnsOrigin(seg.ovX, seg.ovY)
-      // GPU-composited 3D transform, always applied (even at scale 1) so the
-      // layer never promotes/demotes mid-zoom. Same math as the exporters.
-      v.style.transform = kenBurnsTransform({ size: seg.ovScale ?? 1, zoomStart: seg.ovZoomStart, zoomEnd: seg.ovZoomEnd, progress: prog })
+      // Compositor-driven zoom (Web Animations API): renders at the display
+      // refresh rate off its own smooth clock, so a fast ease-out no longer
+      // steps at the video fps / stutters under main-thread load. Paused → exact.
+      anim.drive(v, {
+        origin: kenBurnsOrigin(seg.ovX, seg.ovY),
+        size: seg.ovScale ?? 1,
+        zoomStart: seg.ovZoomStart,
+        zoomEnd: seg.ovZoomEnd,
+        startSec: seg.start,
+        lenSec: seg.len,
+        playing: isPlaying,
+        clockSec,
+        playheadSec
+      })
     }
     if (playing) {
       let raf = 0
       const loop = (): void => {
-        applyAt()
+        drive(true, playClock.t, playClock.t)
         raf = requestAnimationFrame(loop)
       }
       raf = requestAnimationFrame(loop)
       return () => cancelAnimationFrame(raf)
     }
-    applyAt()
+    drive(false, playhead, playhead)
     return undefined
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, playhead, segsKey])
+
+  // Stop the compositor animation when the preview unmounts.
+  useEffect(() => () => zoomAnimRef.current?.stop(), [])
 
   // Guarantee the first frame decodes after a (re)mount — the classic "black
   // preview" on reopen or after moving the base clip off→onto the main lane. Two
