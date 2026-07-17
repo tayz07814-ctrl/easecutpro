@@ -1,7 +1,7 @@
 // Standalone logic test for ZoomAnimator (run: npx tsx <thisfile>). Mocks the
 // DOM element's Web-Animations surface so we can assert the compositor path
 // without a browser. NOT part of the build.
-import { ZoomAnimator, kenBurnsTransform } from '../src/renderer/src/kenBurns'
+import { ZoomAnimator, kenBurnsTransform, kenBurnsScale, kenBurnsEase } from '../src/renderer/src/kenBurns'
 
 let pass = 0
 let fail = 0
@@ -109,6 +109,19 @@ const asEl = (f: FakeEl): HTMLElement => f as unknown as HTMLElement
   z.stop()
   check('stop cancels animation', el.anims[0].cancelled)
   check('stop clears transform', el.style.transform === '')
+}
+
+// --- 7. Constant velocity: equal time steps → equal scale steps (linear) -----
+{
+  check('default easing is identity (linear, no easing)', Math.abs(kenBurnsEase(0.37) - 0.37) < 1e-9, String(kenBurnsEase(0.37)))
+  const s = (p: number): number => kenBurnsScale({ zoomStart: 1, zoomEnd: 1.3, progress: p })
+  const d1 = s(0.25) - s(0.0)
+  const d2 = s(0.5) - s(0.25)
+  const d3 = s(0.75) - s(0.5)
+  const d4 = s(1.0) - s(0.75)
+  const uniform = [d1, d2, d3, d4].every((d) => Math.abs(d - d1) < 1e-9)
+  check('equal Δscale per equal Δtime (constant velocity)', uniform, `${d1.toFixed(4)}/${d2.toFixed(4)}/${d3.toFixed(4)}/${d4.toFixed(4)}`)
+  check('midpoint is the exact linear midpoint (1.15)', Math.abs(s(0.5) - 1.15) < 1e-9, String(s(0.5)))
 }
 
 console.log(`\nZoomAnimator: ${pass} passed, ${fail} failed`)

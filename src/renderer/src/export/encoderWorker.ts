@@ -173,6 +173,12 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
       }
       canvas = new OffscreenCanvas(W, H)
       ctx = canvas.getContext('2d', { alpha: false })
+      if (ctx) {
+        // Highest-quality resampling for the Ken Burns scale (kills shimmer /
+        // aliasing on slow zooms); float dst coords keep the motion subpixel.
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'high'
+      }
       ;(self as unknown as Worker).postMessage({ type: 'ready' })
       return
     }

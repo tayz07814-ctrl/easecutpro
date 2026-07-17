@@ -91,6 +91,10 @@ export async function exportOnDeviceMB(
   canvas.height = H
   const ctx = canvas.getContext('2d', { alpha: false })
   if (!ctx) throw new Error('no 2d canvas in this browser')
+  // Highest-quality resampling for the Ken Burns scale — bilinear/'low' shimmers
+  // and aliases on a slow zoom; 'high' glides. (Float dst coords keep it subpixel.)
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
 
   const videoSource = new CanvasSource(canvas, {
     codec: 'avc',

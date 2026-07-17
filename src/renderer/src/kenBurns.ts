@@ -25,11 +25,10 @@ export type Easing = (t: number) => number
 
 const clamp01 = (t: number): number => (t < 0 ? 0 : t > 1 ? 1 : t)
 
-// Easing library — each maps 0..1 → 0..1. Ken Burns defaults to easeOutCubic:
-// the zoom MOVES from the very first frame (non-zero starting velocity), then
-// decelerates to a soft landing. An ease-IN/-in-out curve starts at zero speed,
-// so the first ~0.2–0.3s is imperceptible and the zoom reads as a delayed
-// animation instead of a camera push — easeOut removes that dead start.
+// Easing library — each maps 0..1 → 0..1. Ken Burns defaults to `linear`:
+// CONSTANT velocity, no acceleration — the zoom glides at a uniform speed from
+// the first frame to the last, like a motorized camera slider. (The other
+// curves stay available for callers that pass an explicit `ease`.)
 export const Easings = {
   linear: (t: number): number => clamp01(t),
   easeInQuad: (t: number): number => ((t = clamp01(t)), t * t),
@@ -49,8 +48,8 @@ export const Easings = {
 export type EasingName = keyof typeof Easings
 
 /** Default Ken Burns easing. Change here to restyle every zoom, preview + export.
- *  easeOutCubic → the zoom starts moving immediately (no dead ease-in start). */
-export const kenBurnsEase: Easing = Easings.easeOutCubic
+ *  `linear` → constant velocity, zero acceleration: a perfectly uniform glide. */
+export const kenBurnsEase: Easing = Easings.linear
 
 export interface KenBurnsParams {
   /** base size (1 = fill the frame). */
@@ -106,10 +105,12 @@ export function kenBurnsOrigin(ovX = 0, ovY = 0): string {
 // on a real discontinuity (play start, loop, seek). Paused/scrubbing still
 // writes the exact static frame, so a dragged playhead lands precisely.
 
-/** Only correct on a genuine jump (seek/loop/play-start), never on the small
- *  frame-to-frame stepping of the video clock — letting the compositor free-run
- *  between corrections is the whole point. */
-const DRIFT_RESYNC_MS = 120
+/** Only correct on a genuine discontinuity — play-start, loop, or seek, which
+ *  jump the clock by hundreds of ms to seconds. Normal per-frame advance is
+ *  ≤~33ms and gradual video/wall-clock drift stays well under this, so the
+ *  compositor free-runs at constant velocity and NEVER snaps mid-glide (a snap
+ *  would read as a periodic hitch — the opposite of what we want). */
+const DRIFT_RESYNC_MS = 250
 
 export interface ZoomDrive {
   /** transform-origin (focal point) — see kenBurnsOrigin. */
