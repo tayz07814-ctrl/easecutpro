@@ -13,8 +13,10 @@
 //                         (misses cuts or over-cuts run-to-run).
 //   • google/gemini-3.5-flash — reasons ~4x more efficiently: ~1-1.6k tokens in
 //                         ~7s, and RELIABLY emits clean whole-take span cuts.
-// So the default is gemini-3.5-flash with effort=low reasoning + throughput
-// provider routing. Any model still works via DELTA_MODEL.
+// Default is now google/gemini-3.1-pro-preview (creator's choice) — a frontier
+// reasoning model for higher-quality take detection; effort=low reasoning +
+// throughput provider routing keep it within the latency budget. Any model still
+// works via DELTA_MODEL (e.g. set it back to google/gemini-3.5-flash for speed/cost).
 //
 // The SYSTEM prompt forces WHOLE-TAKE SPAN cuts (not scattered word/filler removal),
 // which is what makes a fast model produce pro-quality edits.
@@ -26,7 +28,7 @@
 //   DELTA_JUDGE_KEY  — required. OpenRouter sk-or-… key. Edge secret OR Supabase
 //                      Vault via the service-role-only delta_judge_key() RPC.
 //   DELTA_BASE_URL   — optional. Default https://openrouter.ai/api/v1.
-//   DELTA_MODEL      — optional. Default google/gemini-3.5-flash.
+//   DELTA_MODEL      — optional. Default google/gemini-3.1-pro-preview.
 //   DELTA_REASONING_EFFORT      — optional. low|medium|high|off. Default low.
 //   DELTA_REASONING_MAX_TOKENS  — optional alt cap (effort wins if both set).
 //   DELTA_PROVIDER_SORT         — optional. throughput|latency|price|off. Default throughput.
@@ -48,7 +50,7 @@ function preflight(req: Request): Response | null {
 }
 
 const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.5-flash'
+const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.1-pro-preview'
 
 // Reasoning control. Default effort=low — enough to reliably find take boundaries,
 // fast on gemini-flash (~7s). `off` disables (fast but unreliable on this task).
