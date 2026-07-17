@@ -15,7 +15,12 @@
 // subscription to our user.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { json } from '../_shared/http.ts'
+
+// Self-contained JSON responder. A server-to-server webhook needs no CORS, so we
+// don't pull in _shared/http.ts — this keeps the function a single file.
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
 
 // Replay window. Paddle's docs suggest 5s, but that's brittle across network
 // latency + edge cold starts; 5 min keeps replay protection while tolerating
