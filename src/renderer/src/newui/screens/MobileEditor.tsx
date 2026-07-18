@@ -6,6 +6,7 @@ import type { LibraryItem } from '@shared/types'
 import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../../components/timeline/TimelinePanel'
 import { MobileTools } from '../../components/mobile/MobileTools'
+import { Icon } from '../../components/mobile/Icon'
 import TextPanel from '../../components/TextPanel'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
@@ -13,6 +14,8 @@ import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { primePlayback } from '../../clock'
+import { addMediaToTimeline } from '../../timelineAdd'
+import { addDocTexts, countCaptionTexts } from '../../docTextClips'
 
 // Mobile layout for the new UI editor. Same chassis the proven legacy MobileApp
 // uses — a FIXED, user-resizable stage (so the timeline never drifts), the
@@ -24,7 +27,7 @@ const HAIR = 'rgba(255,255,255,.06)'
 const ZOOM_MIN = 4
 const ZOOM_MAX = 2000
 
-type SheetKind = 'cut' | 'media' | 'text' | null
+type SheetKind = 'cut' | 'media' | 'text' | 'music' | 'captions' | null
 
 function Sheet({ onClose, children, header }: { onClose: () => void; children: ReactNode; header?: ReactNode }): JSX.Element {
   return (
@@ -86,6 +89,68 @@ function MediaSheet({ onClose }: { onClose: () => void }): JSX.Element {
   )
 }
 
+// Audio sheet — the desktop AudioTab on a phone: import audio, then tap a clip to
+// drop it on an audio track (the SAME addMediaToTimeline path the desktop uses).
+function MusicSheet({ onClose }: { onClose: () => void }): JSX.Element {
+  const library = useStore((s) => s.library)
+  const addToLibrary = useStore((s) => s.addToLibrary)
+  const audio = library.filter((it) => it.kind === 'audio')
+  const fmt = (it: LibraryItem): string =>
+    it.duration ? `${Math.floor(it.duration / 60)}:${String(Math.round(it.duration % 60)).padStart(2, '0')}` : ''
+  return (
+    <Sheet
+      onClose={onClose}
+      header={
+        <div style={css('flex:none;display:flex;align-items:center;justify-content:space-between;padding:6px 16px 12px')}>
+          <div style={css('font-size:15px;font-weight:650')}>Audio</div>
+          <button onClick={addToLibrary} style={css('background:rgba(110,106,232,.16);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 14px;cursor:pointer')}>＋ Import audio</button>
+        </div>
+      }
+    >
+      <div style={css('flex:1;min-height:0;overflow:auto;padding:0 14px 20px;display:flex;flex-direction:column;gap:8px')}>
+        {audio.length === 0 && (
+          <div style={css('color:#686E7B;font-size:13px;text-align:center;padding:32px 16px;line-height:1.6')}>No audio yet — tap ＋ Import audio to add music or a voiceover. It drops onto an audio track.</div>
+        )}
+        {audio.map((it) => (
+          <div key={it.id} onClick={() => { addMediaToTimeline(it); onClose() }} style={css('display:flex;gap:11px;align-items:center;padding:10px;border-radius:12px;background:#1E2026;border:1px solid rgba(255,255,255,.07);cursor:pointer')}>
+            <div style={css('width:44px;height:44px;flex:none;border-radius:9px;background:#23252b;display:grid;place-items:center;color:#8890A0')}><Icon name="music" size={20} /></div>
+            <div style={css('flex:1;min-width:0')}>
+              <div style={css('font-size:13px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{it.name}</div>
+              <div style={css("font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#686E7B;margin-top:3px")}>{fmt(it)}</div>
+            </div>
+            <span style={css('font-size:16px;color:#B7B5F4;flex:none')}>＋</span>
+          </div>
+        ))}
+      </div>
+    </Sheet>
+  )
+}
+
+// Captions sheet — the desktop CaptionsTab on a phone: turn the transcript into
+// subtitle text clips, show the count, and clear.
+function CaptionsSheet({ onClose }: { onClose: () => void }): JSX.Element {
+  const generateCaptions = useStore((s) => s.generateCaptions)
+  const clearCaptions = useStore((s) => s.clearCaptions)
+  const hasTranscript = useStore((s) => !!s.project.transcript?.words?.length)
+  const jobActive = useStore((s) => s.job.active)
+  const snap = useSharedEngineSnapshot()
+  const capCount = countCaptionTexts(snap?.doc)
+  return (
+    <Sheet onClose={onClose} header={<div style={css('flex:none;padding:6px 16px 12px;font-size:15px;font-weight:650')}>Captions</div>}>
+      <div style={css('flex:1;min-height:0;overflow:auto;padding:2px 16px 20px')}>
+        <button onClick={generateCaptions} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:14px;font-weight:600;border-radius:11px;padding:13px 0;box-shadow:0 6px 18px rgba(110,106,232,.3);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>Generate captions</button>
+        {capCount > 0 && (
+          <div style={css('margin-top:12px;display:flex;align-items:center;gap:10px')}>
+            <div style={css('flex:1;font-size:13px;color:#7FCBA8')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>
+            <button onClick={clearCaptions} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;font-family:inherit;font-size:13px;border-radius:9px;padding:8px 14px;cursor:pointer')}>Clear</button>
+          </div>
+        )}
+        <div style={css('margin-top:16px;font-size:12.5px;color:#686E7B;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle clips on a text track. Tap a line on the timeline to restyle it.' : 'Run Cut Lord (or transcribe) first to get a transcript, then generate captions.'}</div>
+      </div>
+    </Sheet>
+  )
+}
+
 function IcBtn({ label, onClick, disabled, active }: { label: string; onClick: () => void; disabled?: boolean; active?: boolean }): JSX.Element {
   return (
     <button onClick={onClick} disabled={disabled} style={css(`width:34px;height:34px;border-radius:9px;border:1px solid ${active ? 'rgba(110,106,232,.4)' : 'transparent'};background:${active ? 'rgba(110,106,232,.16)' : 'transparent'};color:${disabled ? '#4A4F5B' : active ? '#B7B5F4' : '#C6C9D2'};font-size:16px;display:grid;place-items:center;cursor:${disabled ? 'default' : 'pointer'};font-family:inherit`)}>{label}</button>
@@ -114,6 +179,30 @@ export default function MobileEditor(): JSX.Element {
   const showSettings = useStore((s) => s.showSettings)
   const [sheet, setSheet] = useState<SheetKind>(null)
   const hasBase = !!media || ((useStore.getState().project.baseSequence?.length ?? 0) > 0)
+
+  // Add a text layer at the playhead and open its editor (desktop "Add text").
+  const addText = (): void => {
+    const ph = useStore.getState().project.playhead
+    addDocTexts([{ text: 'Your text', startS: ph, endS: ph + 3 }], true)
+    setSheet('text')
+  }
+
+  // The mobile timeline's empty-lane "＋ Add text / Add music" buttons dispatch
+  // ec:sheet — the legacy MobileApp listened for it but this new-UI editor did
+  // not, so those buttons were dead. Route each to the matching sheet/action.
+  useEffect(() => {
+    const open = (e: Event): void => {
+      const d = (e as CustomEvent).detail as string
+      if (d === 'text') addText()
+      else if (d === 'music') setSheet('music')
+      else if (d === 'media') setSheet('media')
+      else if (d === 'cut') setSheet('cut')
+      else if (d === 'captions') setSheet('captions')
+    }
+    window.addEventListener('ec:sheet', open)
+    return () => window.removeEventListener('ec:sheet', open)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Stage height (vh): fixed by default (~46% of the screen) and user-adjustable
   // by dragging the grip under the canvas. A FIXED height is what keeps the
@@ -195,6 +284,10 @@ export default function MobileEditor(): JSX.Element {
           onImport={() => setSheet('media')}
           onCutlord={() => setSheet('cut')}
           onEditText={() => setSheet('text')}
+          onAddText={addText}
+          onAddAudio={() => setSheet('music')}
+          onCaptions={() => setSheet('captions')}
+          onSticker={() => void useStore.getState().importOverlayFromDevice()}
         />
       </div>
 
@@ -205,6 +298,8 @@ export default function MobileEditor(): JSX.Element {
         </Sheet>
       )}
       {sheet === 'media' && <MediaSheet onClose={() => setSheet(null)} />}
+      {sheet === 'music' && <MusicSheet onClose={() => setSheet(null)} />}
+      {sheet === 'captions' && <CaptionsSheet onClose={() => setSheet(null)} />}
       {sheet === 'text' && (
         <Sheet onClose={() => setSheet(null)} header={<div style={css('flex:none;padding:6px 16px 12px;font-size:15px;font-weight:650')}>Text</div>}>
           <div className="ec-legacy" style={css('flex:1;min-height:0;overflow:auto;padding:0 14px 16px')}>

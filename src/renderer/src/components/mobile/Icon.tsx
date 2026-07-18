@@ -7,7 +7,7 @@ export type IconName =
   | 'magnet' | 'snap' | 'trash' | 'split' | 'speed' | 'crop' | 'removeBg'
   | 'animation' | 'audioExtract' | 'adjust' | 'zoom' | 'duplicate' | 'lock'
   | 'replace' | 'more' | 'plus' | 'text' | 'music' | 'volume' | 'video' | 'overlay'
-  | 'kfPrev' | 'kfNext' | 'kfAdd' | 'import' | 'cutlord' | 'export' | 'check'
+  | 'kfPrev' | 'kfNext' | 'kfAdd' | 'import' | 'cutlord' | 'export' | 'check' | 'captions'
 
 const PATHS: Record<IconName, JSX.Element> = {
   back: <path d="M15 5l-7 7 7 7" />,
@@ -42,7 +42,8 @@ const PATHS: Record<IconName, JSX.Element> = {
   import: <><path d="M12 3v11M8 10l4 4 4-4" /><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" /></>,
   cutlord: <><path d="M12 3l1.6 4L18 8.6 13.6 10 12 14l-1.6-4L6 8.6 10.4 7 12 3z" /><path d="M18 14l.9 2.2L21 17l-2.1.8L18 20l-.9-2.2L15 17l2.1-.8L18 14z" /></>,
   export: <><path d="M12 15V4M8 8l4-4 4 4" /><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3" /></>,
-  check: <path d="M5 12l5 5L20 7" />
+  check: <path d="M5 12l5 5L20 7" />,
+  captions: <><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M9.5 10.5a2.2 2.2 0 1 0 0 3M16 10.5a2.2 2.2 0 1 0 0 3" /></>
 }
 
 export function Icon({ name, size = 22 }: { name: IconName; size?: number }): JSX.Element {

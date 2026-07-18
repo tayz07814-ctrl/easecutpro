@@ -51,10 +51,18 @@ function Chips({ options, value, onPick }: { options: { label: string; v: number
   )
 }
 
-export function MobileTools({ onImport, onCutlord, onEditText }: {
+export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddAudio, onCaptions, onSticker }: {
   onImport: () => void
   onCutlord: () => void
   onEditText: () => void
+  /** create a new text layer at the playhead and open its editor. */
+  onAddText?: () => void
+  /** open the Audio sheet (import + add a music/voiceover clip). */
+  onAddAudio?: () => void
+  /** open the Captions sheet (generate / clear subtitle clips). */
+  onCaptions?: () => void
+  /** pick an image and drop it on an overlay track (sticker / logo). */
+  onSticker?: () => void
 }): JSX.Element {
   const project = useStore((s) => s.project)
   const playhead = useStore((s) => s.project.playhead)
@@ -97,6 +105,17 @@ export function MobileTools({ onImport, onCutlord, onEditText }: {
             <Icon name="cutlord" size={18} /> Cut Lord
           </button>
         </div>
+        {/* Creation tools — the same functions as the desktop left dock (Text /
+            Audio / Captions / Stickers), in one scrollable CapCut-style row.
+            Optional so the legacy MobileApp (its own add-menu) can omit them. */}
+        {(onAddText || onAddAudio || onCaptions || onSticker) && (
+          <div className="mt-row" style={{ marginTop: 12 }}>
+            {onAddText && <Tool icon="text" label="Text" onClick={onAddText} />}
+            {onAddAudio && <Tool icon="music" label="Audio" onClick={onAddAudio} />}
+            {onCaptions && <Tool icon="captions" label="Captions" onClick={onCaptions} />}
+            {onSticker && <Tool icon="overlay" label="Sticker" onClick={onSticker} />}
+          </div>
+        )}
       </div>
     )
   }

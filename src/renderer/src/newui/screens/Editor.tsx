@@ -15,11 +15,8 @@ import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { addDocTexts, countCaptionTexts } from '../../docTextClips'
 import { resolveMedia } from '../../media/resolver'
 import { primePlayback } from '../../clock'
-import { framesToSeconds, secondsToFrames } from '@shared/timeline/time'
-import { createClip, mainTrackId } from '@shared/timeline/model'
-import * as C from '@shared/timeline/commands'
-import type { Command } from '@shared/timeline/commands'
-import { uid } from '@shared/timeline/ids'
+import { framesToSeconds } from '@shared/timeline/time'
+import { addMediaToTimeline } from '../../timelineAdd'
 
 function fmtDur(s: number): string {
   if (!s || s < 0) return '0:00'
@@ -175,53 +172,6 @@ function TopBar(): JSX.Element {
       <button onClick={() => setShowExportModal(true)} style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 16px;cursor:pointer')}>Export</button>
     </div>
   )
-}
-
-// Append a library clip to the END of the timeline: video/image → the main (base)
-// lane, audio → an audio lane — through the SAME engine path drag-drop uses, so
-// existing clips are preserved (this is NOT the old behavior that rebuilt the base
-// and wiped the others). No-op until the engine + a target lane are ready.
-function addMediaToTimeline(item: LibraryItem): void {
-  const engine = getSharedEngine()
-  if (!engine) return
-  const doc = engine.document
-  const tb = doc.timebase
-  const isImage = item.kind === 'image'
-  const isAudio = item.kind === 'audio'
-  const durSec = isImage ? 4 : item.duration || 4
-  const kind = isImage ? 'image' : isAudio ? 'audio' : 'video'
-  const mainId = mainTrackId(doc)
-  const cmds: Command[] = []
-  let trackId = mainId ?? doc.tracks[0]?.id ?? ''
-  if (isAudio) {
-    const a = doc.tracks.find((t) => t.kind === 'audio')
-    if (a) trackId = a.id
-    else {
-      trackId = uid('track')
-      cmds.push(C.addTrack('audio', { id: trackId }))
-    }
-  }
-  if (!trackId) return
-  const lane = doc.tracks.find((t) => t.id === trackId)
-  const endFrame = lane ? lane.clips.reduce((m, c) => Math.max(m, c.start + c.duration), 0) : 0
-  const clip = createClip({
-    kind,
-    trackId,
-    start: endFrame,
-    duration: secondsToFrames(durSec, tb),
-    sourcePath: item.path,
-    sourceIn: 0,
-    sourceOut: durSec,
-    sourceDuration: isImage ? 3600 : item.duration || durSec,
-    srcW: item.width,
-    srcH: item.height,
-    srcFps: item.fps,
-    name: item.name,
-    hasAudio: item.hasAudio
-  })
-  cmds.push(trackId === mainId ? C.insertToMain(clip, endFrame) : C.addClip(clip))
-  engine.batch('Add clip', cmds)
-  engine.select([clip.id])
 }
 
 // A clip's preview image. Prefer the probe-generated thumbnail; when that's absent
