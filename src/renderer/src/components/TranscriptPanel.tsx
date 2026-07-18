@@ -63,8 +63,11 @@ function ClutterCleaner(): JSX.Element {
   const setSmartCutPreset = useStore((s) => s.setSmartCutPreset)
   const runFastCutLord = useStore((s) => s.runFastCutLord)
   const runProCut = useStore((s) => s.runProCut)
-  // Retake δ replaces Retake β behind "Find Retakes & Silence" (β disabled).
-  const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
+  // "Find Retakes & Silence" runs the REAL Retake β (procut-judge, Opus): the
+  // artifact-aware prompt that removes slates / off-camera direction / intro-outro
+  // chatter and cuts whole takes precisely. Retake δ (delta-judge) is unrouted —
+  // its narrow prompt left that chatter behind and over-cut wide spans.
+  const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
   const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
   const showSilenceSettings = useStore((s) => s.showSilenceSettings)
   const executeCuts = useStore((s) => s.executeCuts)
@@ -172,7 +175,7 @@ function ClutterCleaner(): JSX.Element {
       )}
       <button
         className={IS_CLOUD ? 'primary' : ''}
-        onClick={() => void runRetakeCutDelta()}
+        onClick={() => void runRetakeCutBeta()}
         disabled={jobActive}
         title="Cut Lord — verbatim transcript, whole-take retake removal (never splices takes), filler triage, AND conservative transcript-gap silence tightening. Highlights + silence chips only; nothing is cut until Execute."
       >

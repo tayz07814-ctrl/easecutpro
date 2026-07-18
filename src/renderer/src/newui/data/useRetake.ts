@@ -56,9 +56,13 @@ export function useRetake(): RetakeModel {
   const stagedSel = useStore((s) => s.stagedSilenceSel)
   const smartSilence = useStore((s) => s.smartSilenceCutter)
   const setSmartSilence = useStore((s) => s.setSmartSilenceCutter)
-  // Retake δ is now THE engine behind "Find Retakes & Silence"; Retake β is
-  // disabled (its store action stays defined but no button routes to it).
-  const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
+  // "Find Retakes & Silence" runs the REAL Retake β (runRetakeCutBeta →
+  // procut-judge, Opus on our official Anthropic key): the production-artifact-aware
+  // prompt that removes slates / count-ins / off-camera direction / intro-outro
+  // chatter and cuts whole takes precisely (never mid-sentence, only-copy
+  // untouchable). Retake δ (delta-judge) stays defined but NO button routes to it —
+  // its narrow whole-take prompt left that chatter behind and over-cut wide spans.
+  const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
   const clearSelection = useStore((s) => s.clearSelection)
@@ -128,7 +132,7 @@ export function useRetake(): RetakeModel {
     isDeleted: (id) => deletedIds.has(id),
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
     smartSilence,
-    find: () => { setExecuted(false); void runRetakeCutDelta() },
+    find: () => { setExecuted(false); void runRetakeCutBeta() },
     execute: () => { setExecuted(true); void executeCuts() },
     restore: () => restoreSelected(),
     clear: () => clearSelection(),
