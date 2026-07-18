@@ -245,6 +245,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   if (!baseZoomRef.current) baseZoomRef.current = new ZoomAnimator()
   const pendingRef = useRef(new Map<string, Pending>())
   const badRef = useRef(new Set<string>()) // sources that fired 'error'
+  // Tracks the ACTIVE element's currentTime + the wall time it last CHANGED, so the
+  // reconciler can tell a LIVE decoder (new frames arriving) from a stalled/seeking one
+  // and keep the playhead advancing on the wall clock instead of freezing on a stall.
+  const ctTrackRef = useRef<{ src: string; ct: number; wall: number }>({ src: '', ct: -1, wall: 0 })
 
   // Local continuous time `t` — what the viewer shows. Store playhead is
   // written FROM it (throttled) while playing; adopted INTO it when it changes
@@ -331,31 +335,42 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         if (active && !badRef.current.has(active.src)) {
           const v = pool.get(active.src)
           if (v) {
-            const want = active.sourceStart + (t - active.start) * active.speed
-            // element far from where the timeline says we are → seek it
-            if (settled(v, active.src) && Math.abs(v.currentTime - want) > 0.25) {
-              seek(v, active.src, want)
-            }
             if (v.paused) v.play().catch(() => undefined)
-            // TIMELINE DRIVES, DECODER CHASES — kills "the slider sticks at every cut".
-            // At a SAME-SOURCE cut seam the one shared <video> must cold-seek from the
-            // previous clip's out-point to this clip's in-point; on long-GOP H.264 that
-            // seek can take 100-800 ms. The old code PINNED the playhead to the seam for
-            // the whole seek (t was derived from the element, clamped to the clip), so
-            // the red line + slider FROZE at every cut. Instead: while the element is
-            // settled AND caught up to the timeline it IS the clock (A/V stays locked);
-            // while it's mid-seek or still lagging after a seam, advance the timeline on
-            // the WALL CLOCK and let the decoder chase `t` — forward only, never snapping
-            // back, never freezing. The picture catches up within the clip; the playhead
-            // never stops. (A brief same-source-seam picture catch-up remains; a
-            // dual-decoder pre-seek would make it pixel-seamless — a larger follow-up.)
-            const elemT = active.start + clamp((v.currentTime - active.sourceStart) / active.speed, 0, active.len)
-            if (settled(v, active.src) && elemT >= t - 1.5 / 30) {
-              t = elemT
-            } else {
-              t = Math.min(t + dt, active.start + active.len)
-              const w2 = active.sourceStart + (t - active.start) * active.speed
-              if (settled(v, active.src) && Math.abs(v.currentTime - w2) > 0.25) seek(v, active.src, w2)
+            // TIMELINE DRIVES, DECODER CHASES — kills "the red line / slider sticks at
+            // every cut". At a SAME-SOURCE cut seam the one shared <video> must cold-seek
+            // from the previous clip's out-point to this clip's in-point; on long-GOP
+            // H.264 that seek takes 100-800 ms AND the decoder then STALLS briefly
+            // delivering the first post-seek frames (currentTime sits still). The old
+            // code derived `t` from the element whenever a seek was "settled", so that
+            // stall PINNED the playhead — the red line froze at every cut. Fix: the
+            // playhead is ALWAYS driven by the wall clock (forward only, clamped to the
+            // clip) and is only *re-anchored* to the element while the decoder is provably
+            // LIVE — its currentTime produced a NEW value within the last ~80 ms. A seek
+            // or a decode stall (no new frame) can therefore never freeze the clock, while
+            // healthy playback still locks A/V exactly. (~1 video-frame gaps between rAF
+            // ticks stay under the 80 ms window, so normal 24-30 fps playback still locks.)
+            const ctNow = v.currentTime
+            const trk = ctTrackRef.current
+            if (trk.src !== active.src || Math.abs(ctNow - trk.ct) > 1e-4) {
+              trk.src = active.src
+              trk.ct = ctNow
+              trk.wall = now
+            }
+            const decoderLive = settled(v, active.src) && now - trk.wall < 80
+            const elemT = active.start + clamp((ctNow - active.sourceStart) / active.speed, 0, active.len)
+            let nt = Math.min(t + dt, active.start + active.len) // forward-only wall clock
+            // Re-anchor to the decoder only when it is live AND within a tight window of
+            // the wall clock — corrects drift without ever pulling the playhead backward
+            // or letting a stalled/seeking element hold it still.
+            if (decoderLive && elemT >= t - 1.5 / 30 && elemT <= nt + 1 / 30) nt = Math.max(nt, elemT)
+            t = nt
+            // Chase: pull the element toward the timeline with ONE seek per seam. It is
+            // suppressed while a prior seek is still settling (settled() false) so the
+            // decoder is never thrashed frame-by-frame (which stutters the picture); the
+            // threshold is generous so a decoder catching up by playing isn't re-seeked.
+            const want = active.sourceStart + (t - active.start) * active.speed
+            if (settled(v, active.src) && Math.abs(v.currentTime - want) > 0.34) {
+              seek(v, active.src, want)
             }
             // Pre-warm the NEXT source's decoder BEFORE the seam so crossing to a
             // different file plays through instead of stalling on a cold seek.
