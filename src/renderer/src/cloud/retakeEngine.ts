@@ -211,9 +211,8 @@ export async function retakeAwareCutCloud(
 }
 
 /** Retake δ (Delta) — a COPY of retakeAwareCutCloud whose ONLY difference is the
- *  judge: the cut EDL comes from the creator's OWN model over an OpenAI-
- *  compatible API — OpenRouter by default (the `delta-judge` edge fn) —
- *  instead of Claude Opus (`procut-judge`). Retake β above is untouched. The result shape
+ *  judge edge function: `delta-judge` (Claude Opus on our official Anthropic key)
+ *  instead of `procut-judge`. Retake β above is untouched. The result shape
  *  (RetakeAwareResult) is identical, so the store's review-first contract, the
  *  transcript/highlight UX and Execute all reuse the exact beta path. */
 export async function retakeDeltaCutCloud(
@@ -247,9 +246,9 @@ export async function retakeDeltaCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — the creator's OWN model (delta-judge) over the FULL
-  //    transcript, empty first pass. Same index-anchored payload + validateEdl as
-  //    Retake β; only the judge endpoint differs.
+  // 4. WORD-CUT BRAIN — Claude Opus (delta-judge, on our official Anthropic key)
+  //    over the FULL transcript, empty first pass. Same index-anchored payload +
+  //    validateEdl as Retake β; only the judge endpoint differs.
   op(72, 'Your model is judging your takes…')
   const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
   const payload = buildAiPayload(map)
@@ -258,10 +257,7 @@ export async function retakeDeltaCutCloud(
   try {
     const res = await invokeEdge<ProcutJudgeRes>('delta-judge', {
       payload,
-      proposal: { word_cuts: [], pause_cuts: [] },
-      // easecut0.01 A/B: route this branch's Retake δ to GLM 5.2 (whitelisted
-      // server-side). Other branches omit `model` and get the safe default.
-      model: 'z-ai/glm-5.2'
+      proposal: { word_cuts: [], pause_cuts: [] }
     } satisfies ProcutJudgeReq)
     modelRaw = res.raw
     if (res.judge === 'none') {
