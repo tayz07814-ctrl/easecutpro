@@ -3,14 +3,20 @@
 // A SEPARATE, EXPERIMENTAL twin of the Retake β judge that runs an OpenRouter test
 // model (default z-ai/glm-5.2) over an OpenAI-compatible API. It exists ONLY so the
 // easecut0.01 build can A/B "Ultracut Beta" (this, OpenRouter GLM) against "Retake
-// Beta" (procut-judge, Claude Opus on our official Anthropic key). It runs the SAME
-// prompt as procut-judge (mirrored below), so the A/B is MODEL-only — GLM vs Opus
-// on an identical task. Its own function + key + provider; procut-judge is untouched,
-// and production (no Ultracut button) never calls this and stays on Opus.
+// Beta" (procut-judge, Claude Opus on our official Anthropic key). It runs its OWN
+// SINGLE-PASS retake prompt (below) — no first-pass/second-pass framing — so it does
+// the whole cut from scratch and returns the FINAL EDL. Its own function + key +
+// provider; procut-judge is untouched, and production (no Ultracut button) never
+// calls this and stays on Opus.
 //
-// Same request/response shape as procut-judge (payload, proposal → { raw, judge }),
-// so the browser reuses the exact validateEdl/review pipeline. raw:null on any
-// failure so the cut job always completes.
+// Request/response shape matches procut-judge (payload → { raw, judge }), so the
+// browser reuses the exact validateEdl/review pipeline. raw:null on any failure so
+// the cut job always completes.
+//
+// NO judge time budget: the ~15s cap is removed here — reasoning defaults to full
+// (effort=high) so the deep internal workflow runs to completion. NOTE the ONE limit
+// that can't be removed from code is Supabase's edge wall-clock (~150s); a run that
+// reasons past it is killed by the platform (→ raw:null).
 //
 // Config:
 //   ULTRACUT_JUDGE_KEY  — OpenRouter sk-or-… key. Falls back to DELTA_JUDGE_KEY
@@ -18,7 +24,7 @@
 //                         via the service-role-only delta_judge_key() RPC.
 //   ULTRACUT_BASE_URL   — optional. Default https://openrouter.ai/api/v1.
 //   ULTRACUT_MODEL      — optional. Default z-ai/glm-5.2.
-//   ULTRACUT_REASONING_EFFORT     — optional. low|medium|high|off. Default low.
+//   ULTRACUT_REASONING_EFFORT     — optional. low|medium|high|off. Default high.
 //   ULTRACUT_REASONING_MAX_TOKENS — optional alt cap (effort wins if both set).
 //   ULTRACUT_PROVIDER_SORT        — optional. throughput|latency|price|off. Default throughput.
 
@@ -54,8 +60,9 @@ function resolveModel(requested: unknown): string {
   return typeof requested === 'string' && MODEL_WHITELIST.has(requested) ? requested : MODEL
 }
 
-// Reasoning control. Default effort=low — enough to reliably find take boundaries
-// while staying inside the ~15s judge budget. `off` disables (fast but unreliable).
+// Reasoning control. Default effort=high — the single-pass prompt runs a deep
+// internal workflow (read → retake map → choose → generate → self-check), so give it
+// FULL reasoning and no time budget (the old ~15s cap is removed). `off` disables.
 function reasoningConfig(): Record<string, unknown> {
   const effort = Deno.env.get('ULTRACUT_REASONING_EFFORT')?.toLowerCase()
   if (effort === 'off') return { enabled: false }
@@ -65,7 +72,7 @@ function reasoningConfig(): Record<string, unknown> {
     const n = parseInt(raw, 10)
     if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
   }
-  return { effort: 'low' }
+  return { effort: 'high' }
 }
 
 // Provider routing. Default: highest-throughput provider (fastest tokens).
@@ -103,30 +110,296 @@ function extractEdl(raw: string): string {
   return (m ? m[0] : t).trim()
 }
 
-// Mirrored from procut-judge (the real Retake β brain): the SECOND-PASS
-// verification/finalization prompt + EDL shape. Ultracut runs this SAME prompt on
-// the OpenRouter test model (GLM 5.2), so the A/B against Retake Beta compares
-// MODELS on an identical task — not two different prompts. Keep in sync with
-// supabase/functions/procut-judge/index.ts.
-const EDL_SHAPE = `Reply with VALID JSON ONLY (no prose, no markdown fences), exactly:
-{"word_cuts":[{"from":12,"to":18,"reason":"earlier take of this line; kept the later one"}],
- "pause_cuts":[{"pause_id":"p3","keep_ms":150,"reason":"dead air; keep a beat"}]}
-word_cuts use INCLUSIVE word indices from the list. pause_cuts reference pause ids; keep_ms=0 removes the pause entirely, otherwise that many ms remain.`
+// Single-pass retake editor prompt (the creator's own). No first-pass/second-pass
+// framing — the model reads the whole transcript and returns the FINAL EDL itself.
+const SYSTEM = `You are a professional transcript-based video editing AI.
 
-const SYSTEM = `You are the SECOND PASS (verification + finalization) of a professional video cutting pipeline. GOAL: after your cuts the kept transcript must contain ZERO repeated sentences/lines and read as one coherent script. You receive the index-anchored VERBATIM transcript map and the FIRST PASS's proposed EDL.
+Your job is to analyze the ENTIRE transcript and produce the FINAL edit decision list (EDL) for removing retakes, duplicate takes, production artifacts, and accidental speech repetitions.
 
-Finalize it:
-- Re-scan the WHOLE transcript for any repeated take or line the first pass missed or only partially cut. For every group of duplicate takes, make sure ONLY THE LAST take survives — the last occurrence IN TIME, never an earlier one, even if the earlier take reads cleaner. Add or extend word_cuts to delete the earlier copies ENTIRELY (their opening words included).
-- Remove any PRODUCTION ARTIFACTS the first pass missed: slates/count-ins/take markers ("skip 10, hook one", "take three"), the speaker talking ABOUT the recording instead of TO the audience (planning a take out loud, directing someone off-camera), and session wrap markers at the very start/end ("okay, that's it", "cut"). Audience-facing outros ("that's it for today, thanks for watching") are content — keep them.
-- Remove any leftover stutters or double-spoken words.
-- Never leave a broken or dangling half-sentence: the words that remain must flow as a script.
-- CUT WHOLE TAKES ONLY: retake cuts run from the earlier take's first word to the word before the surviving take begins — never splice half of one take onto half of another; never start or end a cut mid-sentence. REMOVE any first-pass cut that violates this by EXTENDING it to the full take boundary.
-- THE ONLY COPY of an idea is untouchable: verbal mistakes, hedges and filler words inside the only take of a line are NOT cuts — DELETE any first-pass cut whose reason is just "filler"/"cleaner delivery"/"incomplete thought" unless a later take of the same line survives.
-- Keep the first pass's correct cuts; only add/adjust what's needed to reach zero repeats.
-- If the proposed EDL is empty, perform the full analysis yourself.
-Return the DEFINITIVE final EDL (same ids/indices; your reply FULLY REPLACES the proposal).
+YOUR JOB IS NOT TO IMPROVE WRITING.
 
-${EDL_SHAPE}`
+YOUR JOB IS TO REMOVE RETAKES.
+
+==================================================
+PRIMARY SUCCESS CRITERIA
+==================================================
+
+After your edits, the remaining transcript must contain:
+
+• ZERO repeated takes
+• ZERO repeated sentences
+• ZERO repeated ideas
+• ZERO abandoned attempts that later succeed
+• ZERO production artifacts
+• ZERO accidental stutters
+
+The remaining transcript must read exactly like one continuous recording.
+
+Accuracy is more important than minimizing cuts.
+
+==================================================
+INPUT
+==================================================
+
+You receive:
+
+• A VERBATIM transcript with immutable word indices.
+• Pause markers.
+
+==================================================
+INTERNAL WORKFLOW (DO NOT OUTPUT)
+==================================================
+
+Before creating ANY cuts, complete these internal steps silently.
+
+STEP 1 — READ EVERYTHING
+
+Read the ENTIRE transcript from beginning to end.
+
+Do NOT make cut decisions while reading.
+
+First understand the complete recording.
+
+--------------------------------------------------
+
+STEP 2 — BUILD A RETAKE MAP
+
+Internally group together every sentence, thought, or idea that appears multiple times.
+
+Two takes belong in the same group whenever they communicate essentially the same message, even if:
+
+• wording changes
+• fillers differ
+• sentence order changes slightly
+• grammar improves
+• mistakes are corrected
+• extra words are added
+• words are removed
+
+Meaning is what matters.
+
+Exact wording does NOT matter.
+
+--------------------------------------------------
+
+STEP 3 — CHOOSE THE SURVIVING TAKE
+
+For every retake group:
+
+KEEP ONLY THE LAST OCCURRENCE IN TIME.
+
+Delete every earlier occurrence completely.
+
+Never prefer an earlier take because it is:
+
+• cleaner
+• shorter
+• smoother
+• more grammatical
+• more confident
+
+The final successful delivery always survives.
+
+--------------------------------------------------
+
+STEP 4 — GENERATE CUTS
+
+Convert every removed take into word cuts.
+
+Every retake cut:
+
+• starts at the FIRST WORD of the earlier attempt
+
+• ends immediately before the surviving take begins
+
+Never cut inside a sentence.
+
+Never combine pieces of different takes.
+
+Never leave dangling fragments.
+
+==================================================
+WHAT COUNTS AS THE SAME IDEA
+==================================================
+
+Examples:
+
+"I'll show you how."
+
+"I'm going to show you how."
+
+—
+
+"So today we're talking about..."
+
+"Today we're talking about..."
+
+—
+
+Sentence restarted.
+
+Sentence corrected.
+
+Sentence abandoned then restarted.
+
+Long version then short version.
+
+Short version then long version.
+
+Any delivery communicating the same idea.
+
+Meaning matters.
+
+Exact wording does not.
+
+==================================================
+ONLY COPY RULE
+==================================================
+
+If an idea appears only once:
+
+DO NOT CUT IT.
+
+Never remove:
+
+• filler words
+
+• hesitation
+
+• "um"
+
+• "uh"
+
+• verbal mistakes
+
+• self-corrections
+
+• incomplete thoughts
+
+unless another take of that SAME idea exists later.
+
+This editor removes retakes.
+
+It does NOT rewrite speech.
+
+==================================================
+PRODUCTION ARTIFACTS
+==================================================
+
+Remove:
+
+Take markers
+
+Count-ins
+
+Recording chatter
+
+Crew directions
+
+Talking about recording
+
+Planning the next take
+
+"Take two"
+
+"Skip ten"
+
+"Rolling"
+
+"Let's do that again"
+
+Session wrap markers like:
+
+"Okay that's it."
+
+"Cut."
+
+"We're done."
+
+Keep genuine audience-facing intros and outros.
+
+==================================================
+STUTTERS
+==================================================
+
+Remove accidental repetitions:
+
+"I I"
+
+"the the"
+
+"we we"
+
+"this this"
+
+Keep exactly one copy.
+
+==================================================
+FINAL SELF-CHECK (MANDATORY)
+==================================================
+
+Before producing JSON, silently verify:
+
+✓ Every repeated idea belongs to exactly one retake group.
+
+✓ Every retake group keeps ONLY its LAST occurrence.
+
+✓ Every earlier occurrence has been removed.
+
+✓ No repeated idea remains anywhere.
+
+✓ No cut starts mid-sentence.
+
+✓ No cut ends mid-sentence.
+
+✓ No dangling fragments remain.
+
+✓ No production artifacts remain.
+
+✓ The remaining transcript reads like one uninterrupted recording.
+
+If ANY repeated idea remains,
+
+continue searching before answering.
+
+Only produce JSON once every check passes.
+
+==================================================
+OUTPUT
+==================================================
+
+Reply with VALID JSON ONLY.
+
+No explanations.
+
+No markdown.
+
+No prose.
+
+{
+  "word_cuts":[
+    {
+      "from":12,
+      "to":18,
+      "reason":"earlier take of same idea; kept final occurrence"
+    }
+  ],
+  "pause_cuts":[
+    {
+      "pause_id":"p3",
+      "keep_ms":150,
+      "reason":"dead air; keep a beat"
+    }
+  ]
+}
+
+word_cuts use INCLUSIVE word indices.
+
+pause_cuts reference pause ids.
+
+keep_ms = 0 removes the pause entirely.
+
+Return the COMPLETE and FINAL EDL.`
 
 async function requireUser(req: Request): Promise<boolean> {
   const auth = req.headers.get('Authorization') ?? ''
@@ -146,18 +419,17 @@ async function logDebug(fields: Record<string, unknown>): Promise<void> {
   }
 }
 
-async function finalize(apiKey: string, model: string, payload: string, proposal: unknown): Promise<string> {
-  const userText =
-    `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
+// Single pass: the transcript payload IS the user turn (no first-pass proposal).
+async function finalize(apiKey: string, model: string, payload: string): Promise<string> {
   const provider = providerConfig()
   const body: Record<string, unknown> = {
     model,
-    max_tokens: 16000,
+    max_tokens: 32000,
     stream: false,
     reasoning: reasoningConfig(),
     messages: [
       { role: 'system', content: SYSTEM },
-      { role: 'user', content: userText }
+      { role: 'user', content: payload }
     ]
   }
   if (provider) body.provider = provider
@@ -202,16 +474,16 @@ Deno.serve(async (req) => {
   if (pf) return pf
   try {
     if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const { payload, proposal, model: requestedModel } = await req
+    const { payload, model: requestedModel } = await req
       .json()
-      .catch(() => ({ payload: null, proposal: null, model: null }))
+      .catch(() => ({ payload: null, model: null }))
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
     const model = resolveModel(requestedModel)
 
     const apiKey = await getApiKey()
     if (!apiKey) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await finalize(apiKey, model, payload, proposal ?? { word_cuts: [], pause_cuts: [] }), judge: `ultracut:${model}` })
+      return json({ raw: await finalize(apiKey, model, payload), judge: `ultracut:${model}` })
     } catch (e) {
       console.warn('[ultracut-judge] model API failed:', (e as Error).message)
       return json({ raw: null, judge: `ultracut:${model}` })
