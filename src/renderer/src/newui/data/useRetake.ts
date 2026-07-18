@@ -60,8 +60,8 @@ export function useRetake(): RetakeModel {
   // procut-judge, Opus on our official Anthropic key): the production-artifact-aware
   // prompt that removes slates / count-ins / off-camera direction / intro-outro
   // chatter and cuts whole takes precisely (never mid-sentence, only-copy
-  // untouchable). Retake δ (delta-judge) stays defined but NO button routes to it —
-  // its narrow whole-take prompt left that chatter behind and over-cut wide spans.
+  // untouchable). (Retake δ / delta-judge was removed — its narrow whole-take
+  // prompt left intro/outro + off-camera chatter behind and over-cut wide spans.)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)

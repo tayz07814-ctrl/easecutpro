@@ -719,9 +719,6 @@ interface AppState {
   /** Retake-Aware Cut Beta: separate experimental engine (verbatim provider +
    *  whole-take retake removal + filler triage). Review-only, like the others. */
   runRetakeCutBeta: () => Promise<void>
-  /** Retake δ (Delta): same engine + review contract as Retake β, but the cut
-   *  judge is the creator's own model on the HF router (hf-judge). Cloud-only. */
-  runRetakeCutDelta: () => Promise<void>
   /** apply everything the user reviewed: delete selected words + cut enabled staged
    *  silences. Async because the VAD-off switch defers the silence pass to here. */
   executeCuts: () => Promise<void>
@@ -2178,78 +2175,6 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 0,
           message: IS_CLOUD ? 'Retake β couldn’t finish — please try again.' : `Retake β failed: ${(e as Error).message}`
-        }
-      })
-    }
-  },
-
-  runRetakeCutDelta: async () => {
-    if (!get().requireServer('Retake δ')) return
-    // Retake δ (Delta) — a COPY of runRetakeCutBeta that routes the cut judge to
-    // the creator's OWN model (window.api.retakeDeltaCut → hf-judge edge fn).
-    // Retake β above is UNTOUCHED. Same review-first contract (highlight + stage,
-    // apply on Execute cuts). Cloud-only: the delta method only exists there.
-    const runDelta = (window.api as { retakeDeltaCut?: typeof window.api.retakeAwareCut }).retakeDeltaCut
-    if (!runDelta) {
-      // δ's judge only exists in the cloud build. Off-cloud (desktop / self-host)
-      // the "Find Retakes & Silence" button still needs to work, so fall back to
-      // Retake β rather than dead-ending with an error.
-      await get().runRetakeCutBeta()
-      return
-    }
-    const stored = get().project
-    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
-    const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
-    if (!hasBase) {
-      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
-      return
-    }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Cut Lord…' } })
-    try {
-      let path: string
-      if (isMultiBase(p0)) {
-        const combined = await window.api.combineClips(p0.baseSequence!, true)
-        path = combined.path
-      } else {
-        path = p0.media!.path
-      }
-      const res = await runDelta(path, get().retakeBetaSilenceSettings, get().vadSilenceSettings)
-      const cur = get().project
-      // DOC-NATIVE BASE (new UI): persist the folded base so Execute cuts reach the
-      // Main lane — identical rationale to runRetakeCutBeta (see the note there).
-      const docBase = !cur.media && !!p0.baseSequence?.length
-      const nextProject: typeof cur = docBase
-        ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript: res.transcript }
-        : { ...cur, transcript: res.transcript }
-      const flagIds = res.deleteWordIds
-      // Smart Silence Cutter (redesigned UI): when OFF, don't stage δ's silence.
-      const includeSilence = !IS_NEW_UI || get().smartSilenceCutter
-      const silenceRegions = includeSilence ? (res.silenceRegions ?? []) : []
-      set({
-        project: nextProject,
-        selectedWordIds: new Set(flagIds),
-        stagedSilences: silenceRegions,
-        stagedSilenceSel: new Set(silenceRegions.map((r) => r.id)),
-        retakeSilenceStaged: true
-      })
-      set({
-        job: {
-          active: false,
-          percent: 100,
-          message:
-            `${res.summary} — ${flagIds.length} word(s) highlighted` +
-            (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
-            `, review then Execute cuts` +
-            (!IS_CLOUD && res.warnings.length ? ` · ${res.warnings.length} warning(s)` : '')
-        }
-      })
-    } catch (e) {
-      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Retake δ) failed', e)
-      set({
-        job: {
-          active: false,
-          percent: 0,
-          message: IS_CLOUD ? 'Retake δ couldn’t finish — please try again.' : `Retake δ failed: ${(e as Error).message}`
         }
       })
     }
