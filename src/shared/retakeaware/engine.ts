@@ -61,7 +61,8 @@ export function toAppTranscript(vt: VerbatimTranscript): Transcript {
     text: w.word,
     start: w.start,
     end: w.end,
-    conf: w.confidence
+    conf: w.confidence,
+    speaker: w.speaker
   }))
   const chunks = buildChunks(vt)
   const segments: Segment[] = chunks.map((c, i) => ({

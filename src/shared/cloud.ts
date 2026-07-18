@@ -47,8 +47,9 @@ export interface SttAaiPollReq {
 export interface SttAaiPollRes {
   status: 'queued' | 'processing' | 'completed' | 'error'
   error?: string
-  words?: { text: string; start: number; end: number; confidence?: number }[]
-  utterances?: { start: number; end: number; text: string }[]
+  /** speaker = AssemblyAI diarization label (A, B, …) when speaker_labels is on. */
+  words?: { text: string; start: number; end: number; confidence?: number; speaker?: string }[]
+  utterances?: { start: number; end: number; text: string; speaker?: string }[]
 }
 
 export interface SttDeepgramReq {
@@ -56,8 +57,9 @@ export interface SttDeepgramReq {
   path: string
 }
 export interface SttDeepgramRes {
-  words: { word: string; punctuated_word?: string; start: number; end: number; confidence?: number }[]
-  utterances: { start: number; end: number; transcript: string }[]
+  /** speaker = Deepgram diarization index when diarize=true. */
+  words: { word: string; punctuated_word?: string; start: number; end: number; confidence?: number; speaker?: number }[]
+  utterances: { start: number; end: number; transcript: string; speaker?: number }[]
 }
 
 export interface SttCleanupReq {

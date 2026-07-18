@@ -13,12 +13,16 @@ export interface VerbatimWord {
   start: number
   end: number
   confidence?: number
+  /** diarization speaker label (e.g. "A"/"B" from AssemblyAI, or a Deepgram
+   *  index); undefined when the provider didn't diarize. */
+  speaker?: string
 }
 
 export interface VerbatimUtterance {
   start: number
   end: number
   text: string
+  speaker?: string
 }
 
 /** RAW transcript used for ALL editing decisions. `clean_text` exists only for

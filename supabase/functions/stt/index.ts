@@ -74,6 +74,10 @@ Deno.serve(async (req) => {
             disfluencies: true,
             format_text: false,
             punctuate: true,
+            // Diarization: tag each word/utterance with a speaker label (A, B, …)
+            // so the retake judge knows up front whether it's one speaker or a
+            // talent + off-camera crew (the crew turns are production chatter).
+            speaker_labels: true,
             // must be the speech_models ARRAY (singular param 400s)
             speech_models: ['universal-3-5-pro', 'universal-2']
           })
@@ -93,14 +97,16 @@ Deno.serve(async (req) => {
         const t = (await r.json()) as {
           status: string
           error?: string
-          words?: { text: string; start: number; end: number; confidence?: number }[]
-          utterances?: { start: number; end: number; text: string }[]
+          words?: { text: string; start: number; end: number; confidence?: number; speaker?: string }[]
+          utterances?: { start: number; end: number; text: string; speaker?: string }[]
         }
         return json({
           status: t.status,
           error: t.error,
-          words: t.words?.map((w) => ({ text: w.text, start: w.start, end: w.end, confidence: w.confidence })),
-          utterances: t.utterances?.map((u) => ({ start: u.start, end: u.end, text: u.text }))
+          // speaker: AssemblyAI's diarization label (A, B, …) when speaker_labels
+          // is on; undefined on mono / pre-diarization jobs.
+          words: t.words?.map((w) => ({ text: w.text, start: w.start, end: w.end, confidence: w.confidence, speaker: w.speaker })),
+          utterances: t.utterances?.map((u) => ({ start: u.start, end: u.end, text: u.text, speaker: u.speaker }))
         })
       }
 
@@ -111,7 +117,8 @@ Deno.serve(async (req) => {
         const { data: signed, error } = await service.storage.from(BUCKET).createSignedUrl(path, 3600)
         if (error || !signed) return json({ error: `audio not found: ${error?.message ?? path}` }, 404)
         // smart_format stays OFF: it can normalize away the disfluencies we need.
-        const qs = 'model=nova-3&punctuate=true&filler_words=true&utterances=true&smart_format=false'
+        // diarize=true tags each word with a speaker number (parity with AAI).
+        const qs = 'model=nova-3&punctuate=true&filler_words=true&utterances=true&smart_format=false&diarize=true'
         const r = await fetch(`https://api.deepgram.com/v1/listen?${qs}`, {
           method: 'POST',
           headers: { Authorization: `Token ${key}`, 'content-type': 'application/json' },
@@ -120,13 +127,13 @@ Deno.serve(async (req) => {
         if (!r.ok) return json({ error: `Deepgram: HTTP ${r.status} ${(await r.text()).slice(0, 200)}` }, 502)
         const j = (await r.json()) as {
           results?: {
-            channels?: { alternatives?: { words?: { word: string; punctuated_word?: string; start: number; end: number; confidence?: number }[] }[] }[]
-            utterances?: { start: number; end: number; transcript: string }[]
+            channels?: { alternatives?: { words?: { word: string; punctuated_word?: string; start: number; end: number; confidence?: number; speaker?: number }[] }[] }[]
+            utterances?: { start: number; end: number; transcript: string; speaker?: number }[]
           }
         }
         return json({
           words: j.results?.channels?.[0]?.alternatives?.[0]?.words ?? [],
-          utterances: (j.results?.utterances ?? []).map((u) => ({ start: u.start, end: u.end, transcript: u.transcript }))
+          utterances: (j.results?.utterances ?? []).map((u) => ({ start: u.start, end: u.end, transcript: u.transcript, speaker: u.speaker }))
         })
       }
 

@@ -11,6 +11,8 @@ export interface Word {
   /** Optional ASR confidence/probability in [0,1], when the backend provides it. */
   conf?: number
   confidence?: number
+  /** diarization speaker label (e.g. "A"/"B") when the transcript was diarized. */
+  speaker?: string
   /** true = struck out / removed from the edit (still in source). */
   deleted?: boolean
 }

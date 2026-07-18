@@ -78,12 +78,14 @@ async function assemblyAiTranscribe(path: string, onProgress?: ProgressFn): Prom
         word: w.text,
         start: w.start / 1000,
         end: w.end / 1000,
-        confidence: w.confidence
+        confidence: w.confidence,
+        speaker: w.speaker
       }))
       const utterances: VerbatimUtterance[] = (t.utterances ?? []).map((u) => ({
         start: u.start / 1000,
         end: u.end / 1000,
-        text: u.text
+        text: u.text,
+        speaker: u.speaker
       }))
       return finish({ provider: 'assemblyai', mode: 'verbatim', words, segments: utterances, utterances })
     }
@@ -102,12 +104,14 @@ async function deepgramTranscribe(path: string, onProgress?: ProgressFn): Promis
     word: w.punctuated_word || w.word,
     start: w.start,
     end: w.end,
-    confidence: w.confidence
+    confidence: w.confidence,
+    speaker: w.speaker != null ? String(w.speaker) : undefined
   }))
   const utterances: VerbatimUtterance[] = (j.utterances ?? []).map((u) => ({
     start: u.start,
     end: u.end,
-    text: u.transcript
+    text: u.transcript,
+    speaker: u.speaker != null ? String(u.speaker) : undefined
   }))
   return finish({ provider: 'deepgram', mode: 'verbatim', words, segments: utterances, utterances })
 }

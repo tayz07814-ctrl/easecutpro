@@ -35,7 +35,7 @@ export interface MapPause {
 }
 
 export interface TimestampMap {
-  words: { i: number; text: string; start: number; end: number }[]
+  words: { i: number; text: string; start: number; end: number; speaker?: string }[]
   pauses: MapPause[]
   filler_word_idxs: number[]
   stutter_word_idxs: number[]
@@ -48,7 +48,7 @@ const ENDS_SENTENCE = /[.!?…]["')\]]*$/
 
 export function buildTimestampMap(words: Word[], vad: { start: number; end: number }[]): TimestampMap {
   const alive = words.filter((w) => !w.deleted)
-  const ws = alive.map((w, i) => ({ i, text: w.text, start: w.start, end: w.end }))
+  const ws = alive.map((w, i) => ({ i, text: w.text, start: w.start, end: w.end, speaker: w.speaker }))
 
   // Exact pauses: every inter-word gap >= 250ms (+ leading air before word 0).
   const pauses: MapPause[] = []
@@ -137,8 +137,18 @@ export function buildAiPayload(map: TimestampMap): string {
   const fill = new Set(map.filler_word_idxs)
   const stut = new Set(map.stutter_word_idxs)
   const pauseAfter = new Map(map.pauses.map((p) => [p.after_word, p]))
+  // Diarization: distinct speaker labels present on the words (when the
+  // transcript was diarized). Drives the SPEAKERS header + inline turn markers.
+  const distinctSpeakers = [...new Set(map.words.map((w) => w.speaker).filter((s): s is string => !!s))]
+  const multi = distinctSpeakers.length >= 2
+
   const lines: string[] = []
+  let prevSpeaker: string | undefined
   for (const w of map.words) {
+    // Mark a speaker turn only when there's more than one speaker, so a mono
+    // recording's payload is byte-for-byte the same as before.
+    if (multi && w.speaker && w.speaker !== prevSpeaker) lines.push(`== speaker ${w.speaker} ==`)
+    if (w.speaker) prevSpeaker = w.speaker
     let line = `${w.i}|${w.text}`
     const tags: string[] = []
     if (fill.has(w.i)) tags.push('FILLER')
@@ -149,7 +159,19 @@ export function buildAiPayload(map: TimestampMap): string {
     if (p) lines.push(`-- ${p.id}: pause ${p.dur_ms}ms${p.vad ? ' (VAD-confirmed silence)' : ''}`)
   }
   const inc = map.incomplete_sentences.map((s) => `word ${s.end_word}: "…${s.text}"`).join('\n')
+
+  // Tell the judge up front how many speakers there are. Multi-speaker recordings
+  // are usually the on-camera talent plus off-camera crew/interviewer — those crew
+  // turns are production chatter to cut, and the talent's repeats are the retakes.
+  const speakerHeader =
+    distinctSpeakers.length === 0
+      ? ''
+      : multi
+        ? `SPEAKERS: ${distinctSpeakers.length} distinct speakers detected (${distinctSpeakers.join(', ')}). This recording has MULTIPLE speakers — typically the on-camera talent plus an off-camera crew member / interviewer / director. A "== speaker X ==" marker precedes each speaker turn below. Off-camera speaker turns are usually cues, directions, or production chatter (remove them); the main on-camera speaker's repeated lines are the retakes to dedupe.\n\n`
+        : `SPEAKERS: 1 (single on-camera speaker — every repeated line is the same person re-recording a take).\n\n`
+
   return (
+    speakerHeader +
     `WORDS (index|text, one per line; pauses marked between):\n${lines.join('\n')}\n\n` +
     (inc ? `INCOMPLETE SENTENCES (left hanging before a pause):\n${inc}\n` : '')
   )
