@@ -19,9 +19,9 @@
 // reasons past it is killed by the platform (→ raw:null).
 //
 // Config:
-//   ULTRACUT_JUDGE_KEY  — OpenRouter sk-or-… key. Falls back to DELTA_JUDGE_KEY
-//                         (the existing OpenRouter secret) or the Supabase Vault
-//                         via the service-role-only delta_judge_key() RPC.
+//   ULTRACUT_JUDGE_KEY  — OpenRouter sk-or-… key. Falls back to OPEN_ROUTER_KEY
+//                         (the OpenRouter secret) or the Supabase Vault via the
+//                         service-role-only delta_judge_key() RPC.
 //   ULTRACUT_BASE_URL   — optional. Default https://openrouter.ai/api/v1.
 //   ULTRACUT_MODEL      — optional. Default z-ai/glm-5.2.
 //   ULTRACUT_REASONING_EFFORT     — optional. low|medium|high|off. Default high.
@@ -87,10 +87,10 @@ function admin() {
   return createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 }
 
-// OpenRouter key. NEVER hardcoded. Prefer ULTRACUT_JUDGE_KEY, then the existing
-// DELTA_JUDGE_KEY OpenRouter secret, then the Supabase Vault delta_judge_key() RPC.
+// OpenRouter key. NEVER hardcoded. Prefer ULTRACUT_JUDGE_KEY, then OPEN_ROUTER_KEY
+// (the OpenRouter secret), then the Supabase Vault delta_judge_key() RPC.
 async function getApiKey(): Promise<string> {
-  const env = Deno.env.get('ULTRACUT_JUDGE_KEY') ?? Deno.env.get('DELTA_JUDGE_KEY')
+  const env = Deno.env.get('ULTRACUT_JUDGE_KEY') ?? Deno.env.get('OPEN_ROUTER_KEY')
   if (env) return env
   try {
     const { data } = await admin().rpc('delta_judge_key')
