@@ -13,10 +13,11 @@
 // browser reuses the exact validateEdl/review pipeline. raw:null on any failure so
 // the cut job always completes.
 //
-// NO judge time budget: the ~15s cap is removed here — reasoning defaults to full
-// (effort=high) so the deep internal workflow runs to completion. NOTE the ONE limit
-// that can't be removed from code is Supabase's edge wall-clock (~150s); a run that
-// reasons past it is killed by the platform (→ raw:null).
+// NO judge time budget and NO output-token cap: reasoning defaults to effort=low
+// (fast, shallow — testing whether the models still cut well cheaply) and
+// max_tokens is unset so the model uses its full completion budget. NOTE the ONE
+// limit that can't be removed from code is Supabase's edge wall-clock (~150s); a
+// run that reasons past it is killed by the platform (→ raw:null).
 //
 // Config:
 //   ULTRACUT_JUDGE_KEY  — OpenRouter sk-or-… key. Falls back to OPEN_ROUTER_KEY
@@ -24,7 +25,7 @@
 //                         service-role-only delta_judge_key() RPC.
 //   ULTRACUT_BASE_URL   — optional. Default https://openrouter.ai/api/v1.
 //   ULTRACUT_MODEL      — optional. Default z-ai/glm-5.2.
-//   ULTRACUT_REASONING_EFFORT     — optional. low|medium|high|off. Default high.
+//   ULTRACUT_REASONING_EFFORT     — optional. low|medium|high|off. Default low.
 //   ULTRACUT_REASONING_MAX_TOKENS — optional alt cap (effort wins if both set).
 //   ULTRACUT_PROVIDER_SORT        — optional. throughput|latency|price|off. Default throughput.
 
@@ -60,9 +61,10 @@ function resolveModel(requested: unknown): string {
   return typeof requested === 'string' && MODEL_WHITELIST.has(requested) ? requested : MODEL
 }
 
-// Reasoning control. Default effort=high — the single-pass prompt runs a deep
-// internal workflow (read → retake map → choose → generate → self-check), so give it
-// FULL reasoning and no time budget (the old ~15s cap is removed). `off` disables.
+// Reasoning control. Default effort=low — a shallow, fast reasoning pass (we're
+// testing whether GLM/gemini still cut well at low effort; flip
+// ULTRACUT_REASONING_EFFORT=high to restore the deep read→map→choose→generate→
+// self-check workflow). `off` disables reasoning entirely.
 function reasoningConfig(): Record<string, unknown> {
   const effort = Deno.env.get('ULTRACUT_REASONING_EFFORT')?.toLowerCase()
   if (effort === 'off') return { enabled: false }
@@ -72,7 +74,7 @@ function reasoningConfig(): Record<string, unknown> {
     const n = parseInt(raw, 10)
     if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
   }
-  return { effort: 'high' }
+  return { effort: 'low' }
 }
 
 // Provider routing. Default: highest-throughput provider (fastest tokens).
@@ -466,7 +468,9 @@ async function finalize(apiKey: string, model: string, payload: string): Promise
   const provider = providerConfig()
   const body: Record<string, unknown> = {
     model,
-    max_tokens: 32000,
+    // No max_tokens cap — let the model/provider use its full completion budget
+    // (the old 32000 cap is removed). The only remaining limit is Supabase's
+    // ~150s edge wall-clock. Set ULTRACUT_REASONING_MAX_TOKENS to bound reasoning.
     stream: false,
     reasoning: reasoningConfig(),
     messages: [
