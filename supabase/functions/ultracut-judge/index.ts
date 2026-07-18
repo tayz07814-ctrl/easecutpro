@@ -208,7 +208,7 @@ Convert every removed take into word cuts.
 
 Every retake cut:
 
-• starts at the FIRST WORD of the earlier attempt
+• starts at the FIRST WORD OF THE REPEATED CONTENT in the earlier attempt — NOT the first word of the sentence when the sentence opens with words that are never repeated
 
 • ends immediately before the surviving take begins
 
@@ -217,6 +217,8 @@ Never cut inside a sentence.
 Never combine pieces of different takes.
 
 Never leave dangling fragments.
+
+Never extend a cut backward into unique words that appear only once (see PARTIAL / TAIL RETAKES).
 
 ==================================================
 WHAT COUNTS AS THE SAME IDEA
@@ -251,6 +253,44 @@ Any delivery communicating the same idea.
 Meaning matters.
 
 Exact wording does not.
+
+==================================================
+PARTIAL / TAIL RETAKES (CRITICAL)
+==================================================
+
+Speakers very often re-do only the END of a sentence while keeping the beginning.
+
+When an earlier passage is: [an idea that appears NOWHERE ELSE] + [a clause that is repeated later], then ONLY the repeated clause is the retake.
+
+Cut ONLY from the first word of the repeated clause.
+
+NEVER extend the cut backward into the unique lead-in.
+
+The unique lead-in is the ONLY COPY of that idea and MUST survive.
+
+Example:
+
+"Imagine your jawline slowly starting to come back, your acne slowly starting to clear up. [pause] Your acne slowly starting to clear up."
+
+• "your acne slowly starting to clear up" is the repeated clause -> keep only the LAST one.
+
+• "Imagine your jawline slowly starting to come back" is said ONCE -> it is unique, KEEP IT.
+
+• CORRECT: remove only the FIRST "your acne slowly starting to clear up" (and its trailing pause).
+
+• WRONG: removing "Imagine your jawline slowly starting to come back" — that idea has no later copy.
+
+Stutter version:
+
+"They ended up running, running some tests" -> cut only the extra "running", keep "They ended up".
+
+DECISIVE TEST — before deleting any span, ask:
+
+"Does the IDEA in this span reappear later in the transcript?"
+
+Delete a span ONLY if its idea genuinely repeats later.
+
+If a span contains an idea that appears only once (a unique lead-in), KEEP it — even when it sits right next to a repeated clause.
 
 ==================================================
 ONLY COPY RULE
@@ -353,6 +393,8 @@ Before producing JSON, silently verify:
 ✓ No cut ends mid-sentence.
 
 ✓ No dangling fragments remain.
+
+✓ No cut removed an idea that appears only once — every unique lead-in survived.
 
 ✓ No production artifacts remain.
 
