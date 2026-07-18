@@ -3855,7 +3855,7 @@ export const useStore = create<AppState>((set, get) => ({
         set({ wizardJob: { active: true, label: 'Transcribing…', base: 0, span: 45 } })
         await get().transcribe()
         set({ wizardJob: { active: true, label: 'Finding bad takes & silences…', base: 45, span: 30 } })
-        await get().runRetakeCutDelta()
+        await get().runRetakeCutBeta()
         set({ wizardJob: { active: true, label: 'Applying cuts…', base: 75, span: 10 } })
         await get().executeCuts()
       } else if (opts.captions) {
