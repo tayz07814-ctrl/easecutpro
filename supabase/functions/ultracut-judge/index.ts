@@ -1,12 +1,12 @@
 // EaseCutPro — Ultracut (Beta) cloud judge edge function.
 //
-// A SEPARATE, EXPERIMENTAL twin of the retake judge that runs an OpenRouter test
-// model (default z-ai/glm-5.2) over an OpenAI-compatible API. It exists ONLY so
-// the easecut0.01 build can A/B "Ultracut Beta" (this, OpenRouter) against
-// "Retake Beta" (procut-judge / delta-judge, Claude Opus on our official Anthropic
-// key). NOTHING is shared with those functions — different function, different
-// key, different provider. procut-judge / delta-judge are untouched, so production
-// (which has no Ultracut button) never calls this and stays on Opus.
+// A SEPARATE, EXPERIMENTAL twin of the Retake β judge that runs an OpenRouter test
+// model (default z-ai/glm-5.2) over an OpenAI-compatible API. It exists ONLY so the
+// easecut0.01 build can A/B "Ultracut Beta" (this, OpenRouter GLM) against "Retake
+// Beta" (procut-judge, Claude Opus on our official Anthropic key). It runs the SAME
+// prompt as procut-judge (mirrored below), so the A/B is MODEL-only — GLM vs Opus
+// on an identical task. Its own function + key + provider; procut-judge is untouched,
+// and production (no Ultracut button) never calls this and stays on Opus.
 //
 // Same request/response shape as procut-judge (payload, proposal → { raw, judge }),
 // so the browser reuses the exact validateEdl/review pipeline. raw:null on any
@@ -103,27 +103,30 @@ function extractEdl(raw: string): string {
   return (m ? m[0] : t).trim()
 }
 
-// Whole-take-span prompt — the key to pro-quality cuts from a fast model. Forces
-// contiguous span cuts of entire earlier takes, never scattered word/filler removal.
-const SYSTEM = `You are a video RETAKE editor. The speaker recorded the same lines MULTIPLE times — false starts, restarts, repeated/aborted takes. Delete EVERY earlier/aborted attempt so only the final clean take of each line remains and the kept words read as one smooth script.
+// Mirrored from procut-judge (the real Retake β brain): the SECOND-PASS
+// verification/finalization prompt + EDL shape. Ultracut runs this SAME prompt on
+// the OpenRouter test model (GLM 5.2), so the A/B against Retake Beta compares
+// MODELS on an identical task — not two different prompts. Keep in sync with
+// supabase/functions/procut-judge/index.ts.
+const EDL_SHAPE = `Reply with VALID JSON ONLY (no prose, no markdown fences), exactly:
+{"word_cuts":[{"from":12,"to":18,"reason":"earlier take of this line; kept the later one"}],
+ "pause_cuts":[{"pause_id":"p3","keep_ms":150,"reason":"dead air; keep a beat"}]}
+word_cuts use INCLUSIVE word indices from the list. pause_cuts reference pause ids; keep_ms=0 removes the pause entirely, otherwise that many ms remain.`
 
-SCAN THE WHOLE TRANSCRIPT from index 0 to the last index, IN ORDER. A real recording usually has SEVERAL fix points — find them ALL, do not stop after the first. Two kinds:
+const SYSTEM = `You are the SECOND PASS (verification + finalization) of a professional video cutting pipeline. GOAL: after your cuts the kept transcript must contain ZERO repeated sentences/lines and read as one coherent script. You receive the index-anchored VERBATIM transcript map and the FIRST PASS's proposed EDL.
 
-1) SHORT false-starts / stutters: 1-4 words abandoned and immediately re-started — e.g. "this is— this," then "this is probably…" (cut the abandoned "this is— this,"); "I'm," then "I'm glad…" (cut "I'm,"). Small, but you MUST catch every one.
-2) LONG repeated-take tangles: the same sentence attempted several times with restarts before a final clean version — cut the WHOLE messy run of attempts as ONE span, keeping only the final complete take.
+Finalize it:
+- Re-scan the WHOLE transcript for any repeated take or line the first pass missed or only partially cut. For every group of duplicate takes, make sure ONLY THE LAST take survives — the last occurrence IN TIME, never an earlier one, even if the earlier take reads cleaner. Add or extend word_cuts to delete the earlier copies ENTIRELY (their opening words included).
+- Remove any PRODUCTION ARTIFACTS the first pass missed: slates/count-ins/take markers ("skip 10, hook one", "take three"), the speaker talking ABOUT the recording instead of TO the audience (planning a take out loud, directing someone off-camera), and session wrap markers at the very start/end ("okay, that's it", "cut"). Audience-facing outros ("that's it for today, thanks for watching") are content — keep them.
+- Remove any leftover stutters or double-spoken words.
+- Never leave a broken or dangling half-sentence: the words that remain must flow as a script.
+- CUT WHOLE TAKES ONLY: retake cuts run from the earlier take's first word to the word before the surviving take begins — never splice half of one take onto half of another; never start or end a cut mid-sentence. REMOVE any first-pass cut that violates this by EXTENDING it to the full take boundary.
+- THE ONLY COPY of an idea is untouchable: verbal mistakes, hedges and filler words inside the only take of a line are NOT cuts — DELETE any first-pass cut whose reason is just "filler"/"cleaner delivery"/"incomplete thought" unless a later take of the same line survives.
+- Keep the first pass's correct cuts; only add/adjust what's needed to reach zero repeats.
+- If the proposed EDL is empty, perform the full analysis yourself.
+Return the DEFINITIVE final EDL (same ids/indices; your reply FULLY REPLACES the proposal).
 
-RULES:
-- For EACH group of attempts, emit ONE contiguous word_cut from the first word of the earliest attempt to the last word right before the final good take begins. Prefer wide spans; to should be greater than from except for a lone stutter word.
-- NEVER scatter single-word cuts across a take (do NOT delete "literally"/"like"/"which" one-by-one). Cut the whole earlier take as one span; leave the surviving take VERBATIM.
-- Keep the LAST take in time. Never trim/split/reword the surviving take.
-- Never delete filler/"um"/"like" inside the ONLY take of a line. Said once = keep 100%.
-- Never cut non-repeated content, intros, or outros.
-
-PAUSES: leave them alone unless one is dead air exactly at a cut boundary you created; then you may shorten it (keep_ms).
-
-Return VALID JSON ONLY (no prose, no markdown fences), exactly:
-{"word_cuts":[{"from":11,"to":25,"reason":"earlier aborted takes; kept the final take"}],"pause_cuts":[{"pause_id":"p3","keep_ms":150,"reason":"dead air at a cut"}]}
-word_cuts use INCLUSIVE word indices. pause_cuts reference pause ids; keep_ms=0 removes the pause. If the first-pass EDL is empty, do the full analysis yourself.`
+${EDL_SHAPE}`
 
 async function requireUser(req: Request): Promise<boolean> {
   const auth = req.headers.get('Authorization') ?? ''
