@@ -97,7 +97,7 @@ export interface ProcutJudgeReq {
   payload: string
   /** first-pass EDL proposal ({word_cuts:[],pause_cuts:[]} in cloud: no GPT pass). */
   proposal: unknown
-  /** optional per-request judge model (delta-judge only; whitelisted server-side).
+  /** optional per-request judge model (ultracut-judge only; whitelisted server-side).
    *  A branch build can route ITS runs to a test model; omitted → the safe default. */
   model?: string
 }

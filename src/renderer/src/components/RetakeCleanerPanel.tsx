@@ -39,8 +39,8 @@ export default function RetakeCleanerPanel(): JSX.Element {
   const executeCuts = useStore((s) => s.executeCuts)
   // "Find Retakes & Silence" runs the REAL Retake β (procut-judge, Opus): the
   // artifact-aware prompt that removes slates / off-camera direction / intro-outro
-  // chatter and cuts whole takes precisely. Retake δ (delta-judge) is unrouted —
-  // its narrow prompt left that chatter behind and over-cut wide spans.
+  // chatter and cuts whole takes precisely. (Retake δ / delta-judge was removed —
+  // its narrow prompt left that chatter behind and over-cut wide spans.)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
   const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
   const showSilenceSettings = useStore((s) => s.showSilenceSettings)

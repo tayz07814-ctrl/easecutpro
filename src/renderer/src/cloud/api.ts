@@ -16,7 +16,7 @@ import {
   combineSequenceAudioWav,
   requestPersistentStorage
 } from '../webmedia'
-import { retakeAwareCutCloud, retakeDeltaCutCloud, ultracutCutCloud, transcribeCloud } from './retakeEngine'
+import { retakeAwareCutCloud, ultracutCutCloud, transcribeCloud } from './retakeEngine'
 import { cutCutProCloud } from './procutEngine'
 import { detectSilenceCloud } from './vad'
 import { cloudListProjects, cloudCreateProject, cloudGetProject, cloudSaveProject, cloudDeleteProject } from './projects'
@@ -84,7 +84,6 @@ function needLocal(path: string): string {
 }
 
 const cloudApi: Window['api'] & {
-  retakeDeltaCut: Window['api']['retakeAwareCut']
   ultracutCut: Window['api']['retakeAwareCut']
 } = {
   // No PC binaries in the cloud — feature gating happens via IS_CLOUD in the
@@ -167,13 +166,6 @@ const cloudApi: Window['api'] & {
 
   retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
     retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
-
-  // Retake δ (Delta) — cloud-only twin of retakeAwareCut that routes the cut
-  // judge to the creator's own HF-router model (hf-judge edge fn). Same args +
-  // result shape as β; exposed as an extra method so the Retake δ button can
-  // call it without altering the shared window.api (EaseCutApi) contract.
-  retakeDeltaCut: (path, _silenceSettings, vadSilenceSettings) =>
-    retakeDeltaCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
 
   // Ultracut (Beta) — a SEPARATE experimental engine (ultracut-judge, OpenRouter
   // GLM 5.2). Shares nothing with Retake Beta's Opus judge; exposed as its own
