@@ -102,6 +102,11 @@ export interface ProcutJudgeReq {
   /** optional per-request judge model (ultracut-judge only; whitelisted server-side).
    *  A branch build can route ITS runs to a test model; omitted → the safe default. */
   model?: string
+  /** optional per-request SYSTEM-prompt variant (ultracut-judge only; whitelisted
+   *  server-side). 'segment' = the segment-based prompt/payload used ONLY by the
+   *  0.01 Ultracut button; omitted → the default word-list prompt (production
+   *  gemini + everything else are unaffected). */
+  promptVariant?: string
 }
 export interface ProcutJudgeRes {
   raw: string | null

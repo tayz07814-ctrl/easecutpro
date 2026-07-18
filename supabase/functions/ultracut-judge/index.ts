@@ -445,6 +445,95 @@ keep_ms = 0 removes the pause entirely.
 
 Return the COMPLETE and FINAL EDL.`
 
+// 0.01 Ultracut variant — the segment-based prompt (the creator's). Selected per
+// request via promptVariant:'segment' and paired with the SEGMENT payload
+// (buildSegmentPayload). Every other caller (production retake / gemini) omits the
+// flag and gets SYSTEM above, so this is scoped to the 0.01 Ultracut button only.
+const SYSTEM_SEGMENT = `You are an expert transcript-based video editor.
+
+INPUT
+
+You receive:
+
+1. A transcript split into ordered sentence segments.
+Each segment contains:
+- segment_id
+- start_word (inclusive)
+- end_word (inclusive)
+- text
+
+2. Pause markers.
+
+Your task is to produce the FINAL Edit Decision List (EDL).
+
+GOAL
+
+The remaining transcript must read like a single uninterrupted recording with:
+
+- No repeated ideas
+- No earlier retakes
+- No production artifacts
+- No accidental repeated words
+
+RULES
+
+1. Read ALL segments before making any decisions.
+
+2. Internally group segments that communicate the same idea, even if wording, grammar, fillers, or sentence order differ.
+
+3. For every group, KEEP ONLY THE LAST complete occurrence in time.
+
+4. Remove every earlier occurrence completely.
+
+5. Never keep an earlier take because it is cleaner, shorter, or more polished.
+
+6. Cuts must always remove COMPLETE segments. Never cut inside a segment. Never merge parts of different segments.
+
+7. If an idea appears only once, never remove it for quality reasons. Keep filler words, hesitations, verbal mistakes, and self-corrections unless a later retake of that same idea exists.
+
+8. Remove production artifacts such as take markers, count-ins, recording chatter, planning takes, crew directions, and session wrap markers. Keep genuine audience-facing intros and outros.
+
+9. Remove obvious accidental repeated words ("I I", "the the") while keeping one copy.
+
+Before replying, silently verify:
+
+- Every repeated idea has been grouped.
+- Only the LAST occurrence of each group remains.
+- No duplicate ideas remain.
+- No cut begins or ends inside a segment.
+- The remaining transcript reads naturally.
+
+Return ONLY valid JSON:
+
+{
+  "word_cuts": [
+    {
+      "from": 120,
+      "to": 184,
+      "reason": "earlier retake"
+    }
+  ],
+  "pause_cuts": [
+    {
+      "pause_id": "p3",
+      "keep_ms": 150,
+      "reason": "dead air"
+    }
+  ]
+}
+
+Use the segment start_word and end_word values to generate word_cuts.
+Word indices are inclusive.
+keep_ms=0 removes the pause completely.
+Return no text outside the JSON.`
+
+// Per-request SYSTEM-prompt variant. Whitelisted so a signed-in user can't inject
+// an arbitrary prompt; an unknown value falls back to the default SYSTEM.
+const PROMPT_VARIANTS: Record<string, string> = { segment: SYSTEM_SEGMENT }
+function resolvePrompt(variant: unknown): string {
+  return typeof variant === 'string' && PROMPT_VARIANTS[variant] ? PROMPT_VARIANTS[variant] : SYSTEM
+}
+
 async function requireUser(req: Request): Promise<boolean> {
   const auth = req.headers.get('Authorization') ?? ''
   const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
@@ -464,7 +553,7 @@ async function logDebug(fields: Record<string, unknown>): Promise<void> {
 }
 
 // Single pass: the transcript payload IS the user turn (no first-pass proposal).
-async function finalize(apiKey: string, model: string, payload: string): Promise<string> {
+async function finalize(apiKey: string, model: string, payload: string, system: string): Promise<string> {
   const provider = providerConfig()
   const body: Record<string, unknown> = {
     model,
@@ -474,7 +563,7 @@ async function finalize(apiKey: string, model: string, payload: string): Promise
     stream: false,
     reasoning: reasoningConfig(),
     messages: [
-      { role: 'system', content: SYSTEM },
+      { role: 'system', content: system },
       { role: 'user', content: payload }
     ]
   }
@@ -520,19 +609,22 @@ Deno.serve(async (req) => {
   if (pf) return pf
   try {
     if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const { payload, model: requestedModel } = await req
+    const { payload, model: requestedModel, promptVariant } = await req
       .json()
-      .catch(() => ({ payload: null, model: null }))
+      .catch(() => ({ payload: null, model: null, promptVariant: null }))
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
     const model = resolveModel(requestedModel)
+    const system = resolvePrompt(promptVariant)
+    // tag the judge with the variant so delta_debug shows which prompt ran.
+    const tag = `ultracut:${model}${typeof promptVariant === 'string' && promptVariant ? `:${promptVariant}` : ''}`
 
     const apiKey = await getApiKey()
     if (!apiKey) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await finalize(apiKey, model, payload), judge: `ultracut:${model}` })
+      return json({ raw: await finalize(apiKey, model, payload, system), judge: tag })
     } catch (e) {
       console.warn('[ultracut-judge] model API failed:', (e as Error).message)
-      return json({ raw: null, judge: `ultracut:${model}` })
+      return json({ raw: null, judge: tag })
     }
   } catch (e) {
     return json({ error: (e as Error).message }, 500)

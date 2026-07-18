@@ -177,6 +177,72 @@ export function buildAiPayload(map: TimestampMap): string {
   )
 }
 
+/** Segment-based payload for the 0.01 Ultracut prompt: the transcript grouped
+ *  into ordered sentence units {segment_id, start_word, end_word, text}, each
+ *  spanning a contiguous range of the SAME (map) word indices the EDL speaks in,
+ *  plus pause markers. Gives the model a clean semantic unit (the sentence) while
+ *  still letting it emit precise word_cuts (segment start_word..end_word) without
+ *  reasoning over thousands of individual words. Indices are the map's alive
+ *  indices, so validateEdl resolves them exactly like the word-list payload.
+ *  Speaker is attached per segment ONLY when the clip has >1 speaker (diarized),
+ *  so a single-speaker clip's segments are exactly {segment_id,start_word,end_word,text}. */
+export function buildSegmentPayload(map: TimestampMap): string {
+  const distinctSpeakers = [...new Set(map.words.map((w) => w.speaker).filter((s): s is string => !!s))]
+  const multi = distinctSpeakers.length >= 2
+
+  // Split into sentence-ish segments: end at sentence punctuation, a speaker
+  // change, or a hard length cap (so a punctuation-less run can't become one huge
+  // segment). start/end use map indices (map.words[k].i === k).
+  const segs: { segment_id: number; start_word: number; end_word: number; speaker?: string; text: string }[] = []
+  let start = 0
+  const flush = (end: number): void => {
+    const slice = map.words.slice(start, end + 1)
+    if (!slice.length) return
+    let speaker: string | undefined
+    if (multi) {
+      const counts = new Map<string, number>()
+      for (const w of slice) if (w.speaker) counts.set(w.speaker, (counts.get(w.speaker) ?? 0) + 1)
+      speaker = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+    }
+    segs.push({
+      segment_id: segs.length,
+      start_word: slice[0].i,
+      end_word: slice[slice.length - 1].i,
+      speaker,
+      text: slice.map((w) => w.text).join(' ')
+    })
+  }
+  for (let k = 0; k < map.words.length; k++) {
+    const w = map.words[k]
+    const next = map.words[k + 1]
+    const endsSentence = ENDS_SENTENCE.test(w.text.trim())
+    const speakerChange = !!(multi && next?.speaker && w.speaker && next.speaker !== w.speaker)
+    if (!next || endsSentence || speakerChange || k - start >= 45) {
+      flush(k)
+      start = k + 1
+    }
+  }
+
+  const segLines = segs
+    .map((s) => JSON.stringify(multi ? s : { segment_id: s.segment_id, start_word: s.start_word, end_word: s.end_word, text: s.text }))
+    .join('\n')
+  const pauseLines = map.pauses
+    .map((p) => `${p.id}: ${p.dur_ms}ms${p.after_word >= 0 ? ` after word ${p.after_word}` : ' (leading)'}${p.vad ? ' (VAD-confirmed silence)' : ''}`)
+    .join('\n')
+  const speakerHeader =
+    distinctSpeakers.length === 0
+      ? ''
+      : multi
+        ? `SPEAKERS: ${distinctSpeakers.length} (${distinctSpeakers.join(', ')}). Multiple speakers — usually the on-camera talent plus off-camera crew/interviewer; each segment carries its dominant "speaker". Off-camera speaker segments are usually crew directions / production chatter (remove them).\n\n`
+        : `SPEAKERS: 1 (single on-camera speaker).\n\n`
+
+  return (
+    speakerHeader +
+    `SEGMENTS (ordered sentence units; one JSON object per line — build word_cuts from start_word..end_word, inclusive):\n${segLines}\n\n` +
+    (pauseLines ? `PAUSES (reference pause_id in pause_cuts):\n${pauseLines}\n` : '')
+  )
+}
+
 /** Parse + clamp an AI EDL reply. Never throws; ok=false means unusable. */
 /** Pull the first complete JSON object out of a model reply — models wrap the
  *  EDL in prose or markdown fences routinely, and a leading sentence used to

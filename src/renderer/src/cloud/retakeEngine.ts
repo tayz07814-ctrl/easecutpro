@@ -24,6 +24,7 @@ import type { ProcutJudgeReq, ProcutJudgeRes } from '@shared/cloud'
 import {
   buildTimestampMap,
   buildAiPayload,
+  buildSegmentPayload,
   validateEdl,
   refineEdl,
   type Edl,
@@ -254,14 +255,20 @@ export async function ultracutCutCloud(
   //    Retake β; only the judge endpoint + provider differ.
   op(72, 'Ultracut is judging your takes…')
   const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
-  const payload = buildAiPayload(map)
+  // 0.01 Ultracut runs the SEGMENT-based prompt: send the segment payload + the
+  // 'segment' variant flag so the ultracut-judge picks the matching SYSTEM prompt.
+  // (Production retake / gemini omit both → the default word-list prompt, so this
+  // is scoped to the Ultracut Beta button only. validateEdl is unchanged: the
+  // segments carry the SAME map word indices.)
+  const payload = buildSegmentPayload(map)
   let baseCutSpans: CutSpan[] = []
   let modelRaw: string | null = null
   try {
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: ULTRACUT_MODEL
+      model: ULTRACUT_MODEL,
+      promptVariant: 'segment'
     } satisfies ProcutJudgeReq)
     modelRaw = res.raw
     if (res.judge === 'none') {
