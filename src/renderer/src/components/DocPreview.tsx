@@ -230,6 +230,31 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const sources = useMemo(() => [...new Set(segs.map((s) => s.src))], [segs.map((s) => s.src).join('|')])
   const urlOf = new Map(segs.map((s) => [s.src, s.url]))
   const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0
+  // Sources with at least one SAME-SOURCE cut seam (adjacent same-source clips
+  // joined gaplessly with a real source jump) get a decode-ahead buddy; montages of
+  // distinct one-shot clips have none and pay nothing extra.
+  const buddySig = segs.map((s) => `${s.src}:${s.sourceStart}:${s.sourceEnd}:${s.start}`).join('|')
+  const buddySrcs = useMemo(() => {
+    const count = new Map<string, number>()
+    for (let i = 1; i < segs.length; i++) {
+      const a = segs[i - 1]
+      const b = segs[i]
+      if (a.src !== b.src) continue
+      const jump = b.sourceStart - a.sourceEnd
+      const micro = jump >= 0 && jump <= 0.12
+      const contiguous = b.start - (a.start + a.len) <= 0.08
+      if (!micro && contiguous) count.set(b.src, (count.get(b.src) ?? 0) + 1)
+    }
+    // Cap to the SINGLE most-cut source: one decode-ahead buddy (+1 decoder) makes
+    // the common single-source retake seamless without risking mobile hardware
+    // decoder limits on multi-source montages (every other source keeps the plain
+    // one-decoder path, which the reconciler falls back to automatically).
+    let best = ''
+    let bestN = 0
+    for (const [src, n] of count) if (n > bestN) [best, bestN] = [src, n]
+    return best ? new Set([best]) : new Set<string>()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buddySig])
 
   // ---- refs the reconciler reads (fresh every render) ----
   const segsRef = useRef(segs)
@@ -239,11 +264,19 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const playingRef = useRef(playing)
   playingRef.current = playing
 
-  // element pool: source path -> <video> (callback refs fill it)
-  const poolRef = useRef(new Map<string, HTMLVideoElement>())
+  // Element pool: each source gets one or — for a CUT source that has a same-source
+  // seam — TWO <video> slots: a live one and a "buddy" kept decoded ONE seam ahead
+  // so crossing a same-source cut is a hot SWAP, not a cold seek (which froze the
+  // picture). React owns both slots by stable key; we only flip which slot is LIVE,
+  // so the callback refs never fight the swap. liveVideo()/warmVideo() read through
+  // the live index.
+  const slotsRef = useRef(new Map<string, (HTMLVideoElement | null)[]>())
+  const liveSlotRef = useRef(new Map<string, number>())
   const baseZoomRef = useRef<ZoomAnimator>()
   if (!baseZoomRef.current) baseZoomRef.current = new ZoomAnimator()
-  const pendingRef = useRef(new Map<string, Pending>())
+  // Per-ELEMENT seek-in-flight (two elements can share a src, so a src key would
+  // collide); a WeakMap drops entries automatically when React unmounts an element.
+  const pendingRef = useRef(new WeakMap<HTMLVideoElement, Pending>())
   const badRef = useRef(new Set<string>()) // sources that fired 'error'
   // Tracks the ACTIVE element's currentTime + the wall time it last CHANGED, so the
   // reconciler can tell a LIVE decoder (new frames arriving) from a stalled/seeking one
@@ -277,33 +310,62 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     return t >= last.start + last.len - 1e-4 ? ss.length - 1 : -1
   }
 
+  /** The LIVE <video> currently showing/decoding `src` (falls back to the other slot). */
+  function liveVideo(src: string): HTMLVideoElement | undefined {
+    const pair = slotsRef.current.get(src)
+    if (!pair) return undefined
+    const s = liveSlotRef.current.get(src) ?? 0
+    return pair[s] ?? pair[s ^ 1] ?? undefined
+  }
+  /** The standby ("buddy") <video> for `src`, decoded one seam ahead (if any). */
+  function warmVideo(src: string): HTMLVideoElement | undefined {
+    const pair = slotsRef.current.get(src)
+    if (!pair) return undefined
+    const s = liveSlotRef.current.get(src) ?? 0
+    return pair[s ^ 1] ?? undefined
+  }
+  /** Callback-ref sink: park each <video> in its STABLE [slot0, slot1] position. */
+  function setSlot(src: string, slot: number, el: HTMLVideoElement | null): void {
+    const pair = slotsRef.current.get(src) ?? [null, null]
+    pair[slot] = el
+    if (el) {
+      slotsRef.current.set(src, pair)
+    } else if (!pair[0] && !pair[1]) {
+      slotsRef.current.delete(src)
+      liveSlotRef.current.delete(src)
+      badRef.current.delete(src)
+    } else if ((liveSlotRef.current.get(src) ?? 0) === slot) {
+      liveSlotRef.current.set(src, slot ^ 1) // the live slot unmounted → fall back
+    }
+  }
+
   /** Issue a seek on `v` toward `want`, once, with first-frame-decode nudges. */
-  function seek(v: HTMLVideoElement, src: string, want: number): void {
+  function seek(v: HTMLVideoElement, want: number): void {
     if (isFinite(v.duration) && v.duration > 0) want = Math.min(want, v.duration - 0.05)
     // A fresh element at 0 shows NO decoded frame and writing 0 again is a
     // no-op (no 'seeked' → black until scrub) — nudge a hair past 0.
     if (want <= 0.001) want = Math.min(0.033, Math.max(0.001, (v.duration || 1) - 0.05))
-    const p = pendingRef.current.get(src)
+    const p = pendingRef.current.get(v)
     if (p && Math.abs(p.target - want) < 0.05) return // that seek is in flight
     if (Math.abs(v.currentTime - want) < 0.02) {
       // Same position: force a decode anyway (fresh element parked on its own
       // currentTime still needs a real seek to paint).
       v.currentTime = want > 0.05 ? want - 0.03 : want + 0.03
     }
-    pendingRef.current.set(src, { target: want, since: performance.now() })
+    pendingRef.current.set(v, { target: want, since: performance.now() })
     v.currentTime = want
   }
 
-  /** Has the in-flight seek (if any) on src landed? Watchdog clears stalls. */
-  function settled(v: HTMLVideoElement, src: string): boolean {
-    const p = pendingRef.current.get(src)
+  /** Has the in-flight seek (if any) on `v` landed? Watchdog clears stalls. */
+  function settled(v: HTMLVideoElement): boolean {
+    const p = pendingRef.current.get(v)
     if (!p) return true
     if (Math.abs(v.currentTime - p.target) <= 0.08 || v.currentTime >= p.target - 0.06) {
-      pendingRef.current.delete(src)
+      pendingRef.current.delete(v)
       return true
     }
     if (performance.now() - p.since > 800) {
-      pendingRef.current.delete(src) // decoder stall / clamped target: self-heal
+      pendingRef.current.delete(v) // decoder stall / clamped target: self-heal
       return true
     }
     return false
@@ -318,7 +380,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       const dt = Math.min(0.1, (now - lastWall) / 1000)
       lastWall = now
       const ss = segsRef.current
-      const pool = poolRef.current
       const isPlaying = playingRef.current
 
       if (!ss.length) {
@@ -333,7 +394,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
 
       if (isPlaying) {
         if (active && !badRef.current.has(active.src)) {
-          const v = pool.get(active.src)
+          const v = liveVideo(active.src)
           if (v) {
             if (v.paused) v.play().catch(() => undefined)
             // TIMELINE DRIVES, DECODER CHASES — kills "the red line / slider sticks at
@@ -356,7 +417,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               trk.ct = ctNow
               trk.wall = now
             }
-            const decoderLive = settled(v, active.src) && now - trk.wall < 80
+            const decoderLive = settled(v) && now - trk.wall < 80
             const elemT = active.start + clamp((ctNow - active.sourceStart) / active.speed, 0, active.len)
             let nt = Math.min(t + dt, active.start + active.len) // forward-only wall clock
             // Re-anchor to the decoder only when it is live AND within a tight window of
@@ -369,22 +430,27 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             // decoder is never thrashed frame-by-frame (which stutters the picture); the
             // threshold is generous so a decoder catching up by playing isn't re-seeked.
             const want = active.sourceStart + (t - active.start) * active.speed
-            if (settled(v, active.src) && Math.abs(v.currentTime - want) > 0.34) {
-              seek(v, active.src, want)
+            if (settled(v) && Math.abs(v.currentTime - want) > 0.34) {
+              seek(v, want)
             }
-            // Pre-warm the NEXT source's decoder BEFORE the seam so crossing to a
-            // different file plays through instead of stalling on a cold seek.
+            // DECODE-AHEAD: warm the upcoming seam BEFORE reaching it so crossing it is
+            // seamless. A DIFFERENT file → warm the next source's live element toward
+            // its in-point. A SAME-SOURCE cut → warm THIS source's buddy element to the
+            // next in-point so the seam becomes a hot swap instead of a cold seek that
+            // freezes the picture. (Micro-joins need no seek and are skipped.)
             {
               const up = ss[covIdx + 1]
-              if (
-                up &&
-                up.src !== active.src &&
-                !badRef.current.has(up.src) &&
-                t >= active.start + active.len - PREWARM_LEAD_S
-              ) {
-                const uv = pool.get(up.src)
-                if (uv && settled(uv, up.src) && Math.abs(uv.currentTime - up.sourceStart) > 0.12) {
-                  seek(uv, up.src, up.sourceStart)
+              if (up && !badRef.current.has(up.src) && t >= active.start + active.len - PREWARM_LEAD_S) {
+                if (up.src !== active.src) {
+                  const uv = liveVideo(up.src)
+                  if (uv && settled(uv) && Math.abs(uv.currentTime - up.sourceStart) > 0.12) seek(uv, up.sourceStart)
+                } else {
+                  const jump = up.sourceStart - active.sourceEnd
+                  const micro = jump >= 0 && jump <= 0.12
+                  const wv = warmVideo(active.src)
+                  if (!micro && wv && settled(wv) && Math.abs(wv.currentTime - up.sourceStart) > 0.06) {
+                    seek(wv, up.sourceStart)
+                  }
                 }
               }
             }
@@ -404,18 +470,31 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                   v.pause()
                 } else {
                   t = next.start + 0.0005
-                  const microSameFile =
-                    next.src === active.src &&
-                    next.sourceStart - active.sourceEnd >= 0 &&
-                    next.sourceStart - active.sourceEnd <= 0.12
+                  const jump = next.sourceStart - active.sourceEnd
+                  const microSameFile = next.src === active.src && jump >= 0 && jump <= 0.12
                   if (!microSameFile) {
-                    const nv = pool.get(next.src)
-                    // Already pre-warmed at the seam? just play it — a redundant
-                    // re-seek would re-stall the freshly-decoded element.
-                    const warm =
-                      !!nv && settled(nv, next.src) && Math.abs(nv.currentTime - next.sourceStart) < 0.15
-                    if (nv && !warm) seek(nv, next.src, next.sourceStart)
-                    if (nv && warm && nv.paused) nv.play().catch(() => undefined)
+                    if (next.src === active.src) {
+                      // SAME-SOURCE cut: swap to the pre-warmed buddy (already decoded at
+                      // next.sourceStart) so the picture is seamless — no cold seek. If the
+                      // buddy isn't ready (clip too short to warm in time), fall back to
+                      // cold-seeking the live element, exactly the old single-decoder path.
+                      const wv = warmVideo(active.src)
+                      const buddyReady = !!wv && settled(wv) && Math.abs(wv.currentTime - next.sourceStart) < 0.15
+                      if (buddyReady && wv) {
+                        const cur = liveSlotRef.current.get(active.src) ?? 0
+                        liveSlotRef.current.set(active.src, cur ^ 1) // flip live ↔ buddy
+                        if (wv.paused) wv.play().catch(() => undefined)
+                      } else {
+                        seek(v, next.sourceStart)
+                      }
+                    } else {
+                      const nv = liveVideo(next.src)
+                      // Already pre-warmed at the seam? just play it — a redundant
+                      // re-seek would re-stall the freshly-decoded element.
+                      const warm = !!nv && settled(nv) && Math.abs(nv.currentTime - next.sourceStart) < 0.15
+                      if (nv && !warm) seek(nv, next.sourceStart)
+                      if (nv && warm && nv.paused) nv.play().catch(() => undefined)
+                    }
                   }
                 }
               }
@@ -428,8 +507,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           const nxt = segAtTime(t) >= 0 ? segAtTime(t) : -1
           if (nxt >= 0) {
             const seg = ss[nxt]
-            const nv = pool.get(seg.src)
-            if (nv && !badRef.current.has(seg.src)) seek(nv, seg.src, seg.sourceStart + (t - seg.start) * seg.speed)
+            const nv = liveVideo(seg.src)
+            if (nv && !badRef.current.has(seg.src)) seek(nv, seg.sourceStart + (t - seg.start) * seg.speed)
           } else if (ni < 0 && t >= totalRef.current) {
             playingRef.current = false
             setPlaying(false)
@@ -443,14 +522,20 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           setPlayhead(t)
         }
       } else {
-        // PAUSED: park every element; the active one on the exact frame
+        // PAUSED: park every element; the LIVE one of the shown source on the exact frame.
         const di = displayIdxAt(t)
-        for (const [src, v] of pool) {
-          if (!v.paused) v.pause()
-          if (di >= 0 && ss[di].src === src && !badRef.current.has(src)) {
-            const seg = ss[di]
-            const want = seg.sourceStart + clamp(t - seg.start, 0, seg.len) * seg.speed
-            if (settled(v, src) && Math.abs(v.currentTime - want) > 0.03) seek(v, src, want)
+        const showSrc = di >= 0 ? ss[di].src : null
+        for (const [src, pair] of slotsRef.current) {
+          const li = liveSlotRef.current.get(src) ?? 0
+          for (let slot = 0; slot < pair.length; slot++) {
+            const v = pair[slot]
+            if (!v) continue
+            if (!v.paused) v.pause()
+            if (slot === li && src === showSrc && di >= 0 && !badRef.current.has(src)) {
+              const seg = ss[di]
+              const want = seg.sourceStart + clamp(t - seg.start, 0, seg.len) * seg.speed
+              if (settled(v) && Math.abs(v.currentTime - want) > 0.03) seek(v, want)
+            }
           }
         }
       }
@@ -466,33 +551,46 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       const sf = useStore.getState().seamFade
       const seamFadeS = sf.enabled ? sf.ms / 1000 : 0
       let droveZoom = false
-      for (const [src, v] of pool) {
-        const isShown = !!shown && shown.src === src && !badRef.current.has(src)
-        v.style.visibility = isShown ? 'visible' : 'hidden'
-        if (isShown && shown) {
-          v.muted = shown.muted === true
-          // Anti-click: dip the volume toward 0 across each real cut seam.
-          v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
-          v.playbackRate = clamp(shown.speed, 0.25, 4)
-          // Ken Burns handed to the compositor (Web Animations API) — renders at
-          // the display refresh rate off its own smooth clock, so it never steps
-          // at the video fps or stutters under main-thread load on a fast
-          // ease-out. Retargets automatically when the shown clip changes; paused
-          // (isPlaying false) writes the exact frame so scrubbing lands precisely.
-          baseZoomRef.current?.drive(v, {
-            origin: kenBurnsOrigin(shown.ovX, shown.ovY),
-            size: shown.ovScale ?? 1,
-            zoomStart: shown.ovZoomStart,
-            zoomEnd: shown.ovZoomEnd,
-            startSec: shown.start,
-            lenSec: shown.len,
-            playing: isPlaying,
-            clockSec: t,
-            playheadSec: t
-          })
-          droveZoom = true
-        } else if (!isShown && !v.paused && isPlaying && shown?.src !== src) {
-          v.pause() // never let a hidden element keep playing audio
+      for (const [src, pair] of slotsRef.current) {
+        const li = liveSlotRef.current.get(src) ?? 0
+        for (let slot = 0; slot < pair.length; slot++) {
+          const v = pair[slot]
+          if (!v) continue
+          if (slot !== li) {
+            // Buddy/standby: hidden + muted + paused, holding its pre-warmed frame so
+            // the next same-source seam is an instant swap. Never emits audio/picture.
+            v.style.visibility = 'hidden'
+            if (!v.muted) v.muted = true
+            if (!v.paused) v.pause()
+            continue
+          }
+          const isShown = !!shown && shown.src === src && !badRef.current.has(src)
+          v.style.visibility = isShown ? 'visible' : 'hidden'
+          if (isShown && shown) {
+            v.muted = shown.muted === true
+            // Anti-click: dip the volume toward 0 across each real cut seam.
+            v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
+            v.playbackRate = clamp(shown.speed, 0.25, 4)
+            // Ken Burns handed to the compositor (Web Animations API) — renders at
+            // the display refresh rate off its own smooth clock, so it never steps
+            // at the video fps or stutters under main-thread load on a fast
+            // ease-out. Retargets automatically when the shown clip changes; paused
+            // (isPlaying false) writes the exact frame so scrubbing lands precisely.
+            baseZoomRef.current?.drive(v, {
+              origin: kenBurnsOrigin(shown.ovX, shown.ovY),
+              size: shown.ovScale ?? 1,
+              zoomStart: shown.ovZoomStart,
+              zoomEnd: shown.ovZoomEnd,
+              startSec: shown.start,
+              lenSec: shown.len,
+              playing: isPlaying,
+              clockSec: t,
+              playheadSec: t
+            })
+            droveZoom = true
+          } else if (!isShown && !v.paused && isPlaying && shown?.src !== src) {
+            v.pause() // never let a hidden element keep playing audio
+          }
         }
       }
       // No base clip on screen (gap / bad source) → drop any held zoom transform.
@@ -548,27 +646,22 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             className="frame"
             style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height, backgroundColor: '#000' }}
           >
-            {sources.map((src) => (
-              <video
-                key={src}
-                src={urlOf.get(src)}
-                preload="auto"
-                playsInline
-                data-ec-base
-                // will-change keeps the element on its own GPU layer so the
-                // Ken Burns transform composites without a per-frame CPU repaint.
-                style={{ visibility: 'hidden', position: 'absolute', inset: 0, width: '100%', height: '100%', willChange: 'transform', backfaceVisibility: 'hidden' }}
-                onError={() => badRef.current.add(src)}
-                ref={(el) => {
-                  if (el) poolRef.current.set(src, el)
-                  else {
-                    poolRef.current.delete(src)
-                    pendingRef.current.delete(src)
-                    badRef.current.delete(src)
-                  }
-                }}
-              />
-            ))}
+            {sources.flatMap((src) =>
+              (buddySrcs.has(src) ? [0, 1] : [0]).map((slot) => (
+                <video
+                  key={src + '#' + slot}
+                  src={urlOf.get(src)}
+                  preload="auto"
+                  playsInline
+                  data-ec-base
+                  // will-change keeps the element on its own GPU layer so the
+                  // Ken Burns transform composites without a per-frame CPU repaint.
+                  style={{ visibility: 'hidden', position: 'absolute', inset: 0, width: '100%', height: '100%', willChange: 'transform', backfaceVisibility: 'hidden' }}
+                  onError={() => badRef.current.add(src)}
+                  ref={(el) => setSlot(src, slot, el)}
+                />
+              ))
+            )}
             {frame.width > 0 && <OverlayLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}
             {frame.width > 0 && <TextLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}
           </div>
