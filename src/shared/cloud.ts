@@ -97,6 +97,9 @@ export interface ProcutJudgeReq {
   payload: string
   /** first-pass EDL proposal ({word_cuts:[],pause_cuts:[]} in cloud: no GPT pass). */
   proposal: unknown
+  /** optional per-request judge model (ultracut-judge only; whitelisted server-side).
+   *  Production cloud retake sends google/gemini-3.5-flash. */
+  model?: string
 }
 export interface ProcutJudgeRes {
   raw: string | null

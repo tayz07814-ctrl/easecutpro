@@ -1,11 +1,10 @@
 // Cloud build — Retake-Aware Cut Beta for the browser (no PC server).
 //
-// WORD CUTS are now LLM-first, "ProCut style": instead of the rules-first
-// detectors deciding the cuts and Opus only adjudicating the ambiguous ones, the
-// FULL index-anchored transcript (shared/cutcutpro buildAiPayload) goes to the
-// SAME Opus finalizer ProCut uses (the `procut-judge` edge fn, empty first pass)
-// and Opus scans everything and returns the cut EDL. This closes the recall gap
-// vs ProCut — Opus is the detector, not a downstream referee.
+// WORD CUTS are LLM-first: the FULL index-anchored transcript (shared/cutcutpro
+// buildAiPayload) goes to the SINGLE-PASS ultracut judge (the `ultracut-judge`
+// edge fn, OpenRouter). Production runs google/gemini-3.5-flash on the creator's
+// single-pass retake prompt (no first/second-pass framing) and it returns the cut
+// EDL. (procut-judge / Opus is still deployed but the cloud retake no longer uses it.)
 //
 // SILENCE now uses the UNIFIED configurable VAD pass shared with ProCut
 // (vad.ts vadSilenceRegions, driven by the store's VadSilenceSettings): raw
@@ -120,21 +119,23 @@ export async function retakeAwareCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — ProCut-style Opus finalizer over the FULL transcript
-  //    (procut-judge, empty first pass). REPLACES the rules-first detectors; Opus
-  //    scans everything and returns the cut EDL, the exact judging ProCut uses.
+  // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
+  //    (ultracut-judge edge fn, OpenRouter). Production runs google/gemini-3.5-flash
+  //    on the creator's single-pass retake prompt (no first/second-pass framing);
+  //    it scans everything and returns the cut EDL.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
-  // transcript (from repaired words) is rebuilt after the Opus pass below.
+  // transcript (from repaired words) is rebuilt after the judge pass below.
   const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
   const payload = buildAiPayload(map)
   let baseCutSpans: CutSpan[] = []
   let claudeRaw: string | null = null
   try {
-    const res = await invokeEdge<ProcutJudgeRes>('procut-judge', {
+    const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
-      proposal: { word_cuts: [], pause_cuts: [] }
+      proposal: { word_cuts: [], pause_cuts: [] },
+      model: 'google/gemini-3.5-flash'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
