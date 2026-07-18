@@ -739,6 +739,10 @@ interface AppState {
   /** Retake δ (Delta): same engine + review contract as Retake β, but the cut
    *  judge is the creator's own model on the HF router (hf-judge). Cloud-only. */
   runRetakeCutDelta: () => Promise<void>
+  /** Ultracut (Beta): a SEPARATE experimental engine that routes the cut judge to
+   *  an OpenRouter test model (ultracut-judge, GLM 5.2). Shares nothing with Retake
+   *  Beta's Opus judge — its own edge fn — so the two can be A/B'd. Cloud-only. */
+  runUltracut: () => Promise<void>
   /** apply everything the user reviewed: delete selected words + cut enabled staged
    *  silences. Async because the VAD-off switch defers the silence pass to here. */
   executeCuts: () => Promise<void>
@@ -2278,6 +2282,77 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 0,
           message: IS_CLOUD ? 'Retake δ couldn’t finish — please try again.' : `Retake δ failed: ${(e as Error).message}`
+        }
+      })
+    }
+  },
+
+  runUltracut: async () => {
+    if (!get().requireServer('Ultracut')) return
+    // Ultracut (Beta) — a SEPARATE experimental engine (window.api.ultracutCut →
+    // ultracut-judge edge fn, OpenRouter GLM 5.2). Shares NOTHING with Retake Beta's
+    // Opus judge, so its cuts can be compared against Retake Beta's in the app. Same
+    // review-first contract (highlight + stage, apply on Execute cuts).
+    const runUltra = (window.api as { ultracutCut?: typeof window.api.retakeAwareCut }).ultracutCut
+    if (!runUltra) {
+      // Ultracut's judge only exists in the cloud build. Off-cloud (desktop /
+      // self-host) fall back to Retake β rather than dead-ending with an error.
+      await get().runRetakeCutBeta()
+      return
+    }
+    const stored = get().project
+    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+    const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
+    if (!hasBase) {
+      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
+      return
+    }
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Ultracut…' } })
+    try {
+      let path: string
+      if (isMultiBase(p0)) {
+        const combined = await window.api.combineClips(p0.baseSequence!, true)
+        path = combined.path
+      } else {
+        path = p0.media!.path
+      }
+      const res = await runUltra(path, get().retakeBetaSilenceSettings, get().vadSilenceSettings)
+      const cur = get().project
+      // DOC-NATIVE BASE (new UI): persist the folded base so Execute cuts reach the
+      // Main lane — identical rationale to runRetakeCutBeta (see the note there).
+      const docBase = !cur.media && !!p0.baseSequence?.length
+      const nextProject: typeof cur = docBase
+        ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript: res.transcript }
+        : { ...cur, transcript: res.transcript }
+      const flagIds = res.deleteWordIds
+      // Smart Silence Cutter (redesigned UI): when OFF, don't stage Ultracut's silence.
+      const includeSilence = !IS_NEW_UI || get().smartSilenceCutter
+      const silenceRegions = includeSilence ? (res.silenceRegions ?? []) : []
+      set({
+        project: nextProject,
+        selectedWordIds: new Set(flagIds),
+        stagedSilences: silenceRegions,
+        stagedSilenceSel: new Set(silenceRegions.map((r) => r.id)),
+        retakeSilenceStaged: true
+      })
+      set({
+        job: {
+          active: false,
+          percent: 100,
+          message:
+            `${res.summary} — ${flagIds.length} word(s) highlighted` +
+            (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
+            `, review then Execute cuts` +
+            (!IS_CLOUD && res.warnings.length ? ` · ${res.warnings.length} warning(s)` : '')
+        }
+      })
+    } catch (e) {
+      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Ultracut) failed', e)
+      set({
+        job: {
+          active: false,
+          percent: 0,
+          message: IS_CLOUD ? 'Ultracut couldn’t finish — please try again.' : `Ultracut failed: ${(e as Error).message}`
         }
       })
     }

@@ -331,6 +331,132 @@ export async function retakeDeltaCutCloud(
   }
 }
 
+/** Ultracut (Beta) — a SEPARATE experimental engine, structurally like the retake
+ *  cloud path but whose judge is the `ultracut-judge` edge fn running an OpenRouter
+ *  TEST model (GLM 5.2). It shares NOTHING with Retake Beta's Opus judge
+ *  (procut-judge / delta-judge) — its own edge function, its own request, its own
+ *  debug stream — so the two can be A/B'd in-app. The result shape
+ *  (RetakeAwareResult) is identical, so the review-first contract, the
+ *  transcript/highlight UX and Execute all reuse the exact beta path. Cloud-only. */
+const ULTRACUT_MODEL = 'z-ai/glm-5.2'
+export async function ultracutCutCloud(
+  mediaId: string,
+  onProgress?: (pct: number, msg?: string) => void,
+  vadSettings: VadSilenceSettings = DEFAULT_VAD_SILENCE_SETTINGS
+): Promise<RetakeAwareResult> {
+  const warnings: string[] = []
+  const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
+  console.log('[ultracut] cloud job start (OpenRouter judge):', mediaId, ULTRACUT_MODEL)
+
+  // 1. audio — decoded ONCE; transcription, VAD safety scan and the silence
+  //    engine all read from this single decode (shared clock).
+  op(3, 'Getting your audio ready…')
+  const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
+
+  // 2. verbatim transcription (AssemblyAI -> Deepgram); emits 8..49.
+  const { vt, warnings: tw } = await transcribeVerbatimCloud(audio, op)
+  warnings.push(...tw)
+
+  // 3. VAD safety scan (same profile as Retake β) — reused for the payload's
+  //    pause markers AND the silence engine below.
+  op(56, 'Listening for pauses…')
+  let vadSil: { start: number; end: number }[] = []
+  try {
+    vadSil = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadSafetyOpts(), audio.durationS)).map((r) => ({
+      start: r.start,
+      end: r.end
+    }))
+  } catch (e) {
+    warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
+  }
+
+  // 4. WORD-CUT BRAIN — the OpenRouter TEST model (ultracut-judge) over the FULL
+  //    transcript, empty first pass. Same index-anchored payload + validateEdl as
+  //    Retake β; only the judge endpoint + provider differ.
+  op(72, 'Ultracut is judging your takes…')
+  const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
+  const payload = buildAiPayload(map)
+  let baseCutSpans: CutSpan[] = []
+  let modelRaw: string | null = null
+  try {
+    const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
+      payload,
+      proposal: { word_cuts: [], pause_cuts: [] },
+      model: ULTRACUT_MODEL
+    } satisfies ProcutJudgeReq)
+    modelRaw = res.raw
+    if (res.judge === 'none') {
+      warnings.push('Ultracut needs the OpenRouter API key configured on the server — no takes were cut.')
+    } else if (res.raw == null) {
+      warnings.push('Ultracut couldn’t analyze this clip — no takes were cut.')
+    } else {
+      const v = validateEdl(res.raw, map)
+      if (!v.ok) {
+        warnings.push('Ultracut couldn’t read the model’s result — no takes were cut.')
+      } else {
+        baseCutSpans = edlToRetakeCutSpans(refineEdl(v.edl, map).edl, map)
+      }
+    }
+  } catch {
+    warnings.push('Ultracut couldn’t finish — please try again.')
+  }
+
+  // 5. SILENCE — the UNIFIED configurable VAD pass (identical to Retake β).
+  op(90, 'Cleaning silence…')
+  const artifacts = detectArtifacts(vt.words, baseCutSpans, vadSil)
+  const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
+  const cutSpans = [...baseCutSpans, ...artifacts.orphanCutSpans].sort((a, b) => a.start - b.start)
+  const deleteWordIds = spansToWordIds(cutSpans, transcript)
+
+  const keptWords = artifacts.repairedWords.filter((w) => {
+    const m = (w.start + w.end) / 2
+    return !cutSpans.some((s) => m >= s.start && m <= s.end)
+  })
+  let silenceRegions: SilenceRegion[] = []
+  try {
+    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
+  } catch (e) {
+    warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
+  }
+  const silenceDebug = {
+    source: 'vad_pass',
+    settings: vadSettings,
+    regions_count: silenceRegions.length,
+    total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3))
+  }
+
+  // 6. debug JSON (best-effort, private bucket) — its own mode so ultracut runs
+  //    are distinguishable from retake runs.
+  const debugPath = await saveRetakeDebug({
+    mode: 'retake_ultracut',
+    provider: vt.provider,
+    ai_payload: payload,
+    model_raw: modelRaw,
+    cut_spans: cutSpans,
+    delete_word_ids_count: deleteWordIds.length,
+    silence: silenceDebug,
+    warnings
+  })
+
+  op(100, 'Cut Lord finished')
+  return {
+    // Same cut_mode as beta on purpose: the result shape + review contract are
+    // identical, so nothing downstream needs to special-case ultracut.
+    cut_mode: 'retake_aware_beta',
+    provider: vt.provider,
+    verbatim: vt,
+    transcript,
+    deleteWordIds,
+    cutSpans,
+    silenceRegions,
+    retakeGroups: [],
+    fillerDecisions: [],
+    debugPath,
+    warnings,
+    summary: `Ultracut: ${deleteWordIds.length} word(s) flagged, ${silenceRegions.length} pause(s)`
+  }
+}
+
 /** Plain cloud transcription for the Transcribe button: same audio + provider
  *  chain as the beta engine, converted to the app transcript shape (rw0../rs0..
  *  ids) with the shared toAppTranscript. */

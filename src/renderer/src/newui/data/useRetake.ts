@@ -35,7 +35,10 @@ export interface RetakeModel {
   /** count of committed (executed) word cuts still in effect. */
   deletedCount: number
   // actions
+  /** run Retake Beta — Claude Opus on our official Anthropic key. */
   find: () => void
+  /** run Ultracut Beta — a SEPARATE OpenRouter test engine (GLM 5.2), for A/B. */
+  findUltracut: () => void
   execute: () => void
   /** cut the currently-selected words (executed-state "Cut selected"). */
   cutSelected: () => void
@@ -63,6 +66,8 @@ export function useRetake(): RetakeModel {
   // Retake δ is now THE engine behind "Find Retakes & Silence"; Retake β is
   // disabled (its store action stays defined but no button routes to it).
   const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
+  // Ultracut Beta — a separate OpenRouter test engine, wired to its own button.
+  const runUltracut = useStore((s) => s.runUltracut)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
   const deleteSelected = useStore((s) => s.deleteSelected)
@@ -148,6 +153,7 @@ export function useRetake(): RetakeModel {
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
     smartSilence,
     find: () => void runRetakeCutDelta(),
+    findUltracut: () => void runUltracut(),
     execute: () => void executeCuts(),
     /** cut the currently-selected words (used to add cuts in the executed review). */
     cutSelected: () => deleteSelected(),
