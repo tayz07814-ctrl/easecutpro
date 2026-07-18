@@ -378,7 +378,19 @@ export async function renderAudio(
     if (fi > 0) g.gain.setValueCurveAtTime(equalPowerRamp(base, 'in'), Math.max(0, s.start), fi)
     else g.gain.setValueAtTime(base, Math.max(0, s.start))
     node.connect(g).connect(off.destination)
-    node.start(Math.max(0, s.start), Math.max(0, s.sourceStart), Math.max(0.01, s.sourceEnd - s.sourceStart))
+    // A/V ALIGNMENT (root cause of the seam stutter): the VIDEO occupies the
+    // clip's frame-quantized window `s.len` (= framesToSeconds(round((out-in)*fps))),
+    // but this audio buffer is `out - in` EXACT source-seconds — off by the sub-frame
+    // rounding remainder (0..1/fps). Played as-is it overruns the video window and
+    // doubles/flams into the next clip's first samples (or falls short → click) at
+    // EVERY cut. Play EXACTLY the video's window instead: fill `s.len` output seconds
+    // = `s.len * sp` buffer-seconds, clamped to what the source actually has (never
+    // read into the removed footage). Now audio and video share the identical
+    // per-clip window, so nothing overruns a seam. A ≤½-frame shortfall (when the
+    // frame count rounded UP) lands inside the next clip's fade-in and is inaudible.
+    const availLen = s.sourceEnd - s.sourceStart
+    const winLen = Math.min(availLen, s.len * sp)
+    node.start(Math.max(0, s.start), Math.max(0, s.sourceStart), Math.max(0.01, winLen))
   }
   let any = audible.length > 0
   for (const a of extra) {

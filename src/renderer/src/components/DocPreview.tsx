@@ -337,12 +337,25 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               seek(v, active.src, want)
             }
             if (v.paused) v.play().catch(() => undefined)
-            if (settled(v, active.src)) {
-              // element is the clock: map its time back to the timeline
-              t = active.start + clamp((v.currentTime - active.sourceStart) / active.speed, 0, active.len)
+            // TIMELINE DRIVES, DECODER CHASES — kills "the slider sticks at every cut".
+            // At a SAME-SOURCE cut seam the one shared <video> must cold-seek from the
+            // previous clip's out-point to this clip's in-point; on long-GOP H.264 that
+            // seek can take 100-800 ms. The old code PINNED the playhead to the seam for
+            // the whole seek (t was derived from the element, clamped to the clip), so
+            // the red line + slider FROZE at every cut. Instead: while the element is
+            // settled AND caught up to the timeline it IS the clock (A/V stays locked);
+            // while it's mid-seek or still lagging after a seam, advance the timeline on
+            // the WALL CLOCK and let the decoder chase `t` — forward only, never snapping
+            // back, never freezing. The picture catches up within the clip; the playhead
+            // never stops. (A brief same-source-seam picture catch-up remains; a
+            // dual-decoder pre-seek would make it pixel-seamless — a larger follow-up.)
+            const elemT = active.start + clamp((v.currentTime - active.sourceStart) / active.speed, 0, active.len)
+            if (settled(v, active.src) && elemT >= t - 1.5 / 30) {
+              t = elemT
             } else {
-              const p = pendingRef.current.get(active.src)
-              if (p) t = active.start + clamp((p.target - active.sourceStart) / active.speed, 0, active.len)
+              t = Math.min(t + dt, active.start + active.len)
+              const w2 = active.sourceStart + (t - active.start) * active.speed
+              if (settled(v, active.src) && Math.abs(v.currentTime - w2) > 0.25) seek(v, active.src, w2)
             }
             // Pre-warm the NEXT source's decoder BEFORE the seam so crossing to a
             // different file plays through instead of stalling on a cold seek.
