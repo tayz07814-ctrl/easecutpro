@@ -256,12 +256,12 @@ export async function retakeDeltaCutCloud(
   let baseCutSpans: CutSpan[] = []
   let modelRaw: string | null = null
   try {
-    // 0.03 A/B: this branch's build requests the Pro judge; other branches omit
+    // 0.03 A/B: this branch's build requests the trial judge; other branches omit
     // `model` and get the server default (gemini-3.5-flash). Whitelisted server-side.
     const res = await invokeEdge<ProcutJudgeRes>('delta-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'google/gemini-3.1-pro-preview'
+      model: 'z-ai/glm-5.2'
     } as ProcutJudgeReq & { model: string })
     modelRaw = res.raw
     if (res.judge === 'none') {

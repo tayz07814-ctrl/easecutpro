@@ -51,10 +51,14 @@ const BASE_URL = Deno.env.get('DELTA_BASE_URL') ?? 'https://openrouter.ai/api/v1
 const MODEL = Deno.env.get('DELTA_MODEL') ?? 'google/gemini-3.5-flash'
 
 // Per-request model override (A/B testing from a specific branch build) — the 0.03
-// build sends model:'google/gemini-3.1-pro-preview' while every other branch omits it
-// and gets the default. Whitelisted so a signed-in user can't route to an arbitrary
-// (expensive) model. DELTA_MODEL env still wins over the code default.
-const MODEL_WHITELIST = new Set(['google/gemini-3.5-flash', 'google/gemini-3.1-pro-preview'])
+// build sends a trial model while every other branch omits the field and gets the
+// default. Whitelisted so a signed-in user can't route to an arbitrary (expensive)
+// model. DELTA_MODEL env still wins over the code default.
+const MODEL_WHITELIST = new Set([
+  'google/gemini-3.5-flash',
+  'google/gemini-3.1-pro-preview',
+  'z-ai/glm-5.2'
+])
 function resolveModel(requested: unknown): string {
   return typeof requested === 'string' && MODEL_WHITELIST.has(requested) ? requested : MODEL
 }
