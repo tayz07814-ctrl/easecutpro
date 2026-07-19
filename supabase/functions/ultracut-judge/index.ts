@@ -593,23 +593,22 @@ async function logDebug(fields: Record<string, unknown>): Promise<void> {
   }
 }
 
-// Single pass: the transcript payload IS the user turn (no first-pass proposal).
-async function finalize(
+// One model call: POST to OpenRouter, log the attempt to delta_debug, and return
+// the cleaned EDL plus whether it USABLY succeeded (HTTP ok AND non-empty JSON).
+async function callModel(
   apiKey: string,
   model: string,
   payload: string,
   system: string,
-  rOverride?: Record<string, unknown> | null
-): Promise<string> {
+  reasoning: Record<string, unknown>
+): Promise<{ ok: boolean; status: number; cleaned: string }> {
   const provider = providerConfig()
   const body: Record<string, unknown> = {
     model,
-    // No max_tokens cap — let the model/provider use its full completion budget
-    // (the old 32000 cap is removed). The only remaining limit is Supabase's
-    // ~150s edge wall-clock. Set ULTRACUT_REASONING_MAX_TOKENS to bound reasoning.
+    // No max_tokens cap - let the model/provider use its full completion budget.
+    // The only remaining limit is Supabase's ~150s edge wall-clock.
     stream: false,
-    // Per-request override (0.01 Ultracut sends 'off') else the env default.
-    reasoning: rOverride ?? reasoningConfig(),
+    reasoning,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: payload }
@@ -648,8 +647,34 @@ async function finalize(
     raw_body: bodyText.slice(0, 8000),
     req_payload: payload.slice(0, 16000)
   })
-  if (!r.ok) throw new Error(`model API: HTTP ${r.status} ${bodyText.slice(0, 200)}`)
-  return cleaned
+  return { ok: r.ok && cleaned.length > 0, status: r.status, cleaned }
+}
+
+// Single pass: the transcript payload IS the user turn (no first-pass proposal).
+// RELIABILITY FALLBACK: the 0.01 Ultracut primary (deepseek-v4-flash) is served on
+// OpenRouter's shared allocation by ONE provider (Fireworks) that rate-limits (HTTP
+// 429) most runs -> empty completion -> the client would stage ZERO cuts. So on any
+// primary failure (429 / 5xx / empty JSON) we fall back to deepseek-chat (V3), which
+// is served by many providers and effectively never rate-limits, so a run never
+// comes back empty. V3 is non-reasoning, so the fallback sends reasoning OFF (a
+// universally-accepted config); the 'sharp' prompt still sharpens its boundaries.
+const FALLBACK_MODEL = 'deepseek/deepseek-chat'
+async function finalize(
+  apiKey: string,
+  model: string,
+  payload: string,
+  system: string,
+  rOverride?: Record<string, unknown> | null
+): Promise<{ raw: string; model: string }> {
+  const primary = await callModel(apiKey, model, payload, system, rOverride ?? reasoningConfig())
+  if (primary.ok) return { raw: primary.cleaned, model }
+  if (model !== FALLBACK_MODEL) {
+    const fb = await callModel(apiKey, FALLBACK_MODEL, payload, system, { enabled: false })
+    if (fb.ok) return { raw: fb.cleaned, model: FALLBACK_MODEL }
+  }
+  throw new Error(
+    `model API failed (primary HTTP ${primary.status}${model !== FALLBACK_MODEL ? '; fallback also failed' : ''})`
+  )
 }
 
 Deno.serve(async (req) => {
@@ -669,7 +694,10 @@ Deno.serve(async (req) => {
     const apiKey = await getApiKey()
     if (!apiKey) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await finalize(apiKey, model, payload, system, reasoningOverride(reasoning)), judge: tag })
+      const out = await finalize(apiKey, model, payload, system, reasoningOverride(reasoning))
+      // reflect the model that ACTUALLY produced the cut (may be the fallback).
+      const usedTag = `ultracut:${out.model}${typeof promptVariant === 'string' && promptVariant ? `:${promptVariant}` : ''}`
+      return json({ raw: out.raw, judge: usedTag })
     } catch (e) {
       console.warn('[ultracut-judge] model API failed:', (e as Error).message)
       return json({ raw: null, judge: tag })
