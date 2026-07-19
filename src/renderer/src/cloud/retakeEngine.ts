@@ -217,14 +217,17 @@ export async function retakeAwareCutCloud(
  *  debug stream — so the two can be A/B'd in-app. The result shape
  *  (RetakeAwareResult) is identical, so the review-first contract, the
  *  transcript/highlight UX and Execute all reuse the exact beta path. Cloud-only. */
-// 0.01 Ultracut judge. DeepSeek-V4-flash WITH reasoning: an A/B on real logged
-// transcripts found it matches GLM-5.2+reasoning cut quality (whole earlier takes
-// removed, no splices, the final take in a restart-pile kept) at ~1/40th the cost —
-// V4-flash output is so cheap (~$0.20/M) that its thinking tokens cost ~$0.001, and
-// that thinking is what fixes the retake BOUNDARIES a non-reasoning model gets wrong.
-// ~$0.0017/run. Paired with promptVariant:'sharp' (word-list SYSTEM + Rules A/B).
-// Scoped to the Ultracut Beta button only (production stays on gemini).
-const ULTRACUT_MODEL = 'deepseek/deepseek-v4-flash'
+// 0.01 Ultracut judge. DeepSeek-V4-flash (FIRST-PARTY api.deepseek.com) WITH
+// reasoning. On real logged transcripts it matches GLM-5.2+reasoning cut quality
+// (whole earlier takes removed, no splices, the final take in a restart-pile kept),
+// and its reasoning pass is what fixes the retake BOUNDARIES a non-reasoning model
+// gets wrong. Routed first-party (bare id, no 'deepseek/' prefix) so it hits
+// DeepSeek's CONCURRENCY limit (~2500 in-flight), NOT OpenRouter's shared Fireworks
+// rate pool that was 429-ing ~60% of runs. ~$0.001/run with DeepSeek's automatic
+// prompt caching. Paired with promptVariant:'sharp' (word-list SYSTEM + Rules A/B).
+// Scoped to the Ultracut Beta button only (production = gemini); the edge fn falls
+// back to deepseek-chat on OpenRouter if DeepSeek is ever unreachable.
+const ULTRACUT_MODEL = 'deepseek-v4-flash'
 export async function ultracutCutCloud(
   mediaId: string,
   onProgress?: (pct: number, msg?: string) => void,
@@ -232,7 +235,7 @@ export async function ultracutCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[ultracut] cloud job start (OpenRouter judge):', mediaId, ULTRACUT_MODEL)
+  console.log('[ultracut] cloud job start (DeepSeek first-party judge):', mediaId, ULTRACUT_MODEL)
 
   // 1. audio — decoded ONCE; transcription, VAD safety scan and the silence
   //    engine all read from this single decode (shared clock).
@@ -261,13 +264,13 @@ export async function ultracutCutCloud(
   //    Retake β; only the judge endpoint + provider differ.
   op(72, 'Ultracut is judging your takes…')
   const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
-  // 0.01 Ultracut runs the WORD-LIST prompt (buildAiPayload + the default SYSTEM
-  // prompt — no promptVariant). The segment prompt was reverted: real creator
-  // footage has mid-SENTENCE retakes ("They pretty—", "the way that I—", "Food can,
-  // food can") buried inside long run-on segments, and the segment prompt's "never
-  // cut inside a segment" rule can't reach them — DeepSeek responded by cutting
-  // EVERY segment (rejected by validateEdl's runaway guard → "no cuts"). The
-  // word-list prompt (partial/tail-retake + stutter rules) makes surgical word cuts
+  // 0.01 Ultracut runs the WORD-LIST payload (buildAiPayload) + the 'sharp' SYSTEM
+  // variant. The segment prompt was reverted: real creator footage has mid-SENTENCE
+  // retakes ("They pretty—", "the way that I—", "Food can, food can") buried inside
+  // long run-on segments, and the segment prompt's "never cut inside a segment" rule
+  // can't reach them — DeepSeek responded by cutting EVERY segment (rejected by
+  // validateEdl's runaway guard → "no cuts"). The word-list prompt (partial/tail-
+  // retake + stutter rules, plus the 'sharp' Rules A/B) makes surgical word cuts
   // instead — validated on the exact failing clip: 7 correct cuts, no over-cut.
   const payload = buildAiPayload(map)
   let baseCutSpans: CutSpan[] = []

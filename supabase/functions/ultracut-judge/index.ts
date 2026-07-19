@@ -48,6 +48,14 @@ function preflight(req: Request): Response | null {
 const BASE_URL = Deno.env.get('ULTRACUT_BASE_URL') ?? 'https://openrouter.ai/api/v1'
 const MODEL = Deno.env.get('ULTRACUT_MODEL') ?? 'z-ai/glm-5.2'
 
+// DeepSeek FIRST-PARTY route (api.deepseek.com). DeepSeek caps by CONCURRENCY
+// (~2500 simultaneous requests), not a shared rate pool, so the 0.01 Ultracut judge
+// stops hitting the OpenRouter/Fireworks 429s. Any model listed in DEEPSEEK_DIRECT
+// is sent here with the DEEPSEEK_API_KEY key and DeepSeek's reasoning_effort param
+// shape; every other model keeps the OpenRouter path byte-for-byte unchanged.
+const DEEPSEEK_BASE_URL = Deno.env.get('DEEPSEEK_BASE_URL') ?? 'https://api.deepseek.com'
+const DEEPSEEK_DIRECT = new Set(['deepseek-v4-flash', 'deepseek-v4-pro'])
+
 // Per-request model override (A/B testing a different OpenRouter model from the
 // easecut0.01 build) — whitelisted so a signed-in user can't route to an
 // arbitrary/expensive model. ULTRACUT_MODEL env still wins over the code default.
@@ -57,7 +65,9 @@ const MODEL_WHITELIST = new Set([
   'google/gemini-3.5-flash',
   'qwen/qwen3.7-plus',
   'deepseek/deepseek-chat',
-  'deepseek/deepseek-v4-flash'
+  'deepseek/deepseek-v4-flash',
+  'deepseek-v4-flash',
+  'deepseek-v4-pro'
 ])
 function resolveModel(requested: unknown): string {
   return typeof requested === 'string' && MODEL_WHITELIST.has(requested) ? requested : MODEL
@@ -89,6 +99,14 @@ function reasoningOverride(v: unknown): Record<string, unknown> | null {
   if (v === 'low' || v === 'medium' || v === 'high') return { effort: v }
   if (typeof v === 'number' && v > 0) return { max_tokens: Math.min(v, 8000) }
   return null
+}
+
+// DeepSeek first-party takes a top-level `reasoning_effort` string (low|medium|high)
+// instead of OpenRouter's nested `reasoning` object. Map the per-request value; an
+// unrecognized/off value omits it so DeepSeek's default thinking budget applies.
+function deepseekEffort(v: unknown): string | undefined {
+  if (v === 'low' || v === 'medium' || v === 'high') return v
+  return undefined
 }
 
 // Provider routing. Default: highest-throughput provider (fastest tokens).
@@ -593,29 +611,46 @@ async function logDebug(fields: Record<string, unknown>): Promise<void> {
   }
 }
 
-// One model call: POST to OpenRouter, log the attempt to delta_debug, and return
-// the cleaned EDL plus whether it USABLY succeeded (HTTP ok AND non-empty JSON).
+// One model call: POST to the model's API (DeepSeek first-party for DEEPSEEK_DIRECT
+// ids, else OpenRouter), log the attempt to delta_debug, and return the cleaned EDL
+// plus whether it USABLY succeeded (HTTP ok AND non-empty JSON). reasoningIntent is
+// the RAW per-request value ('medium' / 'off' / ...); it is encoded per route.
 async function callModel(
-  apiKey: string,
+  keys: { openrouter: string; deepseek: string },
   model: string,
   payload: string,
   system: string,
-  reasoning: Record<string, unknown>
+  reasoningIntent: unknown
 ): Promise<{ ok: boolean; status: number; cleaned: string }> {
-  const provider = providerConfig()
+  const direct = DEEPSEEK_DIRECT.has(model)
+  const base = direct ? DEEPSEEK_BASE_URL : BASE_URL
+  const apiKey = direct ? keys.deepseek : keys.openrouter
+  if (!apiKey) return { ok: false, status: 0, cleaned: '' }
   const body: Record<string, unknown> = {
     model,
-    // No max_tokens cap - let the model/provider use its full completion budget.
+    // No max_tokens cap - the model/provider uses its full completion budget.
     // The only remaining limit is Supabase's ~150s edge wall-clock.
     stream: false,
-    reasoning,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: payload }
     ]
   }
-  if (provider) body.provider = provider
-  const r = await fetch(`${BASE_URL}/chat/completions`, {
+  if (direct) {
+    // DeepSeek first-party: top-level reasoning_effort, no provider routing. Set a
+    // generous max_tokens so a large EDL's JSON is never truncated by DeepSeek's
+    // default answer cap (reasoning tokens are billed/bounded separately, so this
+    // only sizes the final answer). 8000 fits hundreds of cuts - any real clip.
+    const eff = deepseekEffort(reasoningIntent)
+    if (eff) body.reasoning_effort = eff
+    body.max_tokens = 8000
+  } else {
+    // OpenRouter: nested reasoning object + provider routing.
+    body.reasoning = reasoningOverride(reasoningIntent) ?? reasoningConfig()
+    const provider = providerConfig()
+    if (provider) body.provider = provider
+  }
+  const r = await fetch(`${base}/chat/completions`, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${apiKey}`,
@@ -637,7 +672,7 @@ async function callModel(
   const cleaned = extractEdl(content)
   await logDebug({
     model,
-    provider: 'openrouter',
+    provider: direct ? 'deepseek' : 'openrouter',
     http_status: r.status,
     ok: r.ok,
     content_len: content.length,
@@ -651,25 +686,24 @@ async function callModel(
 }
 
 // Single pass: the transcript payload IS the user turn (no first-pass proposal).
-// RELIABILITY FALLBACK: the 0.01 Ultracut primary (deepseek-v4-flash) is served on
-// OpenRouter's shared allocation by ONE provider (Fireworks) that rate-limits (HTTP
-// 429) most runs -> empty completion -> the client would stage ZERO cuts. So on any
-// primary failure (429 / 5xx / empty JSON) we fall back to deepseek-chat (V3), which
-// is served by many providers and effectively never rate-limits, so a run never
-// comes back empty. V3 is non-reasoning, so the fallback sends reasoning OFF (a
-// universally-accepted config); the 'sharp' prompt still sharpens its boundaries.
+// RELIABILITY FALLBACK: if the primary judge fails (network / 5xx / rate-limit /
+// empty JSON) we fall back to deepseek-chat on OpenRouter - a different vendor+key -
+// so a transient outage on one provider never returns ZERO cuts. The fallback is
+// non-reasoning V3, so it sends reasoning OFF (a universally-accepted config); the
+// 'sharp' prompt still sharpens its boundaries. With the primary now on DeepSeek
+// first-party (concurrency-limited, not rate-limited) this backstop is rarely hit.
 const FALLBACK_MODEL = 'deepseek/deepseek-chat'
 async function finalize(
-  apiKey: string,
+  keys: { openrouter: string; deepseek: string },
   model: string,
   payload: string,
   system: string,
-  rOverride?: Record<string, unknown> | null
+  reasoningIntent: unknown
 ): Promise<{ raw: string; model: string }> {
-  const primary = await callModel(apiKey, model, payload, system, rOverride ?? reasoningConfig())
+  const primary = await callModel(keys, model, payload, system, reasoningIntent)
   if (primary.ok) return { raw: primary.cleaned, model }
   if (model !== FALLBACK_MODEL) {
-    const fb = await callModel(apiKey, FALLBACK_MODEL, payload, system, { enabled: false })
+    const fb = await callModel(keys, FALLBACK_MODEL, payload, system, 'off')
     if (fb.ok) return { raw: fb.cleaned, model: FALLBACK_MODEL }
   }
   throw new Error(
@@ -691,10 +725,10 @@ Deno.serve(async (req) => {
     // tag the judge with the variant so delta_debug shows which prompt ran.
     const tag = `ultracut:${model}${typeof promptVariant === 'string' && promptVariant ? `:${promptVariant}` : ''}`
 
-    const apiKey = await getApiKey()
-    if (!apiKey) return json({ raw: null, judge: 'none' })
+    const keys = { openrouter: await getApiKey(), deepseek: Deno.env.get('DEEPSEEK_API_KEY') ?? '' }
+    if (!keys.openrouter && !keys.deepseek) return json({ raw: null, judge: 'none' })
     try {
-      const out = await finalize(apiKey, model, payload, system, reasoningOverride(reasoning))
+      const out = await finalize(keys, model, payload, system, reasoning)
       // reflect the model that ACTUALLY produced the cut (may be the fallback).
       const usedTag = `ultracut:${out.model}${typeof promptVariant === 'string' && promptVariant ? `:${promptVariant}` : ''}`
       return json({ raw: out.raw, judge: usedTag })
