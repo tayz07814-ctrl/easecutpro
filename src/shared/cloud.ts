@@ -107,6 +107,11 @@ export interface ProcutJudgeReq {
    *  0.01 Ultracut button; omitted → the default word-list prompt (production
    *  gemini + everything else are unaffected). */
   promptVariant?: string
+  /** optional per-request reasoning mode (ultracut-judge only; whitelisted
+   *  server-side). 'off' = no thinking tokens (the 0.01 Ultracut DeepSeek judge
+   *  needs none); omitted → the server's env default. Scoped to the caller that
+   *  sends it, so production gemini/Retake keep their reasoning unchanged. */
+  reasoning?: string
 }
 export interface ProcutJudgeRes {
   raw: string | null

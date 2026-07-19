@@ -55,7 +55,8 @@ const MODEL_WHITELIST = new Set([
   'z-ai/glm-5.2',
   'google/gemini-3.1-pro-preview',
   'google/gemini-3.5-flash',
-  'qwen/qwen3.7-plus'
+  'qwen/qwen3.7-plus',
+  'deepseek/deepseek-chat'
 ])
 function resolveModel(requested: unknown): string {
   return typeof requested === 'string' && MODEL_WHITELIST.has(requested) ? requested : MODEL
@@ -75,6 +76,18 @@ function reasoningConfig(): Record<string, unknown> {
     if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
   }
   return { effort: 'low' }
+}
+
+// Per-request reasoning override (whitelisted values only). Lets a specific caller
+// pick its reasoning mode without an env flip — the 0.01 Ultracut button sends
+// 'off' (its DeepSeek judge needs no thinking). Any OTHER caller (production
+// gemini / Retake) omits it → null → the env default (reasoningConfig) is used, so
+// their behavior is byte-identical. `off`/false disables reasoning entirely.
+function reasoningOverride(v: unknown): Record<string, unknown> | null {
+  if (v === 'off' || v === false) return { enabled: false }
+  if (v === 'low' || v === 'medium' || v === 'high') return { effort: v }
+  if (typeof v === 'number' && v > 0) return { max_tokens: Math.min(v, 8000) }
+  return null
 }
 
 // Provider routing. Default: highest-throughput provider (fastest tokens).
@@ -553,7 +566,13 @@ async function logDebug(fields: Record<string, unknown>): Promise<void> {
 }
 
 // Single pass: the transcript payload IS the user turn (no first-pass proposal).
-async function finalize(apiKey: string, model: string, payload: string, system: string): Promise<string> {
+async function finalize(
+  apiKey: string,
+  model: string,
+  payload: string,
+  system: string,
+  rOverride?: Record<string, unknown> | null
+): Promise<string> {
   const provider = providerConfig()
   const body: Record<string, unknown> = {
     model,
@@ -561,7 +580,8 @@ async function finalize(apiKey: string, model: string, payload: string, system: 
     // (the old 32000 cap is removed). The only remaining limit is Supabase's
     // ~150s edge wall-clock. Set ULTRACUT_REASONING_MAX_TOKENS to bound reasoning.
     stream: false,
-    reasoning: reasoningConfig(),
+    // Per-request override (0.01 Ultracut sends 'off') else the env default.
+    reasoning: rOverride ?? reasoningConfig(),
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: payload }
@@ -609,9 +629,9 @@ Deno.serve(async (req) => {
   if (pf) return pf
   try {
     if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const { payload, model: requestedModel, promptVariant } = await req
+    const { payload, model: requestedModel, promptVariant, reasoning } = await req
       .json()
-      .catch(() => ({ payload: null, model: null, promptVariant: null }))
+      .catch(() => ({ payload: null, model: null, promptVariant: null, reasoning: null }))
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
     const model = resolveModel(requestedModel)
     const system = resolvePrompt(promptVariant)
@@ -621,7 +641,7 @@ Deno.serve(async (req) => {
     const apiKey = await getApiKey()
     if (!apiKey) return json({ raw: null, judge: 'none' })
     try {
-      return json({ raw: await finalize(apiKey, model, payload, system), judge: tag })
+      return json({ raw: await finalize(apiKey, model, payload, system, reasoningOverride(reasoning)), judge: tag })
     } catch (e) {
       console.warn('[ultracut-judge] model API failed:', (e as Error).message)
       return json({ raw: null, judge: tag })

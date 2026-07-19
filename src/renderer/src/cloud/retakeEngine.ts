@@ -218,7 +218,12 @@ export async function retakeAwareCutCloud(
  *  debug stream — so the two can be A/B'd in-app. The result shape
  *  (RetakeAwareResult) is identical, so the review-first contract, the
  *  transcript/highlight UX and Execute all reuse the exact beta path. Cloud-only. */
-const ULTRACUT_MODEL = 'z-ai/glm-5.2'
+// 0.01 Ultracut judge. DeepSeek-V3 (non-reasoning) with reasoning OFF: an A/B on
+// real logged transcripts found it matches GLM-5.2's retake cuts (same core spans,
+// extra cuts only single-word stutters — no over-cutting) at ~3-16x lower cost,
+// because the old GLM run spent 70-85% of its tokens on thinking that changed no
+// retake decision. Scoped to the Ultracut Beta button only (production is gemini).
+const ULTRACUT_MODEL = 'deepseek/deepseek-chat'
 export async function ultracutCutCloud(
   mediaId: string,
   onProgress?: (pct: number, msg?: string) => void,
@@ -268,7 +273,8 @@ export async function ultracutCutCloud(
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
       model: ULTRACUT_MODEL,
-      promptVariant: 'segment'
+      promptVariant: 'segment',
+      reasoning: 'off'
     } satisfies ProcutJudgeReq)
     modelRaw = res.raw
     if (res.judge === 'none') {
