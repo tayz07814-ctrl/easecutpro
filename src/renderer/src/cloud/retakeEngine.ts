@@ -217,12 +217,14 @@ export async function retakeAwareCutCloud(
  *  debug stream — so the two can be A/B'd in-app. The result shape
  *  (RetakeAwareResult) is identical, so the review-first contract, the
  *  transcript/highlight UX and Execute all reuse the exact beta path. Cloud-only. */
-// 0.01 Ultracut judge. DeepSeek-V3 (non-reasoning) with reasoning OFF: an A/B on
-// real logged transcripts found it matches GLM-5.2's retake cuts (same core spans,
-// extra cuts only single-word stutters — no over-cutting) at ~3-16x lower cost,
-// because the old GLM run spent 70-85% of its tokens on thinking that changed no
-// retake decision. Scoped to the Ultracut Beta button only (production is gemini).
-const ULTRACUT_MODEL = 'deepseek/deepseek-chat'
+// 0.01 Ultracut judge. DeepSeek-V4-flash WITH reasoning: an A/B on real logged
+// transcripts found it matches GLM-5.2+reasoning cut quality (whole earlier takes
+// removed, no splices, the final take in a restart-pile kept) at ~1/40th the cost —
+// V4-flash output is so cheap (~$0.20/M) that its thinking tokens cost ~$0.001, and
+// that thinking is what fixes the retake BOUNDARIES a non-reasoning model gets wrong.
+// ~$0.0017/run. Paired with promptVariant:'sharp' (word-list SYSTEM + Rules A/B).
+// Scoped to the Ultracut Beta button only (production stays on gemini).
+const ULTRACUT_MODEL = 'deepseek/deepseek-v4-flash'
 export async function ultracutCutCloud(
   mediaId: string,
   onProgress?: (pct: number, msg?: string) => void,
@@ -275,7 +277,8 @@ export async function ultracutCutCloud(
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
       model: ULTRACUT_MODEL,
-      reasoning: 'off'
+      promptVariant: 'sharp',
+      reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     modelRaw = res.raw
     if (res.judge === 'none') {

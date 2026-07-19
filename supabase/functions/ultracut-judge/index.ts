@@ -56,7 +56,8 @@ const MODEL_WHITELIST = new Set([
   'google/gemini-3.1-pro-preview',
   'google/gemini-3.5-flash',
   'qwen/qwen3.7-plus',
-  'deepseek/deepseek-chat'
+  'deepseek/deepseek-chat',
+  'deepseek/deepseek-v4-flash'
 ])
 function resolveModel(requested: unknown): string {
   return typeof requested === 'string' && MODEL_WHITELIST.has(requested) ? requested : MODEL
@@ -543,7 +544,34 @@ Return no text outside the JSON.`
 // Per-request SYSTEM-prompt variant. Whitelisted so a signed-in user can't inject
 // an arbitrary prompt; an unknown value falls back to the default SYSTEM.
 const PROMPT_VARIANTS: Record<string, string> = { segment: SYSTEM_SEGMENT }
+
+// 0.01 Ultracut 'sharp' variant = the word-list SYSTEM prompt + two extra boundary
+// rules, inserted right before the FINAL SELF-CHECK. Fixes the two judgment errors a
+// cheap model makes (splicing two takes into one; cutting the FINAL take in a pile of
+// restarts). Scoped per-request: production gemini omits promptVariant → plain SYSTEM,
+// byte-identical. Validated on real clips (DeepSeek-V4-flash + reasoning).
+const SHARP_ANCHOR = `==================================================
+FINAL SELF-CHECK (MANDATORY)`
+const SHARP_RULES = `==================================================
+TWO HARD RULES (MOST COMMON MISTAKES — OBEY EXACTLY)
+==================================================
+
+RULE A — CUT THE WHOLE EARLIER TAKE, NEVER SPLICE THE MIDDLE.
+When a sentence is restarted, e.g. "If you want to check— if you want to check it out":
+- The retake cut MUST start at the FIRST word of the earlier take and end right before the later take begins.
+- CORRECT: cut "If you want to check—" (the entire first attempt). Keep "if you want to check it out...".
+- WRONG: cutting only "check— if you want to" (the middle) — that splices the first take's opening onto the second take's ending. NEVER do this. Always remove a WHOLE earlier take, never a middle slice that joins two takes.
+
+RULE B — A PILE OF RESTARTS: KEEP THE FINAL COMPLETE TAKE, CUT EVERYTHING BEFORE IT.
+When the SAME sentence is attempted many times in a row (a long pile of false starts, often "literally... literally... literally..."):
+- Find the LAST attempt that finishes the complete thought.
+- Cut ALL earlier partial attempts as one span, ENDING right before that final complete take.
+- KEEP the final complete take in full. It is the ONLY good copy — NEVER include it in the cut.
+- Example: many "literally people who..." restarts ending in "literally people who inject tons of glutathione straight into their veins." -> cut everything up to the last "literally" that begins the complete sentence; KEEP "literally people who inject tons of glutathione straight into their veins."
+
+`
 function resolvePrompt(variant: unknown): string {
+  if (variant === 'sharp') return SYSTEM.replace(SHARP_ANCHOR, SHARP_RULES + SHARP_ANCHOR)
   return typeof variant === 'string' && PROMPT_VARIANTS[variant] ? PROMPT_VARIANTS[variant] : SYSTEM
 }
 
