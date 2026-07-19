@@ -24,7 +24,6 @@ import type { ProcutJudgeReq, ProcutJudgeRes } from '@shared/cloud'
 import {
   buildTimestampMap,
   buildAiPayload,
-  buildSegmentPayload,
   validateEdl,
   refineEdl,
   type Edl,
@@ -260,12 +259,15 @@ export async function ultracutCutCloud(
   //    Retake β; only the judge endpoint + provider differ.
   op(72, 'Ultracut is judging your takes…')
   const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
-  // 0.01 Ultracut runs the SEGMENT-based prompt: send the segment payload + the
-  // 'segment' variant flag so the ultracut-judge picks the matching SYSTEM prompt.
-  // (Production retake / gemini omit both → the default word-list prompt, so this
-  // is scoped to the Ultracut Beta button only. validateEdl is unchanged: the
-  // segments carry the SAME map word indices.)
-  const payload = buildSegmentPayload(map)
+  // 0.01 Ultracut runs the WORD-LIST prompt (buildAiPayload + the default SYSTEM
+  // prompt — no promptVariant). The segment prompt was reverted: real creator
+  // footage has mid-SENTENCE retakes ("They pretty—", "the way that I—", "Food can,
+  // food can") buried inside long run-on segments, and the segment prompt's "never
+  // cut inside a segment" rule can't reach them — DeepSeek responded by cutting
+  // EVERY segment (rejected by validateEdl's runaway guard → "no cuts"). The
+  // word-list prompt (partial/tail-retake + stutter rules) makes surgical word cuts
+  // instead — validated on the exact failing clip: 7 correct cuts, no over-cut.
+  const payload = buildAiPayload(map)
   let baseCutSpans: CutSpan[] = []
   let modelRaw: string | null = null
   try {
@@ -273,7 +275,6 @@ export async function ultracutCutCloud(
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
       model: ULTRACUT_MODEL,
-      promptVariant: 'segment',
       reasoning: 'off'
     } satisfies ProcutJudgeReq)
     modelRaw = res.raw
