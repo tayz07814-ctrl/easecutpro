@@ -43,15 +43,21 @@ export interface Subscription {
 const clientToken =
   (import.meta.env.VITE_PADDLE_CLIENT_TOKEN as string | undefined) || 'test_2115f33a332b4eaa8bdc588748e'
 const env = (import.meta.env.VITE_PADDLE_ENV as PaddleEnv | undefined) || 'sandbox'
-const priceMonthly =
-  (import.meta.env.VITE_PADDLE_PRICE_MONTHLY as string | undefined) || 'pri_01kxrsngzrp7x128pz2cjsb7hw'
-const priceAnnual = (import.meta.env.VITE_PADDLE_PRICE_ANNUAL as string | undefined) || undefined
+// The three subscription tiers shown on the landing (Starter $49 / Pro $59 /
+// Unlimited $79). Sandbox price IDs are committed (public); override per-plan
+// with VITE_PADDLE_PRICE_* for production.
+export type PlanId = 'starter' | 'pro' | 'unlimited'
+const PRICES: Record<PlanId, string | undefined> = {
+  starter: (import.meta.env.VITE_PADDLE_PRICE_STARTER as string | undefined) || 'pri_01kxrsngzrp7x128pz2cjsb7hw',
+  pro: (import.meta.env.VITE_PADDLE_PRICE_PRO as string | undefined) || 'pri_01ky0mh6qpep3jp2091sp9v1wh',
+  unlimited: (import.meta.env.VITE_PADDLE_PRICE_UNLIMITED as string | undefined) || 'pri_01ky0mn77d161r8vyz15whyp7v'
+}
 
 /** True once a client token and at least one price are configured. The Upgrade
  *  UI stays hidden until then, so a half-configured build never shows a button
  *  that can't open. */
 export function paddleConfigured(): boolean {
-  return !!(clientToken && (priceMonthly || priceAnnual))
+  return !!(clientToken && (PRICES.starter || PRICES.pro || PRICES.unlimited))
 }
 
 // Paddle emits checkout lifecycle events (completed/closed) through the single
@@ -101,9 +107,9 @@ function loadPaddle(): Promise<PaddleGlobal> {
 /** Open the Pro checkout overlay for the signed-in user. `plan` picks the price. */
 export async function openProCheckout(
   user: { id: string; email?: string },
-  plan: 'monthly' | 'annual' = 'monthly'
+  plan: PlanId = 'starter'
 ): Promise<void> {
-  const priceId = plan === 'annual' ? priceAnnual : priceMonthly
+  const priceId = PRICES[plan]
   if (!priceId) throw new Error(`No Paddle price configured for the ${plan} plan.`)
   const P = await loadPaddle()
   P.Checkout.open({

@@ -94,6 +94,9 @@ export function initLanding(root: HTMLElement, handlers: LandingHandlers): () =>
     } else if (label === 'Privacy') {
       ev.preventDefault()
       handlers.onNavigate('/privacy')
+    } else if (label === 'Refund') {
+      ev.preventDefault()
+      handlers.onNavigate('/refund')
     }
   }
   root.addEventListener('click', onClickRoot)

@@ -90,7 +90,7 @@ export default function HomeScreen(): JSX.Element {
     if (!user || upgrading) return
     setUpgrading(true)
     try {
-      await openProCheckout({ id: user.id, email: user.email }, 'monthly')
+      await openProCheckout({ id: user.id, email: user.email }, 'starter')
     } catch (e) {
       setUpgrading(false)
       window.alert(e instanceof Error ? e.message : 'Could not open checkout')
