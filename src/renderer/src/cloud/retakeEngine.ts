@@ -95,7 +95,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (Opus judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (DeepSeek-V4-flash + sharp judge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -120,21 +120,25 @@ export async function retakeAwareCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — ProCut-style Opus finalizer over the FULL transcript
-  //    (procut-judge, empty first pass). REPLACES the rules-first detectors; Opus
-  //    scans everything and returns the cut EDL, the exact judging ProCut uses.
+  // 4. WORD-CUT BRAIN — the DEFAULT judge over the FULL transcript: DeepSeek-V4-flash
+  //    (ultracut-judge edge fn, OpenRouter) on the 'sharp' word-list prompt +
+  //    reasoning:medium. Scans everything and returns the cut EDL. Same judge as
+  //    production now; the separate Ultracut Beta button uses the identical config.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
-  // transcript (from repaired words) is rebuilt after the Opus pass below.
+  // transcript (from repaired words) is rebuilt after the judge pass below.
   const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
   const payload = buildAiPayload(map)
   let baseCutSpans: CutSpan[] = []
   let claudeRaw: string | null = null
   try {
-    const res = await invokeEdge<ProcutJudgeRes>('procut-judge', {
+    const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
-      proposal: { word_cuts: [], pause_cuts: [] }
+      proposal: { word_cuts: [], pause_cuts: [] },
+      model: 'deepseek/deepseek-v4-flash',
+      promptVariant: 'sharp',
+      reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
