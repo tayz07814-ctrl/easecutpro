@@ -57,7 +57,7 @@ import {
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
 import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
-import { safeErrMessage } from './safeError'
+import { safeErrMessage, errorCode, isTrialLimit, TRIAL_LIMIT_MESSAGE } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite, getProject } from './projectsApi'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideo } from './batchClean'
@@ -2275,15 +2275,24 @@ export const useStore = create<AppState>((set, get) => ({
         }
       })
     } catch (e) {
-      // Show the REAL error on-screen (the vanishing job message hid it on mobile).
-      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Retake β) failed', e)
-      set({
-        job: {
-          active: false,
-          percent: 0,
-          message: IS_CLOUD ? 'Retake β couldn’t finish — please try again.' : `Retake β failed: ${(e as Error).message}`
-        }
-      })
+      if (isTrialLimit(e)) {
+        // Not a failure — the free trial ran out. The upgrade panel is already
+        // opening (stt.ts → openAccountPanel); show a gentle status line, and
+        // deliberately NO red crash box.
+        set({ job: { active: false, percent: 0, message: TRIAL_LIMIT_MESSAGE } })
+      } else {
+        // Surface the failure on-screen (the vanishing job message hid it on
+        // mobile) — but as an opaque code in the cloud, never a raw string that
+        // could reveal the stack or which provider/model ran.
+        ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord failed', e)
+        set({
+          job: {
+            active: false,
+            percent: 0,
+            message: IS_CLOUD ? `Cut Lord couldn’t finish. (Error ${errorCode(e)})` : `Retake β failed: ${(e as Error).message}`
+          }
+        })
+      }
     }
   },
 

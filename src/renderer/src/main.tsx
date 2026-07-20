@@ -8,7 +8,7 @@ import LegalPage from './landing/LegalPage'
 import AccountPanelHost from './newui/screens/AccountPanelHost'
 import { useStore, firstVideoSourcePath } from './store'
 import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
-import { redactForCreator } from './safeError'
+import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
 import { cloudAuthMe } from './cloud/auth'
@@ -69,10 +69,10 @@ if (IS_WEB) {
       // show the message FIRST — otherwise we see where it threw, not WHAT failed.
       const message = (e && e.message) || String(err)
       const stack = (e && e.stack) || ''
-      // Beta ship (cloud): mask everything confidential — creators see a redacted
-      // one-liner, NO stack/paths/URLs/vendor names. Desktop/self-host: full detail.
+      // Beta ship (cloud): a clean creator-safe message or an opaque code — NO
+      // stack/paths/URLs/vendor/model names ever. Desktop/self-host: full detail.
       const msg = IS_CLOUD
-        ? redactForCreator(message) || 'Something went wrong — please try again.'
+        ? safeErrMessage(err)
         : stack && !stack.startsWith(message)
           ? `${message}\n${stack}`
           : stack || message

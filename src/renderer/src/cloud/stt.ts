@@ -22,6 +22,7 @@ import type {
 } from '@shared/cloud'
 import { getSupabase, invokeEdge } from './supabase'
 import { openAccountPanel } from './subscription'
+import { isTrialLimit, TrialLimitError } from '../safeError'
 
 type ProgressFn = (pct: number, msg?: string) => void
 
@@ -136,10 +137,10 @@ export async function transcribeVerbatimCloud(
     signed = await sttEdge<SttSignUploadRes>({ action: 'sign-upload', ext: audio.ext })
   } catch (e) {
     // Free-trial limit hit (server-enforced in the stt fn): open the upgrade
-    // panel and stop with a friendly message.
-    if ((e as Error).message === 'trial_limit') {
+    // panel and stop with a typed, creator-safe error (never a raw string).
+    if (isTrialLimit(e)) {
       openAccountPanel('trial')
-      throw new Error('You’ve used all your free AI runs — upgrade to keep editing.')
+      throw new TrialLimitError()
     }
     throw e
   }
