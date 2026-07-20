@@ -42,6 +42,18 @@ export default function LandingScreen({
     document.body.classList.add('ec-landing-body')
     const el = ref.current
     const cleanup = el ? initLanding(el, { onStartFree, onNavigate }) : undefined
+
+    // Deep links (e.g. /pricing for Paddle) land directly on that section.
+    const section = window.location.pathname.replace(/^\/+/, '')
+    if (section === 'pricing' || section === 'features' || section === 'faq') {
+      const go = (): void => {
+        const t = document.getElementById(section)
+        if (t) window.scrollTo({ top: Math.max(0, t.getBoundingClientRect().top + window.scrollY - 88), behavior: 'auto' })
+      }
+      requestAnimationFrame(go)
+      window.setTimeout(go, 350) // re-settle after the webfonts change layout
+    }
+
     return () => {
       cleanup?.()
       document.body.classList.remove('ec-landing-body')
