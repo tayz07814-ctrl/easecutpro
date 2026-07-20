@@ -36,21 +36,40 @@ export interface Subscription {
   cancel_at_period_end: boolean
 }
 
-// Sandbox defaults are committed on purpose: the client token and price IDs are
-// PUBLIC (they ship in the browser regardless), so this lets the sandbox test run
-// with no env setup. For production, set VITE_PADDLE_* (live token, price IDs and
-// VITE_PADDLE_ENV=production) — env vars always win. See PAYMENTS.md.
-const clientToken =
-  (import.meta.env.VITE_PADDLE_CLIENT_TOKEN as string | undefined) || 'test_2115f33a332b4eaa8bdc588748e'
-const env = (import.meta.env.VITE_PADDLE_ENV as PaddleEnv | undefined) || 'sandbox'
-// The three subscription tiers shown on the landing (Starter $29 / Pro $49 /
-// Unlimited $79). Sandbox price IDs are committed (public); override per-plan
-// with VITE_PADDLE_PRICE_* for production.
+// Live vs sandbox is chosen by HOSTNAME: the production domain uses the live
+// Paddle account; every other origin (Vercel previews, localhost) stays on
+// sandbox, so a preview build can never take a real card. All values here are
+// PUBLIC — the client-side token and price IDs ship in the browser by design —
+// so committing them is fine; VITE_PADDLE_* env vars still override either side.
 export type PlanId = 'starter' | 'pro' | 'unlimited'
+
+const IS_LIVE = typeof window !== 'undefined' && window.location.hostname === 'easecutpro.com'
+
+const LIVE = {
+  token: 'live_f9ef23fd06dc955c369b83a333c',
+  prices: {
+    starter: 'pri_01ky0qqtjyn63656vxg90z8szy',
+    pro: 'pri_01ky0qrg4c8ggv9978qf8fjxqq',
+    unlimited: 'pri_01ky0qss13e7hxbt5ckbkjha2y'
+  } as Record<PlanId, string>
+}
+const SANDBOX = {
+  token: 'test_2115f33a332b4eaa8bdc588748e',
+  prices: {
+    starter: 'pri_01kxrsngzrp7x128pz2cjsb7hw',
+    pro: 'pri_01ky0mh6qpep3jp2091sp9v1wh',
+    unlimited: 'pri_01ky0mn77d161r8vyz15whyp7v'
+  } as Record<PlanId, string>
+}
+const DEFAULTS = IS_LIVE ? LIVE : SANDBOX
+
+const clientToken = (import.meta.env.VITE_PADDLE_CLIENT_TOKEN as string | undefined) || DEFAULTS.token
+const env: PaddleEnv =
+  (import.meta.env.VITE_PADDLE_ENV as PaddleEnv | undefined) || (IS_LIVE ? 'production' : 'sandbox')
 const PRICES: Record<PlanId, string | undefined> = {
-  starter: (import.meta.env.VITE_PADDLE_PRICE_STARTER as string | undefined) || 'pri_01kxrsngzrp7x128pz2cjsb7hw',
-  pro: (import.meta.env.VITE_PADDLE_PRICE_PRO as string | undefined) || 'pri_01ky0mh6qpep3jp2091sp9v1wh',
-  unlimited: (import.meta.env.VITE_PADDLE_PRICE_UNLIMITED as string | undefined) || 'pri_01ky0mn77d161r8vyz15whyp7v'
+  starter: (import.meta.env.VITE_PADDLE_PRICE_STARTER as string | undefined) || DEFAULTS.prices.starter,
+  pro: (import.meta.env.VITE_PADDLE_PRICE_PRO as string | undefined) || DEFAULTS.prices.pro,
+  unlimited: (import.meta.env.VITE_PADDLE_PRICE_UNLIMITED as string | undefined) || DEFAULTS.prices.unlimited
 }
 
 /** True once a client token and at least one price are configured. The Upgrade
