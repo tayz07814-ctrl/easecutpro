@@ -16,7 +16,7 @@ import {
   saveProject,
   type ProjectMeta
 } from '../../projectsApi'
-import type { BatchJob } from '../../store'
+import type { BatchJob, BatchQueue } from '../../store'
 import type { DashCard } from '../mock'
 
 function relDate(t: number): string {
@@ -55,6 +55,16 @@ export interface DashboardModel {
   remove: (id: string) => Promise<void>
   logout: () => Promise<void>
   refresh: () => Promise<void>
+  // ---- Batch Processing queues (right-hand column) ----
+  queues: BatchQueue[]
+  /** open the "Batch processing" setup modal (file picker + toggles). */
+  openBatchModal: () => void
+  /** open one queued project in the editor. */
+  openBatchFile: (projectId: string) => Promise<void>
+  /** export every finished project in a queue to this device. */
+  autoExportAll: (queueId: string) => Promise<void>
+  /** remove a queue card (its projects move back into the normal grid). */
+  dismissQueue: (queueId: string) => void
 }
 
 export function useProjects(): DashboardModel {
@@ -65,6 +75,13 @@ export function useProjects(): DashboardModel {
   const runBatchClean = useStore((s) => s.runBatchClean)
   const setUser = useStore((s) => s.setUser)
   const setView = useStore((s) => s.setView)
+  // ---- Batch Processing queues ----
+  const queues = useStore((s) => s.batchQueues)
+  const loadBatchQueues = useStore((s) => s.loadBatchQueues)
+  const setShowBatchModal = useStore((s) => s.setShowBatchModal)
+  const openBatchProject = useStore((s) => s.openBatchProject)
+  const autoExportAllBatch = useStore((s) => s.autoExportAllBatch)
+  const dismissBatchQueue = useStore((s) => s.dismissBatchQueue)
 
   const [projects, setProjects] = useState<ProjectMeta[]>([])
   const [loading, setLoading] = useState(true)
@@ -77,6 +94,8 @@ export function useProjects(): DashboardModel {
   }
   useEffect(() => {
     void refresh()
+    loadBatchQueues() // hydrate the right-hand queue column from localStorage
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const doneCount = batchJobs.filter((j) => j.status === 'done' || j.status === 'error').length
@@ -85,16 +104,33 @@ export function useProjects(): DashboardModel {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchJobs.length, doneCount])
 
+  // Refresh the project list when batch files finish (thumbnails land) or a queue
+  // is dismissed (its projects rejoin the normal grid).
+  const queueDone = queues.reduce((n, q) => n + q.files.filter((f) => f.status === 'done' || f.status === 'error').length, 0)
+  useEffect(() => {
+    if (queues.length || queueDone) void refresh(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queues.length, queueDone])
+
   const jobById = useMemo(() => {
     const m: Record<string, BatchJob> = {}
     for (const j of batchJobs) m[j.projectId] = j
     return m
   }, [batchJobs])
 
+  // Batch projects live only in the right-hand queue column — keep them out of the
+  // normal project grid so the two stay "separate."
+  const batchProjectIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const q of queues) for (const f of q.files) s.add(f.projectId)
+    return s
+  }, [queues])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return q ? projects.filter((p) => p.name.toLowerCase().includes(q)) : projects
-  }, [projects, query])
+    const notBatch = projects.filter((p) => !batchProjectIds.has(p.id))
+    return q ? notBatch.filter((p) => p.name.toLowerCase().includes(q)) : notBatch
+  }, [projects, query, batchProjectIds])
 
   const cards = useMemo<DashCard[]>(
     () => [{ kind: 'new' }, ...filtered.map((p) => toCard(p, jobById[p.id]))],
@@ -133,5 +169,24 @@ export function useProjects(): DashboardModel {
     setView('auth')
   }
 
-  return { cards, metas: filtered, loading, query, setQuery, email, open, create, batch, rename, remove, logout, refresh }
+  return {
+    cards,
+    metas: filtered,
+    loading,
+    query,
+    setQuery,
+    email,
+    open,
+    create,
+    batch,
+    rename,
+    remove,
+    logout,
+    refresh,
+    queues,
+    openBatchModal: () => setShowBatchModal(true),
+    openBatchFile: (projectId) => openBatchProject(projectId),
+    autoExportAll: (queueId) => autoExportAllBatch(queueId),
+    dismissQueue: (queueId) => dismissBatchQueue(queueId)
+  }
 }

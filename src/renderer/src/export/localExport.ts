@@ -144,8 +144,11 @@ export function probeEncodeCaps(): Promise<EncodeCaps> {
 }
 
 /** '' when the current timeline can export on-device; else the human reason. */
-export function whyNotLocal(project: Project): string {
-  const doc = getSharedEngine()?.document
+export function whyNotLocal(project: Project, docOverride?: TimelineDocument): string {
+  // docOverride lets the batch auto-exporter gate a project WITHOUT it being the
+  // open editor project (it builds the doc from the project itself). Falls back
+  // to the shared engine's document for the normal interactive export.
+  const doc = docOverride ?? getSharedEngine()?.document
   if (!doc) return 'timeline not ready'
   const main = doc.tracks.find((t) => t.isMain)
   if (!main || !main.clips.length) return 'nothing on the main track'
@@ -424,11 +427,16 @@ const dbg = (...a: unknown[]): void => console.log('[ondevice]', ...a)
 export async function exportOnDevice(
   project: Project,
   opts: { width: number; height: number; bitrateMbps: number },
-  onProgress: (pct: number, msg: string) => void
+  onProgress: (pct: number, msg: string) => void,
+  docOverride?: TimelineDocument
 ): Promise<{ blob: Blob; name: string }> {
-  const doc = getSharedEngine()?.document
+  // docOverride powers the batch "Auto export all": each queued project is
+  // exported from a document built off the project itself, so the file need
+  // never be the open editor project. Interactive exports pass nothing and read
+  // the shared engine as before.
+  const doc = docOverride ?? getSharedEngine()?.document
   if (!doc) throw new Error('timeline not ready')
-  const gate = whyNotLocal(project)
+  const gate = whyNotLocal(project, doc)
   if (gate) throw new Error(gate)
   const caps = await probeEncodeCaps()
   if (!caps.video) throw new Error('this browser can’t encode video on-device')
@@ -438,7 +446,7 @@ export async function exportOnDevice(
   // other browser (Android/desktop/iOS 26+), unchanged.
   if (!caps.audio) {
     const { exportOnDeviceMB } = await import('./localExportMB')
-    return exportOnDeviceMB(project, opts, onProgress)
+    return exportOnDeviceMB(project, opts, onProgress, doc)
   }
   const { segs, audio, total } = planFromDoc(doc, project)
   if (!segs.length || total <= 0) throw new Error('nothing to export')

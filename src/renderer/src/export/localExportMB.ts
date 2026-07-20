@@ -35,6 +35,7 @@ import {
   type OverlayRect
 } from './overlays'
 import type { Project } from '@shared/types'
+import type { TimelineDocument } from '@shared/timeline/types'
 
 const dbg = (...a: unknown[]): void => console.log('[ondevice-mb]', ...a)
 
@@ -60,9 +61,12 @@ interface Sprite {
 export async function exportOnDeviceMB(
   project: Project,
   opts: { width: number; height: number; bitrateMbps: number },
-  onProgress: (pct: number, msg: string) => void
+  onProgress: (pct: number, msg: string) => void,
+  docOverride?: TimelineDocument
 ): Promise<{ blob: Blob; name: string }> {
-  const doc = getSharedEngine()?.document
+  // docOverride: see exportOnDevice — the batch auto-exporter passes a document
+  // built from the project so a non-open project can still be exported.
+  const doc = docOverride ?? getSharedEngine()?.document
   if (!doc) throw new Error('timeline not ready')
   const { segs, audio, total } = planFromDoc(doc, project)
   if (!segs.length || total <= 0) throw new Error('nothing to export')

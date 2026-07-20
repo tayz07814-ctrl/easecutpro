@@ -58,9 +58,10 @@ import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSetti
 import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
-import { createProject, saveProject, serializeProject } from './projectsApi'
+import { createProject, saveProject, serializeProject, serializeProjectLite, getProject } from './projectsApi'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideo } from './batchClean'
+import { retakeCleanVideo } from './batchProcess'
 import { getFile } from './webmedia'
 
 function uid(): string {
@@ -514,6 +515,63 @@ export interface BatchJob {
   error?: string
 }
 
+/** Which auto-clean functions a batch run applies. Retake + silence are live;
+ *  auto-zoom and captions are declared here so their toggles persist, but they
+ *  are placeholders (future updates) and currently no-ops in the pipeline. */
+export interface BatchToggles {
+  retakeSilence: boolean
+  autoZoom: boolean
+  captions: boolean
+}
+
+/** One file inside a batch queue — its own auto-created project + live status. */
+export interface BatchQueueFile {
+  projectId: string
+  name: string
+  status: 'queued' | 'processing' | 'done' | 'error'
+  step: string
+  error?: string
+}
+
+/** A "Batch processing queue" — a group of files submitted together, each turned
+ *  into its OWN project (separate from the normal project grid) and cleaned one
+ *  by one. Persisted per-user to localStorage so the right-hand queue column
+ *  survives reloads (the projects themselves live in Supabase). */
+export interface BatchQueue {
+  id: string
+  /** display label, e.g. "Batch processing queue 1". */
+  label: string
+  /** epoch ms the queue was created (drives the date + time lines). */
+  createdAt: number
+  toggles: BatchToggles
+  files: BatchQueueFile[]
+}
+
+// Batch queues persist per-user to localStorage: the projects live in Supabase,
+// but the queue grouping (labels, toggles, per-file status) is a client-side
+// view we want to survive reloads. Keyed by user id so switching accounts on one
+// device never crosses queues. Best-effort — quota/disabled storage degrades to
+// an in-memory-only column (still works for the session).
+function batchQueuesKey(userId: string | undefined): string {
+  return `ec.batchQueues.${userId || 'anon'}`
+}
+function loadBatchQueuesLS(userId: string | undefined): BatchQueue[] {
+  try {
+    const raw = localStorage.getItem(batchQueuesKey(userId))
+    const parsed = raw ? (JSON.parse(raw) as BatchQueue[]) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+function saveBatchQueuesLS(userId: string | undefined, queues: BatchQueue[]): void {
+  try {
+    localStorage.setItem(batchQueuesKey(userId), JSON.stringify(queues))
+  } catch {
+    /* storage full / disabled — the column stays in memory for this session */
+  }
+}
+
 /** Seam blend ("overlap") at cut joins — a short incoming-only fade that de-clicks
  *  the splice. A global render setting applied at export + preview. */
 export interface SeamFadeSettings {
@@ -576,6 +634,11 @@ interface AppState {
   showExportModal: boolean
   /** Batch Video Cleaner jobs shown on the home screen (newest first). */
   batchJobs: BatchJob[]
+  /** Batch Processing queues (new UI): each is a group of files auto-cleaned into
+   *  their own projects, shown in the dashboard's right-hand queue column. */
+  batchQueues: BatchQueue[]
+  /** whether the "Batch processing" setup modal is open (new UI dashboard). */
+  showBatchModal: boolean
   // ---- App shell / accounts / projects (web) ----
   view: 'loading' | 'auth' | 'home' | 'editor'
   user: { id: string; email: string } | null
@@ -856,6 +919,19 @@ interface AppState {
   runBatchClean: (items: { path: string; name: string }[]) => Promise<void>
   /** Clear finished batch-clean jobs from the home screen. */
   dismissBatchJobs: () => void
+  // ---- Batch Processing (new UI): retake+silence queues + auto export ----
+  setShowBatchModal: (v: boolean) => void
+  /** Load persisted batch queues for the signed-in user (call on dashboard mount). */
+  loadBatchQueues: () => void
+  /** Run one batch: create a project per file, then auto retake+silence each,
+   *  one by one, into its own project. Files are separate from normal projects. */
+  runBatchProcessing: (items: { path: string; name: string }[], toggles: BatchToggles) => Promise<void>
+  /** Export every finished project in a queue to this device, one after another. */
+  autoExportAllBatch: (queueId: string) => Promise<void>
+  /** Open one batch project in the editor (loads it from the store). */
+  openBatchProject: (projectId: string) => Promise<void>
+  /** Remove a queue from the column (does not delete its projects). */
+  dismissBatchQueue: (queueId: string) => void
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -906,6 +982,8 @@ export const useStore = create<AppState>((set, get) => ({
   showSettings: false,
   showExportModal: false,
   batchJobs: [],
+  batchQueues: [],
+  showBatchModal: false,
   view: IS_WEB ? 'loading' : 'home',
   user: null,
   editingClipId: null,
@@ -3587,7 +3665,137 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  dismissBatchJobs: () => set({ batchJobs: [] })
+  dismissBatchJobs: () => set({ batchJobs: [] }),
+
+  // ---- Batch Processing (new UI) ------------------------------------------
+  setShowBatchModal: (v) => set({ showBatchModal: v }),
+
+  loadBatchQueues: () => set({ batchQueues: loadBatchQueuesLS(get().user?.id) }),
+
+  runBatchProcessing: async (items, toggles) => {
+    if (!items.length) return
+    // 1) A project per file, up front — the queue's rows appear immediately.
+    const created: { id: string; item: { path: string; name: string } }[] = []
+    for (const it of items) {
+      const base = newProject()
+      base.name = it.name.replace(/\.[^.]+$/, '')
+      const rec = await createProject(base.name, base)
+      created.push({ id: rec.id, item: it })
+    }
+    // 2) The queue record (newest first). Label counts ALL queues ever made so a
+    //    dismissed queue doesn't recycle a number the user already saw.
+    const now = Date.now()
+    const seq = get().batchQueues.length + 1
+    const queue: BatchQueue = {
+      id: `bq_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      label: `Batch processing queue ${seq}`,
+      createdAt: now,
+      toggles,
+      files: created.map((c) => ({ projectId: c.id, name: c.item.name, status: 'queued' as const, step: 'Queued' }))
+    }
+    const persist = (): void => saveBatchQueuesLS(get().user?.id, get().batchQueues)
+    set((s) => ({ batchQueues: [queue, ...s.batchQueues] }))
+    persist()
+
+    const updateFile = (projectId: string, patch: Partial<BatchQueueFile>): void => {
+      set((s) => ({
+        batchQueues: s.batchQueues.map((q) =>
+          q.id === queue.id
+            ? { ...q, files: q.files.map((f) => (f.projectId === projectId ? { ...f, ...patch } : f)) }
+            : q
+        )
+      }))
+      persist()
+    }
+
+    // 3) Same retake+silence the "Find Retakes & Silence" button runs, applied
+    //    headlessly per file, one at a time (transcription + judge are heavy).
+    const opts = {
+      retakeSilenceSettings: get().retakeBetaSilenceSettings,
+      vadSilenceSettings: get().vadSilenceSettings,
+      smartSilence: get().smartSilenceCutter,
+      wordCutPad: wordCutPad(get().cutLordSettings)
+    }
+    for (const c of created) {
+      updateFile(c.id, { status: 'processing', step: 'Starting…' })
+      try {
+        const { project, thumb } = await retakeCleanVideo(c.item.path, c.item.name, opts, (step) =>
+          updateFile(c.id, { step })
+        )
+        // Lite serialize: on the cloud there is no PC to upload to — media stays
+        // in this device's IndexedDB and rehydrates when the project is opened.
+        await saveProject(c.id, { project: serializeProjectLite(project), thumb })
+        updateFile(c.id, { status: 'done', step: 'Cleaned' })
+      } catch (e) {
+        updateFile(c.id, { status: 'error', step: 'Failed', error: safeErrMessage(e) })
+      }
+    }
+  },
+
+  autoExportAllBatch: async (queueId) => {
+    const q = get().batchQueues.find((x) => x.id === queueId)
+    if (!q) return
+    const done = q.files.filter((f) => f.status === 'done')
+    if (!done.length) {
+      set({ job: { active: false, percent: 0, message: 'No finished projects to export yet' } })
+      return
+    }
+    let ok = 0
+    for (let i = 0; i < done.length; i++) {
+      const f = done[i]
+      const tag = `(${i + 1}/${done.length})`
+      set({ job: { active: true, kind: 'export', percent: 1, message: `${tag} Preparing ${f.name}…` } })
+      try {
+        const rec = await getProject(f.projectId)
+        if (!rec?.project) throw new Error('project not found')
+        const project = rec.project
+        // Pull this device's media back out of IndexedDB so the export can decode
+        // the source, then build the cut document straight from the project (the
+        // file is NOT the open editor project, so there is no shared engine).
+        if (IS_WEB) await hydrateProjectMedia(project)
+        const doc = normalizeDefaultLanes(project.timeline ?? projectToDocument(project))
+        const W = project.media?.width && project.media.width > 0 ? project.media.width : 1920
+        const H = project.media?.height && project.media.height > 0 ? project.media.height : 1080
+        const { blob, name } = await exportOnDevice(
+          project,
+          { width: W, height: H, bitrateMbps: 12 },
+          (pct, msg) => set({ job: { active: true, kind: 'export', percent: pct, message: `${tag} ${msg}` } }),
+          doc
+        )
+        const dl = `${(project.name || name).replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim() || 'export'}.mp4`
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = dl
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 8000)
+        ok++
+      } catch (e) {
+        // One bad file never blocks the rest — surface it and keep going.
+        console.error('[batch-export] failed', f.name, e)
+        set({ job: { active: true, kind: 'export', percent: 100, message: `${tag} ${f.name} failed — skipping` } })
+      }
+    }
+    set({
+      job: {
+        active: false,
+        percent: 100,
+        message: ok === done.length ? `Exported ${ok} project(s) to this device` : `Exported ${ok}/${done.length} — see console for skips`
+      }
+    })
+  },
+
+  openBatchProject: async (projectId) => {
+    const rec = await getProject(projectId)
+    if (rec) get().openProjectRecord({ id: rec.id, name: rec.name, project: rec.project })
+  },
+
+  dismissBatchQueue: (queueId) => {
+    set((s) => ({ batchQueues: s.batchQueues.filter((q) => q.id !== queueId) }))
+    saveBatchQueuesLS(get().user?.id, get().batchQueues)
+  }
 }))
 
 // ---- Undo/redo history controller ----
