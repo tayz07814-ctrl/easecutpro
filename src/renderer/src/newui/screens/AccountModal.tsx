@@ -73,6 +73,7 @@ export default function AccountModal({
   }
 
   const isPro = billing?.isPro ?? false
+  const trialEnabled = billing?.trialEnabled ?? true
   const used = billing?.runsUsed ?? 0
   const limit = billing?.runsLimit ?? 5
   const left = Math.max(0, limit - used)
@@ -139,7 +140,7 @@ export default function AccountModal({
               🎉 You&rsquo;re on <b>{billing?.planName}</b> — unlimited AI runs are now unlocked.
             </div>
           )}
-          {reason === 'trial' && !isPro && !upgraded && (
+          {reason === 'trial' && !isPro && !upgraded && trialEnabled && (
             <div
               style={{
                 background: 'rgba(245,197,24,.1)',
@@ -175,6 +176,27 @@ export default function AccountModal({
               >
                 Active
               </span>
+            </div>
+          ) : !trialEnabled ? (
+            <div style={{ marginTop: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '20px', fontWeight: 600 }}>Free beta</span>
+                <span
+                  style={{
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: '#34D399',
+                    border: '1px solid rgba(52,211,153,.4)',
+                    borderRadius: '100px',
+                    padding: '3px 10px'
+                  }}
+                >
+                  Unlimited
+                </span>
+              </div>
+              <div style={{ fontSize: '13px', color: '#9BA0AC', marginTop: '8px' }}>
+                Unlimited AI runs while we&rsquo;re in beta — no limits. Enjoy!
+              </div>
             </div>
           ) : (
             <div style={{ marginTop: '10px' }}>

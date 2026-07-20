@@ -222,21 +222,34 @@ export interface Billing {
   planName: string
   runsUsed: number
   runsLimit: number
+  /** False while the free-trial limit is switched off (private beta = unlimited). */
+  trialEnabled: boolean
 }
 
 /** Everything the account panel needs — plan + free-trial usage — in one call. */
 export async function getBilling(): Promise<Billing> {
   const sb = getSupabase()
-  const [subRes, usageRes] = await Promise.all([
+  const [subRes, usageRes, limitRes] = await Promise.all([
     sb.from('subscriptions').select('status, price_id, current_period_end, cancel_at_period_end').maybeSingle(),
-    sb.from('usage').select('ai_runs').maybeSingle()
+    sb.from('usage').select('ai_runs').maybeSingle(),
+    sb.rpc('ai_run_limit')
   ])
   const sub = (subRes.data ?? null) as Subscription | null
   const isPro = isProNow(sub)
   const plan = sub?.price_id ? PRICE_TO_PLAN[sub.price_id] ?? null : null
-  const planName = plan ? PLANS.find((p) => p.id === plan)?.name ?? 'Pro' : isPro ? 'Pro' : 'Free trial'
+  // The server owns the run allowance: <= 0 means the trial is switched off
+  // (beta → unlimited). Fall back to a sane default if the read ever fails.
+  const runsLimit = typeof limitRes.data === 'number' ? limitRes.data : 5
+  const trialEnabled = runsLimit > 0
+  const planName = plan
+    ? PLANS.find((p) => p.id === plan)?.name ?? 'Pro'
+    : isPro
+      ? 'Pro'
+      : trialEnabled
+        ? 'Free trial'
+        : 'Free beta'
   const runsUsed = (usageRes.data?.ai_runs as number | undefined) ?? 0
-  return { isPro, status: sub?.status ?? 'none', plan, planName, runsUsed, runsLimit: 5 }
+  return { isPro, status: sub?.status ?? 'none', plan, planName, runsUsed, runsLimit, trialEnabled }
 }
 
 // Lets any code open the account/upgrade panel (e.g. when the free trial runs
