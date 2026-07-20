@@ -155,12 +155,14 @@ const DOCS: Record<'terms' | 'privacy' | 'refund', Doc> = {
           'We use trusted third parties that process data only to provide their function to us:',
           {
             ul: [
-              'Supabase — authentication, database, and storage;',
+              'Cloud infrastructure, authentication, and database providers — to host the Service and store your account and projects;',
               'Paddle — payment processing, as our Merchant of Record;',
-              'Transcription providers (such as AssemblyAI and Deepgram) — to convert the extracted audio into text;',
-              'AI providers (such as Anthropic and other model providers) — to generate editing suggestions.'
+              'Speech-to-text providers — to convert the extracted audio into a transcript;',
+              'AI/model providers — to generate the editing suggestions.'
             ]
-          }
+          },
+          'We work with a small number of vetted sub-processors. A current list is available on request at ' +
+            `${SUPPORT}.`
         ]
       },
       {

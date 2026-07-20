@@ -43,7 +43,7 @@ export interface Subscription {
 const clientToken =
   (import.meta.env.VITE_PADDLE_CLIENT_TOKEN as string | undefined) || 'test_2115f33a332b4eaa8bdc588748e'
 const env = (import.meta.env.VITE_PADDLE_ENV as PaddleEnv | undefined) || 'sandbox'
-// The three subscription tiers shown on the landing (Starter $49 / Pro $59 /
+// The three subscription tiers shown on the landing (Starter $29 / Pro $49 /
 // Unlimited $79). Sandbox price IDs are committed (public); override per-plan
 // with VITE_PADDLE_PRICE_* for production.
 export type PlanId = 'starter' | 'pro' | 'unlimited'

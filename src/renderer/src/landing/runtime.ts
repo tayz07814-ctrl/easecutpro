@@ -85,7 +85,8 @@ export function initLanding(root: HTMLElement, handlers: LandingHandlers): () =>
     const a = target?.closest?.('a')
     if (!a) return
     const label = (a.textContent ?? '').trim()
-    if (label === 'Start Free') {
+    const href = a.getAttribute('href') ?? ''
+    if (label === 'Get Started') {
       ev.preventDefault()
       handlers.onStartFree()
     } else if (label === 'Terms') {
@@ -97,6 +98,14 @@ export function initLanding(root: HTMLElement, handlers: LandingHandlers): () =>
     } else if (label === 'Refund') {
       ev.preventDefault()
       handlers.onNavigate('/refund')
+    } else if (href.startsWith('#')) {
+      // In-page nav (Features/Pricing/FAQ, Watch Demo, logo): smooth-scroll to the
+      // section instead of jumping and leaving a #hash in the URL.
+      ev.preventDefault()
+      const id = href.slice(1)
+      const el = id === 'top' ? null : document.getElementById(id)
+      const top = el ? el.getBoundingClientRect().top + window.scrollY - 88 : 0
+      window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
     }
   }
   root.addEventListener('click', onClickRoot)
