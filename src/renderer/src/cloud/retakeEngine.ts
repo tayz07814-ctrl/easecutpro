@@ -95,7 +95,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (DeepSeek-V4-flash + sharp judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (Llama-4-Maverick + sharp judge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -120,10 +120,11 @@ export async function retakeAwareCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — the DEFAULT judge over the FULL transcript: DeepSeek-V4-flash
-  //    (ultracut-judge edge fn, OpenRouter) on the 'sharp' word-list prompt +
-  //    reasoning:medium. Scans everything and returns the cut EDL. Same judge as
-  //    production now; the separate Ultracut Beta button uses the identical config.
+  // 4. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript: Llama 4
+  //    Maverick (ultracut-judge edge fn, OpenRouter) on the 'sharp' word-list prompt.
+  //    Maverick is a non-reasoning model, so reasoning is 'off' (matches the A/B
+  //    config it was validated on: fast, no reasoning trace). 0.01 ONLY — production
+  //    (main) keeps DeepSeek-V4-flash + reasoning:medium, untouched.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -136,9 +137,9 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'deepseek/deepseek-v4-flash',
+      model: 'meta-llama/llama-4-maverick',
       promptVariant: 'sharp',
-      reasoning: 'medium'
+      reasoning: 'off'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
