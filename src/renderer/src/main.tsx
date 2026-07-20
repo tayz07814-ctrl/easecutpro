@@ -6,6 +6,7 @@ import HomeScreen from './components/HomeScreen'
 import LandingScreen from './landing/LandingScreen'
 import LegalPage from './landing/LegalPage'
 import PaddleTestFab from './cloud/PaddleTestFab'
+import AccountPanelHost from './newui/screens/AccountPanelHost'
 import { useStore, firstVideoSourcePath } from './store'
 import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { redactForCreator } from './safeError'
@@ -335,5 +336,6 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <Root />
     <PaddleTestFab />
+    <AccountPanelHost />
   </React.StrictMode>
 )

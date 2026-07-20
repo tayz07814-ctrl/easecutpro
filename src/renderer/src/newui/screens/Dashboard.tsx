@@ -10,14 +10,13 @@ import {
   paddleConfigured,
   waitForPro,
   onPaddleEvent,
-  registerAccountPanel,
+  openAccountPanel,
   type Subscription,
   type PlanId
 } from '../../cloud/subscription'
 import BatchQueuePanel from './BatchQueuePanel'
 import BatchProcessingModal from './BatchProcessingModal'
 import SilenceSettingsModal from './SilenceSettingsModal'
-import AccountModal from './AccountModal'
 import type { DashCard } from '../mock'
 
 // Screen 1a — Project dashboard (1440). Wired to real projects via useProjects.
@@ -225,8 +224,6 @@ export default function Dashboard(): JSX.Element {
   const user = useStore((s) => s.user)
   const [sub, setSub] = useState<Subscription | null>(null)
   const [upgrading, setUpgrading] = useState(false)
-  const [accountOpen, setAccountOpen] = useState(false)
-  const [accountReason, setAccountReason] = useState<'trial' | null>(null)
   const pro = isProNow(sub)
   const showTest = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('paddletest')
 
@@ -247,15 +244,6 @@ export default function Dashboard(): JSX.Element {
       active = false
       off()
     }
-  }, [])
-
-  // Let the trial-limit handler (and anything else) open the account panel.
-  useEffect(() => {
-    registerAccountPanel((reason) => {
-      setAccountReason(reason)
-      setAccountOpen(true)
-    })
-    return () => registerAccountPanel(null)
   }, [])
 
   async function upgrade(plan: PlanId = 'starter'): Promise<void> {
@@ -315,7 +303,7 @@ export default function Dashboard(): JSX.Element {
               <div
                 onClick={() => {
                   setAcct(false)
-                  setAccountOpen(true)
+                  openAccountPanel()
                 }}
                 style={css(
                   'padding:8px 10px;font-size:13px;border-radius:8px;font-weight:600;cursor:pointer',
@@ -333,7 +321,7 @@ export default function Dashboard(): JSX.Element {
             <div
               onClick={() => {
                 setAcct(false)
-                setAccountOpen(true)
+                openAccountPanel()
               }}
               style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}
             >
@@ -394,14 +382,6 @@ export default function Dashboard(): JSX.Element {
       />
       </div>
       <BatchProcessingModal />
-      <AccountModal
-        open={accountOpen}
-        reason={accountReason}
-        onClose={() => {
-          setAccountOpen(false)
-          setAccountReason(null)
-        }}
-      />
       {/* Silence Settings opens ON TOP of the batch modal (rendered after it) —
           it edits vadSilenceSettings, which the batch pipeline reads at run time. */}
       <SilenceSettingsModal />
