@@ -78,13 +78,24 @@ interface PaddleSubscription {
 Deno.serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'method not allowed' }, 405)
 
-  const secret = Deno.env.get('PADDLE_WEBHOOK_SECRET')
-  if (!secret) return json({ error: 'webhook not configured' }, 500)
+  // Accept one or more comma-separated signing secrets, so the live and sandbox
+  // notification destinations (which share this URL) can both be verified.
+  const secrets = (Deno.env.get('PADDLE_WEBHOOK_SECRET') ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (!secrets.length) return json({ error: 'webhook not configured' }, 500)
 
   const raw = await req.text() // RAW body — required for the signature; do not parse-then-reserialize
-  if (!(await verifySignature(raw, req.headers.get('Paddle-Signature'), secret))) {
-    return json({ error: 'invalid signature' }, 401)
+  const sig = req.headers.get('Paddle-Signature')
+  let verified = false
+  for (const secret of secrets) {
+    if (await verifySignature(raw, sig, secret)) {
+      verified = true
+      break
+    }
   }
+  if (!verified) return json({ error: 'invalid signature' }, 401)
 
   let event: { event_type?: string; data?: PaddleSubscription }
   try {
