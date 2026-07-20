@@ -94,7 +94,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (Opus judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (DeepSeek-V4-flash + sharp judge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -120,9 +120,9 @@ export async function retakeAwareCutCloud(
   }
 
   // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
-  //    (ultracut-judge edge fn, OpenRouter). Production runs google/gemini-3.5-flash
-  //    on the creator's single-pass retake prompt (no first/second-pass framing);
-  //    it scans everything and returns the cut EDL.
+  //    (ultracut-judge edge fn, OpenRouter). Production runs deepseek/deepseek-v4-flash
+  //    on the 'sharp' word-list retake prompt + reasoning:medium; it scans everything
+  //    and returns the cut EDL.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -135,7 +135,9 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'google/gemini-3.5-flash'
+      model: 'deepseek/deepseek-v4-flash',
+      promptVariant: 'sharp',
+      reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
