@@ -18,14 +18,14 @@ Legend: **[you]** = needs your accounts/hands · **[claude]** = I build it ·
 The sandbox checkout works end-to-end EXCEPT the webhook → Pro flip. Until a
 paid test flips the ★ Pro badge, nothing else on this list matters.
 
-- [ ] **[you]** Paddle sandbox → Developer Tools → Notifications: destination
+- [x] **[you]** Paddle sandbox → Developer Tools → Notifications: destination
       exists, URL is `https://zlqxrdlognjvwqpmnfjq.supabase.co/functions/v1/paddle-webhook`,
       all `subscription.*` events ticked.
-- [ ] **[you]** Supabase → Edge Functions → Secrets: `PADDLE_WEBHOOK_SECRET` =
+- [x] **[you]** Supabase → Edge Functions → Secrets: `PADDLE_WEBHOOK_SECRET` =
       that destination's secret key (`pdl_ntfset_…`).
-- [ ] **[claude]** Pull edge-function logs, diagnose any 401/500, re-test until a
+- [x] **[claude]** Pull edge-function logs, diagnose any 401/500, re-test until a
       sandbox payment writes a `subscriptions` row and the badge flips to ★ Pro.
-- [ ] **[claude]** Fix the outstanding security advisory: enable RLS on
+- [x] **[claude]** Fix the outstanding security advisory: enable RLS on
       `public.delta_debug` (currently world-writable via the anon key).
 
 ## Phase 1 — Start the external clocks (this week, in parallel)
