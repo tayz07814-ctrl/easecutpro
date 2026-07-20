@@ -1,8 +1,10 @@
 // Hidden $1 live-checkout button, for verifying the real-card loop cheaply.
 // Renders a fixed floating button ONLY when ?paddletest has been visited
-// (persisted to localStorage), on the cloud build, for a signed-in user — so it
-// is app-wide (any dashboard) but never shown to normal users. ?paddletest=0
-// turns it off. Mounted once in main.tsx alongside <Root/>.
+// (persisted to localStorage), on the cloud build, for a signed-in user, AND
+// only INSIDE the app (the /earlybetatesters home/editor views) — never on the
+// public landing, legal, or auth pages, so a marketing visitor can never see a
+// "$1 test checkout" button. ?paddletest=0 turns it off. Mounted once in
+// main.tsx alongside <Root/>.
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { IS_CLOUD } from '../platform'
@@ -34,9 +36,13 @@ function testEnabled(): boolean {
 
 export default function PaddleTestFab(): JSX.Element | null {
   const user = useStore((s) => s.user)
+  const view = useStore((s) => s.view)
   const [busy, setBusy] = useState(false)
   const [sub, setSub] = useState<Subscription | null>(null)
-  const enabled = IS_CLOUD && paddleConfigured() && testEnabled()
+  // App-only: home (dashboard) or editor. The public landing / legal / auth
+  // pages must never render this, even for a signed-in founder with the flag on.
+  const inApp = view === 'home' || view === 'editor'
+  const enabled = IS_CLOUD && inApp && paddleConfigured() && testEnabled()
 
   useEffect(() => {
     if (!enabled || !user) return
