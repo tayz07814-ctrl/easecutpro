@@ -711,12 +711,30 @@ export async function ensureAudioUploaded(id: string, onProgress?: (pct: number)
   return rec.audioServerPath
 }
 
-/** Decode a media file's audio in the browser → 16 kHz mono WAV Blob (null if it can't). */
+/** Decode a media file's audio in the browser → 16 kHz mono WAV Blob (null if it can't).
+ *  Prefers a WebCodecs decode (mediabunny) and falls back to WebAudio decodeAudioData. */
 export async function extractAudioWavBlob(id: string, onProgress?: (pct: number) => void): Promise<Blob | null> {
   const rec = registry.get(id)
   if (!rec) return null
   // Very large files risk OOM on decode; let the caller fall back to full upload.
   if (rec.file.size > 800 * 1024 * 1024) return null
+  // Primary: WebCodecs via mediabunny — the platform's NATIVE audio decoder (the same
+  // one that plays the clip). iOS Safari's decodeAudioData turns some phone-recorded
+  // codecs into SILENCE, so the uploaded WAV had "no spoken audio" and Cut Lord's
+  // transcription failed on iPhone; WebCodecs decodes them correctly and opens no
+  // AudioContext (iOS caps how many can be live). Bounded by an abort timeout.
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 120000)
+  let fast: Blob | null = null
+  try {
+    fast = await extractAudioWavBlobFast(rec, ctrl.signal, onProgress)
+  } catch {
+    fast = null
+  } finally {
+    clearTimeout(timer)
+  }
+  if (fast) return fast
+  // Fallback: WebAudio decodeAudioData (desktop-reliable; iOS-flaky).
   try {
     onProgress?.(5)
     const ab = await rec.file.arrayBuffer()
@@ -731,6 +749,78 @@ export async function extractAudioWavBlob(id: string, onProgress?: (pct: number)
     // Surface the REAL decode error (Cut Lord's "Could not decode…" hides the cause).
     ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Audio decode failed (Cut Lord)', e)
     return null // unsupported container/codec, or decode OOM
+  }
+}
+
+/** WebCodecs audio → 16 kHz mono WAV via mediabunny. Decodes with the platform's
+ *  native decoder (no AudioContext), streaming a drift-free linear resample so a
+ *  long clip never holds the whole native-rate PCM at once. The leading presentation
+ *  offset becomes silence so STT word times line up with the video (matches the
+ *  decodeAudioData path). Returns null (→ decodeAudioData fallback) on any error,
+ *  abort, or undecodable track. */
+async function extractAudioWavBlobFast(
+  rec: MediaRec,
+  signal: AbortSignal,
+  onProgress?: (pct: number) => void
+): Promise<Blob | null> {
+  let input: MBInput | null = null
+  try {
+    const { Input, BlobSource, ALL_FORMATS, AudioBufferSink } = await import('mediabunny')
+    input = new Input({ source: new BlobSource(rec.file), formats: ALL_FORMATS })
+    const track = await input.getPrimaryAudioTrack()
+    if (!track || signal.aborted || !(await track.canDecode())) return null
+    const durationS =
+      (await track.getDurationFromMetadata().catch(() => null)) || (await track.computeDuration().catch(() => 0)) || 0
+    const sink = new AudioBufferSink(track)
+    const TARGET = 16000
+    const content: number[] = [] // 16 kHz mono Int16 sample values (content, no lead)
+    let srcRate = 0
+    let firstTs = -1
+    let globalIn = 0 // native samples consumed before the current chunk
+    let k = 0 // next content output index
+    for await (const wrapped of sink.buffers()) {
+      if (signal.aborted) return null
+      const ab = wrapped.buffer
+      if (!srcRate) srcRate = ab.sampleRate
+      if (firstTs < 0) firstTs = Math.max(0, wrapped.timestamp)
+      const nCh = ab.numberOfChannels
+      const n = ab.length
+      const mono = new Float32Array(n) // downmix channels → mono
+      for (let c = 0; c < nCh; c++) {
+        const ch = ab.getChannelData(c)
+        for (let j = 0; j < n; j++) mono[j] += ch[j]
+      }
+      if (nCh > 1) for (let j = 0; j < n; j++) mono[j] /= nCh
+      const ratio = srcRate / TARGET
+      const chunkEnd = globalIn + n
+      while (k * ratio < chunkEnd) {
+        const local = k * ratio - globalIn // ≥ 0 and < n by the loop bound
+        const i0 = Math.floor(local)
+        const frac = local - i0
+        const a = mono[i0]
+        const b = i0 + 1 < n ? mono[i0 + 1] : mono[i0] // clamp at chunk boundary
+        let s = a + (b - a) * frac
+        s = s < -1 ? -1 : s > 1 ? 1 : s
+        content.push(s < 0 ? s * 0x8000 : s * 0x7fff)
+        k++
+      }
+      globalIn = chunkEnd
+      if (durationS > 0) onProgress?.(Math.min(95, Math.round((globalIn / srcRate / durationS) * 95)))
+    }
+    if (!srcRate || !content.length) return null
+    const lead = Math.max(0, Math.round(Math.max(0, firstTs) * TARGET))
+    const pcm = new Int16Array(lead + content.length) // lead region stays silent (0)
+    pcm.set(content, lead)
+    onProgress?.(100)
+    return encodeWav(pcm, TARGET)
+  } catch {
+    return null
+  } finally {
+    try {
+      input?.dispose()
+    } catch {
+      /* already disposed */
+    }
   }
 }
 
