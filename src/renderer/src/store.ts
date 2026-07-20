@@ -577,7 +577,7 @@ interface AppState {
   /** Batch Video Cleaner jobs shown on the home screen (newest first). */
   batchJobs: BatchJob[]
   // ---- App shell / accounts / projects (web) ----
-  view: 'loading' | 'auth' | 'home' | 'editor'
+  view: 'loading' | 'landing' | 'auth' | 'home' | 'editor' | 'terms' | 'privacy' | 'refund'
   user: { id: string; email: string } | null
   /** id of the montage clip currently open in the single-clip editor (null = not editing a clip). */
   editingClipId: string | null
@@ -844,7 +844,7 @@ interface AppState {
   load: () => Promise<void>
 
   // app shell / accounts / projects
-  setView: (v: 'loading' | 'auth' | 'home' | 'editor') => void
+  setView: (v: 'loading' | 'landing' | 'auth' | 'home' | 'editor' | 'terms' | 'privacy' | 'refund') => void
   setUser: (u: { id: string; email: string } | null) => void
   setSaveState: (s: 'idle' | 'saving' | 'saved' | 'error') => void
   /** rename the open project (persisted by autosave). */

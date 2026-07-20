@@ -25,7 +25,9 @@ function cloudCsp(supabaseUrl: string | undefined): Plugin {
     `connect-src 'self' blob: data: ${https} ${wss} https://*.paddle.com`,
     "img-src 'self' data: blob: https://*.paddle.com",
     "media-src 'self' blob: data:",
-    "style-src 'self' 'unsafe-inline'",
+    // fonts.googleapis: landing webfont stylesheet. font-src: the font files.
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
     // wasm-unsafe-eval: onnxruntime-web (Silero VAD) compiles wasm at runtime.
     // *.paddle.com: Paddle.js is served from cdn.paddle.com.
     "script-src 'self' 'wasm-unsafe-eval' https://*.paddle.com",
