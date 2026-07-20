@@ -82,6 +82,9 @@ export default function BatchProcessingModal(): JSX.Element | null {
   const show = useStore((s) => s.showBatchModal)
   const setShow = useStore((s) => s.setShowBatchModal)
   const runBatchProcessing = useStore((s) => s.runBatchProcessing)
+  // Reuse the EXISTING Silence Settings modal (edits vadSilenceSettings, which the
+  // batch pipeline reads at run time) — no separate batch settings.
+  const openSilenceSettings = useStore((s) => s.setShowSilenceSettings)
 
   const [files, setFiles] = useState<Pick[]>([])
   const [retakeSilence, setRetakeSilence] = useState(true)
@@ -211,6 +214,24 @@ export default function BatchProcessingModal(): JSX.Element | null {
               on={retakeSilence}
               onToggle={() => setRetakeSilence((v) => !v)}
             />
+            {retakeSilence && (
+              <div style={css('display:flex;align-items:center;gap:8px;margin:-2px 2px 0')}>
+                <span style={css('font-size:11.5px;color:#9BA0AC')}>Silence trimming uses your current settings.</span>
+                <div style={css('flex:1')} />
+                <button
+                  onClick={() => openSilenceSettings(true)}
+                  style={css(
+                    "display:flex;align-items:center;gap:6px;background:none;border:1px solid rgba(255,255,255,.14);color:#C6C9D2;font-family:inherit;font-size:11.5px;font-weight:500;border-radius:8px;padding:6px 11px;cursor:pointer"
+                  )}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                  </svg>
+                  Silence settings
+                </button>
+              </div>
+            )}
             <FnCard
               title="Auto zoom"
               desc="Adds dynamic punch-in zooms on emphasis. Arriving in a future update."

@@ -82,17 +82,19 @@ function FileRow({ file, onOpen }: { file: BatchQueueFile; onOpen: () => void })
 
 function QueueCard({
   queue,
+  exporting,
   onOpenFile,
   onAutoExport,
   onDismiss
 }: {
   queue: BatchQueue
+  exporting: { current: number; total: number; percent: number } | null
   onOpenFile: (projectId: string) => void
   onAutoExport: (queueId: string) => void
   onDismiss: (queueId: string) => void
 }): JSX.Element {
   const c = counts(queue.files)
-  const canExport = c.done > 0 && c.active === 0
+  const canExport = c.done > 0 && c.active === 0 && !exporting
   const meta = (k: string, v: string): JSX.Element => (
     <div style={css('display:flex;gap:6px;font-size:11px;line-height:1.7')}>
       <span style={css('color:#7E8393;width:104px;flex:none')}>{k}</span>
@@ -131,6 +133,18 @@ function QueueCard({
           <FileRow key={i} file={f} onOpen={() => onOpenFile(f.projectId)} />
         ))}
       </div>
+      {exporting && (
+        <div style={css('margin-top:11px')}>
+          <div style={css('display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#9BA0AC;margin-bottom:5px')}>
+            <span>Exporting {exporting.current}/{exporting.total}…</span>
+            <span style={css(`font-family:${MONO};color:#B7B5F4`)}>{exporting.percent}%</span>
+          </div>
+          <div style={css('height:4px;border-radius:2px;background:#2A2D36;overflow:hidden')}>
+            <div style={css(`width:${Math.max(3, exporting.percent)}%;height:100%;background:${PURPLE};transition:width .2s`)} />
+          </div>
+          <div style={css('font-size:10px;color:#686E7B;margin-top:5px')}>Files download to this device as each one finishes.</div>
+        </div>
+      )}
       <button
         onClick={() => canExport && onAutoExport(queue.id)}
         disabled={!canExport}
@@ -141,7 +155,7 @@ function QueueCard({
               : 'background:#26272e;color:#666b78;cursor:not-allowed')
         )}
       >
-        {c.active > 0 ? 'Processing…' : 'Auto export all'}
+        {exporting ? 'Exporting…' : c.active > 0 ? 'Processing…' : 'Auto export all'}
       </button>
     </div>
   )
@@ -149,11 +163,13 @@ function QueueCard({
 
 export default function BatchQueuePanel({
   queues,
+  batchExport,
   onOpenFile,
   onAutoExport,
   onDismiss
 }: {
   queues: BatchQueue[]
+  batchExport: { queueId: string; current: number; total: number; percent: number } | null
   onOpenFile: (projectId: string) => void
   onAutoExport: (queueId: string) => void
   onDismiss: (queueId: string) => void
@@ -172,7 +188,14 @@ export default function BatchQueuePanel({
       </div>
       <div style={css('display:flex;flex-direction:column;gap:14px')}>
         {queues.map((q) => (
-          <QueueCard key={q.id} queue={q} onOpenFile={onOpenFile} onAutoExport={onAutoExport} onDismiss={onDismiss} />
+          <QueueCard
+            key={q.id}
+            queue={q}
+            exporting={batchExport && batchExport.queueId === q.id ? batchExport : null}
+            onOpenFile={onOpenFile}
+            onAutoExport={onAutoExport}
+            onDismiss={onDismiss}
+          />
         ))}
       </div>
     </div>

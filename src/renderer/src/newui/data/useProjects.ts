@@ -65,6 +65,8 @@ export interface DashboardModel {
   autoExportAll: (queueId: string) => Promise<void>
   /** remove a queue card (its projects move back into the normal grid). */
   dismissQueue: (queueId: string) => void
+  /** live "Auto export all" progress, for the exporting queue card's bar. */
+  batchExport: { queueId: string; current: number; total: number; percent: number } | null
 }
 
 export function useProjects(): DashboardModel {
@@ -82,6 +84,7 @@ export function useProjects(): DashboardModel {
   const openBatchProject = useStore((s) => s.openBatchProject)
   const autoExportAllBatch = useStore((s) => s.autoExportAllBatch)
   const dismissBatchQueue = useStore((s) => s.dismissBatchQueue)
+  const batchExport = useStore((s) => s.batchExport)
 
   const [projects, setProjects] = useState<ProjectMeta[]>([])
   const [loading, setLoading] = useState(true)
@@ -94,9 +97,18 @@ export function useProjects(): DashboardModel {
   }
   useEffect(() => {
     void refresh()
-    loadBatchQueues() // hydrate the right-hand queue column from localStorage
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  // Batch queues are keyed per-user in localStorage. Load them REACTIVELY on the
+  // user id, not just once on mount: on a page refresh the auth session resolves
+  // asynchronously, so a mount-only load can read before `user.id` is set (the
+  // 'anon' key → empty) and never retry, making the queue column vanish. Re-run
+  // whenever the id resolves/changes so the column always re-hydrates.
+  const userId = useStore((s) => s.user?.id)
+  useEffect(() => {
+    loadBatchQueues()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId])
 
   const doneCount = batchJobs.filter((j) => j.status === 'done' || j.status === 'error').length
   useEffect(() => {
@@ -187,6 +199,7 @@ export function useProjects(): DashboardModel {
     openBatchModal: () => setShowBatchModal(true),
     openBatchFile: (projectId) => openBatchProject(projectId),
     autoExportAll: (queueId) => autoExportAllBatch(queueId),
-    dismissQueue: (queueId) => dismissBatchQueue(queueId)
+    dismissQueue: (queueId) => dismissBatchQueue(queueId),
+    batchExport
   }
 }

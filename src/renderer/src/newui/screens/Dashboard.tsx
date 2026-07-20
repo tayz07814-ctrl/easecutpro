@@ -3,6 +3,7 @@ import { css } from '../css'
 import { useProjects } from '../data/useProjects'
 import BatchQueuePanel from './BatchQueuePanel'
 import BatchProcessingModal from './BatchProcessingModal'
+import SilenceSettingsModal from './SilenceSettingsModal'
 import type { DashCard } from '../mock'
 
 // Screen 1a — Project dashboard (1440). Wired to real projects via useProjects.
@@ -299,12 +300,16 @@ export default function Dashboard(): JSX.Element {
       </div>
       <BatchQueuePanel
         queues={dash.queues}
+        batchExport={dash.batchExport}
         onOpenFile={(id) => void dash.openBatchFile(id)}
         onAutoExport={(id) => void dash.autoExportAll(id)}
         onDismiss={(id) => dash.dismissQueue(id)}
       />
       </div>
       <BatchProcessingModal />
+      {/* Silence Settings opens ON TOP of the batch modal (rendered after it) —
+          it edits vadSilenceSettings, which the batch pipeline reads at run time. */}
+      <SilenceSettingsModal />
     </div>
   )
 }

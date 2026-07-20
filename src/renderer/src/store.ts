@@ -663,6 +663,9 @@ interface AppState {
    *  activity (gate its 'analyzing' state) or it shows a phantom progress bar
    *  over an already-finished project. */
   batchRunning: boolean
+  /** live progress of an "Auto export all" run — drives the queue card's export
+   *  bar. Transient (an export doesn't survive a reload); null when idle. */
+  batchExport: { queueId: string; current: number; total: number; percent: number } | null
   // ---- App shell / accounts / projects (web) ----
   view: 'loading' | 'auth' | 'home' | 'editor'
   user: { id: string; email: string } | null
@@ -1009,6 +1012,7 @@ export const useStore = create<AppState>((set, get) => ({
   batchQueues: [],
   showBatchModal: false,
   batchRunning: false,
+  batchExport: null,
   view: IS_WEB ? 'loading' : 'home',
   user: null,
   editingClipId: null,
@@ -3782,43 +3786,56 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'No finished projects to export yet' } })
       return
     }
+    // Overall percent across ALL files drives the queue card's export bar.
+    const setExp = (current: number, filePct: number): void =>
+      set({
+        batchExport: {
+          queueId,
+          current,
+          total: done.length,
+          percent: Math.max(0, Math.min(100, Math.round(((current - 1 + filePct / 100) / done.length) * 100)))
+        }
+      })
+    setExp(1, 0)
     let ok = 0
-    for (let i = 0; i < done.length; i++) {
-      const f = done[i]
-      const tag = `(${i + 1}/${done.length})`
-      set({ job: { active: true, kind: 'export', percent: 1, message: `${tag} Preparing ${f.name}…` } })
-      try {
-        const rec = await getProject(f.projectId)
-        if (!rec?.project) throw new Error('project not found')
-        const project = rec.project
-        // Pull this device's media back out of IndexedDB so the export can decode
-        // the source, then build the cut document straight from the project (the
-        // file is NOT the open editor project, so there is no shared engine).
-        if (IS_WEB) await hydrateProjectMedia(project)
-        const doc = normalizeDefaultLanes(project.timeline ?? projectToDocument(project))
-        const W = project.media?.width && project.media.width > 0 ? project.media.width : 1920
-        const H = project.media?.height && project.media.height > 0 ? project.media.height : 1080
-        const { blob, name } = await exportOnDevice(
-          project,
-          { width: W, height: H, bitrateMbps: 12 },
-          (pct, msg) => set({ job: { active: true, kind: 'export', percent: pct, message: `${tag} ${msg}` } }),
-          doc
-        )
-        const dl = `${(project.name || name).replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim() || 'export'}.mp4`
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = dl
-        document.body.appendChild(a)
-        a.click()
-        a.remove()
-        setTimeout(() => URL.revokeObjectURL(url), 8000)
-        ok++
-      } catch (e) {
-        // One bad file never blocks the rest — surface it and keep going.
-        console.error('[batch-export] failed', f.name, e)
-        set({ job: { active: true, kind: 'export', percent: 100, message: `${tag} ${f.name} failed — skipping` } })
+    try {
+      for (let i = 0; i < done.length; i++) {
+        const f = done[i]
+        setExp(i + 1, 1)
+        try {
+          const rec = await getProject(f.projectId)
+          if (!rec?.project) throw new Error('project not found')
+          const project = rec.project
+          // Pull this device's media back out of IndexedDB so the export can decode
+          // the source, then build the cut document straight from the project (the
+          // file is NOT the open editor project, so there is no shared engine).
+          if (IS_WEB) await hydrateProjectMedia(project)
+          const doc = normalizeDefaultLanes(project.timeline ?? projectToDocument(project))
+          const W = project.media?.width && project.media.width > 0 ? project.media.width : 1920
+          const H = project.media?.height && project.media.height > 0 ? project.media.height : 1080
+          const { blob, name } = await exportOnDevice(
+            project,
+            { width: W, height: H, bitrateMbps: 12 },
+            (pct) => setExp(i + 1, pct),
+            doc
+          )
+          const dl = `${(project.name || name).replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim() || 'export'}.mp4`
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = dl
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+          setTimeout(() => URL.revokeObjectURL(url), 8000)
+          ok++
+        } catch (e) {
+          // One bad file never blocks the rest — surface it and keep going.
+          console.error('[batch-export] failed', f.name, e)
+        }
       }
+    } finally {
+      set({ batchExport: null })
     }
     set({
       job: {
