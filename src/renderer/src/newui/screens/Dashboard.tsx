@@ -1,6 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { css } from '../css'
 import { useProjects } from '../data/useProjects'
+import { useStore } from '../../store'
+import { IS_CLOUD } from '../../platform'
+import {
+  openProCheckout,
+  getSubscription,
+  isProNow,
+  paddleConfigured,
+  waitForPro,
+  onPaddleEvent,
+  type Subscription,
+  type PlanId
+} from '../../cloud/subscription'
 import BatchQueuePanel from './BatchQueuePanel'
 import BatchProcessingModal from './BatchProcessingModal'
 import SilenceSettingsModal from './SilenceSettingsModal'
@@ -208,6 +220,41 @@ function ContextMenu({ onRename, onDelete }: { onRename?: () => void; onDelete?:
 export default function Dashboard(): JSX.Element {
   const dash = useProjects()
   const [acct, setAcct] = useState(false)
+  const user = useStore((s) => s.user)
+  const [sub, setSub] = useState<Subscription | null>(null)
+  const [upgrading, setUpgrading] = useState(false)
+  const pro = isProNow(sub)
+  const showTest = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('paddletest')
+
+  useEffect(() => {
+    if (!IS_CLOUD || !paddleConfigured()) return
+    let active = true
+    void getSubscription().then((s) => {
+      if (active) setSub(s)
+    })
+    const off = onPaddleEvent(async (name) => {
+      if (name === 'checkout.completed') {
+        await waitForPro()
+        if (active) setSub(await getSubscription())
+      }
+      if (active && (name === 'checkout.completed' || name === 'checkout.closed')) setUpgrading(false)
+    })
+    return () => {
+      active = false
+      off()
+    }
+  }, [])
+
+  async function upgrade(plan: PlanId = 'starter'): Promise<void> {
+    if (!user || upgrading) return
+    setUpgrading(true)
+    try {
+      await openProCheckout({ id: user.id, email: user.email }, plan)
+    } catch (e) {
+      setUpgrading(false)
+      window.alert(e instanceof Error ? e.message : 'Could not open checkout')
+    }
+  }
   const [menuId, setMenuId] = useState<string | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [renameId, setRenameId] = useState<string | null>(null)
@@ -251,6 +298,16 @@ export default function Dashboard(): JSX.Element {
         <div style={css('position:relative')} onClick={(e) => e.stopPropagation()}>
           <div style={css('position:absolute;right:40px;top:8px;width:200px;background:#1E2026;border:1px solid rgba(255,255,255,.09);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:6px;z-index:5')}>
             <div style={css('padding:8px 10px 6px;font-size:12px;color:#9BA0AC;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:4px')}>{dash.email}</div>
+            {IS_CLOUD && paddleConfigured() && (pro ? (
+              <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#F5C518;font-weight:600')}>★ Pro</div>
+            ) : (
+              <div onClick={() => void upgrade()} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#B7B5F4;font-weight:600;cursor:pointer')}>
+                {upgrading ? 'Opening…' : '★ Upgrade to Pro'}
+              </div>
+            ))}
+            {IS_CLOUD && paddleConfigured() && showTest && (
+              <div onClick={() => void upgrade('test')} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#9BA0AC;cursor:pointer')}>Test checkout ($1)</div>
+            )}
             <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}>Account settings</div>
             <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}>Keyboard shortcuts</div>
             <div onClick={() => void dash.logout()} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#9BA0AC;cursor:pointer')}>Log out</div>

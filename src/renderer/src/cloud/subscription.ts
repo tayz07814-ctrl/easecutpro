@@ -41,7 +41,9 @@ export interface Subscription {
 // sandbox, so a preview build can never take a real card. All values here are
 // PUBLIC — the client-side token and price IDs ship in the browser by design —
 // so committing them is fine; VITE_PADDLE_* env vars still override either side.
-export type PlanId = 'starter' | 'pro' | 'unlimited'
+// 'test' is a hidden $1 live price for verifying the real-card loop cheaply —
+// never surfaced to normal users (see the ?paddletest gate in the dashboard).
+export type PlanId = 'starter' | 'pro' | 'unlimited' | 'test'
 
 const IS_LIVE = typeof window !== 'undefined' && window.location.hostname === 'easecutpro.com'
 
@@ -50,7 +52,8 @@ const LIVE = {
   prices: {
     starter: 'pri_01ky0qqtjyn63656vxg90z8szy',
     pro: 'pri_01ky0qrg4c8ggv9978qf8fjxqq',
-    unlimited: 'pri_01ky0qss13e7hxbt5ckbkjha2y'
+    unlimited: 'pri_01ky0qss13e7hxbt5ckbkjha2y',
+    test: 'pri_01ky0rn6kp0xjtt8rc3nye810d'
   } as Record<PlanId, string>
 }
 const SANDBOX = {
@@ -58,7 +61,8 @@ const SANDBOX = {
   prices: {
     starter: 'pri_01kxrsngzrp7x128pz2cjsb7hw',
     pro: 'pri_01ky0mh6qpep3jp2091sp9v1wh',
-    unlimited: 'pri_01ky0mn77d161r8vyz15whyp7v'
+    unlimited: 'pri_01ky0mn77d161r8vyz15whyp7v',
+    test: 'pri_01kxrsngzrp7x128pz2cjsb7hw'
   } as Record<PlanId, string>
 }
 const DEFAULTS = IS_LIVE ? LIVE : SANDBOX
@@ -69,7 +73,8 @@ const env: PaddleEnv =
 const PRICES: Record<PlanId, string | undefined> = {
   starter: (import.meta.env.VITE_PADDLE_PRICE_STARTER as string | undefined) || DEFAULTS.prices.starter,
   pro: (import.meta.env.VITE_PADDLE_PRICE_PRO as string | undefined) || DEFAULTS.prices.pro,
-  unlimited: (import.meta.env.VITE_PADDLE_PRICE_UNLIMITED as string | undefined) || DEFAULTS.prices.unlimited
+  unlimited: (import.meta.env.VITE_PADDLE_PRICE_UNLIMITED as string | undefined) || DEFAULTS.prices.unlimited,
+  test: DEFAULTS.prices.test
 }
 
 /** True once a client token and at least one price are configured. The Upgrade
