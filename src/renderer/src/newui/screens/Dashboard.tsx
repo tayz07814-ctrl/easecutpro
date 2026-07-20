@@ -16,6 +16,7 @@ import {
 import BatchQueuePanel from './BatchQueuePanel'
 import BatchProcessingModal from './BatchProcessingModal'
 import SilenceSettingsModal from './SilenceSettingsModal'
+import AccountModal from './AccountModal'
 import type { DashCard } from '../mock'
 
 // Screen 1a — Project dashboard (1440). Wired to real projects via useProjects.
@@ -223,6 +224,7 @@ export default function Dashboard(): JSX.Element {
   const user = useStore((s) => s.user)
   const [sub, setSub] = useState<Subscription | null>(null)
   const [upgrading, setUpgrading] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
   const pro = isProNow(sub)
   const showTest = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('paddletest')
 
@@ -298,17 +300,34 @@ export default function Dashboard(): JSX.Element {
         <div style={css('position:relative')} onClick={(e) => e.stopPropagation()}>
           <div style={css('position:absolute;right:40px;top:8px;width:200px;background:#1E2026;border:1px solid rgba(255,255,255,.09);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:6px;z-index:5')}>
             <div style={css('padding:8px 10px 6px;font-size:12px;color:#9BA0AC;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:4px')}>{dash.email}</div>
-            {IS_CLOUD && paddleConfigured() && (pro ? (
-              <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#F5C518;font-weight:600')}>★ Pro</div>
-            ) : (
-              <div onClick={() => void upgrade()} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#B7B5F4;font-weight:600;cursor:pointer')}>
-                {upgrading ? 'Opening…' : '★ Upgrade to Pro'}
+            {IS_CLOUD && paddleConfigured() && (
+              <div
+                onClick={() => {
+                  setAcct(false)
+                  setAccountOpen(true)
+                }}
+                style={css(
+                  'padding:8px 10px;font-size:13px;border-radius:8px;font-weight:600;cursor:pointer',
+                  pro ? 'color:#F5C518' : 'color:#B7B5F4'
+                )}
+              >
+                {pro ? '★ Pro — manage' : '★ Upgrade to Pro'}
               </div>
-            ))}
-            {IS_CLOUD && paddleConfigured() && showTest && (
-              <div onClick={() => void upgrade('test')} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#9BA0AC;cursor:pointer')}>Test checkout ($1)</div>
             )}
-            <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}>Account settings</div>
+            {IS_CLOUD && paddleConfigured() && showTest && (
+              <div onClick={() => void upgrade('test')} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#9BA0AC;cursor:pointer')}>
+                {upgrading ? 'Opening…' : 'Test checkout ($1)'}
+              </div>
+            )}
+            <div
+              onClick={() => {
+                setAcct(false)
+                setAccountOpen(true)
+              }}
+              style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}
+            >
+              Account settings
+            </div>
             <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}>Keyboard shortcuts</div>
             <div onClick={() => void dash.logout()} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#9BA0AC;cursor:pointer')}>Log out</div>
           </div>
@@ -364,6 +383,7 @@ export default function Dashboard(): JSX.Element {
       />
       </div>
       <BatchProcessingModal />
+      <AccountModal open={accountOpen} onClose={() => setAccountOpen(false)} />
       {/* Silence Settings opens ON TOP of the batch modal (rendered after it) —
           it edits vadSilenceSettings, which the batch pipeline reads at run time. */}
       <SilenceSettingsModal />

@@ -175,3 +175,66 @@ export async function waitForPro(timeoutMs = 20000, intervalMs = 2000): Promise<
     await new Promise((r) => setTimeout(r, intervalMs))
   }
 }
+
+// --- Plans & billing (the account panel + upgrade hub) ---
+export interface PlanMeta {
+  id: PlanId
+  name: string
+  price: string
+  tagline: string
+  features: string[]
+}
+export const PLANS: PlanMeta[] = [
+  {
+    id: 'starter',
+    name: 'Starter',
+    price: '$29',
+    tagline: 'For getting started',
+    features: ['10 videos per day', 'AI retake detection', 'Smart silence cutter', 'Manual editor', 'Batch processing']
+  },
+  {
+    id: 'pro',
+    name: 'Pro',
+    price: '$49',
+    tagline: 'For working creators',
+    features: ['20 videos per day', 'Everything in Starter', 'Priority processing']
+  },
+  {
+    id: 'unlimited',
+    name: 'Unlimited',
+    price: '$79',
+    tagline: 'For teams & agencies',
+    features: ['Unlimited videos*', 'Everything in Pro', 'Early access features']
+  }
+]
+
+// Any (live or sandbox) price id → its plan, so we can show the active plan name.
+const PRICE_TO_PLAN: Record<string, PlanId> = {}
+for (const p of ['starter', 'pro', 'unlimited'] as PlanId[]) {
+  PRICE_TO_PLAN[LIVE.prices[p]] = p
+  PRICE_TO_PLAN[SANDBOX.prices[p]] = p
+}
+
+export interface Billing {
+  isPro: boolean
+  status: string
+  plan: PlanId | null
+  planName: string
+  runsUsed: number
+  runsLimit: number
+}
+
+/** Everything the account panel needs — plan + free-trial usage — in one call. */
+export async function getBilling(): Promise<Billing> {
+  const sb = getSupabase()
+  const [subRes, usageRes] = await Promise.all([
+    sb.from('subscriptions').select('status, price_id, current_period_end, cancel_at_period_end').maybeSingle(),
+    sb.from('usage').select('ai_runs').maybeSingle()
+  ])
+  const sub = (subRes.data ?? null) as Subscription | null
+  const isPro = isProNow(sub)
+  const plan = sub?.price_id ? PRICE_TO_PLAN[sub.price_id] ?? null : null
+  const planName = plan ? PLANS.find((p) => p.id === plan)?.name ?? 'Pro' : isPro ? 'Pro' : 'Free trial'
+  const runsUsed = (usageRes.data?.ai_runs as number | undefined) ?? 0
+  return { isPro, status: sub?.status ?? 'none', plan, planName, runsUsed, runsLimit: 5 }
+}
