@@ -109,12 +109,14 @@ function deepseekEffort(v: unknown): string | undefined {
   return undefined
 }
 
-// Provider routing. Default: highest-throughput provider (fastest tokens).
+// Provider routing. DEFAULT: none - send NO provider field so OpenRouter routes per
+// the account's OWN enabled providers (the user changes providers directly on
+// OpenRouter, so the code must not pin or sort them). Opt into a sort ONLY via
+// ULTRACUT_PROVIDER_SORT=throughput|latency|price; anything else sends nothing.
 function providerConfig(): Record<string, unknown> | undefined {
   const sort = Deno.env.get('ULTRACUT_PROVIDER_SORT')?.toLowerCase()
-  if (sort === 'off') return undefined
   if (sort === 'throughput' || sort === 'latency' || sort === 'price') return { sort }
-  return { sort: 'throughput' }
+  return undefined
 }
 
 function admin() {
@@ -645,7 +647,7 @@ async function callModel(
     if (eff) body.reasoning_effort = eff
     body.max_tokens = 8000
   } else {
-    // OpenRouter: nested reasoning object + provider routing.
+    // OpenRouter: nested reasoning object + optional provider routing.
     body.reasoning = reasoningOverride(reasoningIntent) ?? reasoningConfig()
     const provider = providerConfig()
     if (provider) body.provider = provider

@@ -218,7 +218,8 @@ export async function retakeAwareCutCloud(
  *  (RetakeAwareResult) is identical, so the review-first contract, the
  *  transcript/highlight UX and Execute all reuse the exact beta path. Cloud-only. */
 // 0.01 Ultracut judge. DeepSeek-V4-flash via OPENROUTER (the 'deepseek/' slug routes
-// through OpenRouter — the user's OpenRouter key/credit, provider Fireworks) WITH
+// through OpenRouter on the user's OpenRouter key/credit; the edge fn sends NO
+// provider preference, so routing follows the account's own enabled providers) WITH
 // reasoning:'medium'. Reverted from the DeepSeek first-party route (api.deepseek.com,
 // bare id) per request: that account ran out of balance, so OpenRouter v4-flash is
 // the single model for this button now. Paired with promptVariant:'sharp' (word-list
