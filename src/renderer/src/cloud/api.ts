@@ -17,6 +17,7 @@ import {
   requestPersistentStorage
 } from '../webmedia'
 import { retakeAwareCutCloud, ultracutCutCloud, transcribeCloud } from './retakeEngine'
+import { premiumCutCloud } from './premiumEngine'
 import { cutCutProCloud } from './procutEngine'
 import { detectSilenceCloud } from './vad'
 import { cloudListProjects, cloudCreateProject, cloudGetProject, cloudSaveProject, cloudDeleteProject } from './projects'
@@ -85,6 +86,7 @@ function needLocal(path: string): string {
 
 const cloudApi: Window['api'] & {
   ultracutCut: Window['api']['retakeAwareCut']
+  premiumCut: Window['api']['retakeAwareCut']
 } = {
   // No PC binaries in the cloud — feature gating happens via IS_CLOUD in the
   // UI; report everything unavailable for any legacy checks.
@@ -172,6 +174,13 @@ const cloudApi: Window['api'] & {
   // method so the Ultracut button routes independently. Cloud-only (easecut0.01).
   ultracutCut: (path, _silenceSettings, vadSilenceSettings) =>
     ultracutCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
+
+  // Premium Cut — a SEPARATE experimental engine (premium-cut, Gemini 3.5 Flash
+  // multimodal). Gemini LISTENS to the raw audio and returns the transcript + all
+  // cuts itself (no STT, no VAD). Its own method so the Premium button routes
+  // independently. Cloud-only (easecut0.01).
+  premiumCut: (path, _silenceSettings, vadSilenceSettings) =>
+    premiumCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
 
   openaiStatus: async () => ({ available: false }),
   whisperModels: async () => [],

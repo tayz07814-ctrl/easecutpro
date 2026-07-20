@@ -740,6 +740,11 @@ interface AppState {
    *  an OpenRouter test model (ultracut-judge, GLM 5.2). Shares nothing with Retake
    *  Beta's Opus judge — its own edge fn — so the two can be A/B'd. Cloud-only. */
   runUltracut: () => Promise<void>
+  /** Premium Cut (Beta): a SEPARATE experimental engine — Gemini 3.5 Flash LISTENS
+   *  to the raw audio (premium-cut edge fn) and returns the verbatim transcript +
+   *  ALL cuts (retakes + silence) itself; no STT, no ONNX VAD. Same review-first
+   *  contract (highlight + stage, apply on Execute cuts). Cloud-only. */
+  runPremiumCut: () => Promise<void>
   /** apply everything the user reviewed: delete selected words + cut enabled staged
    *  silences. Async because the VAD-off switch defers the silence pass to here. */
   executeCuts: () => Promise<void>
@@ -2278,6 +2283,77 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 0,
           message: IS_CLOUD ? 'Ultracut couldn’t finish — please try again.' : `Ultracut failed: ${(e as Error).message}`
+        }
+      })
+    }
+  },
+
+  runPremiumCut: async () => {
+    if (!get().requireServer('Premium Cut')) return
+    // Premium Cut (Beta) — a SEPARATE experimental engine (window.api.premiumCut →
+    // premium-cut edge fn, Gemini 3.5 Flash multimodal). Gemini LISTENS to the raw
+    // audio and returns the transcript + ALL cuts (retakes + silence) itself — no
+    // STT, no ONNX VAD. Same review-first contract (highlight + stage, Execute cuts).
+    const runPremium = (window.api as { premiumCut?: typeof window.api.retakeAwareCut }).premiumCut
+    if (!runPremium) {
+      // Premium's judge only exists in the cloud build. Off-cloud (desktop /
+      // self-host) fall back to Retake β rather than dead-ending with an error.
+      await get().runRetakeCutBeta()
+      return
+    }
+    const stored = get().project
+    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+    const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
+    if (!hasBase) {
+      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
+      return
+    }
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Premium Cut…' } })
+    try {
+      let path: string
+      if (isMultiBase(p0)) {
+        const combined = await window.api.combineClips(p0.baseSequence!, true)
+        path = combined.path
+      } else {
+        path = p0.media!.path
+      }
+      const res = await runPremium(path, get().retakeBetaSilenceSettings, get().vadSilenceSettings)
+      const cur = get().project
+      // DOC-NATIVE BASE (new UI): persist the folded base so Execute cuts reach the
+      // Main lane — identical rationale to runRetakeCutBeta (see the note there).
+      const docBase = !cur.media && !!p0.baseSequence?.length
+      const nextProject: typeof cur = docBase
+        ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript: res.transcript }
+        : { ...cur, transcript: res.transcript }
+      const flagIds = res.deleteWordIds
+      // Premium Cut IS the silence detector (Gemini, not the ONNX VAD Smart Silence
+      // Cutter), so its silence cuts ALWAYS stage — they aren't gated by that toggle.
+      const silenceRegions = res.silenceRegions ?? []
+      set({
+        project: nextProject,
+        selectedWordIds: new Set(flagIds),
+        stagedSilences: silenceRegions,
+        stagedSilenceSel: new Set(silenceRegions.map((r) => r.id)),
+        retakeSilenceStaged: true
+      })
+      set({
+        job: {
+          active: false,
+          percent: 100,
+          message:
+            `${res.summary} — ${flagIds.length} word(s) highlighted` +
+            (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
+            `, review then Execute cuts` +
+            (!IS_CLOUD && res.warnings.length ? ` · ${res.warnings.length} warning(s)` : '')
+        }
+      })
+    } catch (e) {
+      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Premium) failed', e)
+      set({
+        job: {
+          active: false,
+          percent: 0,
+          message: IS_CLOUD ? 'Premium Cut couldn’t finish — please try again.' : `Premium Cut failed: ${(e as Error).message}`
         }
       })
     }

@@ -39,6 +39,8 @@ export interface RetakeModel {
   find: () => void
   /** run Ultracut Beta — a SEPARATE OpenRouter test engine (GLM 5.2), for A/B. */
   findUltracut: () => void
+  /** run Premium Cut — Gemini 3.5 Flash LISTENS to the audio (transcript + cuts). */
+  findPremium: () => void
   execute: () => void
   /** cut the currently-selected words (executed-state "Cut selected"). */
   cutSelected: () => void
@@ -72,6 +74,8 @@ export function useRetake(): RetakeModel {
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
   // Ultracut Beta — a separate OpenRouter test engine, wired to its own button.
   const runUltracut = useStore((s) => s.runUltracut)
+  // Premium Cut — Gemini 3.5 Flash multimodal engine, wired to its own button.
+  const runPremiumCut = useStore((s) => s.runPremiumCut)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
   const deleteSelected = useStore((s) => s.deleteSelected)
@@ -158,6 +162,7 @@ export function useRetake(): RetakeModel {
     smartSilence,
     find: () => void runRetakeCutBeta(),
     findUltracut: () => void runUltracut(),
+    findPremium: () => void runPremiumCut(),
     execute: () => void executeCuts(),
     /** cut the currently-selected words (used to add cuts in the executed review). */
     cutSelected: () => deleteSelected(),

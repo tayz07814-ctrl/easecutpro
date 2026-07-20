@@ -117,3 +117,16 @@ export interface ProcutJudgeRes {
   raw: string | null
   judge: string
 }
+
+// ---- premium-cut edge function (Premium Cut: Gemini 3.5 Flash, multimodal) ----
+// The browser uploads the extracted 16 kHz mono WAV to the stt-audio bucket (the
+// SAME sign-upload flow STT uses) and passes the object path. The function reads the
+// WAV server-side, base64s it, and sends it as ONE input_audio message to Gemini 3.5
+// Flash (OpenRouter). Gemini LISTENS — it transcribes AND proposes cuts (retakes +
+// silence) in a single pass; no STT, no VAD. The response reuses ProcutJudgeRes:
+// `raw` is Gemini's JSON string ({transcript, cuts, clean_transcript}), parsed
+// client-side; raw:null on any failure so the job always completes.
+export interface PremiumCutReq {
+  /** stt-audio bucket object path of the uploaded 16 kHz mono WAV. */
+  path: string
+}

@@ -6,7 +6,7 @@
 // the other engines use: flagged word ids + staged spans, applied only when
 // the user presses "Execute cuts".
 
-export type VerbatimProvider = 'assemblyai' | 'deepgram' | 'existing' | 'mock'
+export type VerbatimProvider = 'assemblyai' | 'deepgram' | 'existing' | 'mock' | 'gemini'
 
 export interface VerbatimWord {
   word: string
