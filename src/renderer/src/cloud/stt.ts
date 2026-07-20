@@ -21,6 +21,7 @@ import type {
   SttDeepgramRes
 } from '@shared/cloud'
 import { getSupabase, invokeEdge } from './supabase'
+import { openAccountPanel } from './subscription'
 
 type ProgressFn = (pct: number, msg?: string) => void
 
@@ -130,7 +131,19 @@ export async function transcribeVerbatimCloud(
   }
   // ONE upload feeds both providers (they transcribe from a signed download URL).
   onProgress?.(8, 'Preparing your video…')
-  const { path, token } = await sttEdge<SttSignUploadRes>({ action: 'sign-upload', ext: audio.ext })
+  let signed: SttSignUploadRes
+  try {
+    signed = await sttEdge<SttSignUploadRes>({ action: 'sign-upload', ext: audio.ext })
+  } catch (e) {
+    // Free-trial limit hit (server-enforced in the stt fn): open the upgrade
+    // panel and stop with a friendly message.
+    if ((e as Error).message === 'trial_limit') {
+      openAccountPanel('trial')
+      throw new Error('You’ve used all your free AI runs — upgrade to keep editing.')
+    }
+    throw e
+  }
+  const { path, token } = signed
   try {
     const up = await getSupabase().storage.from('stt-audio').uploadToSignedUrl(path, token, audio.blob)
     if (up.error) throw new Error(`Audio upload failed: ${up.error.message}`)

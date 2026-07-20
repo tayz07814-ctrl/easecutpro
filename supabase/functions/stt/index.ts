@@ -11,7 +11,21 @@
 // Secrets (supabase secrets set): ASSEMBLYAI_API_KEY, DEEPGRAM_API_KEY.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { corsHeaders, json, preflight } from '../_shared/http.ts'
+
+// Inlined from _shared/http.ts so this function deploys as a single file.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
+}
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  })
+}
+function preflight(req: Request): Response | null {
+  return req.method === 'OPTIONS' ? new Response('ok', { headers: corsHeaders }) : null
+}
 
 const BUCKET = 'stt-audio'
 
@@ -52,6 +66,13 @@ Deno.serve(async (req) => {
         })
 
       case 'sign-upload': {
+        // Free-trial gate: called once per transcription job, so count it against
+        // the user's AI-run allowance (Pro = unlimited). Fail-OPEN on an
+        // unexpected usage error so a metering hiccup never blocks the product.
+        const gate = await service.rpc('consume_ai_run', { p_user: user.id, p_increment: true })
+        const g = gate.data as { allowed?: boolean } | null
+        if (!gate.error && g && g.allowed === false) return json({ error: 'trial_limit' }, 402)
+
         const ext = (String(body.ext || 'wav').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'wav').toLowerCase()
         const path = `${user.id}/${crypto.randomUUID()}.${ext}`
         const { data, error } = await service.storage.from(BUCKET).createSignedUploadUrl(path)

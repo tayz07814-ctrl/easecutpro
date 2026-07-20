@@ -238,3 +238,14 @@ export async function getBilling(): Promise<Billing> {
   const runsUsed = (usageRes.data?.ai_runs as number | undefined) ?? 0
   return { isPro, status: sub?.status ?? 'none', plan, planName, runsUsed, runsLimit: 5 }
 }
+
+// Lets any code open the account/upgrade panel (e.g. when the free trial runs
+// out) without threading UI state through the app. The dashboard registers its
+// opener while mounted; callers use openAccountPanel().
+let accountOpener: ((reason: 'trial' | null) => void) | null = null
+export function registerAccountPanel(fn: ((reason: 'trial' | null) => void) | null): void {
+  accountOpener = fn
+}
+export function openAccountPanel(reason: 'trial' | null = null): void {
+  accountOpener?.(reason)
+}

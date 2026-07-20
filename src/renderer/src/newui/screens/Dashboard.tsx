@@ -10,6 +10,7 @@ import {
   paddleConfigured,
   waitForPro,
   onPaddleEvent,
+  registerAccountPanel,
   type Subscription,
   type PlanId
 } from '../../cloud/subscription'
@@ -225,6 +226,7 @@ export default function Dashboard(): JSX.Element {
   const [sub, setSub] = useState<Subscription | null>(null)
   const [upgrading, setUpgrading] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
+  const [accountReason, setAccountReason] = useState<'trial' | null>(null)
   const pro = isProNow(sub)
   const showTest = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('paddletest')
 
@@ -245,6 +247,15 @@ export default function Dashboard(): JSX.Element {
       active = false
       off()
     }
+  }, [])
+
+  // Let the trial-limit handler (and anything else) open the account panel.
+  useEffect(() => {
+    registerAccountPanel((reason) => {
+      setAccountReason(reason)
+      setAccountOpen(true)
+    })
+    return () => registerAccountPanel(null)
   }, [])
 
   async function upgrade(plan: PlanId = 'starter'): Promise<void> {
@@ -383,7 +394,14 @@ export default function Dashboard(): JSX.Element {
       />
       </div>
       <BatchProcessingModal />
-      <AccountModal open={accountOpen} onClose={() => setAccountOpen(false)} />
+      <AccountModal
+        open={accountOpen}
+        reason={accountReason}
+        onClose={() => {
+          setAccountOpen(false)
+          setAccountReason(null)
+        }}
+      />
       {/* Silence Settings opens ON TOP of the batch modal (rendered after it) —
           it edits vadSilenceSettings, which the batch pipeline reads at run time. */}
       <SilenceSettingsModal />
