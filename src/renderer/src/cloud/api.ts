@@ -28,35 +28,49 @@ function emit(kind: ProgressEvent['kind'], percent: number, message?: string, jo
   for (const cb of progressListeners) cb({ jobId, kind, percent, message })
 }
 
-function pickFile(accept: string): Promise<File | null> {
+/** Open a native file picker and resolve with the chosen files (empty on cancel).
+ *  The <input> is appended to the DOM before `.click()` — iOS Safari does NOT
+ *  fire `change` on a DETACHED input, so on mobile the picker's "Done"/"Add" tap
+ *  silently did nothing. We insert it off-screen, click, then remove it once the
+ *  pick settles. The `cancel` event (modern browsers) cleans up on dismissal;
+ *  where it's unsupported the node simply lingers off-screen until the next pick. */
+function openPicker(configure: (input: HTMLInputElement) => void): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = accept
-    input.onchange = () => resolve(input.files?.[0] ?? null)
+    configure(input)
+    input.style.cssText = 'position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0'
+    let settled = false
+    const finish = (files: File[]): void => {
+      if (settled) return
+      settled = true
+      input.remove()
+      resolve(files)
+    }
+    input.onchange = () => finish(input.files ? Array.from(input.files) : [])
+    input.oncancel = () => finish([])
+    document.body.appendChild(input)
     input.click()
   })
 }
 
+function pickFile(accept: string): Promise<File | null> {
+  return openPicker((i) => {
+    i.accept = accept
+  }).then((files) => files[0] ?? null)
+}
+
 function pickFiles(accept: string): Promise<File[]> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = accept
-    input.multiple = true
-    input.onchange = () => resolve(input.files ? Array.from(input.files) : [])
-    input.click()
+  return openPicker((i) => {
+    i.accept = accept
+    i.multiple = true
   })
 }
 
 function pickFolder(): Promise<File[]> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.multiple = true
-    ;(input as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true
-    input.onchange = () => resolve(input.files ? Array.from(input.files) : [])
-    input.click()
+  return openPicker((i) => {
+    i.multiple = true
+    ;(i as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true
   })
 }
 

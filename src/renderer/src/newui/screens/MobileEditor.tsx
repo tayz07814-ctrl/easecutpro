@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { css } from '../css'
 import { useStore } from '../../store'
@@ -23,6 +23,11 @@ import { primePlayback } from '../../clock'
 const HAIR = 'rgba(255,255,255,.06)'
 const ZOOM_MIN = 4
 const ZOOM_MAX = 2000
+// Stage occupies a FIXED share of the screen — no longer drag-resizable. A fixed
+// height keeps the layout from drifting (a flex:1 stage fights the preview's
+// internal min-heights and jumps as media/waveform load) and leaves the timeline
+// clips section as the one place that scrolls.
+const STAGE_VH = 46
 
 type SheetKind = 'cut' | 'media' | 'text' | null
 
@@ -115,40 +120,6 @@ export default function MobileEditor(): JSX.Element {
   const [sheet, setSheet] = useState<SheetKind>(null)
   const hasBase = !!media || ((useStore.getState().project.baseSequence?.length ?? 0) > 0)
 
-  // Stage height (vh): fixed by default (~46% of the screen) and user-adjustable
-  // by dragging the grip under the canvas. A FIXED height is what keeps the
-  // timeline from drifting — a flex:1 stage fights the preview's internal
-  // min-heights (.video-wrap/.stage) and jumps as media/waveform load.
-  const [stageVh, setStageVh] = useState<number>(() => {
-    const v = Number(localStorage.getItem('ec.nu.mStageVh'))
-    return v >= 22 && v <= 58 ? v : 46
-  })
-  useEffect(() => {
-    localStorage.setItem('ec.nu.mStageVh', String(stageVh))
-  }, [stageVh])
-  // Consume the pointer-down (preventDefault + stopPropagation) so iOS doesn't
-  // hijack the touch as a page scroll before the drag starts; window listeners
-  // then drive the move. Pointer events only (no touch+mouse) — avoids the iOS
-  // double-drag from simulated mouse events.
-  function startStageDrag(e: ReactPointerEvent<HTMLDivElement>): void {
-    e.preventDefault()
-    e.stopPropagation()
-    const vh0 = stageVh
-    const y0 = e.clientY
-    const onMove = (ev: PointerEvent): void => {
-      const dvh = ((ev.clientY - y0) / window.innerHeight) * 100
-      setStageVh(Math.min(58, Math.max(22, vh0 + dvh)))
-    }
-    const onUp = (): void => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
-  }
-
   return (
     <div style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-m-editor">
       {/* Top bar */}
@@ -160,13 +131,8 @@ export default function MobileEditor(): JSX.Element {
       </div>
 
       {/* Stage — FIXED height; production preview (its own transport is hidden via CSS) */}
-      <div className="ec-legacy ec-m-stage" style={css(`flex:none;height:${stageVh}vh;min-height:0;display:flex;flex-direction:column;background:#000`)}>
+      <div className="ec-legacy ec-m-stage" style={css(`flex:none;height:${STAGE_VH}vh;min-height:0;display:flex;flex-direction:column;background:#000`)}>
         <VideoPreview />
-      </div>
-
-      {/* Stage resize grip */}
-      <div onPointerDown={startStageDrag} style={css('flex:none;height:20px;display:grid;place-items:center;cursor:row-resize;touch-action:none')}>
-        <span style={css('width:44px;height:4px;border-radius:2px;background:rgba(255,255,255,.18)')} />
       </div>
 
       {/* Transport */}
