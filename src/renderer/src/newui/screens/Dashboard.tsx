@@ -4,15 +4,13 @@ import { useProjects } from '../data/useProjects'
 import { useStore } from '../../store'
 import { IS_CLOUD } from '../../platform'
 import {
-  openProCheckout,
   getSubscription,
   isProNow,
   paddleConfigured,
   waitForPro,
   onPaddleEvent,
   openAccountPanel,
-  type Subscription,
-  type PlanId
+  type Subscription
 } from '../../cloud/subscription'
 import BatchQueuePanel from './BatchQueuePanel'
 import BatchProcessingModal from './BatchProcessingModal'
@@ -223,9 +221,7 @@ export default function Dashboard(): JSX.Element {
   const [acct, setAcct] = useState(false)
   const user = useStore((s) => s.user)
   const [sub, setSub] = useState<Subscription | null>(null)
-  const [upgrading, setUpgrading] = useState(false)
   const pro = isProNow(sub)
-  const showTest = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('paddletest')
 
   useEffect(() => {
     if (!IS_CLOUD || !paddleConfigured()) return
@@ -238,7 +234,6 @@ export default function Dashboard(): JSX.Element {
         await waitForPro()
         if (active) setSub(await getSubscription())
       }
-      if (active && (name === 'checkout.completed' || name === 'checkout.closed')) setUpgrading(false)
     })
     return () => {
       active = false
@@ -246,16 +241,6 @@ export default function Dashboard(): JSX.Element {
     }
   }, [])
 
-  async function upgrade(plan: PlanId = 'starter'): Promise<void> {
-    if (!user || upgrading) return
-    setUpgrading(true)
-    try {
-      await openProCheckout({ id: user.id, email: user.email }, plan)
-    } catch (e) {
-      setUpgrading(false)
-      window.alert(e instanceof Error ? e.message : 'Could not open checkout')
-    }
-  }
   const [menuId, setMenuId] = useState<string | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [renameId, setRenameId] = useState<string | null>(null)
@@ -311,11 +296,6 @@ export default function Dashboard(): JSX.Element {
                 )}
               >
                 {pro ? '★ Pro — manage' : '★ Upgrade to Pro'}
-              </div>
-            )}
-            {IS_CLOUD && paddleConfigured() && showTest && (
-              <div onClick={() => void upgrade('test')} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#9BA0AC;cursor:pointer')}>
-                {upgrading ? 'Opening…' : 'Test checkout ($1)'}
               </div>
             )}
             <div
