@@ -217,17 +217,13 @@ export async function retakeAwareCutCloud(
  *  debug stream — so the two can be A/B'd in-app. The result shape
  *  (RetakeAwareResult) is identical, so the review-first contract, the
  *  transcript/highlight UX and Execute all reuse the exact beta path. Cloud-only. */
-// 0.01 Ultracut judge. DeepSeek-V4-flash (FIRST-PARTY api.deepseek.com) WITH
-// reasoning. On real logged transcripts it matches GLM-5.2+reasoning cut quality
-// (whole earlier takes removed, no splices, the final take in a restart-pile kept),
-// and its reasoning pass is what fixes the retake BOUNDARIES a non-reasoning model
-// gets wrong. Routed first-party (bare id, no 'deepseek/' prefix) so it hits
-// DeepSeek's CONCURRENCY limit (~2500 in-flight), NOT OpenRouter's shared Fireworks
-// rate pool that was 429-ing ~60% of runs. ~$0.001/run with DeepSeek's automatic
-// prompt caching. Paired with promptVariant:'sharp' (word-list SYSTEM + Rules A/B).
-// Scoped to the Ultracut Beta button only (production = gemini); the edge fn falls
-// back to deepseek-chat on OpenRouter if DeepSeek is ever unreachable.
-const ULTRACUT_MODEL = 'deepseek-v4-flash'
+// 0.01 Ultracut judge. DeepSeek-V4-flash via OPENROUTER (the 'deepseek/' slug routes
+// through OpenRouter — the user's OpenRouter key/credit, provider Fireworks) WITH
+// reasoning:'medium'. Reverted from the DeepSeek first-party route (api.deepseek.com,
+// bare id) per request: that account ran out of balance, so OpenRouter v4-flash is
+// the single model for this button now. Paired with promptVariant:'sharp' (word-list
+// SYSTEM + Rules A/B). Scoped to the Ultracut Beta button only.
+const ULTRACUT_MODEL = 'deepseek/deepseek-v4-flash'
 export async function ultracutCutCloud(
   mediaId: string,
   onProgress?: (pct: number, msg?: string) => void,
