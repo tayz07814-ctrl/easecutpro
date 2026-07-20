@@ -58,9 +58,10 @@ import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSetti
 import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
-import { createProject, saveProject, serializeProject } from './projectsApi'
+import { createProject, saveProject, serializeProject, serializeProjectLite, getProject } from './projectsApi'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideo } from './batchClean'
+import { retakeCleanVideo } from './batchProcess'
 import { getFile } from './webmedia'
 
 function uid(): string {
@@ -514,6 +515,82 @@ export interface BatchJob {
   error?: string
 }
 
+/** Which auto-clean functions a batch run applies. Retake + silence are live;
+ *  auto-zoom and captions are declared here so their toggles persist, but they
+ *  are placeholders (future updates) and currently no-ops in the pipeline. */
+export interface BatchToggles {
+  retakeSilence: boolean
+  autoZoom: boolean
+  captions: boolean
+}
+
+/** One file inside a batch queue — its own auto-created project + live status. */
+export interface BatchQueueFile {
+  projectId: string
+  name: string
+  status: 'queued' | 'processing' | 'done' | 'error'
+  step: string
+  error?: string
+}
+
+/** A "Batch processing queue" — a group of files submitted together, each turned
+ *  into its OWN project (separate from the normal project grid) and cleaned one
+ *  by one. Persisted per-user to localStorage so the right-hand queue column
+ *  survives reloads (the projects themselves live in Supabase). */
+export interface BatchQueue {
+  id: string
+  /** display label, e.g. "Batch processing queue 1". */
+  label: string
+  /** epoch ms the queue was created (drives the date + time lines). */
+  createdAt: number
+  toggles: BatchToggles
+  files: BatchQueueFile[]
+}
+
+// Batch queues persist per-user to localStorage: the projects live in Supabase,
+// but the queue grouping (labels, toggles, per-file status) is a client-side
+// view we want to survive reloads. Keyed by user id so switching accounts on one
+// device never crosses queues. Best-effort — quota/disabled storage degrades to
+// an in-memory-only column (still works for the session).
+function batchQueuesKey(userId: string | undefined): string {
+  return `ec.batchQueues.${userId || 'anon'}`
+}
+function loadBatchQueuesLS(userId: string | undefined): BatchQueue[] {
+  try {
+    const raw = localStorage.getItem(batchQueuesKey(userId))
+    const parsed = raw ? (JSON.parse(raw) as BatchQueue[]) : []
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+function saveBatchQueuesLS(userId: string | undefined, queues: BatchQueue[]): void {
+  try {
+    localStorage.setItem(batchQueuesKey(userId), JSON.stringify(queues))
+  } catch {
+    /* storage full / disabled — the column stays in memory for this session */
+  }
+}
+/** Monotonic per-user "Batch processing queue N" counter. Persisted so dismissing
+ *  a queue never recycles a number the user already saw (queue.length would). */
+function nextBatchSeq(userId: string | undefined): number {
+  const key = `ec.batchQueueSeq.${userId || 'anon'}`
+  let n = 1
+  try {
+    const raw = localStorage.getItem(key)
+    const prev = raw ? parseInt(raw, 10) : 0
+    n = Number.isFinite(prev) && prev >= 0 ? prev + 1 : 1
+  } catch {
+    /* storage disabled — fall back to 1 (labels may repeat, harmless) */
+  }
+  try {
+    localStorage.setItem(key, String(n))
+  } catch {
+    /* ignore */
+  }
+  return n
+}
+
 /** Seam blend ("overlap") at cut joins — a short incoming-only fade that de-clicks
  *  the splice. A global render setting applied at export + preview. */
 export interface SeamFadeSettings {
@@ -576,6 +653,19 @@ interface AppState {
   showExportModal: boolean
   /** Batch Video Cleaner jobs shown on the home screen (newest first). */
   batchJobs: BatchJob[]
+  /** Batch Processing queues (new UI): each is a group of files auto-cleaned into
+   *  their own projects, shown in the dashboard's right-hand queue column. */
+  batchQueues: BatchQueue[]
+  /** whether the "Batch processing" setup modal is open (new UI dashboard). */
+  showBatchModal: boolean
+  /** true while a batch run is processing files. The headless retake pipeline
+   *  emits into the SHARED `job`, so the editor's Retake panel must ignore that
+   *  activity (gate its 'analyzing' state) or it shows a phantom progress bar
+   *  over an already-finished project. */
+  batchRunning: boolean
+  /** live progress of an "Auto export all" run — drives the queue card's export
+   *  bar. Transient (an export doesn't survive a reload); null when idle. */
+  batchExport: { queueId: string; current: number; total: number; percent: number } | null
   // ---- App shell / accounts / projects (web) ----
   view: 'loading' | 'landing' | 'auth' | 'home' | 'editor' | 'terms' | 'privacy' | 'refund'
   user: { id: string; email: string } | null
@@ -719,9 +809,6 @@ interface AppState {
   /** Retake-Aware Cut Beta: separate experimental engine (verbatim provider +
    *  whole-take retake removal + filler triage). Review-only, like the others. */
   runRetakeCutBeta: () => Promise<void>
-  /** Retake δ (Delta): same engine + review contract as Retake β, but the cut
-   *  judge is the creator's own model on the HF router (hf-judge). Cloud-only. */
-  runRetakeCutDelta: () => Promise<void>
   /** apply everything the user reviewed: delete selected words + cut enabled staged
    *  silences. Async because the VAD-off switch defers the silence pass to here. */
   executeCuts: () => Promise<void>
@@ -859,6 +946,19 @@ interface AppState {
   runBatchClean: (items: { path: string; name: string }[]) => Promise<void>
   /** Clear finished batch-clean jobs from the home screen. */
   dismissBatchJobs: () => void
+  // ---- Batch Processing (new UI): retake+silence queues + auto export ----
+  setShowBatchModal: (v: boolean) => void
+  /** Load persisted batch queues for the signed-in user (call on dashboard mount). */
+  loadBatchQueues: () => void
+  /** Run one batch: create a project per file, then auto retake+silence each,
+   *  one by one, into its own project. Files are separate from normal projects. */
+  runBatchProcessing: (items: { path: string; name: string }[], toggles: BatchToggles) => Promise<void>
+  /** Export every finished project in a queue to this device, one after another. */
+  autoExportAllBatch: (queueId: string) => Promise<void>
+  /** Open one batch project in the editor (loads it from the store). */
+  openBatchProject: (projectId: string) => Promise<void>
+  /** Remove a queue from the column (does not delete its projects). */
+  dismissBatchQueue: (queueId: string) => void
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -909,6 +1009,10 @@ export const useStore = create<AppState>((set, get) => ({
   showSettings: false,
   showExportModal: false,
   batchJobs: [],
+  batchQueues: [],
+  showBatchModal: false,
+  batchRunning: false,
+  batchExport: null,
   view: IS_WEB ? 'loading' : 'home',
   user: null,
   editingClipId: null,
@@ -2178,78 +2282,6 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 0,
           message: IS_CLOUD ? 'Retake β couldn’t finish — please try again.' : `Retake β failed: ${(e as Error).message}`
-        }
-      })
-    }
-  },
-
-  runRetakeCutDelta: async () => {
-    if (!get().requireServer('Retake δ')) return
-    // Retake δ (Delta) — a COPY of runRetakeCutBeta that routes the cut judge to
-    // the creator's OWN model (window.api.retakeDeltaCut → hf-judge edge fn).
-    // Retake β above is UNTOUCHED. Same review-first contract (highlight + stage,
-    // apply on Execute cuts). Cloud-only: the delta method only exists there.
-    const runDelta = (window.api as { retakeDeltaCut?: typeof window.api.retakeAwareCut }).retakeDeltaCut
-    if (!runDelta) {
-      // δ's judge only exists in the cloud build. Off-cloud (desktop / self-host)
-      // the "Find Retakes & Silence" button still needs to work, so fall back to
-      // Retake β rather than dead-ending with an error.
-      await get().runRetakeCutBeta()
-      return
-    }
-    const stored = get().project
-    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
-    const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
-    if (!hasBase) {
-      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
-      return
-    }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Cut Lord…' } })
-    try {
-      let path: string
-      if (isMultiBase(p0)) {
-        const combined = await window.api.combineClips(p0.baseSequence!, true)
-        path = combined.path
-      } else {
-        path = p0.media!.path
-      }
-      const res = await runDelta(path, get().retakeBetaSilenceSettings, get().vadSilenceSettings)
-      const cur = get().project
-      // DOC-NATIVE BASE (new UI): persist the folded base so Execute cuts reach the
-      // Main lane — identical rationale to runRetakeCutBeta (see the note there).
-      const docBase = !cur.media && !!p0.baseSequence?.length
-      const nextProject: typeof cur = docBase
-        ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript: res.transcript }
-        : { ...cur, transcript: res.transcript }
-      const flagIds = res.deleteWordIds
-      // Smart Silence Cutter (redesigned UI): when OFF, don't stage δ's silence.
-      const includeSilence = !IS_NEW_UI || get().smartSilenceCutter
-      const silenceRegions = includeSilence ? (res.silenceRegions ?? []) : []
-      set({
-        project: nextProject,
-        selectedWordIds: new Set(flagIds),
-        stagedSilences: silenceRegions,
-        stagedSilenceSel: new Set(silenceRegions.map((r) => r.id)),
-        retakeSilenceStaged: true
-      })
-      set({
-        job: {
-          active: false,
-          percent: 100,
-          message:
-            `${res.summary} — ${flagIds.length} word(s) highlighted` +
-            (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
-            `, review then Execute cuts` +
-            (!IS_CLOUD && res.warnings.length ? ` · ${res.warnings.length} warning(s)` : '')
-        }
-      })
-    } catch (e) {
-      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Retake δ) failed', e)
-      set({
-        job: {
-          active: false,
-          percent: 0,
-          message: IS_CLOUD ? 'Retake δ couldn’t finish — please try again.' : `Retake δ failed: ${(e as Error).message}`
         }
       })
     }
@@ -3662,7 +3694,167 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  dismissBatchJobs: () => set({ batchJobs: [] })
+  dismissBatchJobs: () => set({ batchJobs: [] }),
+
+  // ---- Batch Processing (new UI) ------------------------------------------
+  setShowBatchModal: (v) => set({ showBatchModal: v }),
+
+  loadBatchQueues: () => {
+    // A run does NOT survive a page reload, so any file still marked queued/
+    // processing was interrupted — reconcile it to 'error' so the queue can't sit
+    // "Processing 1/3" forever (which also kept Auto export all disabled).
+    const raw = loadBatchQueuesLS(get().user?.id)
+    const reconciled = raw.map((q) => ({
+      ...q,
+      files: q.files.map((f) =>
+        f.status === 'processing' || f.status === 'queued'
+          ? { ...f, status: 'error' as const, step: 'Interrupted', error: f.error ?? 'Interrupted by a page reload' }
+          : f
+      )
+    }))
+    set({ batchQueues: reconciled })
+    saveBatchQueuesLS(get().user?.id, reconciled)
+  },
+
+  runBatchProcessing: async (items, toggles) => {
+    if (!items.length) return
+    // The queue record (newest first). Files start with NO projectId — the
+    // Supabase project is created only AFTER a file cleans successfully, so a
+    // failed or interrupted file never strands an empty project row (and there's
+    // no double-write). Label uses a monotonic counter so dismissing a queue
+    // never recycles a number the user already saw.
+    const now = Date.now()
+    const seq = nextBatchSeq(get().user?.id)
+    const queueId = `bq_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`
+    const queue: BatchQueue = {
+      id: queueId,
+      label: `Batch processing queue ${seq}`,
+      createdAt: now,
+      toggles,
+      files: items.map((it) => ({ projectId: '', name: it.name, status: 'queued' as const, step: 'Queued' }))
+    }
+    const persist = (): void => saveBatchQueuesLS(get().user?.id, get().batchQueues)
+    // batchRunning gates the editor's Retake panel off the shared `job` that the
+    // headless pipeline emits into (otherwise it shows a phantom "Analyzing").
+    set((s) => ({ batchQueues: [queue, ...s.batchQueues], batchRunning: true }))
+    persist()
+
+    // Update one file by its index within THIS queue (files have no id of their
+    // own until they finish and receive a projectId).
+    const updateFile = (idx: number, patch: Partial<BatchQueueFile>): void => {
+      set((s) => ({
+        batchQueues: s.batchQueues.map((q) =>
+          q.id === queueId ? { ...q, files: q.files.map((f, i) => (i === idx ? { ...f, ...patch } : f)) } : q
+        )
+      }))
+      persist()
+    }
+
+    // Same retake+silence the "Find Retakes & Silence" button runs, applied
+    // headlessly per file, one at a time (transcription + judge are heavy).
+    const opts = {
+      retakeSilenceSettings: get().retakeBetaSilenceSettings,
+      vadSilenceSettings: get().vadSilenceSettings,
+      smartSilence: get().smartSilenceCutter,
+      wordCutPad: wordCutPad(get().cutLordSettings)
+    }
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]
+        updateFile(i, { status: 'processing', step: 'Starting…' })
+        try {
+          const { project, thumb } = await retakeCleanVideo(it.path, it.name, opts, (step) => updateFile(i, { step }))
+          // Lite serialize: on the cloud there is no PC to upload to — media stays
+          // in this device's IndexedDB and rehydrates when the project is opened.
+          const rec = await createProject(project.name, serializeProjectLite(project))
+          if (thumb) await saveProject(rec.id, { thumb })
+          updateFile(i, { projectId: rec.id, status: 'done', step: 'Cleaned' })
+        } catch (e) {
+          updateFile(i, { status: 'error', step: 'Failed', error: safeErrMessage(e) })
+        }
+      }
+    } finally {
+      set({ batchRunning: false })
+    }
+  },
+
+  autoExportAllBatch: async (queueId) => {
+    const q = get().batchQueues.find((x) => x.id === queueId)
+    if (!q) return
+    const done = q.files.filter((f) => f.status === 'done')
+    if (!done.length) {
+      set({ job: { active: false, percent: 0, message: 'No finished projects to export yet' } })
+      return
+    }
+    // Overall percent across ALL files drives the queue card's export bar.
+    const setExp = (current: number, filePct: number): void =>
+      set({
+        batchExport: {
+          queueId,
+          current,
+          total: done.length,
+          percent: Math.max(0, Math.min(100, Math.round(((current - 1 + filePct / 100) / done.length) * 100)))
+        }
+      })
+    setExp(1, 0)
+    let ok = 0
+    try {
+      for (let i = 0; i < done.length; i++) {
+        const f = done[i]
+        setExp(i + 1, 1)
+        try {
+          const rec = await getProject(f.projectId)
+          if (!rec?.project) throw new Error('project not found')
+          const project = rec.project
+          // Pull this device's media back out of IndexedDB so the export can decode
+          // the source, then build the cut document straight from the project (the
+          // file is NOT the open editor project, so there is no shared engine).
+          if (IS_WEB) await hydrateProjectMedia(project)
+          const doc = normalizeDefaultLanes(project.timeline ?? projectToDocument(project))
+          const W = project.media?.width && project.media.width > 0 ? project.media.width : 1920
+          const H = project.media?.height && project.media.height > 0 ? project.media.height : 1080
+          const { blob, name } = await exportOnDevice(
+            project,
+            { width: W, height: H, bitrateMbps: 12 },
+            (pct) => setExp(i + 1, pct),
+            doc
+          )
+          const dl = `${(project.name || name).replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim() || 'export'}.mp4`
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = dl
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+          setTimeout(() => URL.revokeObjectURL(url), 8000)
+          ok++
+        } catch (e) {
+          // One bad file never blocks the rest — surface it and keep going.
+          console.error('[batch-export] failed', f.name, e)
+        }
+      }
+    } finally {
+      set({ batchExport: null })
+    }
+    set({
+      job: {
+        active: false,
+        percent: 100,
+        message: ok === done.length ? `Exported ${ok} project(s) to this device` : `Exported ${ok}/${done.length} — see console for skips`
+      }
+    })
+  },
+
+  openBatchProject: async (projectId) => {
+    const rec = await getProject(projectId)
+    if (rec) get().openProjectRecord({ id: rec.id, name: rec.name, project: rec.project })
+  },
+
+  dismissBatchQueue: (queueId) => {
+    set((s) => ({ batchQueues: s.batchQueues.filter((q) => q.id !== queueId) }))
+    saveBatchQueuesLS(get().user?.id, get().batchQueues)
+  }
 }))
 
 // ---- Undo/redo history controller ----

@@ -16,7 +16,7 @@ import {
   combineSequenceAudioWav,
   requestPersistentStorage
 } from '../webmedia'
-import { retakeAwareCutCloud, retakeDeltaCutCloud, transcribeCloud } from './retakeEngine'
+import { retakeAwareCutCloud, transcribeCloud } from './retakeEngine'
 import { cutCutProCloud } from './procutEngine'
 import { detectSilenceCloud } from './vad'
 import { cloudListProjects, cloudCreateProject, cloudGetProject, cloudSaveProject, cloudDeleteProject } from './projects'
@@ -83,7 +83,7 @@ function needLocal(path: string): string {
   return path
 }
 
-const cloudApi: Window['api'] & { retakeDeltaCut: Window['api']['retakeAwareCut'] } = {
+const cloudApi: Window['api'] = {
   // No PC binaries in the cloud — feature gating happens via IS_CLOUD in the
   // UI; report everything unavailable for any legacy checks.
   toolStatus: async () => ({ ffmpeg: false, ffprobe: false, whisper: false, whisperModel: false }),
@@ -164,13 +164,6 @@ const cloudApi: Window['api'] & { retakeDeltaCut: Window['api']['retakeAwareCut'
 
   retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
     retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
-
-  // Retake δ (Delta) — cloud-only twin of retakeAwareCut that routes the cut
-  // judge to the creator's own HF-router model (hf-judge edge fn). Same args +
-  // result shape as β; exposed as an extra method so the Retake δ button can
-  // call it without altering the shared window.api (EaseCutApi) contract.
-  retakeDeltaCut: (path, _silenceSettings, vadSilenceSettings) =>
-    retakeDeltaCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
 
   openaiStatus: async () => ({ available: false }),
   whisperModels: async () => [],

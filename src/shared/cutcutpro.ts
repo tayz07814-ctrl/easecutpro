@@ -209,10 +209,17 @@ export function validateEdl(raw: string, map: TimestampMap): { ok: boolean; edl:
       const keep_ms = Number.isFinite(k) ? Math.max(0, Math.min(p.dur_ms - 40, Math.round(k))) : 0
       pause_cuts.push({ pause_id: id, keep_ms, reason: String(c?.reason || '') })
     }
-    // Runaway guard: an EDL that deletes most of the speech is a bad reply.
+    // Runaway guard: reject a reply that deletes ALMOST THE ENTIRE transcript —
+    // that's a hallucinated/degenerate EDL, not an edit. The threshold has to be
+    // high: heavily-retaken production footage (every line shot 3-4× plus crew
+    // chatter, count-ins and off-camera direction) legitimately cuts 60-85% of
+    // words, and a 0.6 cap silently threw those valid EDLs away ("editor received
+    // no cuts"). 0.9 still catches a "cut everything" runaway while letting real
+    // retake-heavy videos through. Cuts are staged/restorable, so erring toward
+    // accepting is the safer side.
     const cutWords = new Set<number>()
     for (const c of word_cuts) for (let i = c.from; i <= c.to; i++) cutWords.add(i)
-    if (map.words.length >= 20 && cutWords.size > map.words.length * 0.6) return { ok: false, edl: empty }
+    if (map.words.length >= 20 && cutWords.size > map.words.length * 0.9) return { ok: false, edl: empty }
     return { ok: true, edl: { word_cuts, pause_cuts } }
   } catch {
     return { ok: false, edl: empty }

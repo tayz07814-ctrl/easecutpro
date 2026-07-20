@@ -105,6 +105,21 @@ export default function TimelinePanel({ mobile = false }: { mobile?: boolean }):
   const cutRef = useRef(cutInfo)
   cutRef.current = cutInfo
 
+  // Is the doc-native player (DocPreview) the ACTIVE preview? VideoPreview mounts
+  // it the instant the shared engine's MAIN lane has clips — true for ANY media
+  // project, because projectToDocument lays the cut result out GAPLESSLY. When it
+  // is active, the store playhead is EDITED (gapless) seconds and maps to the
+  // engine 1:1. Gating this on project.timeline was the bug: executeCuts (Retake)
+  // never sets project.timeline, so after cuts the timeline treated the playhead
+  // as SOURCE and ran it through collapse/expand while DocPreview treated it as
+  // EDITED — a click seeked to the wrong spot and play restarted from 0. Only the
+  // pure legacy <video> preview (no doc main clips, hence no cuts) uses SOURCE
+  // seconds and needs the collapse/expand mapping (a no-op there anyway).
+  const docPlayheadActive = (): boolean => {
+    const main = engine.document.tracks.find((tk) => tk.isMain)
+    return !!main && main.clips.length > 0
+  }
+
   // LEGACY view: rebuild the whole document from the legacy fields on structural /
   // cut changes, so imports / Fast Cut / Pro Cut / silences show — but ONLY until
   // the document becomes authoritative. Once `project.timeline` exists the document
@@ -153,11 +168,11 @@ export default function TimelinePanel({ mobile = false }: { mobile?: boolean }):
     if (frames.length) engine.dispatch(Commands.applyDeletions(mainId, frames))
   }, [engine, sig])
 
-  // store playhead -> engine (edited frames). In document mode the store playhead
-  // IS edited seconds (the gapless main lane); in legacy mode it is source seconds
-  // and collapses through the cut ranges.
+  // store playhead -> engine (edited frames). In doc-preview mode the store
+  // playhead IS edited seconds (the gapless main lane); in the legacy source-time
+  // preview it is source seconds and collapses through the cut ranges.
   useEffect(() => {
-    const editedS = projectRef.current.timeline ? project.playhead : collapseTime(project.playhead, cutInfo.cuts)
+    const editedS = docPlayheadActive() ? project.playhead : collapseTime(project.playhead, cutInfo.cuts)
     applying.current = true
     engine.setPlayhead(secondsToFrames(editedS, engine.document.timebase))
     applying.current = false
@@ -177,7 +192,7 @@ export default function TimelinePanel({ mobile = false }: { mobile?: boolean }):
       if (ph === lastPh) return // a doc/selection change, not a scrub
       lastPh = ph
       const editedS = framesToSeconds(ph, engine.document.timebase)
-      const srcS = projectRef.current.timeline ? editedS : expandTime(editedS, cutRef.current.cuts, cutRef.current.dur)
+      const srcS = docPlayheadActive() ? editedS : expandTime(editedS, cutRef.current.cuts, cutRef.current.dur)
       useStore.getState().setPlayhead(srcS)
     })
   }, [engine])

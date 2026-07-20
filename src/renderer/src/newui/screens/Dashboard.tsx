@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { css } from '../css'
 import { useProjects } from '../data/useProjects'
+import BatchQueuePanel from './BatchQueuePanel'
+import BatchProcessingModal from './BatchProcessingModal'
+import SilenceSettingsModal from './SilenceSettingsModal'
 import type { DashCard } from '../mock'
 
 // Screen 1a — Project dashboard (1440). Wired to real projects via useProjects.
@@ -213,7 +216,7 @@ export default function Dashboard(): JSX.Element {
   const metaFor = (i: number): { id: string } | undefined => (i > 0 ? dash.metas[i - 1] : undefined)
 
   return (
-    <div style={css('width:100%;height:100%;overflow-y:auto;background:#17181C')} className="ec-newui ec-dash" onClick={() => { setAcct(false); setMenuId(null) }}>
+    <div style={css('width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;background:#17181C')} className="ec-newui ec-dash" onClick={() => { setAcct(false); setMenuId(null) }}>
       {/* top nav */}
       <div style={css(`display:flex;align-items:center;gap:24px;height:64px;padding:0 40px;border-bottom:1px solid ${HAIR}`)}>
         <div style={css('display:flex;align-items:center;gap:10px')}>
@@ -255,6 +258,9 @@ export default function Dashboard(): JSX.Element {
         </div>
       )}
 
+      {/* main content + right-hand batch queue column */}
+      <div style={css('flex:1;min-height:0;display:flex')}>
+      <div style={css('flex:1;min-width:0;overflow-y:auto')}>
       {/* body */}
       <div style={css('max-width:1216px;margin:0 auto;padding:48px 40px 64px')}>
         <div style={css('display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:36px')}>
@@ -263,7 +269,7 @@ export default function Dashboard(): JSX.Element {
             <div style={css('font-size:14px;color:#9BA0AC;margin-top:6px')}>Everything is saved automatically as you edit.</div>
           </div>
           <div style={css('display:flex;align-items:center;gap:12px')}>
-            <button onClick={() => void dash.batch()} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:13px;font-weight:500;border-radius:10px;padding:10px 16px;cursor:pointer')}>Batch clean videos</button>
+            <button onClick={() => dash.openBatchModal()} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:13px;font-weight:500;border-radius:10px;padding:10px 16px;cursor:pointer')}>Batch processing</button>
             <button onClick={() => void dash.create()} style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:10px 18px;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>＋ New project</button>
           </div>
         </div>
@@ -291,6 +297,19 @@ export default function Dashboard(): JSX.Element {
           })}
         </div>
       </div>
+      </div>
+      <BatchQueuePanel
+        queues={dash.queues}
+        batchExport={dash.batchExport}
+        onOpenFile={(id) => void dash.openBatchFile(id)}
+        onAutoExport={(id) => void dash.autoExportAll(id)}
+        onDismiss={(id) => dash.dismissQueue(id)}
+      />
+      </div>
+      <BatchProcessingModal />
+      {/* Silence Settings opens ON TOP of the batch modal (rendered after it) —
+          it edits vadSilenceSettings, which the batch pipeline reads at run time. */}
+      <SilenceSettingsModal />
     </div>
   )
 }
