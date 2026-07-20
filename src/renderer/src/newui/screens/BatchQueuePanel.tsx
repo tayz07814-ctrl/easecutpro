@@ -125,8 +125,10 @@ function QueueCard({
         </div>
       )}
       <div style={css('display:flex;flex-direction:column;gap:5px;margin-top:11px')}>
-        {queue.files.map((f) => (
-          <FileRow key={f.projectId} file={f} onOpen={() => onOpenFile(f.projectId)} />
+        {queue.files.map((f, i) => (
+          // key by index: projectId is empty until a file finishes (deferred create),
+          // and file order within a queue is stable.
+          <FileRow key={i} file={f} onOpen={() => onOpenFile(f.projectId)} />
         ))}
       </div>
       <button

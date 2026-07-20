@@ -571,6 +571,25 @@ function saveBatchQueuesLS(userId: string | undefined, queues: BatchQueue[]): vo
     /* storage full / disabled — the column stays in memory for this session */
   }
 }
+/** Monotonic per-user "Batch processing queue N" counter. Persisted so dismissing
+ *  a queue never recycles a number the user already saw (queue.length would). */
+function nextBatchSeq(userId: string | undefined): number {
+  const key = `ec.batchQueueSeq.${userId || 'anon'}`
+  let n = 1
+  try {
+    const raw = localStorage.getItem(key)
+    const prev = raw ? parseInt(raw, 10) : 0
+    n = Number.isFinite(prev) && prev >= 0 ? prev + 1 : 1
+  } catch {
+    /* storage disabled — fall back to 1 (labels may repeat, harmless) */
+  }
+  try {
+    localStorage.setItem(key, String(n))
+  } catch {
+    /* ignore */
+  }
+  return n
+}
 
 /** Seam blend ("overlap") at cut joins — a short incoming-only fade that de-clicks
  *  the splice. A global render setting applied at export + preview. */
@@ -639,6 +658,11 @@ interface AppState {
   batchQueues: BatchQueue[]
   /** whether the "Batch processing" setup modal is open (new UI dashboard). */
   showBatchModal: boolean
+  /** true while a batch run is processing files. The headless retake pipeline
+   *  emits into the SHARED `job`, so the editor's Retake panel must ignore that
+   *  activity (gate its 'analyzing' state) or it shows a phantom progress bar
+   *  over an already-finished project. */
+  batchRunning: boolean
   // ---- App shell / accounts / projects (web) ----
   view: 'loading' | 'auth' | 'home' | 'editor'
   user: { id: string; email: string } | null
@@ -984,6 +1008,7 @@ export const useStore = create<AppState>((set, get) => ({
   batchJobs: [],
   batchQueues: [],
   showBatchModal: false,
+  batchRunning: false,
   view: IS_WEB ? 'loading' : 'home',
   user: null,
   editingClipId: null,
@@ -3670,65 +3695,82 @@ export const useStore = create<AppState>((set, get) => ({
   // ---- Batch Processing (new UI) ------------------------------------------
   setShowBatchModal: (v) => set({ showBatchModal: v }),
 
-  loadBatchQueues: () => set({ batchQueues: loadBatchQueuesLS(get().user?.id) }),
+  loadBatchQueues: () => {
+    // A run does NOT survive a page reload, so any file still marked queued/
+    // processing was interrupted — reconcile it to 'error' so the queue can't sit
+    // "Processing 1/3" forever (which also kept Auto export all disabled).
+    const raw = loadBatchQueuesLS(get().user?.id)
+    const reconciled = raw.map((q) => ({
+      ...q,
+      files: q.files.map((f) =>
+        f.status === 'processing' || f.status === 'queued'
+          ? { ...f, status: 'error' as const, step: 'Interrupted', error: f.error ?? 'Interrupted by a page reload' }
+          : f
+      )
+    }))
+    set({ batchQueues: reconciled })
+    saveBatchQueuesLS(get().user?.id, reconciled)
+  },
 
   runBatchProcessing: async (items, toggles) => {
     if (!items.length) return
-    // 1) A project per file, up front — the queue's rows appear immediately.
-    const created: { id: string; item: { path: string; name: string } }[] = []
-    for (const it of items) {
-      const base = newProject()
-      base.name = it.name.replace(/\.[^.]+$/, '')
-      const rec = await createProject(base.name, base)
-      created.push({ id: rec.id, item: it })
-    }
-    // 2) The queue record (newest first). Label counts ALL queues ever made so a
-    //    dismissed queue doesn't recycle a number the user already saw.
+    // The queue record (newest first). Files start with NO projectId — the
+    // Supabase project is created only AFTER a file cleans successfully, so a
+    // failed or interrupted file never strands an empty project row (and there's
+    // no double-write). Label uses a monotonic counter so dismissing a queue
+    // never recycles a number the user already saw.
     const now = Date.now()
-    const seq = get().batchQueues.length + 1
+    const seq = nextBatchSeq(get().user?.id)
+    const queueId = `bq_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`
     const queue: BatchQueue = {
-      id: `bq_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      id: queueId,
       label: `Batch processing queue ${seq}`,
       createdAt: now,
       toggles,
-      files: created.map((c) => ({ projectId: c.id, name: c.item.name, status: 'queued' as const, step: 'Queued' }))
+      files: items.map((it) => ({ projectId: '', name: it.name, status: 'queued' as const, step: 'Queued' }))
     }
     const persist = (): void => saveBatchQueuesLS(get().user?.id, get().batchQueues)
-    set((s) => ({ batchQueues: [queue, ...s.batchQueues] }))
+    // batchRunning gates the editor's Retake panel off the shared `job` that the
+    // headless pipeline emits into (otherwise it shows a phantom "Analyzing").
+    set((s) => ({ batchQueues: [queue, ...s.batchQueues], batchRunning: true }))
     persist()
 
-    const updateFile = (projectId: string, patch: Partial<BatchQueueFile>): void => {
+    // Update one file by its index within THIS queue (files have no id of their
+    // own until they finish and receive a projectId).
+    const updateFile = (idx: number, patch: Partial<BatchQueueFile>): void => {
       set((s) => ({
         batchQueues: s.batchQueues.map((q) =>
-          q.id === queue.id
-            ? { ...q, files: q.files.map((f) => (f.projectId === projectId ? { ...f, ...patch } : f)) }
-            : q
+          q.id === queueId ? { ...q, files: q.files.map((f, i) => (i === idx ? { ...f, ...patch } : f)) } : q
         )
       }))
       persist()
     }
 
-    // 3) Same retake+silence the "Find Retakes & Silence" button runs, applied
-    //    headlessly per file, one at a time (transcription + judge are heavy).
+    // Same retake+silence the "Find Retakes & Silence" button runs, applied
+    // headlessly per file, one at a time (transcription + judge are heavy).
     const opts = {
       retakeSilenceSettings: get().retakeBetaSilenceSettings,
       vadSilenceSettings: get().vadSilenceSettings,
       smartSilence: get().smartSilenceCutter,
       wordCutPad: wordCutPad(get().cutLordSettings)
     }
-    for (const c of created) {
-      updateFile(c.id, { status: 'processing', step: 'Starting…' })
-      try {
-        const { project, thumb } = await retakeCleanVideo(c.item.path, c.item.name, opts, (step) =>
-          updateFile(c.id, { step })
-        )
-        // Lite serialize: on the cloud there is no PC to upload to — media stays
-        // in this device's IndexedDB and rehydrates when the project is opened.
-        await saveProject(c.id, { project: serializeProjectLite(project), thumb })
-        updateFile(c.id, { status: 'done', step: 'Cleaned' })
-      } catch (e) {
-        updateFile(c.id, { status: 'error', step: 'Failed', error: safeErrMessage(e) })
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]
+        updateFile(i, { status: 'processing', step: 'Starting…' })
+        try {
+          const { project, thumb } = await retakeCleanVideo(it.path, it.name, opts, (step) => updateFile(i, { step }))
+          // Lite serialize: on the cloud there is no PC to upload to — media stays
+          // in this device's IndexedDB and rehydrates when the project is opened.
+          const rec = await createProject(project.name, serializeProjectLite(project))
+          if (thumb) await saveProject(rec.id, { thumb })
+          updateFile(i, { projectId: rec.id, status: 'done', step: 'Cleaned' })
+        } catch (e) {
+          updateFile(i, { status: 'error', step: 'Failed', error: safeErrMessage(e) })
+        }
       }
+    } finally {
+      set({ batchRunning: false })
     }
   },
 

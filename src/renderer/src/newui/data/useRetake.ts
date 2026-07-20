@@ -73,6 +73,7 @@ export function useRetake(): RetakeModel {
   const setPlayhead = useStore((s) => s.setPlayhead)
   const setPlaying = useStore((s) => s.setPlaying)
   const hasTimeline = useStore((s) => !!s.project.timeline)
+  const batchRunning = useStore((s) => s.batchRunning)
 
   // "executed" and "error" aren't distinct store flags, so the panel tracks the
   // last terminal transition locally (reset when a new analysis starts).
@@ -80,12 +81,22 @@ export function useRetake(): RetakeModel {
 
   const failed = !job.active && job.percent === 0 && !!job.message && /fail|couldn|could not|didn/i.test(job.message)
   const hasResults = !!transcript && (selected.size > 0 || staged.length > 0)
+  // A project opened with RETAKE cuts ALREADY committed (batch-processed, or
+  // reopened after a prior Execute) carries them on transcript.words[].deleted —
+  // NOT in the staged sets. Surface them in the executed review so the panel
+  // shows the transcript with its cuts instead of the idle "Find Retakes" button
+  // (which, being the only CTA, would re-run and WIPE those committed cuts).
+  const hasCommittedCuts = !!transcript && transcript.words.some((w) => w.deleted)
 
   let state: RetakeState
-  if (job.active) state = 'analyzing'
+  // batchRunning: the headless batch pipeline emits into the SHARED job; ignore
+  // that activity here so an opened/finished project never shows a phantom
+  // "Analyzing…" bar while other files in the batch are still processing.
+  if (job.active && !batchRunning) state = 'analyzing'
   else if (executed) state = 'executed'
   else if (failed && !transcript) state = 'error'
   else if (hasResults) state = 'results'
+  else if (hasCommittedCuts) state = 'executed'
   else state = 'idle'
 
   const words = selected.size
