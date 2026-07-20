@@ -45,7 +45,7 @@ export interface Subscription {
 // never surfaced to normal users (see the ?paddletest gate in the dashboard).
 export type PlanId = 'starter' | 'pro' | 'unlimited' | 'test'
 
-const IS_LIVE = typeof window !== 'undefined' && window.location.hostname === 'easecutpro.com'
+const IS_LIVE = typeof window !== 'undefined' && /(^|\.)easecutpro\.com$/i.test(window.location.hostname)
 
 const LIVE = {
   token: 'live_f9ef23fd06dc955c369b83a333c',
