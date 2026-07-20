@@ -85,6 +85,12 @@ function parseGemini(raw: string): GeminiOut | null {
   }
 }
 
+// Smooth-seam margins for Premium's PAUSE cuts: a trimmed pause never slices flush
+// against speech. Anchored to the kept words below so the margin is exact even
+// though Gemini's audio timestamps aren't millisecond-precise.
+const LEAD_IN_S = 0.1 // keep 100 ms before the following kept sentence/word begins
+const TAIL_S = 0.3 // keep 300 ms after the preceding kept sentence/word ends
+
 export async function premiumCutCloud(
   mediaId: string,
   onProgress?: (pct: number, msg?: string) => void,
@@ -153,9 +159,31 @@ export async function premiumCutCloud(
   })
   const cutSpans: CutSpan[] = rawCuts.map(toSpan)
   const deleteWordIds = spansToWordIds(rawCuts.filter(hasWord).map(toSpan), transcript)
-  const silenceRegions: SilenceRegion[] = rawCuts
-    .filter((c) => !hasWord(c))
-    .map((c, i) => ({ id: `pg${i}`, start: Number(c.start), end: Number(c.end), action: 'remove', protect: true }))
+
+  // Pause cuts, with smooth-seam margins anchored to the neighbouring kept words:
+  // trim from (prev kept word end + TAIL_S) to (next kept word start - LEAD_IN_S),
+  // so 300 ms of tail survives after the preceding speech and 100 ms of lead-in
+  // survives before the following speech. Leading/trailing silence (no neighbour on
+  // one side) trims to the pause edge on that side. Cuts too short to keep both
+  // margins are dropped (a sub-~430 ms gap is a natural beat — leave it).
+  const words = verbatim.words
+  const silenceRegions: SilenceRegion[] = []
+  for (const c of rawCuts) {
+    if (hasWord(c)) continue
+    const cs = Number(c.start)
+    const ce = Number(c.end)
+    let prevEnd = -Infinity
+    let nextStart = Infinity
+    for (const w of words) {
+      if (w.end <= cs + 0.02 && w.end > prevEnd) prevEnd = w.end
+      if (w.start >= ce - 0.02 && w.start < nextStart) nextStart = w.start
+    }
+    const lo = Number.isFinite(prevEnd) ? prevEnd + TAIL_S : cs
+    const hi = Number.isFinite(nextStart) ? nextStart - LEAD_IN_S : ce
+    if (hi - lo >= 0.03) {
+      silenceRegions.push({ id: `pg${silenceRegions.length}`, start: lo, end: hi, action: 'remove', protect: true })
+    }
+  }
 
   if (!rawCuts.length && !warnings.length) warnings.push('Premium Cut found nothing to cut.')
 

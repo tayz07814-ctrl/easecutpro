@@ -70,6 +70,10 @@ Keep:
 - Emotion
 - Storytelling
 
+Smoothness (so cuts do not clip speech):
+- Do NOT cut flush against speech. Leave about 100 ms of lead-in before each kept sentence or word begins, and about 300 ms of tail after each kept sentence or word ends.
+- Trim pauses to leave those margins; cut retakes and false starts tightly but preserve the 100 ms / 300 ms margins on the surrounding kept speech.
+
 Return ONLY valid JSON:
 
 {
