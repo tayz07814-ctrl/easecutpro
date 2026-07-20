@@ -110,13 +110,17 @@ export async function retakeAwareCutCloud(
   //    path's safety scan). If it fails we fall back to transcript-gap pauses.
   op(56, 'Listening for pauses…')
   let vadSil: { start: number; end: number }[] = []
-  try {
-    vadSil = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadSafetyOpts(), audio.durationS)).map((r) => ({
-      start: r.start,
-      end: r.end
-    }))
-  } catch (e) {
-    warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
+  // No local PCM (server-side extraction fallback) → skip the VAD and map pauses
+  // from transcript gaps only.
+  if (audio.float32.length) {
+    try {
+      vadSil = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadSafetyOpts(), audio.durationS)).map((r) => ({
+        start: r.start,
+        end: r.end
+      }))
+    } catch (e) {
+      warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
+    }
   }
 
   // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
@@ -171,10 +175,16 @@ export async function retakeAwareCutCloud(
     return !cutSpans.some((s) => m >= s.start && m <= s.end)
   })
   let silenceRegions: SilenceRegion[] = []
-  try {
-    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
-  } catch (e) {
-    warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
+  if (audio.float32.length) {
+    try {
+      silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
+    } catch (e) {
+      warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
+    }
+  } else {
+    // Server-side transcription fallback (no local PCM): retakes are still cut, but
+    // there's no waveform here to trim silence from.
+    warnings.push('Silence trimming skipped — this clip’s audio was transcribed on our servers.')
   }
   const silenceDebug = {
     source: 'vad_pass',
