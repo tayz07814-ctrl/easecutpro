@@ -60,6 +60,7 @@ export function SilenceControls({ sil }: { sil: ReturnType<typeof useSilence> })
       <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:16px')}>
         <Slider label="Trim pauses longer than" value={sil.s.minGapS} min={0.05} max={2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0.05s · tight" hi="2s · relaxed" onChange={(v) => set('minGapS', v)} />
         <Slider label="Pause to keep at each cut" value={sil.s.padAfterS} min={0} max={0.4} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · gapless" hi="0.4s · gentle" onChange={(v) => set('padAfterS', v)} />
+        <Slider label="Trim cut edges" value={sil.s.edgeTrimS} min={0} max={0.2} step={0.01} fmt={(v) => (v <= 0 ? 'off' : `${Math.round(v * 1000)} ms`)} lo="0 · off" hi="200 ms · snug" onChange={(v) => set('edgeTrimS', v)} />
         <Slider label="Silence detection strictness" value={sil.s.speechThreshold} min={0.5} max={0.9} step={0.01} fmt={(v) => `${strictnessLabel(v)} · ${Math.round(v * 100)}%`} lo="gentle · keeps soft speech" hi="strict · may clip soft speech" onChange={(v) => set('speechThreshold', v)} />
         <div style={css('display:flex;align-items:flex-start;gap:9px')}>
           <div onClick={() => set('removeBreaths', !sil.s.removeBreaths)} style={css(sil.s.removeBreaths ? 'width:32px;height:18px;border-radius:9px;background:#6E6AE8;position:relative;flex:none;cursor:pointer;margin-top:1px' : 'width:32px;height:18px;border-radius:9px;background:#3A3E48;position:relative;flex:none;cursor:pointer;margin-top:1px')}>

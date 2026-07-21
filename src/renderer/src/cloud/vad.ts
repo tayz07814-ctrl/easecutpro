@@ -233,13 +233,14 @@ export function clampSilenceRegions(
   // leave 50-110ms slivers BETWEEN words of fluent speech — each one a video
   // splice that shreds the phrase. Those are coarticulation gaps, not pauses.
   minPieceS = 0.05,
-  // edgeGrowS: tighten each SURVIVING cut by up to this on both sides for snappier
-  // pacing. Applied HERE — AFTER the word-carve + minPiece filter, and clamped so
-  // growth can never enter or cross a protected (guarded) word. It must NOT run in
-  // the raw VAD pass: there it grows every sub-minGap breath dip and MERGES the
-  // dips of a soft, fluent passage into one big region, which — where STT
-  // under-covers that soft speech — carved into multi-second cuts of real words.
-  // Post-carve + clamped, a dip below minGap is already gone and can't be revived.
+  // edgeGrowS ("trim cut edges"): tighten each SURVIVING cut by up to this on both
+  // sides for snappier pacing — it MAY bite INTO the adjacent word at the cut edge
+  // (see the capped, word-core-preserving logic below). It must run HERE, AFTER the
+  // word-carve + minPiece filter, never in the raw VAD pass: in the raw pass it
+  // grows every sub-minGap breath dip and MERGES the dips of a soft, fluent passage
+  // into one big region, which — where STT under-covers that soft speech — carved
+  // into multi-second cuts of real words. Post-carve it only extends cuts that are
+  // already real >= minGap pauses, so it can never cascade like that again.
   edgeGrowS = 0
 ): SilenceRegion[] {
   // TRUE interval subtraction: carve every guarded word span out of every region.
@@ -278,20 +279,41 @@ export function clampSilenceRegions(
     // (floor 0.02 keeps the zero-pause profile honest at its minGap of 0.05).
     .filter((r) => r.end - r.start > clampMin)
 
-  // Snappier cuts: grow each surviving pause up to edgeGrowS on each side, but
-  // NEVER past the neighboring guarded word — the growth is bounded by the words
-  // that already bracket the piece, so it can only consume dead air, never speech.
-  // (Sub-minGap dips were dropped above, so growth cannot resurrect them.)
+  // "Trim cut edges": grow each surviving pause up to edgeGrowS on each side. This
+  // MAY reach INTO the adjacent word at the cut edge — trimming a word's soft
+  // onset/tail is exactly what tightens a jump cut. It stays safe because:
+  //  (a) it runs POST-carve on cuts that are ALREADY real ≥ minGap pauses, so a
+  //      sub-minGap breath dip is long gone and this can never cascade into the
+  //      multi-second cut it used to (that bug was edgeTrim in the RAW pass);
+  //  (b) the intrusion into any ONE word is capped to KEEP_CORE of its length, so
+  //      a solid core always survives — a short word can't be eaten through, and
+  //      two cuts bracketing a word can never meet and delete it;
+  //  (c) only INTERIOR cuts (a real word on BOTH sides) trim into words; the
+  //      leading/trailing dead-air cut only snugs up to the first/last spoken
+  //      word, never clipping the open or the ending.
+  const KEEP_CORE = 0.35 // max fraction of a word the trim may eat from one side
   if (edgeGrowS > 0 && pieces.length) {
     const hiCap = durationS > 0 ? durationS : Infinity
+    const words = [...keptWords].sort((a, b) => a.start - b.start)
     pieces = pieces.map((r) => {
-      let lo = 0
-      let hi = hiCap
-      for (const w of guarded) {
-        if (w.end <= r.start) lo = Math.max(lo, w.end)
-        if (w.start >= r.end) { hi = Math.min(hi, w.start); break }
+      let prevW: { start: number; end: number } | null = null
+      let nextW: { start: number; end: number } | null = null
+      for (const w of words) {
+        if (w.end <= r.start) prevW = w
+        else if (w.start >= r.end) { nextW = w; break }
       }
-      return { start: Math.max(r.start - edgeGrowS, lo), end: Math.min(r.end + edgeGrowS, hi) }
+      let loLimit: number
+      let hiLimit: number
+      if (prevW && nextW) {
+        // interior cut — may bite into both neighboring words, capped per word.
+        loLimit = prevW.end - Math.min(edgeGrowS, KEEP_CORE * (prevW.end - prevW.start))
+        hiLimit = nextW.start + Math.min(edgeGrowS, KEEP_CORE * (nextW.end - nextW.start))
+      } else {
+        // head/tail cut — snug up to the lone adjacent word but never into it.
+        loLimit = prevW ? prevW.end : 0
+        hiLimit = nextW ? nextW.start : hiCap
+      }
+      return { start: Math.max(r.start - edgeGrowS, loLimit, 0), end: Math.min(r.end + edgeGrowS, hiLimit, hiCap) }
     })
   }
 
