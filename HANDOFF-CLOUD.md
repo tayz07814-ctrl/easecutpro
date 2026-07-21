@@ -60,3 +60,22 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - Edge fn `ultracut-judge` `MODEL_WHITELIST` includes `meta-llama/llama-4-maverick`.
 - A/B (main-logged transcripts): Maverick faster / more reliable; DeepSeek more conservative, slower,
   occasional timeouts.
+
+### Mobile UI redesign (0.01 only — `9416050`)
+CapCut-style rework of the mobile editor, from a proposed 3-mockup design. Files:
+`components/mobile/{Icon,MobileTools,MobileExportDrawer}.tsx`, `newui/screens/MobileEditor.tsx`, `styles.css`.
+- **Main toolbar** (nothing selected): Edit · Music · Effect · Text · ScriptCut · Captions. Edit selects
+  the base clip (reveals its editing toolbar); ScriptCut = Cut Lord; Effect stubs ("coming soon").
+- **Selected clip**: main toolbar hides → context toolbar led by a collapse chevron (deselect) + a floating
+  two-pill quick bar (Layer · Keyframe · Duplicate | Flip · Delete). Video/image: Duration · Split ·
+  Animation · AI Upscaler(OFF) · Crop + existing Speed/Zoom/Adjust/Volume/Extract/Overlay/Remove-BG/Delete.
+  Text + audio have their own toolbars. New Duration panel. Real edits → shared engine; stubs toast.
+- **Export drawer** (`MobileExportDrawer`, replaces the modal on mobile): top-anchored sheet with
+  Resolution (480p–4K) + Frame-rate (24–60) + Code-rate (Low/Med/High) sliders + live est. file size.
+  Resolution + code-rate drive the real on-device encode; **FPS is UI-only — export is fixed at 30 fps**
+  in `localExport` (threading a variable FPS is a bigger, separate change).
+- **Stubs** (toast "coming soon", matching the existing pattern): Effect, AI Upscaler, Layer, Keyframe,
+  Flip, Fade.
+- **Deferred** (documented, not built): top-bar aspect/resolution controls; the canvas selection frame;
+  the transport keyframe ◇+ button — all need a real keyframe engine and/or the rendered video rect.
+- NOT GUI-tested (no mobile-render harness) — needs a live test on `easecut0.01`.
