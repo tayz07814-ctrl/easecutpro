@@ -786,12 +786,13 @@ async function extractAudioPcm16(rec: MediaRec, diag: string[], onProgress?: (pc
   }
   // 2. WebAudio decodeAudioData — desktop-reliable; first track only. Trust it
   //    only when the decode carries signal.
+  let leadSec = 0 // container audio-start offset — also re-applied on the ffmpeg path
   try {
     onProgress?.(40)
     const ab = await rec.file.arrayBuffer()
-    const lead = mp4AudioStartOffset(ab) // parse BEFORE decode (it detaches ab)
+    leadSec = mp4AudioStartOffset(ab) // parse BEFORE decode (it detaches ab)
     const audio = await decodeAudioAtRate(ab, 16000)
-    const pcm = audioBufferToPcm16kMono(audio, lead)
+    const pcm = audioBufferToPcm16kMono(audio, leadSec)
     const pk = peakOfInt16(pcm)
     diag.push(`wa[${(pk / 32768).toFixed(2)}]`)
     if (pk >= PEAK_MIN_16) {
@@ -807,7 +808,13 @@ async function extractAudioPcm16(rec: MediaRec, diag: string[], onProgress?: (pc
   diag.push(ff.note)
   if (ff.pcm) {
     onProgress?.(100)
-    return ff.pcm
+    // Raw s16le output drops the container's leading delay — re-pad it so the
+    // transcript's word times line up with the video (same as the other layers).
+    const lead = Math.max(0, Math.round(leadSec * 16000))
+    if (!lead) return ff.pcm
+    const padded = new Int16Array(lead + ff.pcm.length)
+    padded.set(ff.pcm, lead)
+    return padded
   }
   return null
 }
@@ -1020,14 +1027,35 @@ export async function combineSequenceAudioWav(
     if (c.isImage || c.hasAudio === false || !rec) {
       parts.push(new Int16Array(nOut)) // still / silent / missing → silence, stays aligned
     } else {
+      let slice: Int16Array | null = null
+      let lead = 0
       try {
         const buf = await rec.file.arrayBuffer()
-        const lead = mp4AudioStartOffset(buf) // parse BEFORE decode (it detaches buf)
+        lead = mp4AudioStartOffset(buf) // parse BEFORE decode (it detaches buf)
         const audio = await decodeAudioAtRate(buf, TARGET)
-        parts.push(sliceMonoInt16(audio, c.sourceIn, c.sourceOut, TARGET, c.gain ?? 1, lead))
+        const s = sliceMonoInt16(audio, c.sourceIn, c.sourceOut, TARGET, c.gain ?? 1, lead)
+        if (peakOfInt16(s) >= PEAK_MIN_16) slice = s
       } catch {
-        parts.push(new Int16Array(nOut)) // decode failed → silence (keep time alignment)
+        slice = null // undecodable here — try ffmpeg below
       }
+      // Decode failed OR came back silent (the iOS silent-decode bug) → ffmpeg.
+      if (!slice) {
+        try {
+          const ff = await ffmpegDecodeAudio(rec.file, undefined, TARGET)
+          if (ff.pcm && ff.pcm.length) {
+            const fb = new AudioBuffer({ length: ff.pcm.length, sampleRate: TARGET, numberOfChannels: 1 })
+            const ch = fb.getChannelData(0)
+            for (let j = 0; j < ff.pcm.length; j++) {
+              const s = ff.pcm[j]
+              ch[j] = s < 0 ? s / 0x8000 : s / 0x7fff
+            }
+            slice = sliceMonoInt16(fb, c.sourceIn, c.sourceOut, TARGET, c.gain ?? 1, lead)
+          }
+        } catch {
+          /* keep silence below */
+        }
+      }
+      parts.push(slice ?? new Int16Array(nOut)) // last resort: silence (keeps time alignment)
     }
     onProgress?.(Math.round(((i + 1) / clips.length) * 100))
   }

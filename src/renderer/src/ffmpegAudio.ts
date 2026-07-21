@@ -129,12 +129,12 @@ async function probeAudioStreams(ff: FFmpeg, path: string): Promise<FfAudioStrea
   return out
 }
 
-/** Decode EVERY audio stream to 16 kHz mono int16 and mix the non-silent ones —
- *  screen recordings and app exports often carry voice on the SECOND track
- *  (mic) while track 1 (app audio) is silent, and single-track decoders read
- *  those clips as "no audio". Returns pcm=null when nothing decodable carries
- *  signal; `note` always reports what was found. */
-export function ffmpegDecodeAudio(file: File, onProgress?: (pct: number) => void): Promise<FfDecodeResult> {
+/** Decode EVERY audio stream to mono int16 at `rate` and mix the non-silent
+ *  ones — screen recordings and app exports often carry voice on the SECOND
+ *  track (mic) while track 1 (app audio) is silent, and single-track decoders
+ *  read those clips as "no audio". Returns pcm=null when nothing decodable
+ *  carries signal; `note` always reports what was found. */
+export function ffmpegDecodeAudio(file: File, onProgress?: (pct: number) => void, rate = 16000): Promise<FfDecodeResult> {
   return enqueue(async () => {
     let ff: FFmpeg
     try {
@@ -158,7 +158,7 @@ export function ffmpegDecodeAudio(file: File, onProgress?: (pct: number) => void
           let code = 1
           try {
             code = await ff.exec(
-              ['-i', input, '-map', `0:a:${i}`, '-vn', '-sn', '-dn', '-ac', '1', '-ar', '16000', '-f', 's16le', out],
+              ['-i', input, '-map', `0:a:${i}`, '-vn', '-sn', '-dn', '-ac', '1', '-ar', String(rate), '-f', 's16le', out],
               300000
             )
           } catch {
