@@ -726,3 +726,12 @@
   border-radius: 50%;
   background: var(--red, #ff5d6c);
 }
+
+/* Seam-blend marker: a clip that starts at a real cut with the audio overlap ON
+   shows a small gradient wedge at its left edge (tooltip = blend length). */
+.ec-tl-seam {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 10px;
+  background: linear-gradient(100deg, rgba(110,106,232,0.75), rgba(110,106,232,0));
+  border-left: 2px solid rgba(110,106,232,0.95);
+  pointer-events: auto; z-index: 3;
+}

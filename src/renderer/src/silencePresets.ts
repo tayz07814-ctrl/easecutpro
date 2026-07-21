@@ -6,7 +6,7 @@
 
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
 
-export type SilencePresetId = 'conservative' | 'balanced' | 'aggressive'
+export type SilencePresetId = 'conservative' | 'balanced' | 'aggressive' | 'zero'
 export type SilencePresetOrCustom = SilencePresetId | 'custom'
 
 export interface SilencePreset {
@@ -17,22 +17,29 @@ export interface SilencePreset {
 }
 
 // Balanced == the app default, so "Reset to defaults" lands back on a named
-// preset. Conservative is gentler (only longer pauses, more breathing room);
-// Aggressive is tighter and opts into breath removal. Every value is run through
-// normalizeVadSilence so a preset can never carry an out-of-range value.
+// preset. Every value runs through normalizeVadSilence so a preset can never
+// carry an out-of-range value.
+//
+// Retuned after real-run overcutting: pace now comes from WHICH pauses are cut
+// (minGapS) and how much air is left (pads) — NOT from cranking the VAD
+// threshold or eating into speech. The old Aggressive (threshold .88 + 40-50ms
+// pads + 30ms edgeTrim + breaths at -28dB) classified soft-spoken words as
+// silence and clipped word edges; thresholds now stay ≤0.8, edgeTrimS is 0
+// everywhere, and breath removal (Aggressive only) uses a quieter -34dB gate so
+// it sweeps real breaths, not quiet speech.
 export const SILENCE_PRESETS: SilencePreset[] = [
   {
     id: 'conservative',
     label: 'Conservative',
     blurb: 'Only trims longer pauses; keeps a natural, relaxed rhythm.',
     values: normalizeVadSilence({
-      speechThreshold: 0.7,
-      minGapS: 0.5,
-      padBeforeS: 0.12,
-      padAfterS: 0.1,
+      speechThreshold: 0.65,
+      minGapS: 0.6,
+      padBeforeS: 0.15,
+      padAfterS: 0.2,
       edgeTrimS: 0,
       removeBreaths: false,
-      breathDb: -30
+      breathDb: -34
     })
   },
   {
@@ -46,13 +53,31 @@ export const SILENCE_PRESETS: SilencePreset[] = [
     label: 'Aggressive',
     blurb: 'Tight, fast-paced — trims short pauses and removes soft breaths.',
     values: normalizeVadSilence({
-      speechThreshold: 0.88,
-      minGapS: 0.08,
-      padBeforeS: 0.05,
-      padAfterS: 0.04,
-      edgeTrimS: 0.03,
+      speechThreshold: 0.8,
+      minGapS: 0.15,
+      padBeforeS: 0.06,
+      padAfterS: 0.06,
+      edgeTrimS: 0,
       removeBreaths: true,
-      breathDb: -28
+      breathDb: -34
+    })
+  },
+  {
+    id: 'zero',
+    label: 'Zero pause',
+    blurb: 'Gapless jump cuts — the next word starts the instant the last one ends.',
+    // pads 0 = the cut lands exactly on the word boundary (no residual air);
+    // minGap at the floor = even 50ms pauses collapse. Words themselves stay
+    // protected by the interval-subtraction clamp, and the seam blend (overlap)
+    // keeps the joins from clicking. Breaths on: dead air of any kind goes.
+    values: normalizeVadSilence({
+      speechThreshold: 0.75,
+      minGapS: 0.05,
+      padBeforeS: 0,
+      padAfterS: 0,
+      edgeTrimS: 0,
+      removeBreaths: true,
+      breathDb: -34
     })
   }
 ]
