@@ -63,6 +63,10 @@ function ClutterCleaner(): JSX.Element {
   const setSmartCutPreset = useStore((s) => s.setSmartCutPreset)
   const runFastCutLord = useStore((s) => s.runFastCutLord)
   const runProCut = useStore((s) => s.runProCut)
+  // "Find Retakes & Silence" runs the REAL Retake β (procut-judge, Opus): the
+  // artifact-aware prompt that removes slates / off-camera direction / intro-outro
+  // chatter and cuts whole takes precisely. (Retake δ / delta-judge was removed —
+  // its narrow prompt left that chatter behind and over-cut wide spans.)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
   const runRetakeCutDelta = useStore((s) => s.runRetakeCutDelta)
   const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)

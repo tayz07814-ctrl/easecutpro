@@ -235,6 +235,9 @@ export interface TextClip {
   bgRadius: number
   bgPadding: number
   bgOpacity: number
+  /** true = auto-generated from the transcript (Captions tab); lets a regenerate
+   *  replace the previous batch without touching hand-added text. */
+  caption?: boolean
 }
 
 export interface Track {
@@ -449,18 +452,50 @@ export interface OverlayAsset {
   file: string
   /** display name, e.g. "No Bloating". */
   name: string
+  /** AI vision description of what the image DEPICTS (e.g. "a red '50% OFF' badge").
+   *  Cached after one vision pass; fed into matching/suggestion so placement keys
+   *  on the overlay's CONTENT, not just its name. */
+  description?: string
 }
+
+/** A downscaled overlay thumbnail (base64) sent to moment vision for image-to-image
+ *  matching: given video FRAMES + these thumbnails, the model picks which overlay
+ *  depicts what the creator is showing on camera. */
+export interface OverlayThumb {
+  id: string
+  name: string
+  /** base64 image bytes (no data: prefix). */
+  image: string
+  /** e.g. "image/jpeg". */
+  mediaType: string
+}
+
+/** One sampled video frame (base64) for moment vision. Several are taken across a
+ *  show-moment so the reveal is caught wherever in the line it lands. */
+export interface MomentFrame {
+  /** base64 image bytes (no data: prefix). */
+  image: string
+  /** e.g. "image/jpeg". */
+  mediaType: string
+}
+
+/** Which mentions of a matched topic actually get the overlay. Deterministic —
+ *  applied in code AFTER matching, never left to the AI to count. */
+export type OverlayOccurrence = 'every' | 'first' | 'last'
 
 /** A natural-language rule: when should this overlay appear, and how. */
 export interface OverlayRule {
   overlayId: string
   name: string
-  /** "Show this when I talk about bloating, digestion, gut health…". */
+  /** "Show this when I talk about bloating, digestion, gut health…".
+   *  OPTIONAL — when empty, the overlay's NAME is used as the topic to match. */
   instruction: string
   position: OverlayPosition
   /** seconds the overlay stays on screen (clamped 2.5–4 at generation). */
   durationSeconds: number
   animation: OverlayAnimation
+  /** which matched mentions to keep (default 'every', capped per overlay). */
+  occurrence?: OverlayOccurrence
 }
 
 /** A concrete placement the AI/keyword matcher produced (SOURCE-time seconds). */
@@ -474,6 +509,8 @@ export interface OverlayEvent {
   reason: string
   /** which matcher produced it. */
   source?: 'llm' | 'keyword'
+  /** matcher confidence 0..1 (LLM only) — for logs today, review UI later. */
+  confidence?: number
 }
 
 export interface OverlayGenResult {
@@ -481,6 +518,40 @@ export interface OverlayGenResult {
   /** which path produced the events. */
   via: 'llm' | 'keyword' | 'none'
   /** human-readable log lines (rules in, matches found/rejected, …). */
+  log: string[]
+}
+
+/** A proactive placement PROPOSAL from "Suggest" — the AI reads the whole
+ *  transcript + the overlay library and proposes overlay↔moment pairs the
+ *  creator reviews (accept/reject) before anything is placed. Unlike an
+ *  OverlayEvent (already committed) a suggestion is pending review. */
+export interface OverlaySuggestion {
+  /** ephemeral id for the review list (not persisted). */
+  id: string
+  /** 'overlay' = place a library image card; 'label' = place an auto-generated text
+   *  label of what the creator is SHOWING on screen (moment vision). */
+  kind: 'overlay' | 'label'
+  /** which library overlay this proposes (empty for 'label'). */
+  overlayId: string
+  /** the on-screen text for a 'label' suggestion (what the frame vision saw). */
+  label?: string
+  /** the proposed moment, SOURCE-time seconds. */
+  start: number
+  end: number
+  position: OverlayPosition
+  animation: OverlayAnimation
+  /** why here (the beat / what the creator says) — shown on the review card. */
+  reason: string
+  /** the transcript sentence that triggered it — shown on the review card. */
+  sentence: string
+  /** model confidence 0..1. */
+  confidence: number
+}
+
+export interface OverlaySuggestResult {
+  suggestions: OverlaySuggestion[]
+  /** 'llm' when the model produced suggestions, else 'none'. */
+  via: 'llm' | 'none'
   log: string[]
 }
 

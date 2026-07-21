@@ -3,9 +3,12 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import AuthScreen from './components/AuthScreen'
 import HomeScreen from './components/HomeScreen'
+import LandingScreen from './landing/LandingScreen'
+import LegalPage from './landing/LegalPage'
+import AccountPanelHost from './newui/screens/AccountPanelHost'
 import { useStore, firstVideoSourcePath } from './store'
 import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
-import { redactForCreator } from './safeError'
+import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
 import { cloudAuthMe } from './cloud/auth'
@@ -66,10 +69,10 @@ if (IS_WEB) {
       // show the message FIRST — otherwise we see where it threw, not WHAT failed.
       const message = (e && e.message) || String(err)
       const stack = (e && e.stack) || ''
-      // Beta ship (cloud): mask everything confidential — creators see a redacted
-      // one-liner, NO stack/paths/URLs/vendor names. Desktop/self-host: full detail.
+      // Beta ship (cloud): a clean creator-safe message or an opaque code — NO
+      // stack/paths/URLs/vendor/model names ever. Desktop/self-host: full detail.
       const msg = IS_CLOUD
-        ? redactForCreator(message) || 'Something went wrong — please try again.'
+        ? safeErrMessage(err)
         : stack && !stack.startsWith(message)
           ? `${message}\n${stack}`
           : stack || message
@@ -153,6 +156,30 @@ if (IS_WEB) {
   })
 }
 
+type RouteView = 'landing' | 'auth' | 'home' | 'terms' | 'privacy' | 'refund'
+
+// Cloud routing on top of the view-state machine. It's all one SPA (Vercel
+// serves index.html on every path), so this just maps the pathname to a view:
+//   /                        → public landing (marketing)
+//   /earlybetatesters        → the app; signed-out ⇒ auth screen
+//   /terms | /privacy | /refund → legal pages
+// `navigate` keeps URL and view in sync for the marketing/legal links.
+const APP_PATH = '/earlybetatesters'
+
+function viewForPath(path: string, user: { id: string } | null): RouteView {
+  if (path === '/terms') return 'terms'
+  if (path === '/privacy') return 'privacy'
+  if (path === '/refund') return 'refund'
+  if (path === APP_PATH || path.startsWith(`${APP_PATH}/`)) return user ? 'home' : 'auth'
+  return 'landing'
+}
+
+function navigate(path: string): void {
+  if (window.location.pathname !== path) window.history.pushState({}, '', path)
+  useStore.setState({ view: viewForPath(path, useStore.getState().user) })
+  window.scrollTo(0, 0)
+}
+
 function Root(): JSX.Element {
   const view = useStore((s) => s.view)
   const isMobile = useIsMobile()
@@ -164,6 +191,15 @@ function Root(): JSX.Element {
   // bar (it just jumps from the action's own 1% to 100%). Register it once here.
   useEffect(() => {
     if (NEW_UI) void useStore.getState().init()
+  }, [])
+
+  // Marketing/legal routes: keep the view in sync with the URL on back/forward.
+  useEffect(() => {
+    if (!IS_CLOUD) return
+    const onPop = (): void =>
+      useStore.setState({ view: viewForPath(window.location.pathname, useStore.getState().user) })
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
   }, [])
 
   // Bootstrap (web): probe the backend first. If it's unreachable (bundled
@@ -193,7 +229,7 @@ function Root(): JSX.Element {
           return
         }
         const { user } = await cloudAuthMe()
-        if (!cancelled) useStore.setState({ user, view: user ? 'home' : 'auth' })
+        if (!cancelled) useStore.setState({ user, view: viewForPath(window.location.pathname, user) })
         return
       }
       const online = await probeServer()
@@ -285,6 +321,10 @@ function Root(): JSX.Element {
   }, [])
 
   if (view === 'loading') return <div className="auth"><div className="muted">Loading…</div></div>
+  if (view === 'landing') return <LandingScreen onStartFree={() => navigate(APP_PATH)} onNavigate={navigate} />
+  if (view === 'terms') return <LegalPage kind="terms" onNavigate={navigate} />
+  if (view === 'privacy') return <LegalPage kind="privacy" onNavigate={navigate} />
+  if (view === 'refund') return <LegalPage kind="refund" onNavigate={navigate} />
   if (view === 'auth') return <AuthScreen />
   if (view === 'home') return NEW_UI ? (isMobile ? <MobileDashboard /> : <Dashboard />) : <HomeScreen />
   if (NEW_UI) return isMobile ? <MobileEditor /> : <Editor />
@@ -294,5 +334,6 @@ function Root(): JSX.Element {
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <Root />
+    <AccountPanelHost />
   </React.StrictMode>
 )

@@ -1,0 +1,54 @@
+/* Landing styles — scoped under .ec-landing so the marketing page's global
+ * reset never leaks into the editor. Mirrors the design's <helmet> block. */
+.ec-landing,
+.ec-landing * {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+.ec-landing {
+  font-family: 'Hanken Grotesk', system-ui, sans-serif;
+  color: #f5f5f7;
+  -webkit-font-smoothing: antialiased;
+}
+.ec-landing a {
+  color: inherit;
+  text-decoration: none;
+}
+.ec-landing a:hover {
+  color: #fff;
+}
+.ec-landing ::selection {
+  background: rgba(99, 102, 241, 0.35);
+}
+/* While the landing/legal pages are mounted: dark backdrop + restore normal
+ * document scrolling. The editor otherwise locks the viewport
+ * (styles.css: html,body,#root height:100% + body overflow:hidden), which
+ * clips this tall page and makes it unscrollable. */
+body.ec-landing-body {
+  background: #08080a;
+  height: auto;
+  overflow: visible;
+  user-select: auto;
+}
+body.ec-landing-body #root {
+  height: auto;
+}
+
+@keyframes ec-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes ec-scan {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}

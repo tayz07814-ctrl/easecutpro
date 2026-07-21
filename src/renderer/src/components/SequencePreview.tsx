@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { mediaSrc } from '../platform'
 import { computeKeepRanges, virtualKeepsToClipSegments } from '@shared/edit'
-import { playClock, easeInOut, primePlayback } from '../clock'
+import { playClock, primePlayback } from '../clock'
+import { kenBurnsTransform, kenBurnsOrigin } from '../kenBurns'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -550,13 +551,11 @@ export default function SequencePreview(): JSX.Element {
         v.style.transform = ''
         return
       }
-      const size = seg.ovScale ?? 1
-      const zs = seg.ovZoomStart ?? 1
-      const ze = seg.ovZoomEnd ?? 1
       const prog = seg.len > 0 ? Math.min(1, Math.max(0, (playClock.t - seg.start) / seg.len)) : 0
-      const scale = size * (zs + (ze - zs) * easeInOut(prog))
-      v.style.transformOrigin = `${50 + (seg.ovX ?? 0) * 100}% ${50 + (seg.ovY ?? 0) * 100}%`
-      v.style.transform = Math.abs(scale - 1) > 0.001 ? `scale(${scale})` : ''
+      v.style.transformOrigin = kenBurnsOrigin(seg.ovX, seg.ovY)
+      // GPU-composited 3D transform, always applied (even at scale 1) so the
+      // layer never promotes/demotes mid-zoom. Same math as the exporters.
+      v.style.transform = kenBurnsTransform({ size: seg.ovScale ?? 1, zoomStart: seg.ovZoomStart, zoomEnd: seg.ovZoomEnd, progress: prog })
     }
     if (playing) {
       let raf = 0
@@ -716,7 +715,9 @@ export default function SequencePreview(): JSX.Element {
               onTimeUpdate={onTimeUpdate}
               onError={onMediaError}
               onClick={() => { if (!playing) primePlayback(); setPlaying(!playing) }}
-              style={{ visibility: inGap ? 'hidden' : 'visible' }}
+              // will-change keeps the base on its own GPU layer so Ken Burns
+              // composites without a per-frame CPU repaint.
+              style={{ visibility: inGap ? 'hidden' : 'visible', willChange: 'transform', backfaceVisibility: 'hidden' }}
             />
             {frame.width > 0 && <OverlayLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}
             {frame.width > 0 && <TextLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}

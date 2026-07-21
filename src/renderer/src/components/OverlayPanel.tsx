@@ -1,11 +1,24 @@
+import { useState } from 'react'
 import { useStore } from '../store'
 import { mediaSrc, IS_CLOUD } from '../platform'
-import type { OverlayAnimation, OverlayPosition } from '@shared/types'
+import { useSharedEngineSnapshot } from '../timelineEngine'
+import { docSourceToEdited } from '../docTime'
+import type { OverlayAnimation, OverlayOccurrence, OverlayPosition } from '@shared/types'
 
 const POSITIONS: OverlayPosition[] = [
   'top_center', 'center', 'bottom_center', 'top_left', 'top_right', 'bottom_left', 'bottom_right'
 ]
 const ANIMS: OverlayAnimation[] = ['none', 'pop', 'fade']
+const OCCURRENCES: { value: OverlayOccurrence; label: string }[] = [
+  { value: 'every', label: 'every mention' },
+  { value: 'first', label: 'first mention only' },
+  { value: 'last', label: 'last mention only' }
+]
+
+function mmss(sec: number): string {
+  const s = Math.max(0, Math.round(sec))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
 
 /** Author overlay images + natural-language placement rules; run AI placement. */
 export default function OverlayPanel(): JSX.Element {
@@ -13,22 +26,45 @@ export default function OverlayPanel(): JSX.Element {
   const rules = useStore((s) => s.project.overlayRules ?? [])
   const library = useStore((s) => s.library)
   const job = useStore((s) => s.job)
+  const hasTranscript = useStore((s) => (s.project.transcript?.segments?.length ?? 0) > 0)
   const overlayLog = useStore((s) => s.overlayLog)
+  const [logCopied, setLogCopied] = useState(false)
+  // true once the creator has run Generate/Suggest this session — gates the status
+  // line so it shows the overlay job's message (not a stale unrelated one on mount).
+  const [ranOp, setRanOp] = useState(false)
   const addOverlayAsset = useStore((s) => s.addOverlayAsset)
   const updateOverlayRule = useStore((s) => s.updateOverlayRule)
   const removeOverlayAsset = useStore((s) => s.removeOverlayAsset)
   const generateOverlays = useStore((s) => s.generateOverlays)
   const clearGeneratedOverlays = useStore((s) => s.clearGeneratedOverlays)
 
+  // Suggest (proactive review flow)
+  const suggestions = useStore((s) => s.overlaySuggestions)
+  const suggestOverlays = useStore((s) => s.suggestOverlays)
+  const acceptSuggestions = useStore((s) => s.acceptSuggestions)
+  const dismissSuggestion = useStore((s) => s.dismissSuggestion)
+  const clearSuggestions = useStore((s) => s.clearSuggestions)
+  const setPlayhead = useStore((s) => s.setPlayhead)
+  const setPlaying = useStore((s) => s.setPlaying)
+  const hasTimeline = useStore((s) => !!s.project.timeline)
+  const snap = useSharedEngineSnapshot()
+  const doc = hasTimeline ? snap?.doc : undefined
+
   const used = new Set(assets.map((a) => a.libraryItemId))
   const images = library.filter((i) => i.kind === 'image' && !used.has(i.id))
   const ruleFor = (id: string) => rules.find((r) => r.overlayId === id)
+  const assetById = (id: string) => assets.find((a) => a.id === id)
+  const seek = (srcStart: number): void => {
+    setPlayhead(hasTimeline ? docSourceToEdited(doc, srcStart) : srcStart)
+    setPlaying(true)
+  }
 
   return (
     <div className="overlay-panel">
       <p className="muted small">
-        Import overlay images in the Media Library, add them here, and write when each should appear.
-        The AI places them on overlay track 1 — you can drag or delete them after.
+        Import overlay images in the Media Library and add them here. A well-named overlay
+        (Bloating, CTA, Hairfall…) is enough — the AI matches its name to the transcript; add
+        an instruction only to say it differently. Placed on overlay track 1 — drag or delete after.
       </p>
 
       {images.length > 0 && (
@@ -65,13 +101,25 @@ export default function OverlayPanel(): JSX.Element {
               />
               <button className="ov-del" title="Remove overlay" onClick={() => removeOverlayAsset(a.id)}>✕</button>
             </div>
+            {a.description ? <div className="ov-desc" title="What the AI sees in this image">👁 {a.description}</div> : null}
             <textarea
               className="ov-instr"
-              placeholder="Show this when I talk about bloating, digestion, my stomach feeling lighter…"
+              placeholder={`Optional — matches the name "${r.name}" by itself. Or describe it: show this when I talk about bloating, my stomach feeling lighter…`}
               value={r.instruction}
               onChange={(e) => updateOverlayRule(a.id, { instruction: e.target.value })}
             />
             <div className="ov-opts">
+              <label>
+                Shows on
+                <select
+                  value={r.occurrence ?? 'every'}
+                  onChange={(e) => updateOverlayRule(a.id, { occurrence: e.target.value as OverlayOccurrence })}
+                >
+                  {OCCURRENCES.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
               <label>
                 Position
                 <select
@@ -112,25 +160,115 @@ export default function OverlayPanel(): JSX.Element {
 
       {assets.length > 0 && (
         <div className="ov-actions">
-          {/* AI placement runs on the PC server; manual overlay clips still work in cloud. */}
-          {IS_CLOUD ? (
-            <span className="muted small">
-              AI overlay placement isn't in the cloud version yet — drag images onto the timeline instead.
-            </span>
-          ) : (
-            <button className="primary" disabled={job.active} onClick={() => void generateOverlays()}>
-              ✨ Generate overlays
-            </button>
-          )}
+          <button
+            className="primary"
+            disabled={job.active || !hasTranscript}
+            title={hasTranscript ? 'Match your rules to the transcript and place the overlays' : 'Needs a transcript — the AI reads it to find when you say things'}
+            onClick={() => { setRanOp(true); void generateOverlays() }}
+          >
+            ✨ Generate
+          </button>
+          <button
+            className="ov-suggest-btn"
+            disabled={job.active || !hasTranscript}
+            title={hasTranscript ? 'Let the AI read the whole video and propose what overlay goes where' : 'Needs a transcript first'}
+            onClick={() => { setRanOp(true); void suggestOverlays() }}
+          >
+            🪄 Suggest
+          </button>
           <button disabled={job.active} onClick={() => clearGeneratedOverlays()}>
             Clear placed
           </button>
         </div>
       )}
 
+      {/* Feedback line: the new editor has no global status bar, so surface the
+          overlay job's progress/result (and any guard message / error) here — else
+          a run that finds nothing or hits "transcribe first" looks like a dead button. */}
+      {ranOp && job.message && (
+        <p className={`ov-status${job.active ? ' busy' : ''}`} role="status">
+          {job.active ? '⏳ ' : ''}{job.message}
+        </p>
+      )}
+
+      {suggestions.length > 0 && (
+        <div className="ov-suggest">
+          <div className="ov-suggest-head">
+            <span><b>{suggestions.length}</b> suggestion{suggestions.length > 1 ? 's' : ''} — review &amp; accept</span>
+            <span className="ov-suggest-bulk">
+              <button className="primary small" disabled={job.active} onClick={() => acceptSuggestions()}>Accept all</button>
+              <button className="small" onClick={() => clearSuggestions()}>Dismiss all</button>
+            </span>
+          </div>
+          {suggestions.map((s) => {
+            const isLabel = s.kind === 'label'
+            const a = assetById(s.overlayId)
+            const conf = Math.round(s.confidence * 100)
+            return (
+              <div key={s.id} className="ov-sugg-card">
+                <button className="ov-sugg-seek" title="Preview this moment" onClick={() => seek(s.start)}>
+                  {isLabel ? <span className="ov-sugg-ic">📝</span> : a?.file ? <img src={mediaSrc(a.file)} alt="" /> : <span className="ov-sugg-ic">🖼</span>}
+                  <span className="ov-sugg-time">▶ {mmss(s.start)}</span>
+                </button>
+                <div className="ov-sugg-body">
+                  <div className="ov-sugg-title">
+                    <b>{isLabel ? s.label : a?.name ?? 'Overlay'}</b>
+                    {isLabel && <span className="ov-sugg-tag">auto-label</span>}
+                    <span className={`ov-sugg-conf ${conf >= 75 ? 'hi' : conf >= 55 ? 'mid' : 'lo'}`}>{conf}%</span>
+                  </div>
+                  <div className="ov-sugg-why">{s.reason || '—'}</div>
+                  <div className="ov-sugg-quote">“{s.sentence}”</div>
+                </div>
+                <div className="ov-sugg-acts">
+                  <button className="primary small" disabled={job.active} title={isLabel ? 'Place this text label' : 'Place this overlay'} onClick={() => acceptSuggestions([s.id])}>✓</button>
+                  <button className="small" title="Dismiss" onClick={() => dismissSuggestion(s.id)}>✕</button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {assets.length > 0 && !hasTranscript && (
+        <p className="muted small">
+          No transcript yet — run {IS_CLOUD ? '✂ ProCut or 📝 Transcribe' : '⚡ FastCut, ✂ ProCut or 📝 Transcribe'} first so the AI knows when you say things.
+        </p>
+      )}
+      {assets.length > 0 && hasTranscript && IS_CLOUD && (
+        <p className="muted small">
+          Overlays are matched by AI (understands paraphrases &amp; negation), with keyword matching as an offline fallback.
+        </p>
+      )}
+
       {overlayLog.length > 0 && (
         <details className="ov-log">
           <summary>Last run · {overlayLog.length} log lines</summary>
+          <div className="ov-log-head">
+            <button
+              type="button"
+              className="ov-log-copy"
+              onClick={async () => {
+                const text = overlayLog.join('\n')
+                try {
+                  await navigator.clipboard.writeText(text)
+                } catch {
+                  // clipboard API blocked (insecure ctx / permission) — fall back to a
+                  // hidden textarea + execCommand so copy still works.
+                  const ta = document.createElement('textarea')
+                  ta.value = text
+                  ta.style.position = 'fixed'
+                  ta.style.opacity = '0'
+                  document.body.appendChild(ta)
+                  ta.select()
+                  try { document.execCommand('copy') } catch { /* give up silently */ }
+                  document.body.removeChild(ta)
+                }
+                setLogCopied(true)
+                window.setTimeout(() => setLogCopied(false), 1500)
+              }}
+            >
+              {logCopied ? '✓ Copied' : 'Copy log'}
+            </button>
+          </div>
           <pre>{overlayLog.join('\n')}</pre>
         </details>
       )}

@@ -282,43 +282,114 @@ async function decodeAudioAtRate(buf: ArrayBuffer, _targetRate: number): Promise
   }
 }
 
-/** Compute a waveform in the browser via WebAudio (best effort; skipped if huge). */
+/** Compute a waveform (amplitude envelope) in the browser. Best-effort and purely
+ *  cosmetic, so it degrades to no waveform rather than alarming the creator. */
 export async function localWaveform(id: string, peaksPerSec = 60): Promise<Waveform> {
   const rec = registry.get(id)
   if (!rec || rec.file.size > 700 * 1024 * 1024) return { peaksPerSec, peaks: [] }
+  // Primary: WebCodecs via mediabunny. It decodes with the platform's NATIVE audio
+  // decoder, so it reads codecs that iOS Safari's decodeAudioData rejects (the
+  // "waveform decode failed" box on mobile), and it opens NO AudioContext — iOS caps
+  // how many can be live, and exhausting them broke decoding for every later clip.
+  // Bounded by an abort timeout; any miss falls through to decodeAudioData.
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 30000)
+  let fast: number[] | null = null
+  try {
+    fast = await localWaveformFast(rec, peaksPerSec, ctrl.signal)
+  } catch {
+    fast = null
+  } finally {
+    clearTimeout(timer)
+  }
+  if (fast && fast.length) return { peaksPerSec, peaks: fast }
+  // Fallback: WebAudio decodeAudioData at a LOW rate (~6x less PCM to scan and far
+  // less memory — a multi-minute 48kHz file can GC-thrash a phone). Reliable on
+  // desktop and on older iOS that predates WebCodecs audio.
   try {
     const buf = await rec.file.arrayBuffer()
     const leadPeaks = Math.round(mp4AudioStartOffset(buf) * peaksPerSec) // parse BEFORE decode (it detaches buf)
-    // A waveform only needs the amplitude envelope, so decode/resample to a LOW
-    // rate: ~6x less PCM to scan and far less memory (a multi-minute file at full
-    // 48kHz can GC-thrash or OOM a phone).
     const audio = await decodeAudioAtRate(buf, 8000)
-    // Use ALL channels (max across them): voice is often recorded on only one
-    // channel, so reading channel 0 alone shows flat waves while someone speaks.
-    const chans: Float32Array[] = []
-    for (let c = 0; c < audio.numberOfChannels; c++) chans.push(audio.getChannelData(c))
-    const n = chans[0]?.length ?? 0
-    const per = Math.max(1, Math.floor(audio.sampleRate / peaksPerSec))
-    const peaks: number[] = []
-    for (let i = 0; i < n; i += per) {
-      let max = 0
-      const end = Math.min(i + per, n)
-      for (const ch of chans) {
-        for (let j = i; j < end; j++) {
-          const a = Math.abs(ch[j])
-          if (a > max) max = a
-        }
-      }
-      peaks.push(max)
-    }
-    // Pad the leading audio offset with silent peaks so the waveform aligns to
-    // the video timeline (matches the desktop extraction fix).
+    const peaks = peaksFromAudioBuffer(audio, peaksPerSec)
+    // Pad the leading audio offset with silent peaks so the waveform aligns to the
+    // video timeline (decodeAudioData strips the elst delay; the WebCodecs path
+    // keeps it via presentation timestamps, so it needs no padding).
     if (leadPeaks > 0) return { peaksPerSec, peaks: new Array(leadPeaks).fill(0).concat(peaks) }
     return { peaksPerSec, peaks }
   } catch (e) {
-    // Surface WHY the waveform is missing (iOS audio-decode failures are silent otherwise).
-    ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Waveform decode failed', e)
+    // Both decoders failed (e.g. an iOS-only codec with no WebCodecs support). The
+    // waveform is a cosmetic envelope, so degrade to none QUIETLY — log for remote
+    // debugging, but do NOT pop the on-screen error box for a non-fatal miss.
+    console.warn('[ec] Waveform unavailable (audio not decodable here)', e)
     return { peaksPerSec, peaks: [] }
+  }
+}
+
+/** Max-amplitude peaks per output bucket, reading ALL channels (voice is often on
+ *  a single channel, so channel 0 alone can read flat while someone speaks). */
+function peaksFromAudioBuffer(audio: AudioBuffer, peaksPerSec: number): number[] {
+  const chans: Float32Array[] = []
+  for (let c = 0; c < audio.numberOfChannels; c++) chans.push(audio.getChannelData(c))
+  const n = chans[0]?.length ?? 0
+  const per = Math.max(1, Math.floor(audio.sampleRate / peaksPerSec))
+  const peaks: number[] = []
+  for (let i = 0; i < n; i += per) {
+    let max = 0
+    const end = Math.min(i + per, n)
+    for (const ch of chans) {
+      for (let j = i; j < end; j++) {
+        const a = Math.abs(ch[j])
+        if (a > max) max = a
+      }
+    }
+    peaks.push(max)
+  }
+  return peaks
+}
+
+/** WebCodecs waveform via mediabunny: decode the audio track in presentation order
+ *  and fold each buffer into max-amplitude peak buckets keyed by ABSOLUTE time, so
+ *  the edit-list (elst) delay lands as leading silence automatically. Returns null
+ *  (→ decodeAudioData fallback) on any error, abort, or undecodable track. The
+ *  `for await` yields between buffers so the main thread stays responsive. */
+async function localWaveformFast(rec: MediaRec, peaksPerSec: number, signal: AbortSignal): Promise<number[] | null> {
+  let input: MBInput | null = null
+  try {
+    const { Input, BlobSource, ALL_FORMATS, AudioBufferSink } = await import('mediabunny')
+    input = new Input({ source: new BlobSource(rec.file), formats: ALL_FORMATS })
+    const track = await input.getPrimaryAudioTrack()
+    if (!track || signal.aborted || !(await track.canDecode())) return null
+    const sink = new AudioBufferSink(track)
+    const peaks: number[] = []
+    for await (const wrapped of sink.buffers()) {
+      if (signal.aborted) break
+      const ab = wrapped.buffer
+      const nCh = ab.numberOfChannels
+      const n = ab.length
+      const baseBucket = wrapped.timestamp * peaksPerSec // presentation time → bucket units
+      const bucketPerSample = peaksPerSec / ab.sampleRate
+      const chans: Float32Array[] = []
+      for (let c = 0; c < nCh; c++) chans.push(ab.getChannelData(c))
+      for (let j = 0; j < n; j++) {
+        const bucket = (baseBucket + j * bucketPerSample) | 0 // floor (timestamp ≥ 0)
+        let a = 0
+        for (let c = 0; c < nCh; c++) {
+          const v = Math.abs(chans[c][j])
+          if (v > a) a = v
+        }
+        while (peaks.length <= bucket) peaks.push(0)
+        if (a > peaks[bucket]) peaks[bucket] = a
+      }
+    }
+    return peaks.length ? peaks : null
+  } catch {
+    return null // codec undecodable here, read failed, or aborted — use fallback
+  } finally {
+    try {
+      input?.dispose()
+    } catch {
+      /* already disposed */
+    }
   }
 }
 
@@ -640,12 +711,30 @@ export async function ensureAudioUploaded(id: string, onProgress?: (pct: number)
   return rec.audioServerPath
 }
 
-/** Decode a media file's audio in the browser → 16 kHz mono WAV Blob (null if it can't). */
+/** Decode a media file's audio in the browser → 16 kHz mono WAV Blob (null if it can't).
+ *  Prefers a WebCodecs decode (mediabunny) and falls back to WebAudio decodeAudioData. */
 export async function extractAudioWavBlob(id: string, onProgress?: (pct: number) => void): Promise<Blob | null> {
   const rec = registry.get(id)
   if (!rec) return null
   // Very large files risk OOM on decode; let the caller fall back to full upload.
   if (rec.file.size > 800 * 1024 * 1024) return null
+  // Primary: WebCodecs via mediabunny — the platform's NATIVE audio decoder (the same
+  // one that plays the clip). iOS Safari's decodeAudioData turns some phone-recorded
+  // codecs into SILENCE, so the uploaded WAV had "no spoken audio" and Cut Lord's
+  // transcription failed on iPhone; WebCodecs decodes them correctly and opens no
+  // AudioContext (iOS caps how many can be live). Bounded by an abort timeout.
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 120000)
+  let fast: Blob | null = null
+  try {
+    fast = await extractAudioWavBlobFast(rec, ctrl.signal, onProgress)
+  } catch {
+    fast = null
+  } finally {
+    clearTimeout(timer)
+  }
+  if (fast) return fast
+  // Fallback: WebAudio decodeAudioData (desktop-reliable; iOS-flaky).
   try {
     onProgress?.(5)
     const ab = await rec.file.arrayBuffer()
@@ -660,6 +749,78 @@ export async function extractAudioWavBlob(id: string, onProgress?: (pct: number)
     // Surface the REAL decode error (Cut Lord's "Could not decode…" hides the cause).
     ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Audio decode failed (Cut Lord)', e)
     return null // unsupported container/codec, or decode OOM
+  }
+}
+
+/** WebCodecs audio → 16 kHz mono WAV via mediabunny. Decodes with the platform's
+ *  native decoder (no AudioContext), streaming a drift-free linear resample so a
+ *  long clip never holds the whole native-rate PCM at once. The leading presentation
+ *  offset becomes silence so STT word times line up with the video (matches the
+ *  decodeAudioData path). Returns null (→ decodeAudioData fallback) on any error,
+ *  abort, or undecodable track. */
+async function extractAudioWavBlobFast(
+  rec: MediaRec,
+  signal: AbortSignal,
+  onProgress?: (pct: number) => void
+): Promise<Blob | null> {
+  let input: MBInput | null = null
+  try {
+    const { Input, BlobSource, ALL_FORMATS, AudioBufferSink } = await import('mediabunny')
+    input = new Input({ source: new BlobSource(rec.file), formats: ALL_FORMATS })
+    const track = await input.getPrimaryAudioTrack()
+    if (!track || signal.aborted || !(await track.canDecode())) return null
+    const durationS =
+      (await track.getDurationFromMetadata().catch(() => null)) || (await track.computeDuration().catch(() => 0)) || 0
+    const sink = new AudioBufferSink(track)
+    const TARGET = 16000
+    const content: number[] = [] // 16 kHz mono Int16 sample values (content, no lead)
+    let srcRate = 0
+    let firstTs = -1
+    let globalIn = 0 // native samples consumed before the current chunk
+    let k = 0 // next content output index
+    for await (const wrapped of sink.buffers()) {
+      if (signal.aborted) return null
+      const ab = wrapped.buffer
+      if (!srcRate) srcRate = ab.sampleRate
+      if (firstTs < 0) firstTs = Math.max(0, wrapped.timestamp)
+      const nCh = ab.numberOfChannels
+      const n = ab.length
+      const mono = new Float32Array(n) // downmix channels → mono
+      for (let c = 0; c < nCh; c++) {
+        const ch = ab.getChannelData(c)
+        for (let j = 0; j < n; j++) mono[j] += ch[j]
+      }
+      if (nCh > 1) for (let j = 0; j < n; j++) mono[j] /= nCh
+      const ratio = srcRate / TARGET
+      const chunkEnd = globalIn + n
+      while (k * ratio < chunkEnd) {
+        const local = k * ratio - globalIn // ≥ 0 and < n by the loop bound
+        const i0 = Math.floor(local)
+        const frac = local - i0
+        const a = mono[i0]
+        const b = i0 + 1 < n ? mono[i0 + 1] : mono[i0] // clamp at chunk boundary
+        let s = a + (b - a) * frac
+        s = s < -1 ? -1 : s > 1 ? 1 : s
+        content.push(s < 0 ? s * 0x8000 : s * 0x7fff)
+        k++
+      }
+      globalIn = chunkEnd
+      if (durationS > 0) onProgress?.(Math.min(95, Math.round((globalIn / srcRate / durationS) * 95)))
+    }
+    if (!srcRate || !content.length) return null
+    const lead = Math.max(0, Math.round(Math.max(0, firstTs) * TARGET))
+    const pcm = new Int16Array(lead + content.length) // lead region stays silent (0)
+    pcm.set(content, lead)
+    onProgress?.(100)
+    return encodeWav(pcm, TARGET)
+  } catch {
+    return null
+  } finally {
+    try {
+      input?.dispose()
+    } catch {
+      /* already disposed */
+    }
   }
 }
 

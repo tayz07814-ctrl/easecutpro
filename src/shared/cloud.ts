@@ -97,6 +97,15 @@ export interface ProcutJudgeReq {
   payload: string
   /** first-pass EDL proposal ({word_cuts:[],pause_cuts:[]} in cloud: no GPT pass). */
   proposal: unknown
+  /** optional per-request judge model (ultracut-judge only; whitelisted server-side).
+   *  Production cloud retake sends deepseek/deepseek-v4-flash. */
+  model?: string
+  /** optional per-request SYSTEM-prompt variant (ultracut-judge only; whitelisted
+   *  server-side). 'sharp' = the word-list retake prompt + boundary rules. */
+  promptVariant?: string
+  /** optional per-request reasoning mode (ultracut-judge only; whitelisted
+   *  server-side). e.g. 'medium'; omitted -> the server's env default. */
+  reasoning?: string
 }
 export interface ProcutJudgeRes {
   raw: string | null

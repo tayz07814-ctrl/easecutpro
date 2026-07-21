@@ -32,7 +32,7 @@ import { judgeCuts } from '../main/ai-cut-judge'
 import { cutCutPro } from '../main/cutcutpro'
 import { retakeAwareCut } from '../main/retakeaware/engine'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from '../main/fast-cut'
-import { generateOverlayTimeline } from '../main/overlay-rules'
+import { generateOverlayTimeline, suggestOverlayTimeline, describeOverlayImage, matchMoment } from '../main/overlay-rules'
 import { openaiAvailable } from '../main/openai'
 import type { Project, Transcript, TranscribeBackend, OverlayAsset, OverlayRule } from '../shared/types'
 
@@ -500,6 +500,43 @@ app.post('/api/generate-overlays', (req, res) => {
       generateOverlayTimeline(transcript, assets, rules, opts, (pct, msg) => op(pct, msg))
     )
     res.json({ jobId })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+app.post('/api/suggest-overlays', (req, res) => {
+  try {
+    const userId = uid(req)
+    const transcript = req.body?.transcript as Transcript | undefined
+    const assets = (req.body?.assets ?? []) as OverlayAsset[]
+    const opts = (req.body?.opts ?? { duration: 0, cuts: [] }) as { duration: number; cuts: { start: number; end: number }[] }
+    if (!transcript?.segments) throw new Error('No transcript provided')
+    const jobId = runJob('transcribe', userId, (op) =>
+      suggestOverlayTimeline(transcript, assets, opts, (pct, msg) => op(pct, msg))
+    )
+    res.json({ jobId })
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+app.post('/api/describe-overlay', async (req, res) => {
+  try {
+    const imageBase64 = String(req.body?.imageBase64 ?? '')
+    const mediaType = String(req.body?.mediaType ?? 'image/png')
+    res.json(await describeOverlayImage(imageBase64, mediaType))
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+
+app.post('/api/match-moment', async (req, res) => {
+  try {
+    const frames = Array.isArray(req.body?.frames) ? req.body.frames : []
+    const line = String(req.body?.line ?? '')
+    const overlays = Array.isArray(req.body?.overlays) ? req.body.overlays : []
+    res.json(await matchMoment(frames, line, overlays))
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }

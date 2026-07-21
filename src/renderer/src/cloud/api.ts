@@ -5,6 +5,8 @@
 // the Supabase edge functions; the other engines are desktop/self-host-only
 // and their UI is hidden by IS_CLOUD gates.
 import type { Project, ProgressEvent } from '@shared/types'
+import { generateOverlaysCloud, suggestOverlaysCloud } from './overlayMatch'
+import { invokeEdge } from './supabase'
 import {
   registerLocalFile,
   isWebMediaId,
@@ -26,35 +28,49 @@ function emit(kind: ProgressEvent['kind'], percent: number, message?: string, jo
   for (const cb of progressListeners) cb({ jobId, kind, percent, message })
 }
 
-function pickFile(accept: string): Promise<File | null> {
+/** Open a native file picker and resolve with the chosen files (empty on cancel).
+ *  The <input> is appended to the DOM before `.click()` — iOS Safari does NOT
+ *  fire `change` on a DETACHED input, so on mobile the picker's "Done"/"Add" tap
+ *  silently did nothing. We insert it off-screen, click, then remove it once the
+ *  pick settles. The `cancel` event (modern browsers) cleans up on dismissal;
+ *  where it's unsupported the node simply lingers off-screen until the next pick. */
+function openPicker(configure: (input: HTMLInputElement) => void): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = accept
-    input.onchange = () => resolve(input.files?.[0] ?? null)
+    configure(input)
+    input.style.cssText = 'position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0'
+    let settled = false
+    const finish = (files: File[]): void => {
+      if (settled) return
+      settled = true
+      input.remove()
+      resolve(files)
+    }
+    input.onchange = () => finish(input.files ? Array.from(input.files) : [])
+    input.oncancel = () => finish([])
+    document.body.appendChild(input)
     input.click()
   })
 }
 
+function pickFile(accept: string): Promise<File | null> {
+  return openPicker((i) => {
+    i.accept = accept
+  }).then((files) => files[0] ?? null)
+}
+
 function pickFiles(accept: string): Promise<File[]> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = accept
-    input.multiple = true
-    input.onchange = () => resolve(input.files ? Array.from(input.files) : [])
-    input.click()
+  return openPicker((i) => {
+    i.accept = accept
+    i.multiple = true
   })
 }
 
 function pickFolder(): Promise<File[]> {
-  return new Promise((resolve) => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.multiple = true
-    ;(input as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true
-    input.onchange = () => resolve(input.files ? Array.from(input.files) : [])
-    input.click()
+  return openPicker((i) => {
+    i.multiple = true
+    ;(i as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true
   })
 }
 
@@ -92,7 +108,7 @@ const cloudApi: Window['api'] & { retakeDeltaCut: Window['api']['retakeAwareCut'
     return f ? registerLocalFile(f) : null
   },
   openMediaDialogMulti: async () => {
-    const files = await pickFiles('video/*')
+    const files = await pickFiles('video/*,audio/*,image/*')
     return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
   },
   importFolder: async () => {
@@ -135,7 +151,30 @@ const cloudApi: Window['api'] & { retakeDeltaCut: Window['api']['retakeAwareCut'
     cutCutProCloud(needLocal(path), transcript ?? null, runVad ?? true, script, vadSilenceSettings, (pct, msg) => emit('transcribe', pct, msg)),
   cutJudge: async () => desktopOnly('Smart Smooth Cut'),
   saveSmartCutDebug: async () => desktopOnly('Smart Smooth Cut'),
-  generateOverlays: async () => desktopOnly('AI overlay generation'),
+  // Cloud overlay placement: SEMANTIC matching via the overlay-match edge function
+  // (Claude Opus), with deterministic keyword matching as the offline fallback.
+  generateOverlays: async (transcript, assets, rules, opts) =>
+    generateOverlaysCloud(transcript, assets, rules, opts),
+  // "Suggest" (paid/discovery): AI proposes placements from the library, for review.
+  suggestOverlays: async (transcript, assets, opts) =>
+    suggestOverlaysCloud(transcript, assets, opts),
+  // Vision (v1.5): describe what an overlay image depicts, via the overlay-vision edge fn.
+  describeOverlayImage: async (imageBase64, mediaType) => {
+    try {
+      return await invokeEdge<{ description: string }>('overlay-vision', { image: imageBase64, mediaType })
+    } catch {
+      return { description: '' } // graceful: matching falls back to the overlay name
+    }
+  },
+  // Moment vision (image-to-image): pick which of the creator's overlays depicts what
+  // they show across a few video frames, via the moment-vision edge fn.
+  matchMoment: async (frames, line, overlays) => {
+    try {
+      return await invokeEdge<{ overlayId: string }>('moment-vision', { frames, line, overlays })
+    } catch {
+      return { overlayId: '' } // graceful: moment matching just adds nothing
+    }
+  },
 
   retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
     retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),

@@ -18,8 +18,11 @@ import type {
   AICutResult,
   WhisperModelInfo,
   OverlayAsset,
+  OverlayThumb,
+  MomentFrame,
   OverlayRule,
-  OverlayGenResult
+  OverlayGenResult,
+  OverlaySuggestResult
 } from '../shared/types'
 import type { ToolStatus } from '../main/binaries'
 import type { CutCutProResult } from '../shared/cutcutpro'
@@ -71,6 +74,25 @@ const api = {
     rules: OverlayRule[],
     opts: { duration: number; cuts: { start: number; end: number }[] }
   ): Promise<OverlayGenResult> => ipcRenderer.invoke(IPC.generateOverlays, transcript, assets, rules, opts),
+  /** "Suggest": AI proposes overlay↔moment placements from the library, for review. */
+  suggestOverlays: (
+    transcript: Transcript,
+    assets: OverlayAsset[],
+    opts: { duration: number; cuts: { start: number; end: number }[] }
+  ): Promise<OverlaySuggestResult> => ipcRenderer.invoke(IPC.suggestOverlays, transcript, assets, opts),
+  /** Vision: describe what an overlay image DEPICTS (cached, fed into matching). */
+  describeOverlayImage: (
+    imageBase64: string,
+    mediaType: string
+  ): Promise<{ description: string }> => ipcRenderer.invoke(IPC.describeOverlayImage, imageBase64, mediaType),
+  /** Moment vision: given a few video FRAMES across the moment + the creator's overlay
+   *  thumbnails, pick which overlay depicts what they're showing (image-to-image match). */
+  matchMoment: (
+    frames: MomentFrame[],
+    line: string,
+    overlays: OverlayThumb[]
+  ): Promise<{ overlayId: string }> =>
+    ipcRenderer.invoke(IPC.matchMoment, frames, line, overlays),
   openaiStatus: (): Promise<{ available: boolean }> => ipcRenderer.invoke(IPC.openaiStatus),
   whisperModels: (): Promise<WhisperModelInfo[]> => ipcRenderer.invoke(IPC.whisperModels),
   detectSilence: (path: string, opts: SilenceDetectOptions): Promise<SilenceRegion[]> =>

@@ -5,8 +5,9 @@
 // STRUCTURE (tracks + clips with correct source refs + timing) so the media
 // managers can pull real waveforms/thumbnails by sourcePath. Pure & headless.
 
-import type { Project, TextClip, SequenceClip, ExtraAudioClip, Clip as LegacyClip, Track as LegacyTrack } from '../types'
+import type { Project, TextClip, SequenceClip, ExtraAudioClip, Clip as LegacyClip, Track as LegacyTrack, OverlayAsset, OverlayEvent, OverlayPosition } from '../types'
 import type { Clip, TextContent, TimelineDocument } from './types'
+import { positionToBox } from '../overlay'
 import {
   createTimeline,
   createTrack,
@@ -445,6 +446,136 @@ export function removedRangesToMainFrames(
     }
   }
   return frames
+}
+
+/**
+ * Turn AI overlay events (SOURCE seconds, from the transcript matcher) into
+ * image clips on the document's first overlay lane, positioned in EDITED frames.
+ * Each event's start is located on the main lane through the same source→edited
+ * mapping the cut engine uses, so placements stay glued to the sentence that
+ * triggered them no matter what has been cut. Events whose footage is no longer
+ * on the main lane (cut out or manually deleted) are skipped with a note.
+ * Pure — the caller wraps the clips in engine commands.
+ */
+export function overlayEventsToDocClips(
+  doc: TimelineDocument,
+  project: Project,
+  events: OverlayEvent[],
+  assets: OverlayAsset[]
+): { clips: Clip[]; skipped: string[] } {
+  const skipped: string[] = []
+  const lane = doc.tracks
+    .filter((t) => t.kind === 'video' && !t.isMain)
+    .sort((a, b) => a.order - b.order)[0]
+  if (!lane) return { clips: [], skipped: ['no overlay lane in the timeline'] }
+
+  const assetById = new Map(assets.map((a) => [a.id, a]))
+  const clips: Clip[] = []
+  for (const ev of events) {
+    const asset = assetById.get(ev.overlayId)
+    if (!asset) continue
+    const mapped = removedRangesToMainFrames(doc, project, [{ start: ev.start, end: ev.end }])
+    if (mapped.length === 0) {
+      skipped.push(`${asset.name}: moment at ${ev.start.toFixed(1)}s is cut from the timeline`)
+      continue
+    }
+    const len = Math.max(0.5, ev.end - ev.start)
+    const durFrames = Math.max(1, secondsToFrames(len, doc.timebase))
+    const box = positionToBox(ev.position)
+    clips.push(
+      createClip({
+        kind: 'image',
+        trackId: lane.id,
+        start: Math.max(0, Math.round(mapped[0].start)),
+        duration: durFrames,
+        sourcePath: asset.file,
+        sourceIn: 0,
+        sourceOut: len,
+        sourceDuration: len,
+        name: asset.name,
+        hasAudio: false,
+        metadata: {
+          ovX: box.x,
+          ovY: box.y,
+          ovScale: box.scale,
+          ovZoomStart: 1,
+          ovZoomEnd: 1,
+          overlayRuleId: asset.id,
+          overlayAnimation: ev.animation,
+          overlayReason: ev.reason
+        }
+      })
+    )
+  }
+  return { clips, skipped }
+}
+
+/** Center-fraction position for an auto-label text overlay (kept off the face). */
+function labelCenter(position: OverlayPosition): { x: number; y: number } {
+  switch (position) {
+    case 'top_center': return { x: 0.5, y: 0.14 }
+    case 'center': return { x: 0.5, y: 0.5 }
+    case 'top_left': return { x: 0.22, y: 0.14 }
+    case 'top_right': return { x: 0.78, y: 0.14 }
+    case 'bottom_left': return { x: 0.22, y: 0.86 }
+    case 'bottom_right': return { x: 0.78, y: 0.86 }
+    default: return { x: 0.5, y: 0.86 } // bottom_center
+  }
+}
+
+/** Default styling for an auto-generated label (bold white with a dark outline). */
+function labelTextContent(text: string): TextContent {
+  return {
+    text,
+    fontFamily: 'Arial Black',
+    fontSize: 0.07,
+    color: '#ffffff',
+    align: 'center',
+    bold: true,
+    italic: false,
+    underline: false,
+    strokeWidth: 0.08,
+    strokeColor: '#000000',
+    background: { enabled: false, color: '#000000', opacity: 0.6, radius: 0.3, padding: 0.3 },
+    shadow: { enabled: false, color: '#000000', blur: 0, dx: 0, dy: 0 },
+    letterSpacing: 0,
+    lineHeight: 1.2
+  }
+}
+
+/**
+ * Turn accepted "moment label" suggestions (auto-generated text of what the
+ * creator is SHOWING) into doc TEXT clips on the text lane, mapped source->edited
+ * so they land on the sentence that triggered them. Mirrors overlayEventsToDocClips.
+ */
+export function labelSuggestionsToDocTextClips(
+  doc: TimelineDocument,
+  project: Project,
+  labels: { start: number; end: number; label: string; position: OverlayPosition }[]
+): { clips: Clip[]; skipped: string[] } {
+  const skipped: string[] = []
+  const lane = doc.tracks.filter((t) => t.kind === 'text').sort((a, b) => a.order - b.order)[0]
+  if (!lane) return { clips: [], skipped: ['no text lane in the timeline'] }
+  const clips: Clip[] = []
+  for (const l of labels) {
+    const text = (l.label || '').trim()
+    if (!text) continue
+    const mapped = removedRangesToMainFrames(doc, project, [{ start: l.start, end: l.end }])
+    if (mapped.length === 0) { skipped.push(`label "${text}": moment at ${l.start.toFixed(1)}s is cut`); continue }
+    const len = Math.max(0.5, l.end - l.start)
+    const clip = createClip({
+      kind: 'text',
+      trackId: lane.id,
+      start: Math.max(0, Math.round(mapped[0].start)),
+      duration: Math.max(1, secondsToFrames(len, doc.timebase)),
+      name: text,
+      text: labelTextContent(text)
+    })
+    const c = labelCenter(l.position)
+    clip.transform = { ...clip.transform, x: { static: c.x - 0.5 }, y: { static: c.y - 0.5 } }
+    clips.push(clip)
+  }
+  return { clips, skipped }
 }
 
 /** A compact key of the project's STRUCTURE, so the timeline only rebuilds on

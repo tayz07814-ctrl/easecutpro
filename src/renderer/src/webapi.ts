@@ -213,7 +213,7 @@ const webApi: Window['api'] = {
     return f ? registerLocalFile(f) : null
   },
   openMediaDialogMulti: async () => {
-    const files = await pickFiles('video/*')
+    const files = await pickFiles('video/*,audio/*,image/*')
     return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
   },
   importFolder: async () => {
@@ -279,6 +279,12 @@ const webApi: Window['api'] = {
   },
   generateOverlays: (transcript, assets, rules, opts) =>
     runJob(() => call('/api/generate-overlays', { transcript, assets, rules, opts })),
+  suggestOverlays: (transcript, assets, opts) =>
+    runJob(() => call('/api/suggest-overlays', { transcript, assets, opts })),
+  describeOverlayImage: (imageBase64, mediaType) =>
+    call('/api/describe-overlay', { imageBase64, mediaType }),
+  matchMoment: (frames, line, overlays) =>
+    call('/api/match-moment', { frames, line, overlays }),
   openaiStatus: () => call('/api/openai-status'),
   whisperModels: async () => (await call('/api/whisper-models')).models,
   detectSilence: async (path, opts) => {

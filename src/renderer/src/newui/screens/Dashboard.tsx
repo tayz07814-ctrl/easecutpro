@@ -1,6 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { css } from '../css'
 import { useProjects } from '../data/useProjects'
+import { useStore } from '../../store'
+import { IS_CLOUD } from '../../platform'
+import {
+  getSubscription,
+  isProNow,
+  paddleConfigured,
+  waitForPro,
+  onPaddleEvent,
+  openAccountPanel,
+  type Subscription
+} from '../../cloud/subscription'
+import BatchQueuePanel from './BatchQueuePanel'
+import BatchProcessingModal from './BatchProcessingModal'
+import SilenceSettingsModal from './SilenceSettingsModal'
 import type { DashCard } from '../mock'
 
 // Screen 1a — Project dashboard (1440). Wired to real projects via useProjects.
@@ -205,6 +219,28 @@ function ContextMenu({ onRename, onDelete }: { onRename?: () => void; onDelete?:
 export default function Dashboard(): JSX.Element {
   const dash = useProjects()
   const [acct, setAcct] = useState(false)
+  const user = useStore((s) => s.user)
+  const [sub, setSub] = useState<Subscription | null>(null)
+  const pro = isProNow(sub)
+
+  useEffect(() => {
+    if (!IS_CLOUD || !paddleConfigured()) return
+    let active = true
+    void getSubscription().then((s) => {
+      if (active) setSub(s)
+    })
+    const off = onPaddleEvent(async (name) => {
+      if (name === 'checkout.completed') {
+        await waitForPro()
+        if (active) setSub(await getSubscription())
+      }
+    })
+    return () => {
+      active = false
+      off()
+    }
+  }, [])
+
   const [menuId, setMenuId] = useState<string | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [renameId, setRenameId] = useState<string | null>(null)
@@ -213,7 +249,7 @@ export default function Dashboard(): JSX.Element {
   const metaFor = (i: number): { id: string } | undefined => (i > 0 ? dash.metas[i - 1] : undefined)
 
   return (
-    <div style={css('width:100%;height:100%;overflow-y:auto;background:#17181C')} className="ec-newui ec-dash" onClick={() => { setAcct(false); setMenuId(null) }}>
+    <div style={css('width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;background:#17181C')} className="ec-newui ec-dash" onClick={() => { setAcct(false); setMenuId(null) }}>
       {/* top nav */}
       <div style={css(`display:flex;align-items:center;gap:24px;height:64px;padding:0 40px;border-bottom:1px solid ${HAIR}`)}>
         <div style={css('display:flex;align-items:center;gap:10px')}>
@@ -248,13 +284,38 @@ export default function Dashboard(): JSX.Element {
         <div style={css('position:relative')} onClick={(e) => e.stopPropagation()}>
           <div style={css('position:absolute;right:40px;top:8px;width:200px;background:#1E2026;border:1px solid rgba(255,255,255,.09);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:6px;z-index:5')}>
             <div style={css('padding:8px 10px 6px;font-size:12px;color:#9BA0AC;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:4px')}>{dash.email}</div>
-            <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}>Account settings</div>
+            {IS_CLOUD && paddleConfigured() && (
+              <div
+                onClick={() => {
+                  setAcct(false)
+                  openAccountPanel()
+                }}
+                style={css(
+                  'padding:8px 10px;font-size:13px;border-radius:8px;font-weight:600;cursor:pointer',
+                  pro ? 'color:#F5C518' : 'color:#B7B5F4'
+                )}
+              >
+                {pro ? '★ Pro — manage' : '★ Upgrade to Pro'}
+              </div>
+            )}
+            <div
+              onClick={() => {
+                setAcct(false)
+                openAccountPanel()
+              }}
+              style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}
+            >
+              Account settings
+            </div>
             <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}>Keyboard shortcuts</div>
             <div onClick={() => void dash.logout()} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#9BA0AC;cursor:pointer')}>Log out</div>
           </div>
         </div>
       )}
 
+      {/* main content + right-hand batch queue column */}
+      <div style={css('flex:1;min-height:0;display:flex')}>
+      <div style={css('flex:1;min-width:0;overflow-y:auto')}>
       {/* body */}
       <div style={css('max-width:1216px;margin:0 auto;padding:48px 40px 64px')}>
         <div style={css('display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:36px')}>
@@ -263,7 +324,7 @@ export default function Dashboard(): JSX.Element {
             <div style={css('font-size:14px;color:#9BA0AC;margin-top:6px')}>Everything is saved automatically as you edit.</div>
           </div>
           <div style={css('display:flex;align-items:center;gap:12px')}>
-            <button onClick={() => void dash.batch()} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:13px;font-weight:500;border-radius:10px;padding:10px 16px;cursor:pointer')}>Batch clean videos</button>
+            <button onClick={() => dash.openBatchModal()} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:13px;font-weight:500;border-radius:10px;padding:10px 16px;cursor:pointer')}>Batch processing</button>
             <button onClick={() => void dash.create()} style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:10px 18px;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>＋ New project</button>
           </div>
         </div>
@@ -291,6 +352,19 @@ export default function Dashboard(): JSX.Element {
           })}
         </div>
       </div>
+      </div>
+      <BatchQueuePanel
+        queues={dash.queues}
+        batchExport={dash.batchExport}
+        onOpenFile={(id) => void dash.openBatchFile(id)}
+        onAutoExport={(id) => void dash.autoExportAll(id)}
+        onDismiss={(id) => dash.dismissQueue(id)}
+      />
+      </div>
+      <BatchProcessingModal />
+      {/* Silence Settings opens ON TOP of the batch modal (rendered after it) —
+          it edits vadSilenceSettings, which the batch pipeline reads at run time. */}
+      <SilenceSettingsModal />
     </div>
   )
 }

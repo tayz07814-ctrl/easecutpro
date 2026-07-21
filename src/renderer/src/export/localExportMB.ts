@@ -22,7 +22,7 @@
 // — simpler and correct; iOS devices that lack native AAC are still fast enough.
 
 import { getSharedEngine } from '../timelineEngine'
-import { easeInOut } from '../clock'
+import { kenBurnsEase } from '../kenBurns'
 import { planFromDoc, renderAudio, seamFadeSeconds, FPS, exportMsg, type Seg } from './localExport'
 import {
   planOverlays,
@@ -35,6 +35,7 @@ import {
   type OverlayRect
 } from './overlays'
 import type { Project } from '@shared/types'
+import type { TimelineDocument } from '@shared/timeline/types'
 
 const dbg = (...a: unknown[]): void => console.log('[ondevice-mb]', ...a)
 
@@ -60,9 +61,12 @@ interface Sprite {
 export async function exportOnDeviceMB(
   project: Project,
   opts: { width: number; height: number; bitrateMbps: number },
-  onProgress: (pct: number, msg: string) => void
+  onProgress: (pct: number, msg: string) => void,
+  docOverride?: TimelineDocument
 ): Promise<{ blob: Blob; name: string }> {
-  const doc = getSharedEngine()?.document
+  // docOverride: see exportOnDevice — the batch auto-exporter passes a document
+  // built from the project so a non-open project can still be exported.
+  const doc = docOverride ?? getSharedEngine()?.document
   if (!doc) throw new Error('timeline not ready')
   const { segs, audio, total } = planFromDoc(doc, project)
   if (!segs.length || total <= 0) throw new Error('nothing to export')
@@ -139,7 +143,7 @@ export async function exportOnDeviceMB(
       dy: (H - dh) / 2,
       dw,
       dh,
-      scale: seg.size * (seg.zs + (seg.ze - seg.zs) * easeInOut(prog)),
+      scale: seg.size * (seg.zs + (seg.ze - seg.zs) * kenBurnsEase(prog)),
       ox: W * (0.5 + seg.ox),
       oy: H * (0.5 + seg.oy)
     }
@@ -275,7 +279,7 @@ export async function exportOnDeviceMB(
       for (const s of sprites) {
         if (t < s.start || t >= s.end) continue
         const zm = s.zoom
-        const zoom = zm ? zm.zs + (zm.ze - zm.zs) * easeInOut(zm.len > 0 ? (t - zm.start) / zm.len : 1) : 1
+        const zoom = zm ? zm.zs + (zm.ze - zm.zs) * kenBurnsEase(zm.len > 0 ? (t - zm.start) / zm.len : 1) : 1
         draws.push({ z: s.z, run: () => paint(s.bitmap, s.rect, s.clip, zoom) })
       }
       const ovFrames: VideoFrame[] = []
@@ -291,7 +295,7 @@ export async function exportOnDeviceMB(
           continue // decoder hiccup — drop this overlay for one frame, not the export
         }
         ovFrames.push(ovf)
-        const scale = sp.zs + (sp.ze - sp.zs) * easeInOut((t - sp.start) / sp.rampLen)
+        const scale = sp.zs + (sp.ze - sp.zs) * kenBurnsEase((t - sp.start) / sp.rampLen)
         draws.push({ z: sp.z, run: () => paint(ovf, o.rect, true, scale) })
       }
       draws.sort((a, b) => a.z - b.z)
