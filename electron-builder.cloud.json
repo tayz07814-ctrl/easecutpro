@@ -1,0 +1,41 @@
+{
+  "$comment": "Cloud desktop shell (macOS). Separate from the offline/native build in package.json > build. Entry point is overridden to desktop-cloud/main.cjs, which loads the hosted cloud app; no local renderer bundle and no resources/bin binaries are packaged.",
+  "appId": "com.easecutpro.app",
+  "productName": "EaseCutPro",
+  "directories": {
+    "output": "release-cloud",
+    "buildResources": "desktop-cloud"
+  },
+  "extraMetadata": {
+    "main": "desktop-cloud/main.cjs"
+  },
+  "npmRebuild": false,
+  "files": [
+    "desktop-cloud/**/*",
+    "package.json",
+    "!node_modules/**/*",
+    "!src/**/*",
+    "!out/**/*",
+    "!resources/**/*",
+    "!release/**/*"
+  ],
+  "mac": {
+    "icon": "icons/icon.icns",
+    "category": "public.app-category.video",
+    "target": [
+      "dmg",
+      "zip"
+    ],
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "desktop-cloud/entitlements.mac.plist",
+    "entitlementsInherit": "desktop-cloud/entitlements.mac.plist",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "EaseCutPro processes audio from media you import.",
+      "NSCameraUsageDescription": "EaseCutPro processes video you import."
+    }
+  },
+  "dmg": {
+    "title": "EaseCutPro ${version}"
+  }
+}
