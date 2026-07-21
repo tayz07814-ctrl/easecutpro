@@ -64,13 +64,8 @@ export async function cutCutProCloud(
     try {
       op(52, 'Cut Lord is mapping pauses (1/4)…')
       if (!audio) audio = await extractSttAudio(mediaId)
-      if (audio.float32.length) {
-        const regions = await detectSilenceFloat32(audio.float32, audio.sampleRate, vadSilenceToOpts(vadSettings), audio.durationS)
-        vad = regions.map((r) => ({ start: r.start, end: r.end }))
-      } else {
-        // Remux fallback: audio decoded server-side — no local PCM for the VAD.
-        warnings.push('Pause mapping skipped — this clip’s audio was decoded on our servers.')
-      }
+      const regions = await detectSilenceFloat32(audio.float32, audio.sampleRate, vadSilenceToOpts(vadSettings), audio.durationS)
+      vad = regions.map((r) => ({ start: r.start, end: r.end }))
     } catch (e) {
       warnings.push(`VAD unavailable (${(e as Error).message}) — pauses from word gaps only.`)
     }

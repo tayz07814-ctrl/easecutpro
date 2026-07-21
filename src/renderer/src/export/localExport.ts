@@ -21,7 +21,6 @@ import { mainTrackId } from '@shared/timeline/model'
 import { framesToSeconds } from '@shared/timeline/time'
 import { resolveMedia } from '../media/resolver'
 import { isWebMediaId, getFile, mp4AudioStartOffset } from '../webmedia'
-import { ffmpegDecodeAudio } from '../ffmpegAudio'
 import { IS_WEB } from '../platform'
 import { kenBurnsEase } from '../kenBurns'
 import {
@@ -315,20 +314,9 @@ export async function renderAudio(
   //     made tunnel exports silently lose their audio,
   //  3. otherwise (Electron, or an old server without the endpoint) → fetch the
   //     full media URL as before.
-  // Silence probe: iOS "successfully" decodes some clips to pure zeros — mixing
-  // that in is exactly how silent exports get WRITTEN. Sample ~4k points/channel.
-  const bufHasSignal = (b: AudioBuffer): boolean => {
-    const step = Math.max(1, Math.floor(b.length / 4000))
-    for (let c = 0; c < b.numberOfChannels; c++) {
-      const ch = b.getChannelData(c)
-      for (let i = 0; i < b.length; i += step) if (Math.abs(ch[i]) > 0.004) return true // ≈ -48 dBFS
-    }
-    return false
-  }
   const decode = async (src: string, url: string): Promise<AudioBuffer | null> => {
     if (cache.has(src)) return cache.get(src) ?? null
     let buf: AudioBuffer | null = null
-    let leadSec = 0
     try {
       let ab: ArrayBuffer | null = null
       if (isWebMediaId(src)) {
@@ -347,34 +335,11 @@ export async function renderAudio(
       // both strips the offset AND detaches `ab`, so parse first, then re-pad the
       // decoded buffer so the export audio lines up with the video (see
       // padLeadingSilence). Non-MP4 / clean audio parse to 0 and are untouched.
-      leadSec = mp4AudioStartOffset(ab)
+      const leadSec = mp4AudioStartOffset(ab)
       buf = await decodeCtx().decodeAudioData(ab)
       if (buf && leadSec > 0.001) buf = padLeadingSilence(off, buf, leadSec)
     } catch {
       buf = null // undecodable container, dead URL, or decode OOM
-    }
-    // Decoder returned nothing — or SILENCE (the iOS bug that used to ship silent
-    // exports). Re-decode on-device via ffmpeg.wasm at export rate; it also reads
-    // clips whose voice lives on a second audio track (screen recordings).
-    if ((!buf || !bufHasSignal(buf)) && isWebMediaId(src)) {
-      const f = getFile(src)
-      if (f) {
-        try {
-          const ff = await ffmpegDecodeAudio(f, undefined, AUDIO_RATE)
-          if (ff.pcm && ff.pcm.length) {
-            const fb = off.createBuffer(1, ff.pcm.length, AUDIO_RATE)
-            const ch = fb.getChannelData(0)
-            for (let i = 0; i < ff.pcm.length; i++) {
-              const s = ff.pcm[i]
-              ch[i] = s < 0 ? s / 0x8000 : s / 0x7fff
-            }
-            buf = leadSec > 0.001 ? padLeadingSilence(off, fb, leadSec) : fb
-            console.warn('[ec] export audio recovered via ffmpeg.wasm for', src, ff.note)
-          }
-        } catch (e) {
-          console.warn('[ec] export ffmpeg audio fallback failed', e)
-        }
-      }
     }
     cache.set(src, buf)
     return buf

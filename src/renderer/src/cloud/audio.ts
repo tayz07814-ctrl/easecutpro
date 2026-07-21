@@ -13,25 +13,21 @@
 // from the bad one. The WAV is decoded natively and reliably by AssemblyAI and
 // Deepgram alike, so it's the only upload path now.
 
-import { extractAudioWavBlob, extractSttAudioSmart } from '../webmedia'
+import { extractAudioWavBlob } from '../webmedia'
 
 /** Sample rate of webmedia's extracted WAV — the timebase for STT + VAD. */
 const STT_RATE = 16000
 
 export interface SttAudio {
-  /** upload payload — 16 kHz mono WAV, or (fallback) the clip's compressed
-   *  audio track remuxed into an audio-only container for server-side decode. */
+  /** upload payload — the 16 kHz mono WAV. */
   blob: Blob
-  /** audio container extension for the stt sign-upload action. */
+  /** audio container extension for the stt sign-upload action (always 'wav'). */
   ext: string
   /** the decoded samples themselves (16 kHz mono, lead-aligned) — feed the VAD
-   *  with THESE so silence and words share one clock. EMPTY when the audio
-   *  couldn't be decoded on-device (remux fallback) — VAD passes must skip. */
+   *  with THESE so silence and words share one clock. */
   float32: Float32Array
   sampleRate: number
   durationS: number
-  /** compact decoder diagnostic (which layers ran, what they saw). */
-  note?: string
 }
 
 /** Re-read the 16-bit PCM of the WAV we just encoded — no second decode, and
@@ -60,30 +56,14 @@ export async function decodeAudioFloat32(
   return { float32, sampleRate: STT_RATE, durationS: float32.length / STT_RATE }
 }
 
-/** Produce the STT audio for a `webmedia:` id.
- *
- *  Preferred: on-device decode (WebCodecs → WebAudio → ffmpeg.wasm, every layer
- *  silence-guarded and multi-track aware) → 16 kHz mono WAV whose SAME samples
- *  feed the VAD. Fallback: when nothing on-device can decode the audio, the
- *  compressed AUDIO TRACK is demuxed out of the container and uploaded for
- *  server-side decoding — audio only, the video never leaves the device; VAD is
- *  skipped for that clip (float32 empty). Throws with the full decoder
- *  diagnostic when even the demux fails. */
+/** Produce the STT audio for a `webmedia:` id: decode once, return the 16 kHz
+ *  mono WAV upload blob + the decoded samples for the VAD (one shared clock). */
 export async function extractSttAudio(mediaId: string, onProgress?: (pct: number) => void): Promise<SttAudio> {
-  const a = await extractSttAudioSmart(mediaId, (p) => onProgress?.(Math.round(p * 0.95)))
-  if (!a.blob) {
-    throw new Error(
-      `Couldn’t read this clip’s audio on this device [${a.diag}] — try re-importing it, or re-export it as MP4 (H.264 + AAC) and import that.`
-    )
+  const wav = await extractAudioWavBlob(mediaId, (p) => onProgress?.(Math.round(p * 0.9)))
+  if (!wav) {
+    throw new Error('Could not decode this media’s audio in the browser (unsupported codec or the file is too large).')
   }
+  const float32 = wavToFloat32(await wav.arrayBuffer())
   onProgress?.(100)
-  if (a.pcm) {
-    const float32 = new Float32Array(a.pcm.length)
-    for (let i = 0; i < a.pcm.length; i++) {
-      const s = a.pcm[i]
-      float32[i] = s < 0 ? s / 0x8000 : s / 0x7fff
-    }
-    return { blob: a.blob, ext: a.ext, float32, sampleRate: STT_RATE, durationS: float32.length / STT_RATE, note: a.diag }
-  }
-  return { blob: a.blob, ext: a.ext, float32: new Float32Array(0), sampleRate: STT_RATE, durationS: 0, note: a.diag }
+  return { blob: wav, ext: 'wav', float32, sampleRate: STT_RATE, durationS: float32.length / STT_RATE }
 }
