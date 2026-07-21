@@ -242,31 +242,11 @@ export function clampSilenceRegions(
   // region SPLITS around it; region inside a word → dropped; several quiet words →
   // split around each. Kept transcript words can no longer be cut by silence.
   //
-  // STT TAIL TRIM: STT word ends often carry 100-300ms of trailing dead air (the
-  // provider pads the word span). Protecting that slop leaves audible residual
-  // silence at a cut even with 0 padding. When the AUDIO says silence begins inside
-  // a word's tail (a raw region starts inside the word and runs past its end into a
-  // REAL following silence), trust the audio and shrink the protected end — but
-  // conservatively, all three limits at once:
-  //   • never trim more than 250ms,
-  //   • ALWAYS keep at least the first 70% of the word (short words were being
-  //     eaten alive by the first version of this trim — a 200ms word lost ~all of
-  //     itself to a 350ms allowance),
-  //   • only when the region continues ≥150ms past the word (a substantial pause,
-  //     not a VAD flicker).
-  const MAX_TAIL_TRIM_S = 0.25
-  const effectiveEnd = (w: { start: number; end: number }): number => {
-    const minKeep = w.start + (w.end - w.start) * 0.7
-    let end = w.end
-    for (const r of raw) {
-      if (r.start > w.start && r.start < w.end && r.end >= w.end + 0.15) {
-        end = Math.min(end, Math.max(r.start, w.end - MAX_TAIL_TRIM_S, minKeep))
-      }
-    }
-    return end
-  }
+  // NOTE: an earlier revision tried trimming STT word-end slop here ("tail trim")
+  // — reverted: STT/repaired word times are not reliable enough to cut against,
+  // and the trim clipped real speech. Words are protected at their FULL spans.
   const guarded = [...keptWords]
-    .map((w) => ({ start: w.start - guardBeforeS, end: effectiveEnd(w) + guardAfterS }))
+    .map((w) => ({ start: w.start - guardBeforeS, end: w.end + guardAfterS }))
     .sort((x, y) => x.start - y.start)
   const subtractWords = (a: number, b: number): { start: number; end: number }[] => {
     const out: { start: number; end: number }[] = []
@@ -301,24 +281,33 @@ export async function vadSilenceRegions(
 ): Promise<SilenceRegion[]> {
   const raw = await detectSilenceFloat32(float32, sampleRate, vadSilenceToOpts(settings), durationS)
 
-  // TRANSCRIPT-GAP REGIONS: the transcript is the source of truth for where speech
-  // is. Camera thuds / phone-handling noise inside a pause make Silero score
-  // "speech", so the VAD never offers that stretch as silence and the noise stays
-  // in the edit. But a gap between two transcript words with NO word inside it is
-  // not speech — synthesize a region for every word gap ≥ minGap and union it with
-  // the VAD's regions. The word-carve below still trims every region back to the
-  // (padded) word boundaries, so real speech is untouched either way.
-  const ws = [...keptWords].sort((a, b) => a.start - b.start)
-  const gaps: { start: number; end: number }[] = []
-  for (let i = 1; i < ws.length; i++) {
-    const g0 = ws[i - 1].end
-    const g1 = ws[i].start
-    if (g1 - g0 >= Math.max(0.03, settings.minGapS)) gaps.push({ start: g0, end: g1 })
+  // NOISE-ISLAND BRIDGING. Camera thuds / phone-handling noise inside a pause make
+  // Silero score "speech", so the VAD splits the pause into silence-NOISE-silence
+  // and the noise stays in the edit. But if the stretch between two detected
+  // silences contains NO transcript word, nobody is speaking — bridge across it so
+  // the whole pause (noise included) is one cuttable region. Boundaries stay pure
+  // AUDIO (VAD onsets); STT times are never used to place a cut edge — an earlier
+  // revision synthesized regions from transcript word gaps and clipped real speech
+  // where the STT/repaired times were off (reverted).
+  const MAX_ISLAND_S = 5 // a "speech" island longer than this is too risky to assume is noise
+  const sorted = mergeIntervals(raw)
+  const bridged: { start: number; end: number }[] = []
+  for (const r of sorted) {
+    const prev = bridged[bridged.length - 1]
+    if (prev) {
+      const islandStart = prev.end
+      const islandEnd = r.start
+      const wordless = !keptWords.some((w) => w.start < islandEnd && w.end > islandStart)
+      if (wordless && islandEnd - islandStart > 0 && islandEnd - islandStart <= MAX_ISLAND_S) {
+        prev.end = r.end // swallow the noise island + the following silence
+        continue
+      }
+    }
+    bridged.push({ ...r })
   }
-  const unioned = mergeIntervals([...raw, ...gaps])
 
   // Word-guard tied to the padding sliders (0 → crisp gapless cut), trim the
   // leading/trailing dead air of the whole clip, and require every carved piece to
   // still be a pause the creator asked to cut (>= their minGap).
-  return clampSilenceRegions(unioned, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, settings.minGapS)
+  return clampSilenceRegions(bridged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, settings.minGapS)
 }
