@@ -917,6 +917,66 @@ button.small { font-size: 11px; padding: 3px 8px; }
 .mt-chip.on { background: var(--grad, linear-gradient(135deg, #8b6cff, #5b8cff)); border-color: transparent; color: #fff; }
 .mt-note { font-size: 11px; color: var(--muted); line-height: 1.4; margin: 2px 0 0; }
 
+/* ---- 0.01 mobile redesign ---- */
+/* MAIN toolbar (nothing selected): the six tools spread evenly across the width. */
+.mt-row.mt-main { justify-content: space-between; }
+.mt-row.mt-main .mt-tool { min-width: 0; flex: 1 1 0; }
+
+/* collapse (deselect) chevron that leads every selected-clip toolbar */
+.mt-collapse {
+  flex: 0 0 auto; width: 34px; height: 46px; margin-right: 4px; align-self: flex-start;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg3); border: 1px solid var(--border); color: var(--muted); border-radius: 12px;
+}
+.mt-collapse:active { color: var(--text); background: var(--bg2, var(--bg3)); }
+
+/* tiny status badge on a tool icon (e.g. AI Upscaler · OFF) */
+.mt-tool-ic { position: relative; }
+.mt-tool-badge {
+  position: absolute; bottom: -4px; right: -6px; font-size: 8px; font-weight: 700; letter-spacing: 0.3px;
+  background: #2a2f3d; color: #9aa2b4; border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; line-height: 1.5;
+}
+
+/* two-pill floating quick-action bar (shown above the toolbar for a selected clip) */
+.mt-quick2 { display: flex; justify-content: center; gap: 10px; margin-bottom: 10px; }
+.mt-quick-grp {
+  display: flex; gap: 2px; padding: 3px; border-radius: 13px;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border);
+}
+.mt-quick-grp button {
+  width: 38px; height: 34px; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--text); border-radius: 9px;
+}
+.mt-quick-grp button:active { background: var(--bg3); }
+.mt-quick-grp button.danger { color: #ff8a9a; }
+
+/* ---- mobile export drawer (0.01) ---- top-anchored sheet, editor dimmed below */
+.mx-back { position: fixed; inset: 0; z-index: 1200; background: rgba(8, 9, 12, 0.55); }
+.mx-sheet {
+  position: absolute; top: 0; left: 0; right: 0;
+  background: #1b1d24; border-bottom: 1px solid var(--border);
+  border-radius: 0 0 20px 20px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  padding: calc(env(safe-area-inset-top) + 10px) 18px 22px;
+}
+.mx-head { display: flex; align-items: center; gap: 10px; }
+.mx-x { width: 34px; height: 34px; background: none; border: none; color: var(--text); font-size: 18px; }
+.mx-grow { flex: 1; }
+.mx-respill { font-size: 13px; font-weight: 600; color: var(--text); background: var(--bg3); border: 1px solid var(--border); border-radius: 9px; padding: 7px 12px; }
+.mx-export { background: linear-gradient(135deg, #a78bff, #7c6cff); border: none; color: #fff; font-weight: 700; font-size: 14px; border-radius: 11px; padding: 9px 20px; }
+.mx-export:disabled { opacity: 0.5; }
+.mx-body { margin-top: 18px; display: flex; flex-direction: column; gap: 22px; }
+.mx-sec { display: flex; flex-direction: column; gap: 12px; }
+.mx-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.mx-label { font-size: 17px; font-weight: 650; color: var(--text); }
+.mx-desc { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.mx-slider { position: relative; }
+.mx-slider input[type='range'] { width: 100%; accent-color: #59d38a; height: 24px; }
+.mx-ticks { display: flex; justify-content: space-between; margin-top: 2px; }
+.mx-tick { font-size: 12px; color: var(--muted); }
+.mx-tick.on { color: var(--text); font-weight: 700; }
+.mx-est { text-align: center; font-size: 13px; color: var(--muted); margin-top: 4px; }
+.mx-note { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
 /* toast for coming-soon / hints */
 .mt-toast, .m-toast {
   position: fixed; bottom: 130px; left: 50%; transform: translateX(-50%); z-index: 400;

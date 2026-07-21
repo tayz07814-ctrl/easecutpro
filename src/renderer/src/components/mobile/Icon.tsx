@@ -8,6 +8,7 @@ export type IconName =
   | 'animation' | 'audioExtract' | 'adjust' | 'zoom' | 'duplicate' | 'lock'
   | 'replace' | 'more' | 'plus' | 'text' | 'music' | 'volume' | 'video' | 'overlay'
   | 'kfPrev' | 'kfNext' | 'kfAdd' | 'import' | 'cutlord' | 'export' | 'check' | 'captions'
+  | 'edit' | 'effect' | 'scriptcut' | 'duration' | 'upscaler' | 'layers' | 'flip' | 'chevronDown'
 
 const PATHS: Record<IconName, JSX.Element> = {
   back: <path d="M15 5l-7 7 7 7" />,
@@ -43,7 +44,16 @@ const PATHS: Record<IconName, JSX.Element> = {
   cutlord: <><path d="M12 3l1.6 4L18 8.6 13.6 10 12 14l-1.6-4L6 8.6 10.4 7 12 3z" /><path d="M18 14l.9 2.2L21 17l-2.1.8L18 20l-.9-2.2L15 17l2.1-.8L18 14z" /></>,
   export: <><path d="M12 15V4M8 8l4-4 4 4" /><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3" /></>,
   check: <path d="M5 12l5 5L20 7" />,
-  captions: <><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M9.5 10.5a2.2 2.2 0 1 0 0 3M16 10.5a2.2 2.2 0 1 0 0 3" /></>
+  captions: <><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M9.5 10.5a2.2 2.2 0 1 0 0 3M16 10.5a2.2 2.2 0 1 0 0 3" /></>,
+  // Redesign (0.01) additions
+  edit: <><circle cx="6" cy="7" r="2.3" /><circle cx="6" cy="17" r="2.3" /><path d="M7.9 8.4L19 16M7.9 15.6L19 8" /></>,
+  effect: <path d="M13 3L5 13h5l-1 8 8-11h-5l1-7z" />,
+  scriptcut: <><path d="M3 7h9M3 12h6M3 17h9" /><circle cx="18" cy="9" r="1.8" /><circle cx="18" cy="16" r="1.8" /><path d="M16.6 10.2L12.5 12.5l4.1 2.3" /></>,
+  duration: <><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></>,
+  upscaler: <><rect x="4" y="4" width="16" height="16" rx="2.5" /><path d="M10 8H8v2M14 8h2v2M10 16H8v-2M14 16h2v-2" /><path d="M12 10.5v3M10.5 12h3" /></>,
+  layers: <><path d="M12 3l9 5-9 5-9-5 9-5z" /><path d="M3 13l9 5 9-5" /></>,
+  flip: <><path d="M12 3v18" strokeDasharray="2 2" /><path d="M9 7L4 12l5 5V7z" fill="currentColor" stroke="none" /><path d="M15 7l5 5-5 5" /></>,
+  chevronDown: <path d="M6 9l6 6 6-6" />
 }
 
 export function Icon({ name, size = 22 }: { name: IconName; size?: number }): JSX.Element {

@@ -1,7 +1,10 @@
-// The CapCut-style contextual dock. Nothing selected → Import media + Cut Lord.
-// A video/overlay clip → a scrollable tool row (split/speed/crop/remove bg/
-// animation/audio extract/adjust/zoom) where each tool opens its own child panel.
-// Text and audio clips get their own toolbars. All edits drive the shared engine.
+// The CapCut-style contextual dock (0.01 redesign). Nothing selected → the MAIN
+// toolbar (Edit / Music / Effect / Text / ScriptCut / Captions). A clip selected →
+// the main toolbar HIDES and a context editing toolbar appears (Duration / Split /
+// Animation / AI Upscaler / Crop / … / Delete), led by a collapse chevron (deselect)
+// and topped by a floating two-pill quick-action bar (Layer · Keyframe · Duplicate |
+// Flip · Delete). Text + audio clips get their own toolbars. All edits drive the
+// shared engine; features EaseCutPro doesn't have yet toast "coming soon".
 
 import { useEffect, useState } from 'react'
 import { useStore } from '../../store'
@@ -12,13 +15,15 @@ import * as C from '@shared/timeline/commands'
 import { Icon, type IconName } from './Icon'
 
 const mnum = (v: unknown, d: number): number => (typeof v === 'number' ? v : d)
-const clampN = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
 
-/** A labelled tool button (icon over caption). */
-function Tool({ icon, label, onClick, active }: { icon: IconName; label: string; onClick: () => void; active?: boolean }): JSX.Element {
+/** A labelled tool button (icon over caption). `badge` shows a tiny pill (e.g. OFF). */
+function Tool({ icon, label, onClick, active, badge }: { icon: IconName; label: string; onClick: () => void; active?: boolean; badge?: string }): JSX.Element {
   return (
     <button className={'mt-tool' + (active ? ' on' : '')} onClick={onClick}>
-      <span className="mt-tool-ic"><Icon name={icon} /></span>
+      <span className="mt-tool-ic">
+        <Icon name={icon} />
+        {badge && <span className="mt-tool-badge">{badge}</span>}
+      </span>
       <span className="mt-tool-lb">{label}</span>
     </button>
   )
@@ -51,7 +56,7 @@ function Chips({ options, value, onPick }: { options: { label: string; v: number
   )
 }
 
-export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddAudio, onCaptions, onSticker }: {
+export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddAudio, onCaptions }: {
   onImport: () => void
   onCutlord: () => void
   onEditText: () => void
@@ -61,15 +66,14 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
   onAddAudio?: () => void
   /** open the Captions sheet (generate / clear subtitle clips). */
   onCaptions?: () => void
-  /** pick an image and drop it on an overlay track (sticker / logo). */
+  /** pick an image and drop it on an overlay track (sticker / logo). Kept for
+   *  callers (MobileEditor passes it); overlay import now lives on the clip's
+   *  Overlay tool, so the main toolbar no longer surfaces it. */
   onSticker?: () => void
 }): JSX.Element {
-  const project = useStore((s) => s.project)
-  const playhead = useStore((s) => s.project.playhead)
   const snap = useSharedEngineSnapshot()
   // The shared engine's doc is authoritative even before project.timeline
-  // materializes (fresh projects are BRIDGED into a doc) — gating on
-  // project.timeline hid the whole clip toolbar on brand-new projects.
+  // materializes (fresh projects are BRIDGED into a doc).
   const docMode = !!snap?.doc
   const selId = docMode ? snap!.interaction.selection[0] ?? null : null
   const loc = selId && snap?.doc ? findClip(snap.doc, selId) : null
@@ -89,38 +93,30 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
   const engine = getSharedEngine()
   const dispatch = (cmd: ReturnType<typeof C.setClipSpeed>): void => void engine?.dispatch(cmd)
   const soon = (what: string): void => setToast(`${what} — coming soon`)
-
   const toastEl = toast ? <div className="mt-toast">{toast}</div> : null
 
-  // ---- nothing selected: the home dock ----
+  // ---- nothing selected: the MAIN toolbar ----
   if (kind === 'none' || !clip) {
+    // "Edit" reveals a clip's editing toolbar by selecting the base clip; with no
+    // media yet it falls back to importing.
+    const mainClip = snap?.doc.tracks.find((t) => t.isMain)?.clips[0] ?? null
     return (
       <div className="mt-dock">
         {toastEl}
-        <div className="mt-home">
-          <button className="mt-home-btn" onClick={onImport}>
-            <Icon name="import" size={18} /> Import media
-          </button>
-          <button className="mt-home-btn accent" onClick={onCutlord}>
-            <Icon name="cutlord" size={18} /> Cut Lord
-          </button>
+        <div className="mt-row mt-main">
+          <Tool icon="edit" label="Edit" onClick={() => (mainClip ? engine?.select([mainClip.id]) : onImport())} />
+          <Tool icon="music" label="Music" onClick={() => (onAddAudio ? onAddAudio() : soon('Music'))} />
+          <Tool icon="effect" label="Effect" onClick={() => soon('Effects')} />
+          <Tool icon="text" label="Text" onClick={() => (onAddText ? onAddText() : onEditText())} />
+          <Tool icon="scriptcut" label="ScriptCut" onClick={onCutlord} />
+          <Tool icon="captions" label="Captions" onClick={() => (onCaptions ? onCaptions() : soon('Captions'))} />
         </div>
-        {/* Creation tools — the same functions as the desktop left dock (Text /
-            Audio / Captions / Stickers), in one scrollable CapCut-style row.
-            Optional so the legacy MobileApp (its own add-menu) can omit them. */}
-        {(onAddText || onAddAudio || onCaptions || onSticker) && (
-          <div className="mt-row" style={{ marginTop: 12 }}>
-            {onAddText && <Tool icon="text" label="Text" onClick={onAddText} />}
-            {onAddAudio && <Tool icon="music" label="Audio" onClick={onAddAudio} />}
-            {onCaptions && <Tool icon="captions" label="Captions" onClick={onCaptions} />}
-            {onSticker && <Tool icon="overlay" label="Sticker" onClick={onSticker} />}
-          </div>
-        )}
       </div>
     )
   }
 
   const m = clip.metadata ?? {}
+  const durSec = snap ? framesToSeconds(clip.duration, snap.doc.timebase) : 0
 
   // ---- a child panel is open ----
   if (panel) {
@@ -131,7 +127,17 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
     )
     let title = panel
     let body: JSX.Element | null = null
-    if (panel === 'speed') {
+    if (panel === 'duration') {
+      title = 'Duration'
+      const sp = clip.speed ?? 1
+      body = (
+        <>
+          <p className="mt-note">Clip length: {durSec.toFixed(1)}s · speed changes how long it plays.</p>
+          <Chips options={[{ label: '0.5×', v: 0.5 }, { label: '1×', v: 1 }, { label: '1.5×', v: 1.5 }, { label: '2×', v: 2 }]} value={sp} onPick={(v) => dispatch(C.setClipSpeed(clip.id, v))} />
+          <SliderRow label="Speed" value={sp} min={0.25} max={4} step={0.05} fmt={(v) => `${v.toFixed(2)}×`} onChange={(v) => dispatch(C.setClipSpeed(clip.id, v))} />
+        </>
+      )
+    } else if (panel === 'speed') {
       title = 'Speed'
       const sp = clip.speed ?? 1
       body = (
@@ -202,15 +208,26 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
     )
   }
 
-  // ---- quick actions shared by every selected clip ----
+  // ---- floating two-pill quick-action bar (shared by every selected clip) ----
   const quick = (
-    <div className="mt-quick">
-      <button onClick={() => soon('Replace')} title="Replace"><Icon name="replace" size={18} /></button>
-      <button onClick={() => soon('Lock')} title="Lock"><Icon name="lock" size={18} /></button>
-      <button onClick={() => engine?.duplicateSelection()} title="Duplicate"><Icon name="duplicate" size={18} /></button>
-      <button className="danger" onClick={() => engine?.deleteSelection(true)} title="Delete"><Icon name="trash" size={18} /></button>
-      <button onClick={() => soon('More')} title="More"><Icon name="more" size={18} /></button>
+    <div className="mt-quick2">
+      <div className="mt-quick-grp">
+        <button onClick={() => soon('Layer')} title="Layer"><Icon name="layers" size={18} /></button>
+        <button onClick={() => soon('Keyframe')} title="Keyframe"><Icon name="kfAdd" size={18} /></button>
+        <button onClick={() => engine?.duplicateSelection()} title="Duplicate"><Icon name="duplicate" size={18} /></button>
+      </div>
+      <div className="mt-quick-grp">
+        <button onClick={() => soon('Flip')} title="Flip"><Icon name="flip" size={18} /></button>
+        <button className="danger" onClick={() => engine?.deleteSelection(true)} title="Delete"><Icon name="trash" size={18} /></button>
+      </div>
     </div>
+  )
+
+  // Leads each selected toolbar — collapse back to the main toolbar (deselect).
+  const collapse = (
+    <button className="mt-collapse" onClick={() => engine?.select([])} title="Done">
+      <Icon name="chevronDown" size={20} />
+    </button>
   )
 
   // ---- text clip toolbar ----
@@ -220,6 +237,7 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
         {toastEl}
         {quick}
         <div className="mt-row">
+          {collapse}
           <Tool icon="text" label="Edit" onClick={onEditText} />
           <Tool icon="split" label="Split" onClick={() => engine?.splitAtPlayhead()} />
           <Tool icon="animation" label="Animation" onClick={() => setPanel('animation')} />
@@ -237,6 +255,8 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
         {toastEl}
         {quick}
         <div className="mt-row">
+          {collapse}
+          <Tool icon="duration" label="Duration" onClick={() => setPanel('duration')} />
           <Tool icon="volume" label="Volume" onClick={() => setPanel('volume')} />
           <Tool icon="speed" label="Speed" onClick={() => setPanel('speed')} />
           <Tool icon="split" label="Split" onClick={() => engine?.splitAtPlayhead()} />
@@ -247,26 +267,28 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
     )
   }
 
-  // ---- video / overlay clip toolbar ----
+  // ---- video / image clip toolbar (mockup order first, extra real tools appended) ----
   const canDetach = clip.hasAudio && !clip.audioDetached
-  const durSec = snap ? framesToSeconds(clip.duration, snap.doc.timebase) : 0
   return (
     <div className="mt-dock">
       {toastEl}
       {quick}
       <div className="mt-row">
+        {collapse}
+        <Tool icon="duration" label="Duration" onClick={() => setPanel('duration')} />
         <Tool icon="split" label="Split" onClick={() => engine?.splitAtPlayhead()} />
-        <Tool icon="overlay" label="Overlay" onClick={() => void useStore.getState().importOverlayFromDevice()} />
+        <Tool icon="animation" label="Animation" onClick={() => setPanel('animation')} />
+        <Tool icon="upscaler" label="AI Upscaler" badge="OFF" onClick={() => soon('AI Upscaler')} />
+        <Tool icon="crop" label="Crop" onClick={() => setPanel('crop')} />
         <Tool icon="speed" label="Speed" onClick={() => setPanel('speed')} />
         <Tool icon="zoom" label="Zoom" onClick={() => setPanel('zoom')} />
-        <Tool icon="crop" label="Crop" onClick={() => setPanel('crop')} />
         <Tool icon="adjust" label="Adjust" onClick={() => setPanel('adjust')} />
         <Tool icon="volume" label="Volume" onClick={() => setPanel('volume')} />
-        <Tool icon="animation" label="Animation" onClick={() => setPanel('animation')} />
         <Tool icon="audioExtract" label="Extract" onClick={() => (canDetach ? engine?.dispatch(C.detachAudio(clip.id)) : soon('Audio already on a lane'))} />
+        <Tool icon="overlay" label="Overlay" onClick={() => void useStore.getState().importOverlayFromDevice()} />
         <Tool icon="removeBg" label="Remove BG" onClick={() => soon('Remove BG')} />
+        <Tool icon="trash" label="Delete" onClick={() => engine?.deleteSelection(true)} />
       </div>
-      <div className="mt-dur">{durSec.toFixed(1)}s</div>
     </div>
   )
 }
