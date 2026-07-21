@@ -290,21 +290,64 @@ export async function vadSilenceRegions(
   // revision synthesized regions from transcript word gaps and clipped real speech
   // where the STT/repaired times were off (reverted).
   const MAX_ISLAND_S = 5 // a "speech" island longer than this is too risky to assume is noise
-  const sorted = mergeIntervals(raw)
-  const bridged: { start: number; end: number }[] = []
-  for (const r of sorted) {
-    const prev = bridged[bridged.length - 1]
-    if (prev) {
-      const islandStart = prev.end
-      const islandEnd = r.start
-      const wordless = !keptWords.some((w) => w.start < islandEnd && w.end > islandStart)
-      if (wordless && islandEnd - islandStart > 0 && islandEnd - islandStart <= MAX_ISLAND_S) {
-        prev.end = r.end // swallow the noise island + the following silence
-        continue
+  const bridgeWordlessIslands = (list: { start: number; end: number }[]): { start: number; end: number }[] => {
+    const out: { start: number; end: number }[] = []
+    for (const r of mergeIntervals(list)) {
+      const prev = out[out.length - 1]
+      if (prev) {
+        const a = prev.end
+        const b = r.start
+        const wordless = !keptWords.some((w) => w.start < b && w.end > a)
+        if (wordless && b - a > 0 && b - a <= MAX_ISLAND_S) {
+          prev.end = r.end // swallow the noise island + the following silence
+          continue
+        }
       }
+      out.push({ ...r })
     }
-    bridged.push({ ...r })
+    return out
   }
+  let bridged = bridgeWordlessIslands(raw)
+
+  // STUBBORN-NOISE SECOND OPINION. Sustained handling/camera noise can make the VAD
+  // score an ENTIRE pause as "speech" — zero silence inside it, so island bridging
+  // has nothing to bridge and the noise survives whole (found in a real clip: a
+  // 2.3s pause fully classified as speech). For a wordless transcript gap that the
+  // VAD left mostly uncovered, re-run the VAD on JUST that span at a STRICTER
+  // threshold: real speech scores ~0.9+, transient noise ~0.5-0.8, so the strict
+  // pass sees through the noise. Cut edges still come from AUDIO onsets — the
+  // strict regions are clipped to the gap, and the word-carve + minGap filter
+  // below still bound everything. STT times gate WHERE we look, never where we cut.
+  const ws = [...keptWords].sort((a, b) => a.start - b.start)
+  const extra: { start: number; end: number }[] = []
+  for (let i = 1; i < ws.length; i++) {
+    const g0 = ws[i - 1].end
+    const g1 = ws[i].start
+    const len = g1 - g0
+    if (len < Math.max(0.5, settings.minGapS)) continue
+    const covered = bridged.reduce((n, r) => n + Math.max(0, Math.min(r.end, g1) - Math.max(r.start, g0)), 0)
+    if (covered / len >= 0.5) continue // the VAD already found this pause; nothing stubborn here
+    const margin = 0.5 // context so the strict pass sees the neighboring speech onsets
+    const i0 = Math.max(0, Math.floor((g0 - margin) * sampleRate))
+    const i1 = Math.min(float32.length, Math.ceil((g1 + margin) * sampleRate))
+    if (i1 - i0 < sampleRate * 0.2) continue
+    try {
+      const strictOpts = {
+        ...vadSilenceToOpts(settings),
+        vadThreshold: Math.min(0.95, settings.speechThreshold + 0.15)
+      }
+      const sliceDur = (i1 - i0) / sampleRate
+      const sub = await detectSilenceFloat32(float32.subarray(i0, i1), sampleRate, strictOpts, sliceDur)
+      for (const r of sub) {
+        const s = Math.max(g0, r.start + i0 / sampleRate)
+        const e = Math.min(g1, r.end + i0 / sampleRate)
+        if (e - s >= Math.max(0.05, settings.minGapS)) extra.push({ start: s, end: e })
+      }
+    } catch {
+      /* the strict pass is best-effort — a failure just leaves this gap as-is */
+    }
+  }
+  if (extra.length) bridged = bridgeWordlessIslands([...bridged, ...extra])
 
   // Word-guard tied to the padding sliders (0 → crisp gapless cut), trim the
   // leading/trailing dead air of the whole clip, and require every carved piece to
