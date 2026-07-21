@@ -240,15 +240,22 @@ export function clampSilenceRegions(
   // STT TAIL TRIM: STT word ends often carry 100-300ms of trailing dead air (the
   // provider pads the word span). Protecting that slop leaves audible residual
   // silence at a cut even with 0 padding. When the AUDIO says silence begins inside
-  // a word's tail (a raw region starts inside the word and runs past its end), trust
-  // the audio: shrink that word's protected end to the region start — capped at
-  // 350ms so a soft trailing syllable the VAD under-detected can't be clipped.
-  const MAX_TAIL_TRIM_S = 0.35
+  // a word's tail (a raw region starts inside the word and runs past its end into a
+  // REAL following silence), trust the audio and shrink the protected end — but
+  // conservatively, all three limits at once:
+  //   • never trim more than 250ms,
+  //   • ALWAYS keep at least the first 70% of the word (short words were being
+  //     eaten alive by the first version of this trim — a 200ms word lost ~all of
+  //     itself to a 350ms allowance),
+  //   • only when the region continues ≥150ms past the word (a substantial pause,
+  //     not a VAD flicker).
+  const MAX_TAIL_TRIM_S = 0.25
   const effectiveEnd = (w: { start: number; end: number }): number => {
+    const minKeep = w.start + (w.end - w.start) * 0.7
     let end = w.end
     for (const r of raw) {
-      if (r.start > w.start && r.start < w.end && r.end >= w.end) {
-        end = Math.min(end, Math.max(r.start, w.end - MAX_TAIL_TRIM_S))
+      if (r.start > w.start && r.start < w.end && r.end >= w.end + 0.15) {
+        end = Math.min(end, Math.max(r.start, w.end - MAX_TAIL_TRIM_S, minKeep))
       }
     }
     return end
