@@ -19,6 +19,7 @@ export function ClipView({
   color,
   selected,
   waveSize,
+  seamMs = 0,
   onClipPointerDown,
   onHandlePointerDown,
   onClipContextMenu
@@ -29,6 +30,8 @@ export function ClipView({
   color: string
   selected: boolean
   waveSize: number
+  /** >0 = this clip starts at a cut seam with the audio blend on; render the ◢ marker. */
+  seamMs?: number
   onClipPointerDown: (id: string, e: ReactPointerEvent) => void
   onHandlePointerDown: (id: string, edge: 'in' | 'out', e: ReactPointerEvent) => void
   onClipContextMenu: (id: string, e: ReactMouseEvent) => void
@@ -53,6 +56,9 @@ export function ClipView({
       onPointerDown={(e) => onClipPointerDown(clip.id, e)}
       onContextMenu={(e) => onClipContextMenu(clip.id, e)}
     >
+      {seamMs > 0 && (
+        <div className="ec-tl-seam" title={`Audio blended over ${Math.round(seamMs)} ms at this cut`} />
+      )}
       {isText ? (
         <div className="ec-tl-clip-text">
           <span>{clip.name || 'Text'}</span>

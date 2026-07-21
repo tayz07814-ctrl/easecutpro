@@ -135,7 +135,9 @@ export async function detectSilenceFloat32(
 
   // 3. invert SPEECH -> non-speech gaps over [0, duration] (same 0.02s epsilon
   //    as detectSilenceVad), keeping only gaps ≥ the min silence duration.
-  const minDur = Math.max(0.1, opts?.minDuration ?? 0.4)
+  //    Floor 0.03 (was 0.1): the old floor silently kept every pause under 100ms,
+  //    which made a true "zero pause" setting impossible no matter the sliders.
+  const minDur = Math.max(0.03, opts?.minDuration ?? 0.4)
   let regions: { start: number; end: number }[] = []
   let cursor = 0
   for (const s of padded) {
@@ -254,7 +256,9 @@ export function clampSilenceRegions(
     // otherwise keep them and only trim silence BETWEEN speech.
     .filter((r) => trimEdges || (r.start > 0.15 && !(durationS > 0 && r.end >= durationS - 0.15)))
     .flatMap((r) => subtractWords(r.start, r.end))
-    .filter((r) => r.end - r.start > 0.05)
+    // Anti-sliver: 0.02 (was 0.05) — the old filter quietly kept 20-50ms of air at
+    // every seam, which alone defeated a "zero pause" profile.
+    .filter((r) => r.end - r.start > 0.02)
     .map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
 }
 

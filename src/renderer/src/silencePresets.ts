@@ -6,7 +6,7 @@
 
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
 
-export type SilencePresetId = 'conservative' | 'balanced' | 'aggressive'
+export type SilencePresetId = 'conservative' | 'balanced' | 'aggressive' | 'zero'
 export type SilencePresetOrCustom = SilencePresetId | 'custom'
 
 export interface SilencePreset {
@@ -57,6 +57,24 @@ export const SILENCE_PRESETS: SilencePreset[] = [
       minGapS: 0.15,
       padBeforeS: 0.06,
       padAfterS: 0.06,
+      edgeTrimS: 0,
+      removeBreaths: true,
+      breathDb: -34
+    })
+  },
+  {
+    id: 'zero',
+    label: 'Zero pause',
+    blurb: 'Gapless jump cuts — the next word starts the instant the last one ends.',
+    // pads 0 = the cut lands exactly on the word boundary (no residual air);
+    // minGap at the floor = even 50ms pauses collapse. Words themselves stay
+    // protected by the interval-subtraction clamp, and the seam blend (overlap)
+    // keeps the joins from clicking. Breaths on: dead air of any kind goes.
+    values: normalizeVadSilence({
+      speechThreshold: 0.75,
+      minGapS: 0.05,
+      padBeforeS: 0,
+      padAfterS: 0,
       edgeTrimS: 0,
       removeBreaths: true,
       breathDb: -34

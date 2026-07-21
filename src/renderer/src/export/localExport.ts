@@ -363,9 +363,13 @@ export async function renderAudio(
     a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003 && Math.abs(a.speed - b.speed) < 1e-3
   const fadeInAt = audible.map((cur, i) => (i === 0 ? true : !contiguous(audible[i - 1].s, cur.s)))
 
-  // Schedule each audible segment playing EXACTLY its body — no overlap, no removed
-  // audio replayed, no fade-out. A post-cut start gets a ~8ms 0→gain ramp; the rest
-  // holds at full gain, so speech at both edges of every cut is preserved verbatim.
+  // Schedule each audible segment playing EXACTLY its body at full gain — speech at
+  // both edges of every cut is preserved verbatim. At a real cut seam the blend is a
+  // TRUE equal-power crossfade: the incoming clip ramps 0→gain (sin) while the
+  // OUTGOING clip's audio continues up to `seamFadeS` PAST its cut point, ramping
+  // gain→0 (cos) UNDER the incoming words. The tail comes from source audio that the
+  // cut removed, capped short (≤60ms) and fading out, so it smooths the join without
+  // audibly replaying the removed take. Contiguous splits play straight through.
   for (let i = 0; i < audible.length; i++) {
     const { s, buf } = audible[i]
     const sp = Math.max(0.01, s.speed)
@@ -379,6 +383,23 @@ export async function renderAudio(
     else g.gain.setValueAtTime(base, Math.max(0, s.start))
     node.connect(g).connect(off.destination)
     node.start(Math.max(0, s.start), Math.max(0, s.sourceStart), Math.max(0.01, s.sourceEnd - s.sourceStart))
+
+    // Outgoing overlap tail at the NEXT seam (only when the next segment starts at a
+    // real cut and the source actually has audio past this clip's cut point).
+    if (seamFadeS > 0 && i + 1 < audible.length && fadeInAt[i + 1]) {
+      const availSrc = Math.max(0, buf.duration - s.sourceEnd) // removed source audio available
+      const tail = Math.min(seamFadeS, availSrc / sp)
+      if (tail > 0.005) {
+        const boundary = Math.max(0, s.start + s.len)
+        const tn = off.createBufferSource()
+        tn.buffer = buf
+        tn.playbackRate.value = sp
+        const tg = off.createGain()
+        tg.gain.setValueCurveAtTime(equalPowerRamp(base, 'out'), boundary, tail)
+        tn.connect(tg).connect(off.destination)
+        tn.start(boundary, s.sourceEnd, Math.max(0.005, tail * sp))
+      }
+    }
   }
   let any = audible.length > 0
   for (const a of extra) {

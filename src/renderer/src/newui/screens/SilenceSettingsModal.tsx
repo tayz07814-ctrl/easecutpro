@@ -1,10 +1,12 @@
-import { useState } from 'react'
 import { css } from '../css'
-import { useSilence, type Preset } from '../data/useSilence'
+import { useSilence } from '../data/useSilence'
 import type { VadSilenceSettings } from '@shared/vadsilence'
 
-// Stage C — production Silence Settings modal (screen 1d), wired to
-// vadSilenceSettings. Presets ↔ Custom mirror the two approved design variants.
+// Silence Settings — ONE panel. Small preset chips on top, the sliders always
+// visible beneath. Clicking a chip loads its values into the sliders (they're
+// bound to the store, so they move); touching any slider makes the values stop
+// matching every preset, and the highlight flips to "Custom" automatically
+// (detectPreset). No separate presets-vs-custom views.
 
 const FOOT_RESET = 'font-size:12.5px;color:#9BA0AC;cursor:pointer;padding:7px 10px;border-radius:8px'
 const FOOT_CANCEL = 'font-size:12.5px;color:#C6C9D2;cursor:pointer;padding:8px 14px;border-radius:9px'
@@ -16,14 +18,6 @@ const FOOT_APPLY = 'background:#6E6AE8;border:none;color:#fff;font-family:inheri
 function strictnessLabel(th: number): string {
   return th <= 0.68 ? 'Gentle' : th <= 0.78 ? 'Standard' : th <= 0.85 ? 'Strict' : 'Very strict'
 }
-
-// The concrete values a preset uses — shown under its blurb so the creator can see
-// exactly what each template does (mirrors the Custom sliders' meaning).
-function presetSpec(v: VadSilenceSettings): string {
-  const s = (n: number): string => `${n.toFixed(2)}s`
-  return `Trim >${s(v.minGapS)} · leave ${s(v.padAfterS)} · lead ${s(v.padBeforeS)} · edges ${s(v.edgeTrimS)} · noise ${Math.round(v.speechThreshold * 100)}%${v.removeBreaths ? ' · breaths' : ''}`
-}
-const TILE_SPEC = "font-size:10px;color:#7E8393;margin-top:7px;font-family:'IBM Plex Mono',monospace;line-height:1.55;letter-spacing:.2px"
 
 function Slider({ label, value, min, max, step, fmt, lo, hi, onChange }: {
   label: string; value: number; min: number; max: number; step: number; fmt: (v: number) => string; lo: string; hi: string; onChange: (v: number) => void
@@ -43,130 +37,77 @@ function Slider({ label, value, min, max, step, fmt, lo, hi, onChange }: {
   )
 }
 
-const HEAD = 'display:flex;align-items:flex-start;justify-content:space-between'
-const TITLE = 'font-size:16px;font-weight:650'
-const SUB = 'font-size:12.5px;color:#9BA0AC;margin-top:5px;line-height:1.5'
-const CLOSE = 'color:#9BA0AC;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0'
+const CHIP = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid rgba(255,255,255,.12);color:#9BA0AC;background:transparent;font-family:inherit'
+const CHIP_ON = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid #6E6AE8;color:#B7B5F4;background:rgba(110,106,232,.12);font-weight:600;font-family:inherit'
 
 export default function SilenceSettingsModal(): JSX.Element | null {
   const sil = useSilence()
-  const [view, setView] = useState<Preset>(sil.detected)
   if (!sil.show) return null
 
-  const pick = (p: Preset): void => {
-    setView(p)
-    if (p !== 'custom') sil.applyPreset(p)
-  }
-  const set = (k: keyof VadSilenceSettings, v: number | boolean): void => { sil.setField(k, v); setView('custom') }
-
-  const footer = (mt: string): JSX.Element => (
-    <div style={css(`display:flex;align-items:center;margin-top:${mt}`)}>
-      <span onClick={sil.reset} style={css(FOOT_RESET)}>Reset to default</span>
-      <div style={css('flex:1')} />
-      <span onClick={sil.close} style={css(FOOT_CANCEL)}>Cancel</span>
-      <button onClick={sil.close} style={css(FOOT_APPLY)}>Apply</button>
-    </div>
-  )
-  const header = (
-    <div style={css(HEAD)}>
-      <div>
-        <div style={css(TITLE)}>Silence Settings</div>
-        <div style={css(SUB)}>Controls silence detection only — retake detection is unaffected.</div>
-      </div>
-      <div onClick={sil.close} style={css(CLOSE)}>✕</div>
-    </div>
-  )
-
-  // Seam blend ("overlap") — a global render setting (export + preview), shown here
-  // per the creator's request. Toggle on/off; when on, a slider sets the fade length.
-  const overlap = (
-    <div style={css('margin-top:18px;border-top:1px solid rgba(255,255,255,.07);padding-top:16px;display:flex;flex-direction:column;gap:14px')}>
-      <div style={css('display:flex;align-items:flex-start;gap:11px')}>
-        <div onClick={() => sil.setSeamFade({ enabled: !sil.seamFade.enabled })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${sil.seamFade.enabled ? '#6E6AE8' : '#3A3E48'}`)}>
-          <div style={css(sil.seamFade.enabled ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
-        </div>
-        <div style={css('flex:1;min-width:0')}>
-          <div style={css('font-size:12.5px;color:#E9EAEE;font-weight:550')}>Blend audio at cuts (overlap)</div>
-          <div style={css('font-size:11px;color:#9BA0AC;margin-top:3px;line-height:1.45')}>A tiny fade at the start of each cut so joins don’t click. Turn off for hard cuts.</div>
-        </div>
-      </div>
-      {sil.seamFade.enabled && (
-        <Slider label="Overlap amount" value={sil.seamFade.ms} min={0} max={60} step={1} fmt={(v) => `${Math.round(v)} ms`} lo="0 · hard cut" hi="60 ms · smoother" onChange={(v) => sil.setSeamFade({ ms: v })} />
-      )}
-    </div>
-  )
-
-  const isCustom = view === 'custom'
-  const tile = 'border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 14px;cursor:pointer'
-  const tileDesc = 'font-size:11.5px;color:#9BA0AC;margin-top:4px;line-height:1.45'
-  const sel = (p: Preset): boolean => view === p
-  const descOf = (id: 'conservative' | 'balanced' | 'aggressive'): string =>
-    sil.presets.find((p) => p.id === id)?.blurb ?? ''
-  const specOf = (id: 'conservative' | 'balanced' | 'aggressive'): string => {
-    const p = sil.presets.find((x) => x.id === id)
-    return p ? presetSpec(p.values) : ''
-  }
+  const set = (k: keyof VadSilenceSettings, v: number | boolean): void => sil.setField(k, v)
+  const active = sil.detected // matches a preset id, or 'custom' the moment sliders deviate
+  const activePreset = sil.presets.find((p) => p.id === active)
 
   return (
     <div onClick={sil.close} style={css('position:fixed;inset:0;background:rgba(10,11,14,.55);display:grid;place-items:center;z-index:1000')}>
-      <div onClick={(e) => e.stopPropagation()} style={css('width:440px;max-width:92vw;background:#1E2026;border:1px solid rgba(255,255,255,.1);border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.6);padding:22px')}>
-        {header}
-        {!isCustom ? (
-          <>
-            <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px')}>
-              <div onClick={() => pick('conservative')} style={css(sel('conservative') ? 'border:1.5px solid #6E6AE8;border-radius:12px;padding:13px 14px;background:rgba(110,106,232,.07);cursor:pointer;position:relative' : tile)}>
-                <div style={css(sel('conservative') ? 'font-size:13px;font-weight:600;color:#B7B5F4' : 'font-size:13px;font-weight:600')}>Conservative</div>
-                <div style={css(tileDesc)}>{descOf('conservative')}</div>
-                <div style={css(TILE_SPEC)}>{specOf('conservative')}</div>
-                {sel('conservative') && <div style={css('position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;background:#6E6AE8;display:grid;place-items:center;color:#fff;font-size:8px')}>✓</div>}
-              </div>
-              <div onClick={() => pick('balanced')} style={css(sel('balanced') ? 'border:1.5px solid #6E6AE8;border-radius:12px;padding:13px 14px;background:rgba(110,106,232,.07);cursor:pointer;position:relative' : tile)}>
-                <div style={css(sel('balanced') ? 'font-size:13px;font-weight:600;color:#B7B5F4' : 'font-size:13px;font-weight:600')}>Balanced</div>
-                <div style={css(tileDesc)}>{descOf('balanced')}</div>
-                <div style={css(TILE_SPEC)}>{specOf('balanced')}</div>
-                {sel('balanced') && <div style={css('position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;background:#6E6AE8;display:grid;place-items:center;color:#fff;font-size:8px')}>✓</div>}
-              </div>
-              <div onClick={() => pick('aggressive')} style={css(sel('aggressive') ? 'border:1.5px solid #6E6AE8;border-radius:12px;padding:13px 14px;background:rgba(110,106,232,.07);cursor:pointer;position:relative' : tile)}>
-                <div style={css(sel('aggressive') ? 'font-size:13px;font-weight:600;color:#B7B5F4' : 'font-size:13px;font-weight:600')}>Aggressive</div>
-                <div style={css(tileDesc)}>{descOf('aggressive')}</div>
-                <div style={css(TILE_SPEC)}>{specOf('aggressive')}</div>
-                {sel('aggressive') && <div style={css('position:absolute;top:10px;right:10px;width:15px;height:15px;border-radius:50%;background:#6E6AE8;display:grid;place-items:center;color:#fff;font-size:8px')}>✓</div>}
-              </div>
-              <div onClick={() => pick('custom')} style={css(tile)}>
-                <div style={css('font-size:13px;font-weight:600')}>Custom</div>
-                <div style={css(tileDesc)}>Fine-tune every threshold yourself</div>
-              </div>
+      <div onClick={(e) => e.stopPropagation()} style={css('width:440px;max-width:92vw;background:#1E2026;border:1px solid rgba(255,255,255,.1);border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.6);padding:22px;max-height:90vh;overflow-y:auto')}>
+        <div style={css('display:flex;align-items:flex-start;justify-content:space-between')}>
+          <div>
+            <div style={css('font-size:16px;font-weight:650')}>Silence Settings</div>
+            <div style={css('font-size:12.5px;color:#9BA0AC;margin-top:5px;line-height:1.5')}>Controls silence detection only — retake detection is unaffected.</div>
+          </div>
+          <div onClick={sil.close} style={css('color:#9BA0AC;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
+        </div>
+
+        {/* Preset chips — small; picking one loads its values into the sliders below. */}
+        <div style={css('display:flex;gap:6px;margin-top:16px;flex-wrap:wrap')}>
+          {sil.presets.map((p) => (
+            <button key={p.id} onClick={() => sil.applyPreset(p.id)} style={css(active === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
+          ))}
+          <span style={css(active === 'custom' ? CHIP_ON + ';cursor:default' : CHIP + ';cursor:default;opacity:.55')}>Custom</span>
+        </div>
+        <div style={css('font-size:11px;color:#7E8393;margin-top:8px;line-height:1.45;min-height:15px')}>
+          {activePreset ? activePreset.blurb : 'Your own values — move any slider; pick a chip to go back to a preset.'}
+        </div>
+
+        {/* The sliders — always visible, bound to the live settings. */}
+        <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:16px')}>
+          <Slider label="Trim pauses longer than" value={sil.s.minGapS} min={0.05} max={2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0.05s · tight" hi="2s · relaxed" onChange={(v) => set('minGapS', v)} />
+          <Slider label="Pause to keep at each cut" value={sil.s.padAfterS} min={0} max={0.4} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · gapless" hi="0.4s · gentle" onChange={(v) => set('padAfterS', v)} />
+          <Slider label="Silence detection strictness" value={sil.s.speechThreshold} min={0.5} max={0.9} step={0.01} fmt={(v) => `${strictnessLabel(v)} · ${Math.round(v * 100)}%`} lo="gentle · keeps soft speech" hi="strict · may clip soft speech" onChange={(v) => set('speechThreshold', v)} />
+          <div style={css('display:flex;align-items:flex-start;gap:9px')}>
+            <div onClick={() => set('removeBreaths', !sil.s.removeBreaths)} style={css(sil.s.removeBreaths ? 'width:32px;height:18px;border-radius:9px;background:#6E6AE8;position:relative;flex:none;cursor:pointer;margin-top:1px' : 'width:32px;height:18px;border-radius:9px;background:#3A3E48;position:relative;flex:none;cursor:pointer;margin-top:1px')}>
+              <div style={css(sil.s.removeBreaths ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
             </div>
-            <div style={css('margin-top:16px;background:#191B20;border-radius:10px;padding:11px 14px;font-size:12px;color:#9BA0AC;line-height:1.5')}>With <span style={css('color:#E9EAEE;font-weight:550')}>{view.charAt(0).toUpperCase() + view.slice(1)}</span>, pauses longer than <span style={css('color:#E9EAEE')}>{sil.s.minGapS.toFixed(1)}s</span> are shortened, with a little breathing room kept around speech.</div>
-            {overlap}
-            {footer('20px')}
-          </>
-        ) : (
-          <>
-            <div style={css('display:flex;gap:8px;margin-top:18px')}>
-              {(['conservative', 'balanced', 'aggressive'] as const).map((p) => (
-                <div key={p} onClick={() => pick(p)} style={css('flex:1;border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:9px 0;text-align:center;font-size:12px;color:#9BA0AC;cursor:pointer;text-transform:capitalize')}>{p}</div>
-              ))}
-              <div style={css('flex:1;border:1.5px solid #6E6AE8;border-radius:10px;padding:9px 0;text-align:center;font-size:12px;font-weight:600;color:#B7B5F4;background:rgba(110,106,232,.07)')}>Custom</div>
+            <div style={css('flex:1;min-width:0')}>
+              <div style={css('font-size:12px;color:#C6C9D2')}>Remove breaths</div>
+              <div style={css('font-size:10.5px;color:#7E8393;margin-top:2px;line-height:1.4')}>Also cuts audible breaths between words. The most aggressive option — leave off if cuts feel clipped.</div>
             </div>
-            <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:20px')}>
-              <Slider label="Trim pauses longer than" value={sil.s.minGapS} min={0.05} max={2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0.05s · tight" hi="2s · relaxed" onChange={(v) => set('minGapS', v)} />
-              <Slider label="Pause to keep at each cut" value={sil.s.padAfterS} min={0} max={0.4} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · jump cuts" hi="0.4s · gentle" onChange={(v) => set('padAfterS', v)} />
-              <Slider label="Silence detection strictness" value={sil.s.speechThreshold} min={0.5} max={0.9} step={0.01} fmt={(v) => `${strictnessLabel(v)} · ${Math.round(v * 100)}%`} lo="gentle · keeps soft speech" hi="strict · may clip soft speech" onChange={(v) => set('speechThreshold', v)} />
-              <div style={css('display:flex;align-items:flex-start;gap:9px')}>
-                <div onClick={() => set('removeBreaths', !sil.s.removeBreaths)} style={css(sil.s.removeBreaths ? 'width:32px;height:18px;border-radius:9px;background:#6E6AE8;position:relative;flex:none;cursor:pointer;margin-top:1px' : 'width:32px;height:18px;border-radius:9px;background:#3A3E48;position:relative;flex:none;cursor:pointer;margin-top:1px')}>
-                  <div style={css(sil.s.removeBreaths ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
-                </div>
-                <div style={css('flex:1;min-width:0')}>
-                  <div style={css('font-size:12px;color:#C6C9D2')}>Remove breaths</div>
-                  <div style={css('font-size:10.5px;color:#7E8393;margin-top:2px;line-height:1.4')}>Also cuts audible breaths between words. The most aggressive option — leave off if cuts feel clipped.</div>
-                </div>
-              </div>
+          </div>
+        </div>
+
+        {/* Seam blend ("overlap") — a global render setting (export + preview). */}
+        <div style={css('margin-top:18px;border-top:1px solid rgba(255,255,255,.07);padding-top:16px;display:flex;flex-direction:column;gap:14px')}>
+          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
+            <div onClick={() => sil.setSeamFade({ enabled: !sil.seamFade.enabled })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${sil.seamFade.enabled ? '#6E6AE8' : '#3A3E48'}`)}>
+              <div style={css(sil.seamFade.enabled ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
             </div>
-            {overlap}
-            {footer('22px')}
-          </>
-        )}
+            <div style={css('flex:1;min-width:0')}>
+              <div style={css('font-size:12.5px;color:#E9EAEE;font-weight:550')}>Blend audio at cuts (overlap)</div>
+              <div style={css('font-size:11px;color:#9BA0AC;margin-top:3px;line-height:1.45')}>Crossfades the join: the outgoing audio tails off under the incoming words. Marked with ◢ on the timeline. Turn off for hard cuts.</div>
+            </div>
+          </div>
+          {sil.seamFade.enabled && (
+            <Slider label="Overlap amount" value={sil.seamFade.ms} min={0} max={60} step={1} fmt={(v) => `${Math.round(v)} ms`} lo="0 · hard cut" hi="60 ms · smoother" onChange={(v) => sil.setSeamFade({ ms: v })} />
+          )}
+        </div>
+
+        <div style={css('display:flex;align-items:center;margin-top:20px')}>
+          <span onClick={sil.reset} style={css(FOOT_RESET)}>Reset to default</span>
+          <div style={css('flex:1')} />
+          <span onClick={sil.close} style={css(FOOT_CANCEL)}>Cancel</span>
+          <button onClick={sil.close} style={css(FOOT_APPLY)}>Apply</button>
+        </div>
       </div>
     </div>
   )
