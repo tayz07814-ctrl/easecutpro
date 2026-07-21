@@ -232,7 +232,15 @@ export function clampSilenceRegions(
   // Word-carving a big raw region (breath sweep across a soft-spoken phrase) can
   // leave 50-110ms slivers BETWEEN words of fluent speech — each one a video
   // splice that shreds the phrase. Those are coarticulation gaps, not pauses.
-  minPieceS = 0.05
+  minPieceS = 0.05,
+  // edgeGrowS: tighten each SURVIVING cut by up to this on both sides for snappier
+  // pacing. Applied HERE — AFTER the word-carve + minPiece filter, and clamped so
+  // growth can never enter or cross a protected (guarded) word. It must NOT run in
+  // the raw VAD pass: there it grows every sub-minGap breath dip and MERGES the
+  // dips of a soft, fluent passage into one big region, which — where STT
+  // under-covers that soft speech — carved into multi-second cuts of real words.
+  // Post-carve + clamped, a dip below minGap is already gone and can't be revived.
+  edgeGrowS = 0
 ): SilenceRegion[] {
   // TRUE interval subtraction: carve every guarded word span out of every region.
   // The old two-condition edge-nudge only handled PARTIAL overlaps — a region that
@@ -260,15 +268,34 @@ export function clampSilenceRegions(
     if (cursor < b) out.push({ start: cursor, end: b })
     return out
   }
-  return raw
+  const clampMin = Math.max(0.02, minPieceS)
+  let pieces = raw
     // Head/tail: trimEdges removes the leading intro + trailing outro silence too;
     // otherwise keep them and only trim silence BETWEEN speech.
     .filter((r) => trimEdges || (r.start > 0.15 && !(durationS > 0 && r.end >= durationS - 0.15)))
     .flatMap((r) => subtractWords(r.start, r.end))
     // Every surviving piece must be a REAL pause by the creator's own threshold
     // (floor 0.02 keeps the zero-pause profile honest at its minGap of 0.05).
-    .filter((r) => r.end - r.start > Math.max(0.02, minPieceS))
-    .map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
+    .filter((r) => r.end - r.start > clampMin)
+
+  // Snappier cuts: grow each surviving pause up to edgeGrowS on each side, but
+  // NEVER past the neighboring guarded word — the growth is bounded by the words
+  // that already bracket the piece, so it can only consume dead air, never speech.
+  // (Sub-minGap dips were dropped above, so growth cannot resurrect them.)
+  if (edgeGrowS > 0 && pieces.length) {
+    const hiCap = durationS > 0 ? durationS : Infinity
+    pieces = pieces.map((r) => {
+      let lo = 0
+      let hi = hiCap
+      for (const w of guarded) {
+        if (w.end <= r.start) lo = Math.max(lo, w.end)
+        if (w.start >= r.end) { hi = Math.min(hi, w.start); break }
+      }
+      return { start: Math.max(r.start - edgeGrowS, lo), end: Math.min(r.end + edgeGrowS, hi) }
+    })
+  }
+
+  return pieces.map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
 }
 
 export async function vadSilenceRegions(
@@ -279,7 +306,11 @@ export async function vadSilenceRegions(
   keptWords: { start: number; end: number }[],
   idPrefix = 'vadsil'
 ): Promise<SilenceRegion[]> {
-  const raw = await detectSilenceFloat32(float32, sampleRate, vadSilenceToOpts(settings), durationS)
+  // edgeTrim is NOT applied in the raw VAD pass — it would grow+merge sub-minGap
+  // breath dips before word protection can drop them (the multi-second-cut bug).
+  // It is applied post-carve, word-clamped, inside clampSilenceRegions below.
+  const rawOpts = { ...vadSilenceToOpts(settings), edgeTrimMs: 0 }
+  const raw = await detectSilenceFloat32(float32, sampleRate, rawOpts, durationS)
 
   // NOISE-ISLAND BRIDGING. Camera thuds / phone-handling noise inside a pause make
   // Silero score "speech", so the VAD splits the pause into silence-NOISE-silence
@@ -334,6 +365,7 @@ export async function vadSilenceRegions(
     try {
       const strictOpts = {
         ...vadSilenceToOpts(settings),
+        edgeTrimMs: 0, // same reason as the main pass — no grow before word-carve
         vadThreshold: Math.min(0.95, settings.speechThreshold + 0.15)
       }
       const sliceDur = (i1 - i0) / sampleRate
@@ -352,5 +384,5 @@ export async function vadSilenceRegions(
   // Word-guard tied to the padding sliders (0 → crisp gapless cut), trim the
   // leading/trailing dead air of the whole clip, and require every carved piece to
   // still be a pause the creator asked to cut (>= their minGap).
-  return clampSilenceRegions(bridged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, settings.minGapS)
+  return clampSilenceRegions(bridged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, settings.minGapS, settings.edgeTrimS)
 }
