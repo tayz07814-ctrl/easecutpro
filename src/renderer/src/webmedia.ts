@@ -105,13 +105,6 @@ export function serverPathOf(id: string): string | undefined {
   return registry.get(id)?.serverPath
 }
 
-/** The raw imported File for a webmedia id, or null. Used to upload the original
- *  clip for SERVER-SIDE audio extraction when no in-browser decoder can read it
- *  (iOS Safari decodes some phone-exported clips to silence). */
-export function getMediaFile(id: string): File | null {
-  return registry.get(id)?.file ?? null
-}
-
 export function isWebMediaId(p: string | undefined): boolean {
   return !!p && p.startsWith('webmedia:')
 }
@@ -753,10 +746,8 @@ export async function extractAudioWavBlob(id: string, onProgress?: (pct: number)
     onProgress?.(100)
     return wav
   } catch (e) {
-    // Local decode failed — the STT path now falls back to a SERVER-SIDE extraction
-    // (it uploads the original clip), so this is no longer a dead end. Log for remote
-    // debugging, but don't alarm the creator with the on-screen error box.
-    console.warn('[ec] Local audio decode failed (Cut Lord) — falling back to server-side extraction', e)
+    // Surface the REAL decode error (Cut Lord's "Could not decode…" hides the cause).
+    ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Audio decode failed (Cut Lord)', e)
     return null // unsupported container/codec, or decode OOM
   }
 }

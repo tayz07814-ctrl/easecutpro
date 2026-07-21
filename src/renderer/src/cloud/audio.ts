@@ -13,14 +13,10 @@
 // from the bad one. The WAV is decoded natively and reliably by AssemblyAI and
 // Deepgram alike, so it's the only upload path now.
 
-import { extractAudioWavBlob, getMediaFile } from '../webmedia'
+import { extractAudioWavBlob } from '../webmedia'
 
 /** Sample rate of webmedia's extracted WAV — the timebase for STT + VAD. */
 const STT_RATE = 16000
-
-/** The stt-audio bucket's cap (see the init migration). Above this we can neither
- *  decode locally nor upload the original, so we surface an honest error. */
-const RAW_UPLOAD_MAX = 250 * 1024 * 1024
 
 export interface SttAudio {
   /** upload payload — the 16 kHz mono WAV. */
@@ -60,63 +56,14 @@ export async function decodeAudioFloat32(
   return { float32, sampleRate: STT_RATE, durationS: float32.length / STT_RATE }
 }
 
-/** Does this PCM carry real signal, or did the decoder hand back silence? iOS
- *  Safari "successfully" decodes some phone-exported clips to pure zeros — the STT
- *  providers then reject that upload with "no spoken audio", so a silent decode is
- *  treated as a FAILURE and we fall back to a server-side extraction. */
-function hasAudibleSignal(pcm: Float32Array): boolean {
-  if (!pcm.length) return false
-  const step = Math.max(1, Math.floor(pcm.length / 4000)) // sample ~4k points across the clip
-  let peak = 0
-  for (let i = 0; i < pcm.length; i += step) {
-    const a = Math.abs(pcm[i])
-    if (a > peak) peak = a
-  }
-  return peak > 0.004 // ≈ -48 dBFS; below this the clip is effectively silent
-}
-
-/** Container extension for the STT upload path (from the file name, else the MIME). */
-function mediaExt(file: File): string {
-  const fromName = /\.([a-z0-9]{2,5})$/i.exec(file.name)?.[1]
-  if (fromName) return fromName.toLowerCase()
-  const t = (file.type || '').toLowerCase()
-  if (t.includes('quicktime')) return 'mov'
-  if (t.includes('webm')) return 'webm'
-  if (t.includes('matroska')) return 'mkv'
-  if (t.includes('mp4') || t.startsWith('video/')) return 'mp4'
-  if (t.startsWith('audio/')) return 'm4a'
-  return 'mp4'
-}
-
-/** Produce the STT audio for a `webmedia:` id.
- *
- *  Preferred: decode the audio on-device to a small 16 kHz mono WAV — the upload
- *  stays tiny AND the SAME samples feed the VAD, so words and silence share one
- *  clock. Falls back to uploading the ORIGINAL clip for server-side extraction
- *  when no in-browser decoder yields real audio (mainly iOS Safari, which decodes
- *  some phone-exported clips to silence). The fallback has no local PCM, so
- *  `float32` is empty and callers skip the VAD silence pass (transcription and
- *  retake word-cuts still run). */
+/** Produce the STT audio for a `webmedia:` id: decode once, return the 16 kHz
+ *  mono WAV upload blob + the decoded samples for the VAD (one shared clock). */
 export async function extractSttAudio(mediaId: string, onProgress?: (pct: number) => void): Promise<SttAudio> {
   const wav = await extractAudioWavBlob(mediaId, (p) => onProgress?.(Math.round(p * 0.9)))
-  if (wav) {
-    const float32 = wavToFloat32(await wav.arrayBuffer())
-    if (hasAudibleSignal(float32)) {
-      onProgress?.(100)
-      return { blob: wav, ext: 'wav', float32, sampleRate: STT_RATE, durationS: float32.length / STT_RATE }
-    }
+  if (!wav) {
+    throw new Error('Could not decode this media’s audio in the browser (unsupported codec or the file is too large).')
   }
-  // Fallback: send the original clip; the provider (AssemblyAI/Deepgram) extracts
-  // the audio server-side. No local PCM → empty float32 → VAD skipped upstream.
-  const file = getMediaFile(mediaId)
-  if (!file) {
-    throw new Error('Could not read this clip’s audio on this device.')
-  }
-  if (file.size > RAW_UPLOAD_MAX) {
-    throw new Error(
-      'This clip’s audio can’t be read on this device, and the file is too large to transcribe on our servers. Try a shorter clip.'
-    )
-  }
+  const float32 = wavToFloat32(await wav.arrayBuffer())
   onProgress?.(100)
-  return { blob: file, ext: mediaExt(file), float32: new Float32Array(0), sampleRate: STT_RATE, durationS: 0 }
+  return { blob: wav, ext: 'wav', float32, sampleRate: STT_RATE, durationS: float32.length / STT_RATE }
 }
