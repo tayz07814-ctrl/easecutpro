@@ -236,8 +236,25 @@ export function clampSilenceRegions(
   // handles every case uniformly: partial overlap → trimmed; word inside region →
   // region SPLITS around it; region inside a word → dropped; several quiet words →
   // split around each. Kept transcript words can no longer be cut by silence.
+  //
+  // STT TAIL TRIM: STT word ends often carry 100-300ms of trailing dead air (the
+  // provider pads the word span). Protecting that slop leaves audible residual
+  // silence at a cut even with 0 padding. When the AUDIO says silence begins inside
+  // a word's tail (a raw region starts inside the word and runs past its end), trust
+  // the audio: shrink that word's protected end to the region start — capped at
+  // 350ms so a soft trailing syllable the VAD under-detected can't be clipped.
+  const MAX_TAIL_TRIM_S = 0.35
+  const effectiveEnd = (w: { start: number; end: number }): number => {
+    let end = w.end
+    for (const r of raw) {
+      if (r.start > w.start && r.start < w.end && r.end >= w.end) {
+        end = Math.min(end, Math.max(r.start, w.end - MAX_TAIL_TRIM_S))
+      }
+    }
+    return end
+  }
   const guarded = [...keptWords]
-    .map((w) => ({ start: w.start - guardBeforeS, end: w.end + guardAfterS }))
+    .map((w) => ({ start: w.start - guardBeforeS, end: effectiveEnd(w) + guardAfterS }))
     .sort((x, y) => x.start - y.start)
   const subtractWords = (a: number, b: number): { start: number; end: number }[] => {
     const out: { start: number; end: number }[] = []
@@ -271,7 +288,24 @@ export async function vadSilenceRegions(
   idPrefix = 'vadsil'
 ): Promise<SilenceRegion[]> {
   const raw = await detectSilenceFloat32(float32, sampleRate, vadSilenceToOpts(settings), durationS)
+
+  // TRANSCRIPT-GAP REGIONS: the transcript is the source of truth for where speech
+  // is. Camera thuds / phone-handling noise inside a pause make Silero score
+  // "speech", so the VAD never offers that stretch as silence and the noise stays
+  // in the edit. But a gap between two transcript words with NO word inside it is
+  // not speech — synthesize a region for every word gap ≥ minGap and union it with
+  // the VAD's regions. The word-carve below still trims every region back to the
+  // (padded) word boundaries, so real speech is untouched either way.
+  const ws = [...keptWords].sort((a, b) => a.start - b.start)
+  const gaps: { start: number; end: number }[] = []
+  for (let i = 1; i < ws.length; i++) {
+    const g0 = ws[i - 1].end
+    const g1 = ws[i].start
+    if (g1 - g0 >= Math.max(0.03, settings.minGapS)) gaps.push({ start: g0, end: g1 })
+  }
+  const unioned = mergeIntervals([...raw, ...gaps])
+
   // Word-guard tied to the padding sliders (0 → crisp gapless cut), and trim the
   // leading/trailing dead air of the whole clip too.
-  return clampSilenceRegions(raw, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true)
+  return clampSilenceRegions(unioned, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true)
 }
