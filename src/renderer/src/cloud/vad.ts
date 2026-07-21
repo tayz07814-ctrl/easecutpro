@@ -227,7 +227,12 @@ export function clampSilenceRegions(
   // TRAILING silence after the last word (dead air at the very start/end). The
   // first/last word stays protected by the padding above. Default off preserves
   // the old "keep head + tail" behavior for any other caller.
-  trimEdges = false
+  trimEdges = false,
+  // A carved piece must STILL satisfy the creator's "cut pauses longer than X".
+  // Word-carving a big raw region (breath sweep across a soft-spoken phrase) can
+  // leave 50-110ms slivers BETWEEN words of fluent speech — each one a video
+  // splice that shreds the phrase. Those are coarticulation gaps, not pauses.
+  minPieceS = 0.05
 ): SilenceRegion[] {
   // TRUE interval subtraction: carve every guarded word span out of every region.
   // The old two-condition edge-nudge only handled PARTIAL overlaps — a region that
@@ -280,9 +285,9 @@ export function clampSilenceRegions(
     // otherwise keep them and only trim silence BETWEEN speech.
     .filter((r) => trimEdges || (r.start > 0.15 && !(durationS > 0 && r.end >= durationS - 0.15)))
     .flatMap((r) => subtractWords(r.start, r.end))
-    // Anti-sliver: 0.02 (was 0.05) — the old filter quietly kept 20-50ms of air at
-    // every seam, which alone defeated a "zero pause" profile.
-    .filter((r) => r.end - r.start > 0.02)
+    // Every surviving piece must be a REAL pause by the creator's own threshold
+    // (floor 0.02 keeps the zero-pause profile honest at its minGap of 0.05).
+    .filter((r) => r.end - r.start > Math.max(0.02, minPieceS))
     .map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
 }
 
@@ -312,7 +317,8 @@ export async function vadSilenceRegions(
   }
   const unioned = mergeIntervals([...raw, ...gaps])
 
-  // Word-guard tied to the padding sliders (0 → crisp gapless cut), and trim the
-  // leading/trailing dead air of the whole clip too.
-  return clampSilenceRegions(unioned, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true)
+  // Word-guard tied to the padding sliders (0 → crisp gapless cut), trim the
+  // leading/trailing dead air of the whole clip, and require every carved piece to
+  // still be a pause the creator asked to cut (>= their minGap).
+  return clampSilenceRegions(unioned, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, settings.minGapS)
 }
