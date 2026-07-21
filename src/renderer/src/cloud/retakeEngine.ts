@@ -101,8 +101,18 @@ export async function retakeAwareCutCloud(
   op(3, 'Getting your audio ready…')
   const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
 
-  // 2. verbatim transcription (AssemblyAI -> Deepgram); emits 8..49.
-  const { vt, warnings: tw } = await transcribeVerbatimCloud(audio, op)
+  // 2. verbatim transcription (AssemblyAI -> Deepgram); emits 8..49. On failure,
+  //    attach the client-side decoder diagnostic (which layers ran, what they
+  //    heard) so the on-screen error names the ACTUAL audio problem, and dump it
+  //    to the debug bucket for remote inspection.
+  let vtRes: Awaited<ReturnType<typeof transcribeVerbatimCloud>>
+  try {
+    vtRes = await transcribeVerbatimCloud(audio, op)
+  } catch (e) {
+    void saveRetakeDebug({ stage: 'stt_failed', audio_note: audio.note ?? '', error: String((e as Error).message) })
+    throw new Error(`${(e as Error).message}${audio.note ? `\n[audio: ${audio.note}]` : ''}`)
+  }
+  const { vt, warnings: tw } = vtRes
   warnings.push(...tw)
 
   // 3. VAD safety scan (Retake β's own profile) — ONE pass, reused for the Opus
@@ -110,13 +120,17 @@ export async function retakeAwareCutCloud(
   //    path's safety scan). If it fails we fall back to transcript-gap pauses.
   op(56, 'Listening for pauses…')
   let vadSil: { start: number; end: number }[] = []
-  try {
-    vadSil = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadSafetyOpts(), audio.durationS)).map((r) => ({
-      start: r.start,
-      end: r.end
-    }))
-  } catch (e) {
-    warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
+  // No local PCM (audio decoded server-side via the remux fallback) → map pauses
+  // from transcript gaps only.
+  if (audio.float32.length) {
+    try {
+      vadSil = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadSafetyOpts(), audio.durationS)).map((r) => ({
+        start: r.start,
+        end: r.end
+      }))
+    } catch (e) {
+      warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
+    }
   }
 
   // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
@@ -171,10 +185,16 @@ export async function retakeAwareCutCloud(
     return !cutSpans.some((s) => m >= s.start && m <= s.end)
   })
   let silenceRegions: SilenceRegion[] = []
-  try {
-    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
-  } catch (e) {
-    warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
+  if (audio.float32.length) {
+    try {
+      silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
+    } catch (e) {
+      warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
+    }
+  } else {
+    // Server-side decode fallback: retakes still get cut from the transcript,
+    // but there's no waveform on this device to trim silence from.
+    warnings.push('Silence trimming skipped — this clip’s audio was decoded on our servers.')
   }
   const silenceDebug = {
     source: 'vad_pass',
@@ -223,6 +243,10 @@ export async function transcribeCloud(
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
   op(3, 'Extracting audio…')
   const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
-  const { vt } = await transcribeVerbatimCloud(audio, op)
-  return toAppTranscript(vt)
+  try {
+    const { vt } = await transcribeVerbatimCloud(audio, op)
+    return toAppTranscript(vt)
+  } catch (e) {
+    throw new Error(`${(e as Error).message}${audio.note ? `\n[audio: ${audio.note}]` : ''}`)
+  }
 }

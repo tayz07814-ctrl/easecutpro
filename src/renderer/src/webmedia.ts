@@ -7,7 +7,7 @@
 import type { MediaInfo, Waveform } from '@shared/types'
 // Type-only — erased at build; the runtime import is dynamic (fast thumbnail path).
 import type { Input as MBInput } from 'mediabunny'
-import { ffmpegExtractPcm16kMono } from './ffmpegAudio'
+import { ffmpegDecodeAudio, ffmpegRemuxAudioTrack, peakOfInt16 } from './ffmpegAudio'
 
 interface MediaRec {
   file: File
@@ -712,141 +712,201 @@ export async function ensureAudioUploaded(id: string, onProgress?: (pct: number)
   return rec.audioServerPath
 }
 
-/** Decode a media file's audio in the browser → 16 kHz mono WAV Blob (null if it can't).
- *  Three decoders in order of cost: WebCodecs (mediabunny) → WebAudio
- *  decodeAudioData → ffmpeg.wasm. All run ON-DEVICE — the clip never leaves the
- *  phone. The ffmpeg pass is the last resort for iOS Safari, which decodes some
- *  phone-exported clips to silence and can't use WebCodecs audio. */
+/** ≈ -48 dBFS on int16 — a decoded track peaking below this is "silent". */
+const PEAK_MIN_16 = 131
+
+/** STT audio for a `webmedia:` id, produced ON-DEVICE with a self-diagnosing,
+ *  silence-guarded decoder chain. `blob` is null only when every layer failed —
+ *  `diag` then names exactly what each decoder saw (tracks, codecs, peaks). */
+export interface SmartSttAudio {
+  blob: Blob | null
+  /** upload container extension ('wav' when decoded locally). */
+  ext: string
+  /** 16 kHz mono PCM when a local decoder produced real audio, else null
+   *  (audio-track remux → the server decodes; VAD has nothing to read). */
+  pcm: Int16Array | null
+  /** compact per-layer diagnostic, e.g. "wc[t0:0.00 t1:nodec] wa[silent] ff[aac+aac; a0:0.00 a1:0.31]". */
+  diag: string
+}
+
+/** Decode a media file's audio in the browser → 16 kHz mono WAV Blob (null if it
+ *  can't). Thin wrapper over the guarded multi-decoder chain (WebCodecs →
+ *  WebAudio → ffmpeg.wasm), all on-device. */
 export async function extractAudioWavBlob(id: string, onProgress?: (pct: number) => void): Promise<Blob | null> {
   const rec = registry.get(id)
-  if (!rec) return null
-  // Very large files risk OOM on decode; the caller surfaces a clean error.
-  if (rec.file.size > 800 * 1024 * 1024) return null
-  // 1. WebCodecs via mediabunny — the platform's NATIVE decoder, no AudioContext
-  //    (iOS caps how many can be live). Bounded by an abort timeout.
+  if (!rec || rec.file.size > 800 * 1024 * 1024) return null
+  const pcm = await extractAudioPcm16(rec, [], onProgress)
+  return pcm ? encodeWav(pcm, 16000) : null
+}
+
+/** Full STT audio pipeline: guarded decode chain first; if NOTHING on-device can
+ *  produce real audio, demux the compressed AUDIO TRACK out of the container
+ *  (no decode needed) and hand that up for server-side decoding. The video
+ *  never leaves the device on any path. */
+export async function extractSttAudioSmart(id: string, onProgress?: (pct: number) => void): Promise<SmartSttAudio> {
+  const rec = registry.get(id)
+  if (!rec) return { blob: null, ext: 'wav', pcm: null, diag: 'media not found in this browser — re-import the clip' }
+  if (rec.file.size > 800 * 1024 * 1024) return { blob: null, ext: 'wav', pcm: null, diag: 'file over 800 MB' }
+  // iOS quietly invalidates photo-library Files after a while — read a few bytes
+  // up front so that case gets an honest "re-import" instead of decoder noise.
+  try {
+    await rec.file.slice(0, 4).arrayBuffer()
+  } catch {
+    return { blob: null, ext: 'wav', pcm: null, diag: 'file no longer readable — re-import the clip' }
+  }
+  const diag: string[] = []
+  const pcm = await extractAudioPcm16(rec, diag, onProgress)
+  if (pcm) return { blob: encodeWav(pcm, 16000), ext: 'wav', pcm, diag: diag.join(' ') }
+  const remux = await ffmpegRemuxAudioTrack(rec.file)
+  if (remux) {
+    diag.push(`remux:${remux.ext}`)
+    return { blob: remux.blob, ext: remux.ext, pcm: null, diag: diag.join(' ') }
+  }
+  diag.push('remux:failed')
+  return { blob: null, ext: 'wav', pcm: null, diag: diag.join(' ') }
+}
+
+/** The guarded decoder chain: WebCodecs (all tracks) → WebAudio decodeAudioData →
+ *  ffmpeg.wasm (all streams). EVERY layer's output is checked for actual signal —
+ *  on iOS the platform decoders "succeed" with pure silence for some clips, and
+ *  an unchecked silent result here is exactly what made Cut Lord upload silence.
+ *  Layers append what they saw to `diag`. */
+async function extractAudioPcm16(rec: MediaRec, diag: string[], onProgress?: (pct: number) => void): Promise<Int16Array | null> {
+  // 1. WebCodecs via mediabunny — platform decoder, no AudioContext, reads ALL
+  //    audio tracks (screen recordings carry mic voice on track 2).
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 120000)
-  let fast: Blob | null = null
   try {
-    fast = await extractAudioWavBlobFast(rec, ctrl.signal, onProgress)
+    const pcm = await webcodecsExtractPcm(rec, ctrl.signal, diag, onProgress)
+    if (pcm) return pcm
   } catch {
-    fast = null
+    diag.push('wc[threw]')
   } finally {
     clearTimeout(timer)
   }
-  if (fast) return fast
-  // 2. WebAudio decodeAudioData — reliable on desktop, but on iOS Safari it can
-  //    hand back SILENCE for some phone-exported codecs. Only trust it when the
-  //    decode actually carries signal; a silent decode falls through to ffmpeg.
+  // 2. WebAudio decodeAudioData — desktop-reliable; first track only. Trust it
+  //    only when the decode carries signal.
   try {
-    onProgress?.(5)
+    onProgress?.(40)
     const ab = await rec.file.arrayBuffer()
     const lead = mp4AudioStartOffset(ab) // parse BEFORE decode (it detaches ab)
     const audio = await decodeAudioAtRate(ab, 16000)
-    if (audioBufferHasSignal(audio)) {
-      // Pad the leading offset so transcription timestamps align to the video.
-      const wav = audioBufferTo16kMonoWav(audio, lead)
+    const pcm = audioBufferToPcm16kMono(audio, lead)
+    const pk = peakOfInt16(pcm)
+    diag.push(`wa[${(pk / 32768).toFixed(2)}]`)
+    if (pk >= PEAK_MIN_16) {
       onProgress?.(100)
-      return wav
-    }
-    console.warn('[ec] decodeAudioData decoded to silence — trying ffmpeg.wasm')
-  } catch (e) {
-    console.warn('[ec] decodeAudioData failed — trying ffmpeg.wasm', e)
-  }
-  // 3. ffmpeg.wasm — on-device last resort; decodes the containers/codecs WebKit
-  //    can't. Keeps the clip on the phone (no upload). ~31 MB core, fetched lazily
-  //    on first use.
-  try {
-    const pcm = await ffmpegExtractPcm16kMono(rec.file, (p) => onProgress?.(p))
-    if (pcm && pcm.length) {
-      onProgress?.(100)
-      return encodeWav(pcm, 16000)
+      return pcm
     }
   } catch (e) {
-    console.warn('[ec] ffmpeg.wasm fallback failed', e)
+    diag.push(`wa[${String((e as Error)?.message || e).slice(0, 40)}]`)
   }
-  return null // no in-browser decoder could read this clip's audio
+  // 3. ffmpeg.wasm — on-device last resort; decodes what WebKit can't and mixes
+  //    every non-silent stream. ~31 MB core, fetched lazily on first use.
+  const ff = await ffmpegDecodeAudio(rec.file, (p) => onProgress?.(40 + Math.round(p * 0.6)))
+  diag.push(ff.note)
+  if (ff.pcm) {
+    onProgress?.(100)
+    return ff.pcm
+  }
+  return null
 }
 
-/** Did the decoder return real audio, or silence? iOS decodeAudioData can decode
- *  some clips to pure zeros. Samples ~4000 points per channel — cheap, and a
- *  spoken clip clears the tiny threshold immediately. */
-function audioBufferHasSignal(audio: AudioBuffer): boolean {
-  const nch = audio.numberOfChannels
-  const len = audio.length
-  if (!nch || !len) return false
-  const step = Math.max(1, Math.floor(len / 4000))
-  for (let c = 0; c < nch; c++) {
-    const ch = audio.getChannelData(c)
-    for (let i = 0; i < len; i += step) {
-      if (Math.abs(ch[i]) > 0.004) return true // ≈ -48 dBFS
-    }
-  }
-  return false
-}
-
-/** WebCodecs audio → 16 kHz mono WAV via mediabunny. Decodes with the platform's
- *  native decoder (no AudioContext), streaming a drift-free linear resample so a
- *  long clip never holds the whole native-rate PCM at once. The leading presentation
- *  offset becomes silence so STT word times line up with the video (matches the
- *  decodeAudioData path). Returns null (→ decodeAudioData fallback) on any error,
- *  abort, or undecodable track. */
-async function extractAudioWavBlobFast(
+/** WebCodecs decode of EVERY audio track → 16 kHz mono int16, silence-guarded
+ *  per track, non-silent tracks mixed. Returns null when no track carries
+ *  signal (the per-track verdicts land in `diag`). */
+async function webcodecsExtractPcm(
   rec: MediaRec,
   signal: AbortSignal,
+  diag: string[],
   onProgress?: (pct: number) => void
-): Promise<Blob | null> {
+): Promise<Int16Array | null> {
   let input: MBInput | null = null
   try {
     const { Input, BlobSource, ALL_FORMATS, AudioBufferSink } = await import('mediabunny')
     input = new Input({ source: new BlobSource(rec.file), formats: ALL_FORMATS })
-    const track = await input.getPrimaryAudioTrack()
-    if (!track || signal.aborted || !(await track.canDecode())) return null
-    const durationS =
-      (await track.getDurationFromMetadata().catch(() => null)) || (await track.computeDuration().catch(() => 0)) || 0
-    const sink = new AudioBufferSink(track)
-    const TARGET = 16000
-    const content: number[] = [] // 16 kHz mono Int16 sample values (content, no lead)
-    let srcRate = 0
-    let firstTs = -1
-    let globalIn = 0 // native samples consumed before the current chunk
-    let k = 0 // next content output index
-    for await (const wrapped of sink.buffers()) {
-      if (signal.aborted) return null
-      const ab = wrapped.buffer
-      if (!srcRate) srcRate = ab.sampleRate
-      if (firstTs < 0) firstTs = Math.max(0, wrapped.timestamp)
-      const nCh = ab.numberOfChannels
-      const n = ab.length
-      const mono = new Float32Array(n) // downmix channels → mono
-      for (let c = 0; c < nCh; c++) {
-        const ch = ab.getChannelData(c)
-        for (let j = 0; j < n; j++) mono[j] += ch[j]
-      }
-      if (nCh > 1) for (let j = 0; j < n; j++) mono[j] /= nCh
-      const ratio = srcRate / TARGET
-      const chunkEnd = globalIn + n
-      while (k * ratio < chunkEnd) {
-        const local = k * ratio - globalIn // ≥ 0 and < n by the loop bound
-        const i0 = Math.floor(local)
-        const frac = local - i0
-        const a = mono[i0]
-        const b = i0 + 1 < n ? mono[i0 + 1] : mono[i0] // clamp at chunk boundary
-        let s = a + (b - a) * frac
-        s = s < -1 ? -1 : s > 1 ? 1 : s
-        content.push(s < 0 ? s * 0x8000 : s * 0x7fff)
-        k++
-      }
-      globalIn = chunkEnd
-      if (durationS > 0) onProgress?.(Math.min(95, Math.round((globalIn / srcRate / durationS) * 95)))
+    const tracks = await input.getAudioTracks()
+    if (!tracks.length) {
+      diag.push('wc[no-audio-track]')
+      return null
     }
-    if (!srcRate || !content.length) return null
-    const lead = Math.max(0, Math.round(Math.max(0, firstTs) * TARGET))
-    const pcm = new Int16Array(lead + content.length) // lead region stays silent (0)
-    pcm.set(content, lead)
-    onProgress?.(100)
-    return encodeWav(pcm, TARGET)
+    const TARGET = 16000
+    const notes: string[] = []
+    const parts: Int16Array[] = []
+    for (let t = 0; t < tracks.length; t++) {
+      if (signal.aborted) break
+      const track = tracks[t]
+      if (!(await track.canDecode())) {
+        notes.push(`t${t}:nodec`)
+        continue
+      }
+      // Stream-decode this track with a drift-free linear resample; presentation
+      // timestamps map the container's leading offset to silence automatically.
+      const sink = new AudioBufferSink(track)
+      const content: number[] = []
+      let srcRate = 0
+      let firstTs = -1
+      let globalIn = 0
+      let k = 0
+      let failed = false
+      try {
+        for await (const wrapped of sink.buffers()) {
+          if (signal.aborted) break
+          const ab = wrapped.buffer
+          if (!srcRate) srcRate = ab.sampleRate
+          if (firstTs < 0) firstTs = Math.max(0, wrapped.timestamp)
+          const nCh = ab.numberOfChannels
+          const n = ab.length
+          const mono = new Float32Array(n)
+          for (let c = 0; c < nCh; c++) {
+            const ch = ab.getChannelData(c)
+            for (let j = 0; j < n; j++) mono[j] += ch[j]
+          }
+          if (nCh > 1) for (let j = 0; j < n; j++) mono[j] /= nCh
+          const ratio = srcRate / TARGET
+          const chunkEnd = globalIn + n
+          while (k * ratio < chunkEnd) {
+            const local = k * ratio - globalIn
+            const i0 = Math.floor(local)
+            const frac = local - i0
+            const a = mono[i0]
+            const b = i0 + 1 < n ? mono[i0 + 1] : mono[i0]
+            let s = a + (b - a) * frac
+            s = s < -1 ? -1 : s > 1 ? 1 : s
+            content.push(s < 0 ? s * 0x8000 : s * 0x7fff)
+            k++
+          }
+          globalIn = chunkEnd
+        }
+      } catch {
+        failed = true
+      }
+      if (failed || !srcRate || !content.length) {
+        notes.push(`t${t}:err`)
+        continue
+      }
+      const lead = Math.max(0, Math.round(firstTs * TARGET))
+      const pcm = new Int16Array(lead + content.length)
+      pcm.set(content, lead)
+      const pk = peakOfInt16(pcm)
+      notes.push(`t${t}:${(pk / 32768).toFixed(2)}`)
+      if (pk >= PEAK_MIN_16) parts.push(pcm)
+      onProgress?.(Math.round(((t + 1) / tracks.length) * 35))
+    }
+    diag.push(`wc[${notes.join(' ')}]`)
+    if (!parts.length) return null
+    if (parts.length === 1) return parts[0]
+    // Mix simultaneous tracks (mic + app audio), clamped.
+    const len = Math.max(...parts.map((p) => p.length))
+    const mixed = new Int16Array(len)
+    for (let j = 0; j < len; j++) {
+      let s = 0
+      for (const p of parts) if (j < p.length) s += p[j]
+      mixed[j] = s < -32768 ? -32768 : s > 32767 ? 32767 : s
+    }
+    return mixed
   } catch {
+    diag.push('wc[err]')
     return null
   } finally {
     try {
@@ -857,9 +917,9 @@ async function extractAudioWavBlobFast(
   }
 }
 
-/** Downmix to mono, resample to 16 kHz, encode 16-bit PCM WAV. `leadSec` of
- *  leading silence is prepended to re-align a delayed audio stream to the video. */
-function audioBufferTo16kMonoWav(buf: AudioBuffer, leadSec = 0): Blob {
+/** Downmix to mono, resample to 16 kHz → int16 PCM. `leadSec` of leading
+ *  silence is prepended to re-align a delayed audio stream to the video. */
+function audioBufferToPcm16kMono(buf: AudioBuffer, leadSec = 0): Int16Array {
   const TARGET = 16000
   const chans: Float32Array[] = []
   for (let c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c))
@@ -883,7 +943,7 @@ function audioBufferTo16kMonoWav(buf: AudioBuffer, leadSec = 0): Blob {
     s = s < -1 ? -1 : s > 1 ? 1 : s
     pcm[lead + i] = s < 0 ? s * 0x8000 : s * 0x7fff
   }
-  return encodeWav(pcm, TARGET)
+  return pcm
 }
 
 function encodeWav(pcm: Int16Array, rate: number): Blob {
