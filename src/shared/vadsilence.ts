@@ -24,16 +24,19 @@ export interface VadSilenceSettings {
   breathDb: number
 }
 
-/** Launch defaults. Breath/quiet-filler removal is OFF until the user opts in
- *  (it's the most aggressive control); the rest are the tuned silence values. */
+/** Launch defaults (= the Balanced preset). Breath/quiet-filler removal is OFF
+ *  until the user opts in (it's the most aggressive control). Retuned after
+ *  real-run overcutting: a lower VAD threshold (0.75) stops soft-spoken words
+ *  scoring as silence, minGapS 0.3 leaves natural micro-pauses alone, and the
+ *  pads keep a touch more air around speech. */
 export const DEFAULT_VAD_SILENCE_SETTINGS: VadSilenceSettings = {
-  speechThreshold: 0.8,
-  minGapS: 0.1,
+  speechThreshold: 0.75,
+  minGapS: 0.3,
   padBeforeS: 0.1,
-  padAfterS: 0.07,
+  padAfterS: 0.12,
   edgeTrimS: 0,
   removeBreaths: false,
-  breathDb: -30
+  breathDb: -34
 }
 
 /** Sanitize a possibly-partial persisted value back onto the defaults. */

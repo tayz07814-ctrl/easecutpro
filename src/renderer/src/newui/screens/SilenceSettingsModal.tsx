@@ -10,8 +10,11 @@ const FOOT_RESET = 'font-size:12.5px;color:#9BA0AC;cursor:pointer;padding:7px 10
 const FOOT_CANCEL = 'font-size:12.5px;color:#C6C9D2;cursor:pointer;padding:8px 14px;border-radius:9px'
 const FOOT_APPLY = 'background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 18px;cursor:pointer;margin-left:8px'
 
-function noiseLabel(th: number): string {
-  return th <= 0.62 ? 'Silent studio' : th <= 0.78 ? 'Quiet room' : th <= 0.88 ? 'Some background' : 'Noisy street'
+// Honest framing for the VAD threshold: it is NOT a room-noise dial — raising it
+// makes the detector stricter about what counts as speech, so soft-spoken words
+// start counting as silence. Present it as detection strictness with the risk named.
+function strictnessLabel(th: number): string {
+  return th <= 0.68 ? 'Gentle' : th <= 0.78 ? 'Standard' : th <= 0.85 ? 'Strict' : 'Very strict'
 }
 
 // The concrete values a preset uses — shown under its blurb so the creator can see
@@ -48,16 +51,13 @@ const CLOSE = 'color:#9BA0AC;font-size:15px;padding:4px 8px;border-radius:8px;cu
 export default function SilenceSettingsModal(): JSX.Element | null {
   const sil = useSilence()
   const [view, setView] = useState<Preset>(sil.detected)
-  // "Protect first pause after each sentence" has no engine field (flagged):
-  // kept visible per the approved design, held in local UI state only.
-  const [protectFirst, setProtectFirst] = useState(false)
   if (!sil.show) return null
 
   const pick = (p: Preset): void => {
     setView(p)
     if (p !== 'custom') sil.applyPreset(p)
   }
-  const set = (k: keyof VadSilenceSettings, v: number): void => { sil.setField(k, v); setView('custom') }
+  const set = (k: keyof VadSilenceSettings, v: number | boolean): void => { sil.setField(k, v); setView('custom') }
 
   const footer = (mt: string): JSX.Element => (
     <div style={css(`display:flex;align-items:center;margin-top:${mt}`)}>
@@ -151,13 +151,16 @@ export default function SilenceSettingsModal(): JSX.Element | null {
             </div>
             <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:20px')}>
               <Slider label="Trim pauses longer than" value={sil.s.minGapS} min={0.05} max={2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0.05s · tight" hi="2s · relaxed" onChange={(v) => set('minGapS', v)} />
-              <Slider label="Leave this much pause" value={sil.s.padAfterS} min={0} max={0.4} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="none · jump cuts" hi="1s · gentle" onChange={(v) => set('padAfterS', v)} />
-              <Slider label="Background noise level" value={sil.s.speechThreshold} min={0.5} max={0.95} step={0.01} fmt={noiseLabel} lo="silent studio" hi="noisy street" onChange={(v) => set('speechThreshold', v)} />
-              <div style={css('display:flex;align-items:center;gap:9px')}>
-                <div onClick={() => setProtectFirst((v) => !v)} style={css(protectFirst ? 'width:32px;height:18px;border-radius:9px;background:#6E6AE8;position:relative;flex:none;cursor:pointer' : 'width:32px;height:18px;border-radius:9px;background:#3A3E48;position:relative;flex:none;cursor:pointer')}>
-                  <div style={css(protectFirst ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
+              <Slider label="Pause to keep at each cut" value={sil.s.padAfterS} min={0} max={0.4} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · jump cuts" hi="0.4s · gentle" onChange={(v) => set('padAfterS', v)} />
+              <Slider label="Silence detection strictness" value={sil.s.speechThreshold} min={0.5} max={0.9} step={0.01} fmt={(v) => `${strictnessLabel(v)} · ${Math.round(v * 100)}%`} lo="gentle · keeps soft speech" hi="strict · may clip soft speech" onChange={(v) => set('speechThreshold', v)} />
+              <div style={css('display:flex;align-items:flex-start;gap:9px')}>
+                <div onClick={() => set('removeBreaths', !sil.s.removeBreaths)} style={css(sil.s.removeBreaths ? 'width:32px;height:18px;border-radius:9px;background:#6E6AE8;position:relative;flex:none;cursor:pointer;margin-top:1px' : 'width:32px;height:18px;border-radius:9px;background:#3A3E48;position:relative;flex:none;cursor:pointer;margin-top:1px')}>
+                  <div style={css(sil.s.removeBreaths ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
                 </div>
-                <div style={css('font-size:12px;color:#C6C9D2')}>Protect the first pause after each sentence</div>
+                <div style={css('flex:1;min-width:0')}>
+                  <div style={css('font-size:12px;color:#C6C9D2')}>Remove breaths</div>
+                  <div style={css('font-size:10.5px;color:#7E8393;margin-top:2px;line-height:1.4')}>Also cuts audible breaths between words. The most aggressive option — leave off if cuts feel clipped.</div>
+                </div>
               </div>
             </div>
             {overlap}

@@ -227,20 +227,33 @@ export function clampSilenceRegions(
   // the old "keep head + tail" behavior for any other caller.
   trimEdges = false
 ): SilenceRegion[] {
-  const clamp = (a: number, b: number): { start: number; end: number } => {
-    let cs = a
-    let ce = b
-    for (const w of keptWords) {
-      if (cs <= w.start && ce > w.start + 0.002 && ce < w.end) ce = Math.max(cs, w.start - guardBeforeS) // cut end reaches into a word → stop before it
-      if (ce >= w.end && cs < w.end - 0.002 && cs > w.start) cs = Math.min(ce, w.end + guardAfterS) // cut start reaches into a word → start after it
+  // TRUE interval subtraction: carve every guarded word span out of every region.
+  // The old two-condition edge-nudge only handled PARTIAL overlaps — a region that
+  // fully CONTAINED a quiet word (VAD scored the whole word below threshold, or the
+  // breath sweep swallowed it) matched neither condition and deleted the word. This
+  // handles every case uniformly: partial overlap → trimmed; word inside region →
+  // region SPLITS around it; region inside a word → dropped; several quiet words →
+  // split around each. Kept transcript words can no longer be cut by silence.
+  const guarded = [...keptWords]
+    .map((w) => ({ start: w.start - guardBeforeS, end: w.end + guardAfterS }))
+    .sort((x, y) => x.start - y.start)
+  const subtractWords = (a: number, b: number): { start: number; end: number }[] => {
+    const out: { start: number; end: number }[] = []
+    let cursor = a
+    for (const w of guarded) {
+      if (w.end <= cursor) continue
+      if (w.start >= b) break
+      if (w.start > cursor) out.push({ start: cursor, end: w.start })
+      cursor = Math.max(cursor, w.end)
     }
-    return { start: cs, end: ce }
+    if (cursor < b) out.push({ start: cursor, end: b })
+    return out
   }
   return raw
     // Head/tail: trimEdges removes the leading intro + trailing outro silence too;
     // otherwise keep them and only trim silence BETWEEN speech.
     .filter((r) => trimEdges || (r.start > 0.15 && !(durationS > 0 && r.end >= durationS - 0.15)))
-    .map((r) => clamp(r.start, r.end))
+    .flatMap((r) => subtractWords(r.start, r.end))
     .filter((r) => r.end - r.start > 0.05)
     .map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
 }
