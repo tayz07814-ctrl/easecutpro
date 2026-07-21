@@ -6,7 +6,7 @@
 
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
 
-export type SilencePresetId = 'conservative' | 'balanced' | 'aggressive' | 'zero'
+export type SilencePresetId = 'conservative' | 'balanced' | 'aggressive'
 export type SilencePresetOrCustom = SilencePresetId | 'custom'
 
 export interface SilencePreset {
@@ -22,11 +22,11 @@ export interface SilencePreset {
 //
 // Retuned after real-run overcutting: pace now comes from WHICH pauses are cut
 // (minGapS) and how much air is left (pads) — NOT from cranking the VAD
-// threshold or eating into speech. The old Aggressive (threshold .88 + 40-50ms
-// pads + 30ms edgeTrim + breaths at -28dB) classified soft-spoken words as
-// silence and clipped word edges; thresholds now stay ≤0.8, edgeTrimS is 0
-// everywhere, and breath removal (Aggressive only) uses a quieter -34dB gate so
-// it sweeps real breaths, not quiet speech.
+// threshold or eating into speech. Thresholds stay ≤0.8 and breath removal
+// (Aggressive only) uses a quieter -34dB gate so it sweeps real breaths, not
+// quiet speech. Aggressive is now gapless (pads 0, minGap at the floor) with a
+// 50ms edgeTrim; the edgeTrim only tightens joins up to word boundaries because
+// the word-protection clamp always runs AFTER it, so it can't clip speech.
 export const SILENCE_PRESETS: SilencePreset[] = [
   {
     id: 'conservative',
@@ -51,31 +51,19 @@ export const SILENCE_PRESETS: SilencePreset[] = [
   {
     id: 'aggressive',
     label: 'Aggressive',
-    blurb: 'Tight, fast-paced — trims short pauses and removes soft breaths.',
-    values: normalizeVadSilence({
-      speechThreshold: 0.8,
-      minGapS: 0.15,
-      padBeforeS: 0.06,
-      padAfterS: 0.06,
-      edgeTrimS: 0,
-      removeBreaths: true,
-      breathDb: -34
-    })
-  },
-  {
-    id: 'zero',
-    label: 'Zero pause',
     blurb: 'Gapless jump cuts — the next word starts the instant the last one ends.',
-    // pads 0 = the cut lands exactly on the word boundary (no residual air);
-    // minGap at the floor = even 50ms pauses collapse. Words themselves stay
-    // protected by the interval-subtraction clamp, and the seam blend (overlap)
-    // keeps the joins from clicking. Breaths on: dead air of any kind goes.
+    // Gapless: pads 0 = the cut lands exactly on the word boundary (no residual
+    // air); minGap at the floor = even 50ms pauses collapse. edgeTrimS 0.05
+    // sharpens the joins by eating STT-timestamp slop up to the word boundary —
+    // the interval-subtraction clamp runs AFTER, so it can never cut into a
+    // protected word span. Breaths on: dead air of any kind goes. The seam blend
+    // (overlap) keeps the joins from clicking.
     values: normalizeVadSilence({
       speechThreshold: 0.75,
       minGapS: 0.05,
       padBeforeS: 0,
       padAfterS: 0,
-      edgeTrimS: 0,
+      edgeTrimS: 0.05,
       removeBreaths: true,
       breathDb: -34
     })
