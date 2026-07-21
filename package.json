@@ -28,6 +28,9 @@
     "remote:named": "node scripts/remote.mjs lt",
     "selfhost": "node scripts/selfhost.mjs",
     "dist": "electron-vite build && electron-builder --win",
+    "dist:mac": "electron-builder -c electron-builder.cloud.json --mac",
+    "dist:mac:dir": "electron-builder -c electron-builder.cloud.json --mac --dir -c.mac.identity=null",
+    "start:mac": "EASECUT_APP_URL=${EASECUT_APP_URL:-https://easecutpro.com} electron desktop-cloud/main.cjs",
     "package": "electron-vite build && electron-packager . EaseCutPro --platform=win32 --arch=x64 --out=release --overwrite --prune=true --icon=icons/icon.ico --extra-resource=resources/bin --extra-resource=resources/models --ignore=\"^/(src|release|resources|\\.fr|\\.frames|.*\\.log)\""
   },
   "dependencies": {
