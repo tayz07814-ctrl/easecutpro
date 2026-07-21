@@ -182,7 +182,10 @@ export async function retakeAwareCutCloud(
     source: 'vad_pass',
     settings: vadSettings,
     regions_count: silenceRegions.length,
-    total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3))
+    total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3)),
+    // Full lists so a bad cut/kept stretch can be located exactly (compact [start,end] pairs).
+    regions: silenceRegions.map((r) => [Number(r.start.toFixed(2)), Number(r.end.toFixed(2))]),
+    kept_words: keptWords.map((w) => [Number(w.start.toFixed(2)), Number(w.end.toFixed(2))])
   }
 
   // 6. debug JSON (best-effort, private bucket).
