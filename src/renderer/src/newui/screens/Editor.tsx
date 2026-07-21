@@ -6,6 +6,7 @@ import type { LibraryItem } from '@shared/types'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
 import EditPanel from './EditPanel'
 import OverlayPanel from '../../components/OverlayPanel'
+import SilencePanel from './SilencePanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
@@ -492,7 +493,7 @@ function ComingSoon({ title, note, Icon }: { title: string; note: string; Icon: 
 // Overlays/Audio) are wired for active-state + selection but their panels await
 // design (and the "Audio" ↔ silence/ost mapping decision), so they show an
 // honest placeholder rather than mounting off-design legacy panels.
-const AI_TABS = ['AI Cut', 'Edit', 'Text', 'Overlays', 'Audio'] as const
+const AI_TABS = ['AI Cut', 'Silence', 'Edit', 'Text', 'Overlays', 'Audio'] as const
 
 function AiPanel({ width }: { width: number }): JSX.Element {
   const [tab, setTab] = useState<(typeof AI_TABS)[number]>('AI Cut')
@@ -520,6 +521,8 @@ function AiPanel({ width }: { width: number }): JSX.Element {
       </div>
       {tab === 'AI Cut' ? (
         <RetakeCleanerPanel />
+      ) : tab === 'Silence' ? (
+        <SilencePanel />
       ) : tab === 'Edit' ? (
         <EditPanel />
       ) : tab === 'Overlays' ? (

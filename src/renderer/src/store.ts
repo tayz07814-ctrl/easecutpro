@@ -808,7 +808,9 @@ interface AppState {
   runProCut: () => Promise<void>
   /** Retake-Aware Cut Beta: separate experimental engine (verbatim provider +
    *  whole-take retake removal + filler triage). Review-only, like the others. */
-  runRetakeCutBeta: () => Promise<void>
+  /** silenceOnly: run the same engine but stage ONLY the silence chips (the
+   *  dedicated Silence tab) — no word cuts are highlighted. */
+  runRetakeCutBeta: (opts?: { silenceOnly?: boolean }) => Promise<void>
   /** Retake δ (Delta): same engine + review contract as Retake β, but the cut
    *  judge is the creator's own model on the HF router (hf-judge). Cloud-only. */
   runRetakeCutDelta: () => Promise<void>
@@ -2156,8 +2158,9 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  runRetakeCutBeta: async () => {
-    if (!get().requireServer('Retake β')) return
+  runRetakeCutBeta: async (opts) => {
+    const silenceOnly = !!opts?.silenceOnly
+    if (!get().requireServer(silenceOnly ? 'Silence Cutter' : 'Retake β')) return
     // Retake-Aware Cut Beta — fully separate path (cut_mode: retake_aware_beta).
     // Same review-first contract as FastCut/ProCut: highlight + stage, apply on
     // Execute cuts. Deliberately does NOT call snapRetakeFlags or any standard-
@@ -2214,7 +2217,9 @@ export const useStore = create<AppState>((set, get) => ({
       const nextProject: typeof cur = docBase
         ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript: res.transcript }
         : { ...cur, transcript: res.transcript }
-      const flagIds = res.deleteWordIds
+      // Silence-only (the dedicated Silence tab): the engine ran identically, but
+      // stage NOTHING from the judge — only the silence chips below.
+      const flagIds = silenceOnly ? [] : res.deleteWordIds
       const wordsBefore = cur.transcript?.words.length ?? 0
       // Retake β silence is its OWN conservative, word-clamped VAD path (engine),
       // NOT the aggressive shared Cut Lord VAD. Stage the protected regions as
@@ -2225,7 +2230,7 @@ export const useStore = create<AppState>((set, get) => ({
       // them. Flag-off/legacy or toggle-ON keep the exact current behavior.
       // retakeSilenceStaged stays true regardless so Execute never re-runs the
       // shared VAD and re-introduces silence.
-      const includeSilence = !IS_NEW_UI || get().smartSilenceCutter
+      const includeSilence = silenceOnly || !IS_NEW_UI || get().smartSilenceCutter
       const silenceRegions = includeSilence ? (res.silenceRegions ?? []) : []
       set({
         project: nextProject,
@@ -2268,8 +2273,12 @@ export const useStore = create<AppState>((set, get) => ({
         job: {
           active: false,
           percent: 100,
-          message:
-            `${res.summary} — ${flagIds.length} word(s) highlighted` +
+          message: silenceOnly
+            ? (silenceRegions.length
+                ? `Staged ${silenceRegions.length} pause(s) — review, then Execute cuts`
+                : 'No cuttable silence found with these settings')
+            : `${res.summary} — ${flagIds.length} word(s) highlighted` +
+
             (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
             `, review then Execute cuts` +
             (!IS_CLOUD && res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
