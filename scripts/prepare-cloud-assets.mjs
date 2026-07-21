@@ -32,4 +32,24 @@ const nVad = copyMatching(vadDist, /\.(onnx|worklet\.bundle\.min\.js)$|^vad\.wor
 const nOrt = copyMatching(ortDist, /^ort-wasm.*\.(wasm|mjs|jsep\.mjs)$|^ort\..*wasm.*\.(wasm|mjs)$/)
 
 console.log(`[cloud-assets] staged ${nVad} vad-web + ${nOrt} onnxruntime files -> ${outDir}`)
-if (!nVad || !nOrt) process.exitCode = 1
+
+// ffmpeg.wasm core (ESM single-thread): the on-device audio decoder of last
+// resort for iOS Safari, served SAME-ORIGIN from /ffmpeg so it stays within the
+// existing CSP (no blob: needed). ~31 MB wasm — copied from node_modules at build
+// time (never committed), fetched lazily only when the fallback runs.
+const ffmpegOut = join(root, '.cloud-public', 'ffmpeg')
+mkdirSync(ffmpegOut, { recursive: true })
+const ffCoreDist = join(root, 'node_modules', '@ffmpeg', 'core', 'dist', 'esm')
+let nFf = 0
+for (const f of ['ffmpeg-core.js', 'ffmpeg-core.wasm']) {
+  const src = join(ffCoreDist, f)
+  if (existsSync(src)) {
+    copyFileSync(src, join(ffmpegOut, f))
+    nFf++
+  } else {
+    console.warn(`[cloud-assets] missing: ${src} (npm install?)`)
+  }
+}
+
+console.log(`[cloud-assets] staged ${nFf} ffmpeg-core files -> ${ffmpegOut}`)
+if (!nVad || !nOrt || nFf < 2) process.exitCode = 1

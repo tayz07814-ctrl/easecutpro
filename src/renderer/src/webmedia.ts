@@ -7,6 +7,7 @@
 import type { MediaInfo, Waveform } from '@shared/types'
 // Type-only — erased at build; the runtime import is dynamic (fast thumbnail path).
 import type { Input as MBInput } from 'mediabunny'
+import { ffmpegExtractPcm16kMono } from './ffmpegAudio'
 
 interface MediaRec {
   file: File
@@ -712,17 +713,17 @@ export async function ensureAudioUploaded(id: string, onProgress?: (pct: number)
 }
 
 /** Decode a media file's audio in the browser → 16 kHz mono WAV Blob (null if it can't).
- *  Prefers a WebCodecs decode (mediabunny) and falls back to WebAudio decodeAudioData. */
+ *  Three decoders in order of cost: WebCodecs (mediabunny) → WebAudio
+ *  decodeAudioData → ffmpeg.wasm. All run ON-DEVICE — the clip never leaves the
+ *  phone. The ffmpeg pass is the last resort for iOS Safari, which decodes some
+ *  phone-exported clips to silence and can't use WebCodecs audio. */
 export async function extractAudioWavBlob(id: string, onProgress?: (pct: number) => void): Promise<Blob | null> {
   const rec = registry.get(id)
   if (!rec) return null
-  // Very large files risk OOM on decode; let the caller fall back to full upload.
+  // Very large files risk OOM on decode; the caller surfaces a clean error.
   if (rec.file.size > 800 * 1024 * 1024) return null
-  // Primary: WebCodecs via mediabunny — the platform's NATIVE audio decoder (the same
-  // one that plays the clip). iOS Safari's decodeAudioData turns some phone-recorded
-  // codecs into SILENCE, so the uploaded WAV had "no spoken audio" and Cut Lord's
-  // transcription failed on iPhone; WebCodecs decodes them correctly and opens no
-  // AudioContext (iOS caps how many can be live). Bounded by an abort timeout.
+  // 1. WebCodecs via mediabunny — the platform's NATIVE decoder, no AudioContext
+  //    (iOS caps how many can be live). Bounded by an abort timeout.
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 120000)
   let fast: Blob | null = null
@@ -734,22 +735,54 @@ export async function extractAudioWavBlob(id: string, onProgress?: (pct: number)
     clearTimeout(timer)
   }
   if (fast) return fast
-  // Fallback: WebAudio decodeAudioData (desktop-reliable; iOS-flaky).
+  // 2. WebAudio decodeAudioData — reliable on desktop, but on iOS Safari it can
+  //    hand back SILENCE for some phone-exported codecs. Only trust it when the
+  //    decode actually carries signal; a silent decode falls through to ffmpeg.
   try {
     onProgress?.(5)
     const ab = await rec.file.arrayBuffer()
     const lead = mp4AudioStartOffset(ab) // parse BEFORE decode (it detaches ab)
     const audio = await decodeAudioAtRate(ab, 16000)
-    onProgress?.(70)
-    // Pad the leading offset so transcription timestamps align to the video.
-    const wav = audioBufferTo16kMonoWav(audio, lead)
-    onProgress?.(100)
-    return wav
+    if (audioBufferHasSignal(audio)) {
+      // Pad the leading offset so transcription timestamps align to the video.
+      const wav = audioBufferTo16kMonoWav(audio, lead)
+      onProgress?.(100)
+      return wav
+    }
+    console.warn('[ec] decodeAudioData decoded to silence — trying ffmpeg.wasm')
   } catch (e) {
-    // Surface the REAL decode error (Cut Lord's "Could not decode…" hides the cause).
-    ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Audio decode failed (Cut Lord)', e)
-    return null // unsupported container/codec, or decode OOM
+    console.warn('[ec] decodeAudioData failed — trying ffmpeg.wasm', e)
   }
+  // 3. ffmpeg.wasm — on-device last resort; decodes the containers/codecs WebKit
+  //    can't. Keeps the clip on the phone (no upload). ~31 MB core, fetched lazily
+  //    on first use.
+  try {
+    const pcm = await ffmpegExtractPcm16kMono(rec.file, (p) => onProgress?.(p))
+    if (pcm && pcm.length) {
+      onProgress?.(100)
+      return encodeWav(pcm, 16000)
+    }
+  } catch (e) {
+    console.warn('[ec] ffmpeg.wasm fallback failed', e)
+  }
+  return null // no in-browser decoder could read this clip's audio
+}
+
+/** Did the decoder return real audio, or silence? iOS decodeAudioData can decode
+ *  some clips to pure zeros. Samples ~4000 points per channel — cheap, and a
+ *  spoken clip clears the tiny threshold immediately. */
+function audioBufferHasSignal(audio: AudioBuffer): boolean {
+  const nch = audio.numberOfChannels
+  const len = audio.length
+  if (!nch || !len) return false
+  const step = Math.max(1, Math.floor(len / 4000))
+  for (let c = 0; c < nch; c++) {
+    const ch = audio.getChannelData(c)
+    for (let i = 0; i < len; i += step) {
+      if (Math.abs(ch[i]) > 0.004) return true // ≈ -48 dBFS
+    }
+  }
+  return false
 }
 
 /** WebCodecs audio → 16 kHz mono WAV via mediabunny. Decodes with the platform's
