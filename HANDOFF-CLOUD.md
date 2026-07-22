@@ -51,7 +51,8 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **e4ed28e**. Tests alternate LLM cut judges via OpenRouter (the key stays
+`easecut0.01` = **2b088a1** (mobile reskin; redesign `9416050`; beta judges below). Tests alternate
+LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
 - **Ultracut Beta** button → `deepseek/deepseek-v4-flash`. `225b033` / `48b299d`.
@@ -79,3 +80,28 @@ CapCut-style rework of the mobile editor, from a proposed 3-mockup design. Files
 - **Deferred** (documented, not built): top-bar aspect/resolution controls; the canvas selection frame;
   the transport keyframe ◇+ button — all need a real keyframe engine and/or the rendered video rect.
 - NOT GUI-tested (no mobile-render harness) — needs a live test on `easecut0.01`.
+
+### Mobile UI reskin (0.01 only — `2b088a1`) — "EaseCut Editor" design, VISUAL ONLY
+Reskin of the same mobile editor to the imported `EaseCut Editor.dc.html` design. **No behaviour /
+wiring changes** — every handler, engine call and export path is byte-for-byte the same as `9416050`;
+only appearance changed. Files: `components/mobile/{Icon,MobileTools,MobileExportDrawer}.tsx`,
+`newui/screens/MobileEditor.tsx`, `styles.css`, + `newui/fonts/MaterialSymbols-subset.woff2`.
+- **Icons → Material Symbols Outlined.** Self-hosted **17 KB codepoint subset** (49 glyphs, built with
+  `pyftsubset` by unicode; FILL/opsz/wght axes kept). `Icon.tsx` now renders a `.ec-msym` span via a
+  `IconName → codepoint` map (`String.fromCodePoint`) — **same `{name,size}` API** (+ optional `fill`
+  for play/pause) so all call sites are untouched. **No CDN and NO CSP change**: the woff2 is served
+  same-origin under `default-src 'self'`. (If it ever needs the Google CDN instead, that requires adding
+  `fonts.googleapis.com`/`fonts.gstatic.com` to the 0.01 `vite.config.cloud.ts` CSP — not done here.)
+- **Palette** scoped to `.ec-m-editor` (desktop + every other view keep the global blue theme): `#0b0b0d`
+  shell, `#17171b` root tiles, `#1d1d22` collapse chevron + quick pills, purple gradient
+  `#7c5cff→#a468ff`, AI-blue `#5ab6ff` (AI Upscaler), ScriptCut purple. `--accent`/`--grad` override is
+  the only global-ish change — it also tints the selected-clip outline purple (free, on-design).
+- **Top bar**: back + centred 9:16 marker + gradient Export (project name dropped, per design; settings
+  moved to a `⋯` icon). **Transport**: Material undo/redo + filled play glyph (zoom −/＋ kept).
+- **Export drawer**: `#0e0e12` sheet, **green (`#7ed957`) custom slider track** (grey rail + green fill +
+  tick stops + white-circle thumb, rebuilt from the native `<input range>`), purple Export, res pill.
+- **Verified**: typecheck + `build:cloud` green; font subset + all 49 codepoints render (Chromium
+  screenshot of the dock/transport/export). NOT on-device tested — needs a live check on `easecut0.01`.
+- **Not reskinned** (safe scope): timeline waveform bar colour (canvas-drawn in shared timeline logic);
+  the design's CutLord sub-toolbar + AI-cut tool set (that's a feature, not a reskin — ScriptCut still
+  opens the Cut Lord sheet).
