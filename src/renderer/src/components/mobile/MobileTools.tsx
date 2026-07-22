@@ -110,7 +110,7 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
           <Tool icon="edit" label="Edit" onClick={() => (mainClip ? engine?.select([mainClip.id]) : onImport())} />
           <Tool icon="music" label="Music" onClick={() => (onAddAudio ? onAddAudio() : soon('Music'))} />
           <Tool icon="text" label="Text" onClick={() => (onAddText ? onAddText() : onEditText())} />
-          <Tool icon="scriptcut" label="ScriptCut" onClick={onCutlord} tint="accent" />
+          <Tool icon="scriptcut" label="Cut Lord" onClick={onCutlord} tint="accent" />
           <Tool icon="captions" label="Captions" onClick={() => (onCaptions ? onCaptions() : soon('Captions'))} />
         </div>
       </div>

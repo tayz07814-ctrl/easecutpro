@@ -656,14 +656,28 @@
 }
 .ec-mtl-handle.l { left: 0; }
 .ec-mtl-handle.r { right: 0; }
+/* Thick WHITE trim bar (full height) with a BLACK grip handle centred on it. */
+.ec-mtl-handle::before {
+  content: '';
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 9px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+}
 .ec-mtl-handle::after {
   content: '';
-  width: 3px;
-  height: 46%;
-  max-height: 22px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+  position: relative;
+  z-index: 1;
+  width: 2.5px;
+  height: 42%;
+  max-height: 18px;
+  border-radius: 2px;
+  background: #141414;
 }
 .ec-mtl-film {
   position: absolute;
@@ -684,15 +698,16 @@
   right: 0;
   bottom: 0;
   height: 45%;
-  background: rgba(0, 0, 0, 0.32);
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  /* Grey-dark band the bright-purple waveform lines sit on (was translucent black). */
+  background: #202127;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
-/* Audio clips are waveform-only, so it fills the whole clip. */
+/* Audio clips are waveform-only, so it fills the whole clip — same grey-dark bed. */
 .ec-mtl-wave.full {
   top: 0;
   height: auto;
   border-top: none;
-  background: transparent;
+  background: #202127;
 }
 .ec-mtl-clip-label {
   display: block;

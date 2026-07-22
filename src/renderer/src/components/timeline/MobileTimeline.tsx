@@ -20,6 +20,17 @@ import { playClock } from '../../clock'
  *  engine playhead only advances on the video's ~4Hz timeupdate and freezes on
  *  iOS, so the counter would stall even while the timeline scrolls. Isolated so
  *  only this element re-renders (~10Hz), not the whole timeline. */
+// Mobile timeline palette — the app's purple theme (was CapCut teal/seagreen).
+// Waveform: thin, light bright-purple lines. Base + overlay clips: dark-purple
+// tint. Base + overlay lanes render 20% shorter than desktop.
+const WAVE_PURPLE: [string, string, string] = ['rgba(196,181,253,0.98)', 'rgba(167,139,250,0.82)', 'rgba(196,181,253,0.98)']
+function mTrackColor(kind: string): string {
+  return kind === 'video' ? '#312a52' : TRACK_COLOR[kind as keyof typeof TRACK_COLOR]
+}
+function mLaneHeight(t: Parameters<typeof laneHeight>[0]): number {
+  return t.kind === 'video' ? Math.round(laneHeight(t) * 0.8) : laneHeight(t)
+}
+
 function MobileTimecode({ playing, staticFrame, tb }: { playing: boolean; staticFrame: number; tb: Timebase }): JSX.Element {
   const [, force] = useState(0)
   useEffect(() => {
@@ -95,7 +106,7 @@ function MobileClip({
             // Audio clips: waveform fills. Video clips: waveform in the BOTTOM half,
             // under the filmstrip (no overlap).
             <div className={`ec-mtl-wave ${isAudio ? 'full' : ''}`}>
-              {wf && <WaveformCanvas peaks={clipPeaks(wf, clip.sourceIn, clip.sourceOut)} />}
+              {wf && <WaveformCanvas peaks={clipPeaks(wf, clip.sourceIn, clip.sourceOut)} colors={WAVE_PURPLE} barW={1.4} step={3} />}
             </div>
           )}
         </>
@@ -262,7 +273,7 @@ export default function MobileTimeline(): JSX.Element {
       >
         <div className="ec-mtl-content" style={{ width: contentWidth }}>
           {mobileLanes(activeDoc.tracks).map((t) => (
-            <div className="ec-mtl-lane" key={t.id} style={{ height: laneHeight(t), marginLeft: pad, width: laneWidth }}>
+            <div className="ec-mtl-lane" key={t.id} style={{ height: mLaneHeight(t), marginLeft: pad, width: laneWidth }}>
               {!t.clips.length && (t.kind === 'text' || t.kind === 'audio') && (
                 <button
                   className="ec-mtl-addlane"
@@ -281,7 +292,7 @@ export default function MobileTimeline(): JSX.Element {
                   clip={c}
                   zoom={zoom}
                   tb={tb}
-                  color={TRACK_COLOR[t.kind]}
+                  color={mTrackColor(t.kind)}
                   selected={interaction.selection.includes(c.id)}
                   onSelect={(id) => engine.select([id])}
                   onTrim={beginTrim}
