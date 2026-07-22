@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **09f70ea** (Android OFFLINE app — bundled dist-cloud + gallery/files picker; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **0662f2f** (Android offline app: import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -328,3 +328,23 @@ webpage. Edited: `capacitor.config.ts` (webDir → `dist-cloud`, no server.url),
   decoder (proxy is the real fix); **login may need a Supabase redirect-allowlist entry if it's OAuth**
   (email/password works cross-origin as-is). A truly native ExoPlayer/MediaCodec player+exporter remains a
   separate large native track. Bundle is frozen at build time — re-run the workflow to refresh after changes.
+
+### Offline APK: import fix + runtime permissions (0.01 only — `ca255a5`, `0662f2f`)
+On-device: **import didn't open the gallery** and **no permission prompt**. Two fixes:
+- **`ca255a5`** — the cloud picker (`cloud/api.ts`) created a DETACHED `<input>` and clicked it; the Android
+  System WebView (like iOS Safari) ignores a click on an off-DOM input, so nothing opened. Ported `main`'s
+  `openPicker` helper (appends the input to `document.body`, `oncancel` cleanup) — keeps the video/image vs
+  `openAudioDialogMulti` accept split. Also declared media perms in `AndroidManifest.xml`
+  (`READ_MEDIA_VIDEO/IMAGES/AUDIO`, legacy `READ_EXTERNAL_STORAGE` maxSdk 32).
+- **`0662f2f`** — `MainActivity` now **requests the media permissions at launch**
+  (`ActivityCompat.requestPermissions`, API-33 granular vs legacy) so the app shows the Allow-access prompt.
+- The workflow's push-paths filter only watches the wrapper files, so an app/manifest fix needs a `# rebuild
+  marker: vN` bump in `android-apk.yml` to trigger CI (or manual dispatch). Both runs GREEN (`29963083280`,
+  `29963083280`→v4); APK republished at tag `android-apk-0.01`.
+- **Native track (agreed with user, NOT started):** true native ExoPlayer player + Media3/MediaCodec export.
+  Hard prerequisite first — the app keeps imported media as **browser blobs** the native side can't read; a
+  native file-URI bridge (native picker + `convertFileSrc`) must land before any native player/exporter.
+  Plan is incremental + device-tested per step (perms ✓ → file bridge → native export → native player); do
+  NOT big-bang untested native code. Waiting on the user to confirm this perms/import APK works first.
+- **NOTE for whoever merges 0.01 → main:** `main` already has the newer `openPicker` in `cloud/api.ts`; the
+  `main`-side conflict is only the accept types + `openAudioDialogMulti` (0.01 additions).
