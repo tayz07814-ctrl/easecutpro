@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **21be3e1** (mobile single-decoder preview; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **3cd0716** (3-tab text panel + text shadow + style presets; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -252,3 +252,30 @@ it never bites.
 - NOT on-device tested — needs a live check on a phone (ideally charged); expect maybe one tuning round.
   Per the earlier freeze lesson, do NOT tune the reconciler further blind — this change is safe because it
   only *removes* a decoder (the documented fallback), it doesn't add new seek logic.
+
+### Mobile text panel → 3 tabs + shadow + style presets (0.01 only — `3cd0716`)
+From on-device feedback: tapping the Text tool **auto-dropped a "Your text" clip** before the user added
+anything; the panel was "bulky and all over the place"; the length control overlapped. New files:
+`textStyles.ts`. Edited: `MobileTextPanel.tsx` (full rewrite), `MobileEditor.tsx`, plus shadow plumbing in
+`shared/types.ts`, `shared/timeline/bridge.ts`, `textRender.ts`, `components/TextLayer.tsx`.
+- **No more auto-add.** `MobileEditor` opening the Text sheet no longer inserts a clip (`openTextSheet`
+  replaces the old `addText`). With nothing selected the Text tab composes a **draft** and commits on
+  "Add to timeline" (`addDocTexts`, then jumps to the Font tab). Timeline empty-lane `+ Add text` (`ec:sheet`
+  `text`) also just opens the sheet now.
+- **3 tabs** (segmented pill at the top of the sheet), fixing the bulky single-scroll:
+  - **Text** — textarea + a single clean **"Length on screen"** slider (0.3–30s; text clips are
+    non-time-based so `trimClipOut` extends freely) + Delete. (The old overlapping Start/End number pair is
+    gone.)
+  - **Font** — font selector + upload-your-own + "default" toggle; alignment segmented; size; bold/italic.
+  - **Style** — one-tap **presets** (`textStyles.ts`: Plain/Outline/Boxed/Shadow/Yellow/Pop, each a full
+    style bundle so switching is predictable) + manual text colour, outline (thickness+colour), background
+    (toggle+colour+opacity+radius+padding), and **shadow**.
+- **Text shadow — implemented end-to-end** (was previously in the doc model but rendered NOWHERE). Preview:
+  `TextLayer` adds `textShadow` (CSS). Export: `drawTextClip` sets `ctx.shadow*` on the FILL pass only
+  (stroke + bg boxes don't double-cast). Threaded via new optional flat `TextClip.shadow*` fields +
+  `legacyTextFrom` (doc→flat for export). blur/dx/dy are fractions of font size. Backwards-compatible
+  (default off) — existing clips + desktop unaffected. Lives on `main` too (shared files) but only 0.01
+  has the editing UI + is where this ships.
+- Verified: typecheck + `build:cloud` green; Chromium mock confirmed the 3 tabs + preset previews render
+  cleanly with no overlap. NOT on-device tested; **shadow at EXPORT still needs a real on-device export
+  check** (canvas shadow bakes on the main thread, same place as the rest of the text).
