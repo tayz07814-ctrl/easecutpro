@@ -30,7 +30,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { playClock, primePlayback } from '../clock'
-import { kenBurnsOrigin, ZoomAnimator } from '../kenBurns'
+import { kenBurnsOrigin, ZoomAnimator, cropToKenBurns } from '../kenBurns'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -124,6 +124,9 @@ function docSegments(doc: TimelineDocument): { segs: Seg[]; missing: number } {
       continue
     }
     const speed = typeof c.speed === 'number' && c.speed > 0 ? c.speed : 1
+    // Base-clip crop → equivalent cover-zoom + focal pan, folded into the Ken Burns
+    // scale/focal the renderer already applies (so the base video actually crops).
+    const cb = cropToKenBurns(c.crop)
     segs.push({
       src: c.sourcePath,
       url: r.url,
@@ -134,11 +137,11 @@ function docSegments(doc: TimelineDocument): { segs: Seg[]; missing: number } {
       srcW: c.srcW,
       srcH: c.srcH,
       muted: c.audioDetached === true || c.muted === true,
-      ovScale: typeof c.metadata?.ovScale === 'number' ? c.metadata.ovScale : 1,
+      ovScale: (typeof c.metadata?.ovScale === 'number' ? c.metadata.ovScale : 1) * cb.scale,
       ovZoomStart: typeof c.metadata?.ovZoomStart === 'number' ? c.metadata.ovZoomStart : 1,
       ovZoomEnd: typeof c.metadata?.ovZoomEnd === 'number' ? c.metadata.ovZoomEnd : 1,
-      ovX: typeof c.metadata?.ovX === 'number' ? c.metadata.ovX : 0,
-      ovY: typeof c.metadata?.ovY === 'number' ? c.metadata.ovY : 0,
+      ovX: (typeof c.metadata?.ovX === 'number' ? c.metadata.ovX : 0) + cb.ovX,
+      ovY: (typeof c.metadata?.ovY === 'number' ? c.metadata.ovY : 0) + cb.ovY,
       gain: typeof c.gain === 'number' ? c.gain : 1,
       speed
     })

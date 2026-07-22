@@ -22,7 +22,7 @@ import { framesToSeconds } from '@shared/timeline/time'
 import { resolveMedia } from '../media/resolver'
 import { isWebMediaId, getFile, mp4AudioStartOffset } from '../webmedia'
 import { IS_WEB } from '../platform'
-import { kenBurnsEase } from '../kenBurns'
+import { kenBurnsEase, cropToKenBurns } from '../kenBurns'
 import {
   planOverlays,
   planTexts,
@@ -171,6 +171,10 @@ export function planFromDoc(doc: TimelineDocument, project: Project): { segs: Se
     const r = resolveMedia(c.sourcePath)
     if (!r.url) continue
     const speed = typeof c.speed === 'number' && c.speed > 0 ? c.speed : 1
+    // Base-clip crop → cover-zoom + focal pan folded into the Ken Burns size/focal
+    // this exporter (and the preview) already apply, so the base video crops in the
+    // exported file too. Shared by BOTH exporters via planFromDoc.
+    const cbc = cropToKenBurns(c.crop)
     segs.push({
       url: r.url,
       src: c.sourcePath,
@@ -183,11 +187,11 @@ export function planFromDoc(doc: TimelineDocument, project: Project): { segs: Se
       muted: c.audioDetached === true || c.muted === true,
       hasAudio: c.kind !== 'image' && c.hasAudio !== false,
       isImage: c.kind === 'image',
-      size: num(c.metadata?.ovScale, 1),
+      size: num(c.metadata?.ovScale, 1) * cbc.scale,
       zs: num(c.metadata?.ovZoomStart, 1),
       ze: num(c.metadata?.ovZoomEnd, 1),
-      ox: num(c.metadata?.ovX, 0),
-      oy: num(c.metadata?.ovY, 0)
+      ox: num(c.metadata?.ovX, 0) + cbc.ovX,
+      oy: num(c.metadata?.ovY, 0) + cbc.ovY
     })
   }
   const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0

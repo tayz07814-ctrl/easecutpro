@@ -88,6 +88,34 @@ export function kenBurnsOrigin(ovX = 0, ovY = 0): string {
   return `${50 + ovX * 100}% ${50 + ovY * 100}%`
 }
 
+/** Fold a clip's inset crop {left,right,top,bottom} (fractions removed from each
+ *  edge) into an EQUIVALENT Ken Burns cover-zoom + focal pan, so the kept region
+ *  fills the frame. The base video's transform is a uniform scale-about-origin, and
+ *  a crop-to-cover is the same shape, so we reuse that exact machinery in BOTH the
+ *  live preview and every exporter — no new base-video renderer.
+ *  Exact when the clip has no other zoom (the common "just cropped" case); combines
+ *  multiplicatively (scale) + additively (focal) with one if present. Returns
+ *  { scale, ovX, ovY } to multiply/add onto the clip's own ovScale/ovX/ovY.
+ *  Note: assumes the source fills the frame (source aspect ≈ output aspect); a
+ *  letterboxed source is approximate. */
+export function cropToKenBurns(crop?: { left: number; right: number; top: number; bottom: number } | null): {
+  scale: number
+  ovX: number
+  ovY: number
+} {
+  if (!crop) return { scale: 1, ovX: 0, ovY: 0 }
+  const l = clamp01(crop.left), r = clamp01(crop.right), t = clamp01(crop.top), b = clamp01(crop.bottom)
+  const kw = Math.max(0.05, 1 - l - r), kh = Math.max(0.05, 1 - t - b)
+  if (kw >= 0.999 && kh >= 0.999) return { scale: 1, ovX: 0, ovY: 0 } // no crop
+  const S = Math.max(1 / kw, 1 / kh) // cover: kept region fills the frame
+  // Focal so the kept-region centre lands at the frame centre after scaling by S:
+  // scale-about-origin maps cx → 0.5 when origin ox = (0.5 - S·cx)/(1 - S); ovX = ox - 0.5.
+  const cx = 0.5 + (l - r) / 2, cy = 0.5 + (t - b) / 2
+  const ovX = (0.5 - S * cx) / (1 - S) - 0.5
+  const ovY = (0.5 - S * cy) / (1 - S) - 0.5
+  return { scale: S, ovX, ovY }
+}
+
 // ---------------------------------------------------------------------------
 // Compositor-driven playback (Web Animations API)
 // ---------------------------------------------------------------------------
