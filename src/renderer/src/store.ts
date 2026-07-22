@@ -3390,13 +3390,11 @@ export const useStore = create<AppState>((set, get) => ({
           path = p0.media!.path
         }
         const transcript: Transcript = await window.api.transcribe(path, backend, backend === 'local' ? whisperModel || undefined : undefined)
-        const cur = get().project
-        const docBase = !cur.media && !!p0.baseSequence?.length
-        set({
-          project: docBase
-            ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript }
-            : { ...cur, transcript }
-        })
+        // Captions only need the transcript — they place text clips, they do NOT
+        // cut, so (unlike runRetakeCutBeta) we must NOT rewrite media/baseSequence
+        // here; doing so desynced the project from the doc and could disturb the
+        // doc-native preview. Just store the transcript.
+        set((s) => ({ project: { ...s.project, transcript } }))
         words = transcript.words.filter((w) => !w.deleted && w.text.trim())
       } catch (e) {
         ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Captions transcription failed', e)
