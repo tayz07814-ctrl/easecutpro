@@ -1,5 +1,5 @@
 name: Android offline APK (0.01)
-# rebuild marker: v4 — copy picked file bytes at import (fix content:// revoked read)
+# rebuild marker: v5 — native export engine (Media3 Transformer plugin)
 
 # Builds an installable DEBUG Android APK that BUNDLES the cloud web app
 # (dist-cloud) inside a Capacitor shell — a real offline app, not a webpage
