@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getSharedEngine } from '../../timelineEngine'
 import { useStore } from '../../store'
+import { resolveMedia } from '../../media/resolver'
 import * as C from '@shared/timeline/commands'
 import { Icon } from './Icon'
 import type { Clip } from '@shared/timeline/types'
@@ -27,30 +28,28 @@ const clamp01 = (v: number): number => Math.max(0, Math.min(1, v))
 export default function MobileCropModal({ clip, onClose }: { clip: Clip; onClose: () => void }): JSX.Element {
   const library = useStore((s) => s.library)
   const srcAspect = clip.srcW && clip.srcH ? clip.srcW / clip.srcH : 9 / 16
-  // Backdrop: start with the clip's library thumbnail (instant, if we can match
-  // it), then decode a REAL frame near the clip's in-point via the same thumbnail
-  // path the timeline filmstrip uses — that always produces a frame even when the
-  // library has no matching entry (which is why it was showing all-black).
-  const libThumb =
+  // Backdrop: a crisp FULL-RES frame from a real <video> seeked to the clip's
+  // in-point (was a tiny filmstrip thumbnail → pixelated). A library thumbnail is
+  // the instant poster while the video decodes its first frame.
+  const clipUrl = clip.sourcePath ? resolveMedia(clip.sourcePath).url : null
+  const poster =
     library.find((it) => it.path === clip.sourcePath)?.thumb ??
     library.find((it) => it.kind === 'video' || it.kind === 'image')?.thumb ??
-    null
-  const [thumb, setThumb] = useState<string | null>(libThumb)
+    undefined
+  const vidRef = useRef<HTMLVideoElement>(null)
   useEffect(() => {
-    if (!clip.sourcePath) return
-    let alive = true
-    const interval = Math.max(2, Math.round(clip.sourceOut - clip.sourceIn) || 2)
-    void window.api
-      .thumbnails(clip.sourcePath, interval)
-      .then((frames) => {
-        if (!alive || !frames?.length) return
-        const best = frames.reduce((a, b) => (Math.abs(b.time - clip.sourceIn) < Math.abs(a.time - clip.sourceIn) ? b : a))
-        setThumb(best.url)
-      })
-      .catch(() => {})
-    return () => {
-      alive = false
+    const v = vidRef.current
+    if (!v) return
+    const seek = (): void => {
+      try {
+        v.currentTime = Math.max(0, clip.sourceIn)
+      } catch {
+        /* not ready yet */
+      }
     }
+    v.addEventListener('loadedmetadata', seek)
+    if (v.readyState >= 1) seek()
+    return () => v.removeEventListener('loadedmetadata', seek)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -147,7 +146,10 @@ export default function MobileCropModal({ clip, onClose }: { clip: Clip; onClose
 
       {/* frame + crop box */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-        <div ref={frameRef} style={{ position: 'relative', aspectRatio: `${srcAspect}`, maxWidth: '100%', maxHeight: '100%', width: 'auto', height: '100%', background: thumb ? `center/cover no-repeat url(${thumb})` : '#111', borderRadius: 2 }}>
+        <div ref={frameRef} style={{ position: 'relative', aspectRatio: `${srcAspect}`, maxWidth: '100%', maxHeight: '100%', width: 'auto', height: '100%', background: '#111', borderRadius: 2, overflow: 'hidden' }}>
+          {clipUrl && (
+            <video ref={vidRef} src={clipUrl} poster={poster} muted playsInline preload="auto" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
+          )}
           {/* crop box — the giant box-shadow dims everything outside it */}
           <div
             onPointerDown={dragMove}
