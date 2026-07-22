@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **6d38a08** (crop/captions/transcript-reuse; reskin `2b088a1`; redesign `9416050`). Tests alternate
+`easecut0.01` = **25529b2** (on-device bug pass; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -132,3 +132,25 @@ Functional batch on top of the reskin. Files: `components/mobile/{MobileTools,Mo
 - **Not done**: deeper text-editing rework (the `TextPanel` sheet is shared/desktop-oriented — left as-is);
   crop rotate + AI-expand (engine support needed). Verified: typecheck + `build:cloud` green; crop layout
   screenshot-checked. NOT on-device tested.
+
+### On-device bug pass (0.01 only — `c234c5c`, `25529b2`) — from user testing
+Fixes from the first on-device test of the crop/captions batch.
+- **Captions rendered "Your text"** (`c234c5c`): `addDocTexts` (`docTextClips.ts`) built the text clip's
+  content from `defaultTextContent()` + `it.content` but **dropped `it.text`** (the real string), so every
+  caption showed the default. Fixed: `text: { ...default, ...it.content, text: it.text }`. **This bug is
+  also on `main`** (same line) — carry the one-line fix over when 0.01 merges.
+- **Crop backdrop all black** (`c234c5c`): the library-thumbnail lookup missed the clip → dark placeholder.
+  `MobileCropModal` now decodes a REAL frame near the clip in-point via `window.api.thumbnails(sourcePath)`
+  (the filmstrip path), library thumb as an instant fallback while it loads.
+- **Fonts don't render on phones** (`25529b2`): `FONT_OPTIONS` are all desktop system fonts (Arial Black,
+  Impact, Segoe UI…) absent on phones, so selection barely changes anything and the default fell back to a
+  thin sans (looked a different size than desktop). User chose the **quick-consistency** path (kept system
+  fonts): bold weight `700 → 800` in BOTH `TextLayer` (preview) and `textRender` (export) so captions read
+  heavy + identical cross-device; Size shows familiar point-like numbers (`fontSize*300`, default ~24)
+  instead of `%`. **A real cross-device font fix still needs self-hosted webfonts** (deferred by the user).
+- **Seam flicker/stutter at cuts** (`25529b2`, phone + desktop): lives in the doc-native `DocPreview`
+  reconciler (already wall-clock-driven + one decode-ahead buddy). Low-risk lever the user OK'd:
+  `PREWARM_LEAD_S 0.6 → 1.2 s` (warm the next seam earlier so the decoder lands before the cut). Fully
+  behind the existing fallback — revert to `0.6` if it isn't better on-device. A deeper reconciler rework
+  (2nd buddy on capable devices, etc.) is the next step if the lever isn't enough; needs real device
+  profiling — do NOT change it blind.
