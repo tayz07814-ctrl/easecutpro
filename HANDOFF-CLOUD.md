@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **4d033e0** (text-drawer batch: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **21be3e1** (mobile single-decoder preview; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -229,3 +229,26 @@ Text-editing pass on the phone editor. New files: `components/mobile/MobileTextP
 - Verified: typecheck + `build:cloud` green; Chromium mock confirmed the `]|[` split + caption-style cards.
   NOT on-device tested. **Custom-font EXPORT needs an on-device check** — the FontFace must be loaded before
   the canvas bakes text (it is, on upload + on mount), but only a real export confirms the glyphs land.
+
+### Mobile preview: single-decoder path (0.01 only — `21be3e1`) — mobile playback fix, phase 1
+User report: **mobile browsers are slow/glitchy in the preview; desktop is fine.** Root cause is the phone
+platform, not tuning: iOS Safari effectively has **~1 hardware H.264 decode pipeline** (Android 1–3), while
+the `DocPreview` player keeps a `<video>` per source **+ a decode-ahead "buddy"** (+ PiP videos). On a phone
+the buddy can't actually decode ahead — it contends for the single decoder and its prewarm seeks **stall the
+live picture** (the frozen-frame-while-the-playhead-moves bug). Desktop has many pipelines + fast seeks, so
+it never bites.
+- **Fix (phase 1, low-risk):** `DocPreview` gates `buddySrcs` on `useIsMobile()` — on mobile it returns an
+  empty set, so every source gets exactly ONE `<video>` and same-source cut seams **cold-seek that one
+  element** (a brief stall) instead of wedging. This is literally the reconciler's existing no-buddy
+  fallback (already used for multi-source montages on desktop), so it's well-exercised. Desktop keeps the
+  buddy (unchanged). `useIsMobile` = `matchMedia('(max-width: 820px)')` — same gate the app uses to pick the
+  mobile editor.
+- **Tradeoff:** trades the hard FREEZE for a brief seam stutter on heavily-cut clips. Not a full cure —
+  seams still stutter, and multi-source montages still spin one decoder per source (pool windowing is a
+  later lever). Overlay/PiP videos still decode live (pausing them would silence overlay audio — left alone).
+- **Phase 2 (the real cure, not built):** an **on-device low-res proxy** of the edited timeline (reuse the
+  export planner + mediabunny encoder to render a 360–480p MP4), which the phone plays as ONE seek-free
+  file → smooth like desktop. Rebuild debounced after edits; keeps video on-device (no upload). ~1 week.
+- NOT on-device tested — needs a live check on a phone (ideally charged); expect maybe one tuning round.
+  Per the earlier freeze lesson, do NOT tune the reconciler further blind — this change is safe because it
+  only *removes* a decoder (the documented fallback), it doesn't add new seek logic.
