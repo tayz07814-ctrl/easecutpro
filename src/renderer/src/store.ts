@@ -3446,7 +3446,7 @@ export const useStore = create<AppState>((set, get) => ({
         x: 0.5,
         y: 0.85,
         caption: true,
-        content: { bold: true, fontSize: 0.058, strokeWidth: 0.09, strokeColor: '#000000', color: '#ffffff' }
+        content: { bold: true, fontSize: 0.0233, strokeWidth: 0.09, strokeColor: '#000000', color: '#ffffff' } /* size ~7 on the editor scale */
       }
     })
     addDocTexts(specs)
