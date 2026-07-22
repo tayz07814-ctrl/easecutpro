@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **0c2eba3** (Android test APK via CI; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **09f70ea** (Android OFFLINE app — bundled dist-cloud + gallery/files picker; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -302,3 +302,29 @@ wrapper now loads the **live 0.01 preview** instead.
   the download needs a signed-in GitHub session. `google-services` plugin auto-skips (no `google-services.json`).
   The APK loads the live URL, so it reflects the latest deployed 0.01 without reinstalling — only rebuild the
   APK when the wrapper (config/splash/workflow) changes.
+
+### Android OFFLINE app — bundled dist-cloud (0.01 only — `09f70ea`)
+Superseded the webview wrapper: the APK now **bundles the built cloud app** so it's a real offline app, not a
+webpage. Edited: `capacitor.config.ts` (webDir → `dist-cloud`, no server.url), `newui/flag.ts`, `offline.ts`,
+`cloud/api.ts`, `store.ts`, `newui/screens/{MobileEditor,Editor}.tsx`, `.github/workflows/android-apk.yml`.
+- **Offline editing/export** work with no connection (all client-side: import/split/trim/cut/preview + the
+  WebCodecs → hardware-codec export). **Online features** (login, project sync, Cut Lord, captions) reach
+  **Supabase at its absolute URL** — `invokeEdge` already falls back from `/edge` (localhost 404) to the
+  direct `sb.functions.invoke` URL, and the cloud CSP `connect-src` already lists the Supabase origin.
+- **Build flags** (baked by the workflow): `VITE_FORCE_NEWUI=1` → `isNewUi()` returns true (no query string /
+  product domain on localhost); `VITE_CAPACITOR=1` → `probeServer()` uses `navigator.onLine` instead of the
+  same-origin `/api/ping` (which doesn't exist under localhost). Supabase URL + PUBLIC anon key are embedded
+  in the workflow env (they ship in every client bundle; safe).
+- **Gallery vs storage picker** (user ask): cloud `openMediaDialog`/`openMediaDialogMulti` accept narrowed to
+  `video/*,image/*` so Android opens the **gallery/photos** picker; new cloud `openAudioDialogMulti`
+  (`audio/*`) + a new store `addAudioToLibrary` action open **files/storage** for audio. Mobile MusicSheet +
+  desktop-new-UI audio import now call `addAudioToLibrary`. Cloud-only — the shared `window.api` type +
+  electron/webapi picker are untouched (desktop unaffected). NOTE: `main`'s `cloud/api.ts` has a newer
+  iOS-detached-input picker (`openPicker`) that 0.01 lacks — carry that fix into 0.01 when convenient.
+- **Workflow**: `npm ci` (electron/pw binary downloads skipped via env) → `npm run build:cloud` (with the
+  flags + Supabase env) → `npx cap sync android` → `gradlew assembleDebug`. First run GREEN (`29961552244`,
+  ~3 min). APK **34.8 MB** (bundles the app), same release tag `android-apk-0.01` → `app-debug.apk`.
+- **Caveats** (device-only, untested here): preview smoothness is still bounded by the Android WebView
+  decoder (proxy is the real fix); **login may need a Supabase redirect-allowlist entry if it's OAuth**
+  (email/password works cross-origin as-is). A truly native ExoPlayer/MediaCodec player+exporter remains a
+  separate large native track. Bundle is frozen at build time — re-run the workflow to refresh after changes.
