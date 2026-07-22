@@ -13,9 +13,17 @@ export interface NativeSegment {
   endMs: number
 }
 
+export interface NativeExportResult {
+  /** cache-file path of the encoded mp4. */
+  path: string
+  /** user-facing gallery location it was published to (e.g. Movies/EaseCutPro/…). */
+  savedTo?: string
+  durationMs?: number
+}
+
 interface EcNativeExportPlugin {
   ping(): Promise<{ ok: boolean }>
-  export(opts: { segments: NativeSegment[] }): Promise<{ path: string; durationMs?: number }>
+  export(opts: { segments: NativeSegment[]; filename?: string }): Promise<NativeExportResult>
 }
 
 interface CapGlobal {
@@ -44,10 +52,13 @@ export async function nativeExportReady(): Promise<boolean> {
   }
 }
 
-/** Run a native hardware-codec trim+concat export. Returns the output file path. */
-export async function nativeExport(segments: NativeSegment[]): Promise<string> {
+/** Run a native hardware-codec trim+concat export. Resolves with the output path
+ *  and the gallery location it was saved to. */
+export async function nativeExport(
+  segments: NativeSegment[],
+  filename?: string
+): Promise<NativeExportResult> {
   const plug = cap()?.Plugins?.EcNativeExport
   if (!plug) throw new Error('native export is not available on this platform')
-  const res = await plug.export({ segments })
-  return res.path
+  return plug.export({ segments, filename })
 }

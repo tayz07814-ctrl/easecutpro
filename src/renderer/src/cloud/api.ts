@@ -9,6 +9,7 @@ import { generateOverlaysCloud, suggestOverlaysCloud } from './overlayMatch'
 import { invokeEdge } from './supabase'
 import {
   registerLocalFile,
+  registerNativeBackedFile,
   isWebMediaId,
   localProbe,
   localWaveform,
@@ -16,6 +17,7 @@ import {
   combineSequenceAudioWav,
   requestPersistentStorage
 } from '../webmedia'
+import { hasNativeMedia, pickNativeMedia, nativeFileUrl, type NativePickKind } from './nativeMedia'
 import { retakeAwareCutCloud, ultracutCutCloud, transcribeCloud } from './retakeEngine'
 import { premiumCutCloud } from './premiumEngine'
 import { cutCutProCloud } from './procutEngine'
@@ -96,6 +98,29 @@ async function registerPicked(files: File[]): Promise<{ path: string; name: stri
   return out
 }
 
+/** Native (Android) import: the system picker COPIED each file to an app path, so
+ *  we read the bytes from that stable path (no revoked content:// URI) into a File
+ *  for the existing webmedia pipeline, AND remember the path for the native
+ *  hardware-codec export. Returns null when the native picker isn't present so the
+ *  caller can fall back to the DOM <input> picker. */
+async function registerNativePicked(
+  kind: NativePickKind
+): Promise<{ path: string; name: string }[] | null> {
+  if (!hasNativeMedia()) return null
+  const picked = await pickNativeMedia(kind)
+  const out: { path: string; name: string }[] = []
+  for (const p of picked) {
+    try {
+      const blob = await (await fetch(nativeFileUrl(p.path))).blob()
+      const file = new File([blob], p.name, { type: p.mimeType || blob.type })
+      out.push({ path: registerNativeBackedFile(file, p.path), name: p.name })
+    } catch {
+      /* one file failed to read back — skip it, keep the rest */
+    }
+  }
+  return out
+}
+
 function triggerDownload(url: string, name: string): void {
   const a = document.createElement('a')
   a.href = url
@@ -132,15 +157,21 @@ const cloudApi: Window['api'] & {
   // opens the gallery/photos picker (with a Files option) instead of jumping
   // straight to storage; audio has its own picker (openAudioDialogMulti below).
   openMediaDialog: async () => {
+    const nat = await registerNativePicked('visual')
+    if (nat) return nat[0]?.path ?? null
     const f = await pickFile('video/*,image/*')
     return f ? registerLocalFile(await stableFile(f)) : null
   },
   openMediaDialogMulti: async () => {
+    const nat = await registerNativePicked('visual')
+    if (nat) return nat
     const files = await pickFiles('video/*,image/*')
     return registerPicked(files)
   },
   // Audio import (music / voiceover) — opens files/storage, not the gallery.
   openAudioDialogMulti: async () => {
+    const nat = await registerNativePicked('audio')
+    if (nat) return nat
     const files = await pickFiles('audio/*')
     return registerPicked(files)
   },

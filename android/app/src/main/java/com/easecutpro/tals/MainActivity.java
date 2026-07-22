@@ -21,6 +21,7 @@ public class MainActivity extends BridgeActivity {
   public void onCreate(Bundle savedInstanceState) {
     // Register native plugins BEFORE the bridge initialises.
     registerPlugin(EcNativeExportPlugin.class);
+    registerPlugin(EcNativeMediaPlugin.class);
     super.onCreate(savedInstanceState);
     requestMediaPermissions();
   }

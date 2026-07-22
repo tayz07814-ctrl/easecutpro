@@ -13,6 +13,7 @@ interface MediaRec {
   url: string // blob: URL for local <video>/<img> playback
   serverPath?: string // set once the full file is uploaded to the PC
   audioServerPath?: string // set once just the extracted audio is uploaded
+  nativePath?: string // Android only: app-private filesystem path (native export/player)
 }
 
 const registry = new Map<string, MediaRec>()
@@ -117,6 +118,23 @@ export function registerLocalFile(file: File, persist = true): string {
   registry.set(id, { file, url: URL.createObjectURL(file) })
   if (persist) void idbPut(id, file) // survive reloads on this device (best effort)
   return id
+}
+
+/** Register a file that ALSO lives at a real filesystem path (Android native
+ *  import). `file` still holds the bytes (waveform / preview / WebCodecs export
+ *  fallback all use it, unchanged), and `nativePath` is remembered so the native
+ *  hardware-codec export can read the same source directly. Web/desktop never
+ *  call this — they have no native path. */
+export function registerNativeBackedFile(file: File, nativePath: string, persist = true): string {
+  const id = registerLocalFile(file, persist)
+  const rec = registry.get(id)
+  if (rec) rec.nativePath = nativePath
+  return id
+}
+
+/** The app-private filesystem path for this id, if it was imported natively. */
+export function nativePathFor(id: string): string | undefined {
+  return registry.get(id)?.nativePath
 }
 
 export function localUrl(id: string): string {

@@ -34,6 +34,7 @@ import { addDocTexts, removeCaptionTexts } from './docTextClips'
 import { captionStyleContent } from './captionStyles'
 import { insertLibraryItemAtPlayhead } from './timelineInsert'
 import { exportOnDevice } from './export/localExport'
+import { tryNativeCutExport } from './export/nativePlan'
 import { renderTextPng } from './textRender'
 import { TIMELINE_TRACK_COUNT } from '@shared/types'
 import { detectFillerIds, detectRepeatIds, snapRetakeFlags, DEFAULT_FILLERS } from '@shared/fillers'
@@ -3649,14 +3650,29 @@ export const useStore = create<AppState>((set, get) => ({
   exportVideoOnDevice: async (settings) => {
     set({ showExportModal: false, job: { active: true, kind: 'export', percent: 1, message: 'Getting ready to export…' } })
     try {
+      // Android fast path: a plain cut (trim + join, no text/overlay/speed/audio)
+      // exports via native hardware codecs (Media3) — fast + smooth, and saved
+      // straight to the gallery. Returns null when the timeline needs compositing,
+      // which drops to the WebCodecs exporter below (unchanged on web/desktop).
+      const chosenName = (settings.filename ?? '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim()
+      const native = await tryNativeCutExport(
+        get().project,
+        chosenName ? `${chosenName}.mp4` : `EaseCutPro_${Date.now()}.mp4`,
+        (percent, message) => set({ job: { active: true, kind: 'export', percent, message } })
+      )
+      if (native) {
+        set({
+          job: { active: false, percent: 100, message: native.savedTo ? `Saved to ${native.savedTo}` : 'Saved to your device' }
+        })
+        return
+      }
       const { blob, name } = await exportOnDevice(
         get().project,
         { width: settings.width, height: settings.height, bitrateMbps: settings.bitrateMbps },
         (percent, message) => set({ job: { active: true, kind: 'export', percent, message } })
       )
       // Creator-chosen file name wins (sanitized, single .mp4); else the derived one.
-      const chosen = (settings.filename ?? '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim()
-      const dl = chosen ? `${chosen}.mp4` : name
+      const dl = chosenName ? `${chosenName}.mp4` : name
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
