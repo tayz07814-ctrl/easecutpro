@@ -1,5 +1,5 @@
 name: Android offline APK (0.01)
-# rebuild marker: v2 — DOM-attached file picker (import) + media permissions
+# rebuild marker: v3 — runtime media-permission request on launch (MainActivity)
 
 # Builds an installable DEBUG Android APK that BUNDLES the cloud web app
 # (dist-cloud) inside a Capacitor shell — a real offline app, not a webpage
