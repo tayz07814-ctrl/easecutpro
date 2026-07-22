@@ -15,7 +15,7 @@ import SettingsModal from '../../components/SettingsModal'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { primePlayback } from '../../clock'
 import { addMediaToTimeline } from '../../timelineAdd'
-import { addDocTexts, countCaptionTexts } from '../../docTextClips'
+import { countCaptionTexts } from '../../docTextClips'
 import { loadStoredFonts } from '../../customFonts'
 import { CAPTION_STYLES, DEFAULT_CAPTION_STYLE } from '../../captionStyles'
 
@@ -204,12 +204,10 @@ export default function MobileEditor(): JSX.Element {
   const [sheet, setSheet] = useState<SheetKind>(null)
   const hasBase = !!media || ((useStore.getState().project.baseSequence?.length ?? 0) > 0)
 
-  // Add a text layer at the playhead and open its editor (desktop "Add text").
-  const addText = (): void => {
-    const ph = useStore.getState().project.playhead
-    addDocTexts([{ text: 'Your text', startS: ph, endS: ph + 3 }], true)
-    setSheet('text')
-  }
+  // Open the Text sheet WITHOUT inserting a clip — the panel's Text tab composes a
+  // draft and commits on "Add to timeline" (tapping the Text tool used to auto-drop
+  // a "Your text" clip before the user added anything).
+  const openTextSheet = (): void => setSheet('text')
 
   // Register any user-uploaded fonts (+ the chosen default) so they render in the
   // preview and canvas-baked export after a reload.
@@ -221,7 +219,7 @@ export default function MobileEditor(): JSX.Element {
   useEffect(() => {
     const open = (e: Event): void => {
       const d = (e as CustomEvent).detail as string
-      if (d === 'text') addText()
+      if (d === 'text') openTextSheet()
       else if (d === 'music') setSheet('music')
       else if (d === 'media') setSheet('media')
       else if (d === 'cut') setSheet('cut')
@@ -312,7 +310,7 @@ export default function MobileEditor(): JSX.Element {
           onImport={() => setSheet('media')}
           onCutlord={() => setSheet('cut')}
           onEditText={() => setSheet('text')}
-          onAddText={addText}
+          onAddText={openTextSheet}
           onAddAudio={() => setSheet('music')}
           onCaptions={() => setSheet('captions')}
           onSticker={() => void useStore.getState().importOverlayFromDevice()}

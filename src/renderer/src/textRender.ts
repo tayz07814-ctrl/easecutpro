@@ -69,6 +69,15 @@ export function drawTextClip(
     return cx - maxW / 2
   }
 
+  // Reset any inherited shadow (drawn selectively on the fill pass below).
+  const clearShadow = (): void => {
+    ctx.shadowColor = 'transparent'
+    ctx.shadowBlur = 0
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0
+  }
+  clearShadow()
+
   // 1) Backgrounds (hug each line; boxes are line-height tall so they join).
   if (clip.bgEnabled) {
     ctx.fillStyle = rgba(clip.bgColor, clip.bgOpacity)
@@ -81,19 +90,31 @@ export function drawTextClip(
     })
   }
 
-  // 2) Text (stroke under fill).
+  // 2) Text (stroke under fill; the drop shadow sits under the FILL only so the
+  //    outline + background boxes don't double-cast).
+  const hasShadow = !!clip.shadowEnabled
   ctx.textAlign = 'left'
   lines.forEach((line, i) => {
     const lc = topY + i * lineHeight + lineHeight / 2
     if (strokePx > 0) {
+      clearShadow()
       ctx.lineJoin = 'round'
       ctx.strokeStyle = clip.strokeColor
       ctx.lineWidth = strokePx * 2
       ctx.strokeText(line, lineLeft(i), lc)
     }
+    if (hasShadow) {
+      ctx.shadowColor = clip.shadowColor || '#000000'
+      ctx.shadowBlur = (clip.shadowBlur ?? 0) * fontPx
+      ctx.shadowOffsetX = (clip.shadowDx ?? 0) * fontPx
+      ctx.shadowOffsetY = (clip.shadowDy ?? 0) * fontPx
+    } else {
+      clearShadow()
+    }
     ctx.fillStyle = clip.color
     ctx.fillText(line, lineLeft(i), lc)
   })
+  clearShadow()
 }
 
 /** Render a text clip to a full-frame transparent PNG data URL (for export overlay). */

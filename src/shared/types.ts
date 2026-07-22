@@ -237,6 +237,12 @@ export interface TextClip {
   bgRadius: number
   bgPadding: number
   bgOpacity: number
+  /** drop shadow (optional; default off). blur/dx/dy are fractions of font size. */
+  shadowEnabled?: boolean
+  shadowColor?: string
+  shadowBlur?: number
+  shadowDx?: number
+  shadowDy?: number
   /** true = auto-generated from the transcript (Captions tab); lets a regenerate
    *  replace the previous batch without touching hand-added text. */
   caption?: boolean

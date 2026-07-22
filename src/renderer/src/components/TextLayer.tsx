@@ -34,6 +34,11 @@ interface TextView {
   bgOpacity: number
   bgRadius: number
   bgPadding: number
+  shadowEnabled?: boolean
+  shadowColor?: string
+  shadowBlur?: number
+  shadowDx?: number
+  shadowDy?: number
 }
 
 function rgba(hex: string, opacity: number): string {
@@ -74,7 +79,12 @@ function docTexts(doc: TimelineDocument, playheadSec: number): TextView[] {
         bgColor: t.background.color,
         bgOpacity: t.background.opacity,
         bgRadius: t.background.radius,
-        bgPadding: t.background.padding
+        bgPadding: t.background.padding,
+        shadowEnabled: t.shadow?.enabled ?? false,
+        shadowColor: t.shadow?.color ?? '#000000',
+        shadowBlur: t.shadow?.blur ?? 0,
+        shadowDx: t.shadow?.dx ?? 0,
+        shadowDy: t.shadow?.dy ?? 0
       })
     }
   }
@@ -148,6 +158,9 @@ function TextItem({
   const padY = view.bgPadding * fontPx * 0.7
   const radius = view.bgRadius * fontPx
   const lineHeight = view.bgEnabled ? 1 + 1.4 * view.bgPadding : 1.3
+  const textShadow = view.shadowEnabled
+    ? `${(view.shadowDx ?? 0) * fontPx}px ${(view.shadowDy ?? 0) * fontPx}px ${(view.shadowBlur ?? 0) * fontPx}px ${view.shadowColor || '#000000'}`
+    : undefined
 
   // One finger = move (centre snaps to the frame's centre lines); two fingers =
   // pinch to resize the font. Text is centre-anchored, so its half-size is 0.
@@ -190,6 +203,7 @@ function TextItem({
           lineHeight: lineHeight,
           color: view.color,
           whiteSpace: 'pre',
+          textShadow,
           WebkitTextStrokeWidth: strokePx > 0 ? `${strokePx}px` : undefined,
           WebkitTextStrokeColor: strokePx > 0 ? view.strokeColor : undefined,
           paintOrder: 'stroke fill',

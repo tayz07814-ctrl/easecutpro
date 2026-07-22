@@ -281,7 +281,12 @@ function legacyTextFrom(c: Clip, f2s: (f: number) => number): TextClip {
     bgColor: t.background.color,
     bgRadius: t.background.radius,
     bgPadding: t.background.padding,
-    bgOpacity: t.background.opacity
+    bgOpacity: t.background.opacity,
+    shadowEnabled: t.shadow?.enabled ?? false,
+    shadowColor: t.shadow?.color ?? '#000000',
+    shadowBlur: t.shadow?.blur ?? 0,
+    shadowDx: t.shadow?.dx ?? 0,
+    shadowDy: t.shadow?.dy ?? 0
   }
 }
 
