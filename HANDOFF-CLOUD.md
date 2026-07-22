@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **25529b2** (on-device bug pass; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **1cc8551** (freeze fix + on-device bug pass; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -154,3 +154,11 @@ Fixes from the first on-device test of the crop/captions batch.
   behind the existing fallback — revert to `0.6` if it isn't better on-device. A deeper reconciler rework
   (2nd buddy on capable devices, etc.) is the next step if the lever isn't enough; needs real device
   profiling — do NOT change it blind.
+- **⚠ That `PREWARM_LEAD_S = 1.2` FROZE playback — REVERTED to `0.6`** (`1cc8551`). On a heavily-cut video
+  the kept segments are SHORTER than the 1.2 s lead, so the decode-ahead buddy re-seeks on essentially
+  every segment; on mobile that starved the hardware decoder and wedged the picture (frozen frame while
+  the wall-clock playhead kept advancing + no audio). Lesson: **`PREWARM_LEAD_S` must stay ≤ the typical
+  kept-segment length** — do not raise it to chase flicker. Seam flicker is still open; the real fix is a
+  smarter reconciler (device-profiled), not a bigger lead. Also `generateCaptions` no longer rewrites
+  `media`/`baseSequence` in its transcribe branch (captions don't cut → don't need it; only risked
+  desyncing the doc-native preview) — it just stores the transcript.
