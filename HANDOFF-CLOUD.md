@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **2b088a1** (mobile reskin; redesign `9416050`; beta judges below). Tests alternate
+`easecut0.01` = **6d38a08** (crop/captions/transcript-reuse; reskin `2b088a1`; redesign `9416050`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -105,3 +105,30 @@ only appearance changed. Files: `components/mobile/{Icon,MobileTools,MobileExpor
 - **Not reskinned** (safe scope): timeline waveform bar colour (canvas-drawn in shared timeline logic);
   the design's CutLord sub-toolbar + AI-cut tool set (that's a feature, not a reskin — ScriptCut still
   opens the Cut Lord sheet).
+
+### Mobile crop / captions / transcript-reuse (0.01 only — `6d38a08`)
+Functional batch on top of the reskin. Files: `components/mobile/{MobileTools,MobileCropModal}.tsx`,
+`newui/screens/MobileEditor.tsx`, `store.ts`, `cloud/{retakeEngine,transcriptCache}.ts`.
+- **Effects button removed** from the main toolbar (was a "coming soon" stub). Root row is now
+  Edit · Music · Text · ScriptCut · Captions.
+- **Crop → visual crop window** (`MobileCropModal`, replaces the four inset sliders). Full-screen dark
+  sheet: clip-thumbnail backdrop at the source aspect, draggable crop box (corner handles + rule-of-
+  thirds grid + box-shadow-dimmed surround), centred aspect presets (Free/9:16/16:9/1:1/4:3/2:1), Reset,
+  ✕/✓. Confirm dispatches `setOverlayCrop` (the engine crop is inset-based, so the box maps straight on).
+  Backdrop = the clip's library thumbnail (falls back to any video/image thumb, else a placeholder — the
+  crop maths are correct regardless). Live drag doesn't dispatch; it applies on ✓. **Rotate is NOT wired**
+  (the engine has no clip-rotation command) — omitted rather than shipped as a dead control.
+- **Captions now work standalone.** `generateCaptions` (store) is async: uses `project.transcript` if Cut
+  Lord already ran, else transcribes first (`window.api.transcribe`, AssemblyAI) and then captions. Folds
+  a doc-native base exactly like `runRetakeCutBeta` so it works on a dragged-in clip. Captions sheet
+  modernized (gradient button + live status + updated copy). Interface type is now `() => Promise<void>`.
+- **Transcript reuse (efficiency).** New `cloud/transcriptCache.ts` caches the verbatim STT transcript by
+  `mediaId`. The FIRST run of Cut Lord / Ultracut / Transcribe / Generate-Captions transcribes once; every
+  later run **reuses it and skips the AssemblyAI round-trip** — only the on-device audio decode (for VAD)
+  + the LLM judge re-run. `transcribeCloud` returns instantly on a hit (no audio decode at all). Wired in
+  `retakeAwareCutCloud` + `ultracutCutCloud` + `transcribeCloud`; premium is a multimodal-audio path (no
+  STT) so it's untouched. **Cloud-only** — the desktop STT path is not touched. Cache is session-scoped
+  (clears on reload) and keyed by media, so a re-import / re-combined montage never reuses a stale one.
+- **Not done**: deeper text-editing rework (the `TextPanel` sheet is shared/desktop-oriented — left as-is);
+  crop rotate + AI-expand (engine support needed). Verified: typecheck + `build:cloud` green; crop layout
+  screenshot-checked. NOT on-device tested.
