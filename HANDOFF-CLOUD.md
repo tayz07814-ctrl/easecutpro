@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **90661d8** (timeline theme + Cut Lord label; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **4d033e0** (text-drawer batch: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -200,3 +200,32 @@ Files: `components/mobile/MobileTools.tsx`, `components/timeline/{WaveformCanvas
   scoped to `MobileTimeline` (shared `laneHeight` unchanged → desktop lanes are the same height).
 - Verified: typecheck + `build:cloud` green; Chromium static mock confirmed the white-bar/black-grip trims
   render. NOT on-device tested — needs a live check on `easecut0.01`.
+
+### Mobile text drawer batch (0.01 only — `4d033e0`) — text tools, fonts, caption styles
+Text-editing pass on the phone editor. New files: `components/mobile/MobileTextPanel.tsx`, `customFonts.ts`,
+`captionStyles.ts`. Edited: `components/mobile/{Icon,MobileTools}.tsx`, `newui/screens/{MobileEditor,Editor}.tsx`,
+`store.ts`, `docTextClips.ts`, `components/TextPanel.tsx`, `shared/timeline/bridge.ts`.
+- **Duration tool dropped** from the video/image edit toolbar (`MobileTools`) — length is set by trimming;
+  the panel code stays (audio clips still have a Duration tool).
+- **Split icon → `]|[`.** `Icon` special-cases `split` to a bespoke SVG (two brackets + a dashed centre cut
+  line, `currentColor`) instead of the `vertical_split` Material glyph.
+- **Modernized text drawer.** The phone "Text" sheet was still the desktop `TextPanel` (`.tool-content`,
+  raw `<select>`/`<h4>`). New `MobileTextPanel` matches the other sheets (dark cards, purple accents,
+  segmented alignment, `accent-color` sliders, colour swatches) with the SAME engine wiring (doc-native
+  text clips). **Desktop `TextPanel` is untouched** — it's still used by `ToolsPanel` (desktop) + `MobileApp`
+  (legacy), so a mobile-only file was added rather than editing the shared one.
+- **Custom fonts.** `customFonts.ts` lets the user upload a font file (.ttf/.otf/.woff/.woff2): registers a
+  `FontFace` (renders in preview AND the main-thread canvas-baked export), persists it as a data-URL in
+  `localStorage`, reloads on editor mount (`loadStoredFonts` in `MobileEditor`), and tracks a **default**
+  font. Uploading a font sets it as the default; `defaultTextContent()` (docTextClips) now reads
+  `getDefaultFont()`, so new text AND captions inherit it. All storage/FontFace access is try-guarded (quota
+  / private mode degrade quietly). **Cloud-only feature; desktop font list unchanged.**
+- **Two caption styles** (`captionStyles.ts`): **Clean** (white + black outline, the old default) and
+  **Boxed** (white on an opaque black bar). The Captions sheet shows a 2-card picker (mini `Aa` preview);
+  `generateCaptions(styleId?)` applies the chosen style's content. `Editor.tsx` caption button wrapped so it
+  no longer passes the click event as the style id.
+- **Background opacity default 100%** (was `0.6`) in all three text defaults: `docTextClips.ts`,
+  `TextPanel.tsx`, `bridge.ts`. (These live on `main` too but the change is 0.01-only for now.)
+- Verified: typecheck + `build:cloud` green; Chromium mock confirmed the `]|[` split + caption-style cards.
+  NOT on-device tested. **Custom-font EXPORT needs an on-device check** — the FontFace must be loaded before
+  the canvas bakes text (it is, on upload + on mount), but only a real export confirms the glyphs land.
