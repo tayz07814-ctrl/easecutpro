@@ -344,7 +344,7 @@ function MediaTab(): JSX.Element {
 function AudioTab(): JSX.Element {
   const library = useStore((s) => s.library)
   const basePath = useStore((s) => s.project.media?.path)
-  const addToLibrary = useStore((s) => s.addToLibrary)
+  const addToLibrary = useStore((s) => s.addAudioToLibrary)
   const removeFromLibrary = useStore((s) => s.removeFromLibrary)
   const audio = library.filter((it) => it.kind === 'audio')
   return (

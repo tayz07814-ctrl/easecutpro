@@ -612,6 +612,8 @@ interface AppState {
 
   // media library
   addToLibrary: () => Promise<void>
+  /** import audio (music / voiceover) — opens files/storage, not the gallery. */
+  addAudioToLibrary: () => Promise<void>
   /** import every media file in a chosen folder into the library at once. */
   importFolderToLibrary: () => Promise<void>
   /** append one library video to the base sequence (montage). */
@@ -1013,6 +1015,30 @@ export const useStore = create<AppState>((set, get) => ({
         percent: 100,
         message: added === 0 ? 'Already in the library' : added === 1 ? `Added ${lastName} to the library` : `Added ${added} clips to the library`
       }
+    })
+  },
+
+  addAudioToLibrary: async () => {
+    // Audio picker (files/storage). Cloud exposes openAudioDialogMulti; desktop
+    // falls back to the normal media dialog (its native file browser shows audio).
+    const api = window.api as unknown as { openAudioDialogMulti?: () => Promise<{ path: string; name: string }[]> }
+    const picked = api.openAudioDialogMulti ? await api.openAudioDialogMulti() : await window.api.openMediaDialogMulti()
+    if (!picked || !picked.length) return
+    set({ job: { active: true, kind: 'probe', percent: 0, message: 'Adding audio…' } })
+    const lib = [...get().library]
+    let added = 0
+    let lastName = ''
+    for (const p of picked) {
+      if (lib.some((it) => it.path === p.path)) continue
+      const item = await buildLibraryItem(p.path, p.name)
+      lib.push(item)
+      added++
+      lastName = item.name
+    }
+    saveLibrary(lib)
+    set({
+      library: lib,
+      job: { active: false, percent: 100, message: added === 0 ? 'Already in the library' : added === 1 ? `Added ${lastName}` : `Added ${added} audio files` }
     })
   },
 

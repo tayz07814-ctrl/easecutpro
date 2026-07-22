@@ -87,18 +87,26 @@ function needLocal(path: string): string {
 const cloudApi: Window['api'] & {
   ultracutCut: Window['api']['retakeAwareCut']
   premiumCut: Window['api']['retakeAwareCut']
+  openAudioDialogMulti: () => Promise<{ path: string; name: string }[]>
 } = {
   // No PC binaries in the cloud — feature gating happens via IS_CLOUD in the
   // UI; report everything unavailable for any legacy checks.
   toolStatus: async () => ({ ffmpeg: false, ffprobe: false, whisper: false, whisperModel: false }),
 
-  // Local-first import — identical to the self-host web flow.
+  // Local-first import. Video/image use a VISUAL accept so Android's WebView
+  // opens the gallery/photos picker (with a Files option) instead of jumping
+  // straight to storage; audio has its own picker (openAudioDialogMulti below).
   openMediaDialog: async () => {
-    const f = await pickFile('video/*,audio/*,image/*')
+    const f = await pickFile('video/*,image/*')
     return f ? registerLocalFile(f) : null
   },
   openMediaDialogMulti: async () => {
-    const files = await pickFiles('video/*,audio/*,image/*')
+    const files = await pickFiles('video/*,image/*')
+    return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
+  },
+  // Audio import (music / voiceover) — opens files/storage, not the gallery.
+  openAudioDialogMulti: async () => {
+    const files = await pickFiles('audio/*')
     return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
   },
   importFolder: async () => {

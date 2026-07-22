@@ -16,6 +16,9 @@ function onProductDomain(): boolean {
 }
 
 export function isNewUi(): boolean {
+  // The bundled native app (Capacitor) is served from localhost with no query
+  // string and no product domain, so force the new UI on at build time.
+  if (import.meta.env.VITE_FORCE_NEWUI === '1') return true
   try {
     const q = new URLSearchParams(location.search).get('newui')
     if (q === '1') localStorage.setItem('ec.newui', '1')

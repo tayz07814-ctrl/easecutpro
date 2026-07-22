@@ -95,7 +95,7 @@ function MediaSheet({ onClose }: { onClose: () => void }): JSX.Element {
 // drop it on an audio track (the SAME addMediaToTimeline path the desktop uses).
 function MusicSheet({ onClose }: { onClose: () => void }): JSX.Element {
   const library = useStore((s) => s.library)
-  const addToLibrary = useStore((s) => s.addToLibrary)
+  const addToLibrary = useStore((s) => s.addAudioToLibrary)
   const audio = library.filter((it) => it.kind === 'audio')
   const fmt = (it: LibraryItem): string =>
     it.duration ? `${Math.floor(it.duration / 60)}:${String(Math.round(it.duration % 60)).padStart(2, '0')}` : ''

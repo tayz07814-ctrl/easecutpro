@@ -16,6 +16,12 @@ import { IS_WEB } from './platform'
  *    401s / times out for a fresh session over the tunnel and reads as offline. */
 export async function probeServer(timeoutMs = 6000): Promise<boolean> {
   if (!IS_WEB) return true
+  // Bundled native app (Capacitor): served from localhost, so the relative
+  // /api/ping doesn't exist. The backend is Supabase at an ABSOLUTE URL, reached
+  // directly (edge-fn fallback), so "online" here is just device connectivity.
+  if (import.meta.env.VITE_CAPACITOR === '1') {
+    return typeof navigator === 'undefined' ? true : navigator.onLine !== false
+  }
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return false
   const ctl = new AbortController()
   const t = setTimeout(() => ctl.abort(), timeoutMs)

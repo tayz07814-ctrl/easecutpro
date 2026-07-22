@@ -1,14 +1,18 @@
-name: Android test APK (0.01)
+name: Android offline APK (0.01)
 
-# Builds an installable DEBUG Android APK that wraps the live 0.01 web preview
-# (server.url in capacitor.config.ts) in a fullscreen Capacitor WebView. The APK
-# is published as a workflow artifact AND attached to a prerelease so it can be
-# downloaded straight onto a phone. Debug-signed → installable from "unknown
-# sources"; no Play Store / keystore setup needed.
+# Builds an installable DEBUG Android APK that BUNDLES the cloud web app
+# (dist-cloud) inside a Capacitor shell — a real offline app, not a webpage
+# wrapper. Import / split / trim / cut / preview / on-device (WebCodecs →
+# hardware-codec) export all run offline; login / project sync / Cut Lord /
+# captions reach Supabase directly when the device is online (offline.ts gates
+# them otherwise).
 #
-# Triggered manually, or automatically when the wrapper (config / splash / this
-# workflow) changes on easecut0.01. The APK just loads the live preview, so it
-# does NOT need rebuilding for ordinary app changes — only when the shell changes.
+# The bundle is frozen at build time, so run this again (Actions → Run workflow,
+# or it auto-runs when the wrapper/workflow changes) to refresh the APK after app
+# changes. Debug-signed → installable from "unknown sources"; no keystore needed.
+#
+# VITE_SUPABASE_URL + the anon key below are PUBLIC (they ship in every client
+# bundle; RLS protects the data), so embedding them here is fine.
 
 on:
   workflow_dispatch:
@@ -21,6 +25,14 @@ on:
 
 permissions:
   contents: write
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+  VITE_SUPABASE_URL: 'https://zlqxrdlognjvwqpmnfjq.supabase.co'
+  VITE_SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpscXhyZGxvZ25qdndxcG1uZmpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM2MzI5MjMsImV4cCI6MjA5OTIwODkyM30.S7cUsW0NKk609CxaaDnQqQGv3RzmX5oCtaDMjxzLaAw'
+  VITE_FORCE_NEWUI: '1'
+  VITE_CAPACITOR: '1'
 
 jobs:
   build:
@@ -41,7 +53,10 @@ jobs:
           java-version: '17'
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: npm ci
+
+      - name: Build offline web bundle (dist-cloud)
+        run: npm run build:cloud
 
       - name: Sync Capacitor Android project
         run: npx cap sync android
@@ -57,13 +72,12 @@ jobs:
         run: |
           APK=$(find android/app/build/outputs/apk/debug -name '*.apk' | head -1)
           echo "path=$APK" >> "$GITHUB_OUTPUT"
-          echo "Built: $APK"
-          ls -la "$APK"
+          echo "Built: $APK"; ls -la "$APK"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: easecutpro-0.01-debug-apk
+          name: easecutpro-0.01-offline-apk
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
 
@@ -71,15 +85,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-apk-0.01
-          name: EaseCutPro 0.01 — Android test APK
+          name: EaseCutPro 0.01 — Android offline APK
           prerelease: true
           body: |
-            Debug APK that wraps the live **0.01 web preview** in a fullscreen Android app.
+            **Offline** debug APK — the editor is bundled inside the app (not a
+            webpage wrapper).
 
-            - Install: download `app-debug.apk` below on your phone, then open it
-              (allow "install from unknown sources" if prompted).
-            - It loads the live preview, so it always reflects the latest deployed
-              0.01 build — no need to reinstall after app changes.
-            - It runs in Android's WebView (Chromium), so the video engine behaves
-              like Chrome on the phone. Requires a network connection.
+            - Install: download `app-debug.apk` below on your phone → open it →
+              allow "install from unknown sources" if prompted.
+            - Works offline: import / split / trim / cut / preview / export all run
+              on-device (export uses the phone's hardware codecs via WebCodecs).
+            - Online features (login, project sync, Cut Lord, captions) connect to
+              Supabase when you have a connection.
+            - Frozen at build time — a new run refreshes the APK after app changes.
           files: ${{ steps.apk.outputs.path }}
