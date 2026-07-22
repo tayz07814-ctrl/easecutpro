@@ -133,19 +133,23 @@ function CaptionsSheet({ onClose }: { onClose: () => void }): JSX.Element {
   const clearCaptions = useStore((s) => s.clearCaptions)
   const hasTranscript = useStore((s) => !!s.project.transcript?.words?.length)
   const jobActive = useStore((s) => s.job.active)
+  const jobMsg = useStore((s) => s.job.message)
   const snap = useSharedEngineSnapshot()
   const capCount = countCaptionTexts(snap?.doc)
   return (
     <Sheet onClose={onClose} header={<div style={css('flex:none;padding:6px 16px 12px;font-size:15px;font-weight:650')}>Captions</div>}>
       <div style={css('flex:1;min-height:0;overflow:auto;padding:2px 16px 20px')}>
-        <button onClick={generateCaptions} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:14px;font-weight:600;border-radius:11px;padding:13px 0;box-shadow:0 6px 18px rgba(110,106,232,.3);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>Generate captions</button>
-        {capCount > 0 && (
-          <div style={css('margin-top:12px;display:flex;align-items:center;gap:10px')}>
-            <div style={css('flex:1;font-size:13px;color:#7FCBA8')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>
-            <button onClick={clearCaptions} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;font-family:inherit;font-size:13px;border-radius:9px;padding:8px 14px;cursor:pointer')}>Clear</button>
+        <button onClick={() => void generateCaptions()} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(100deg,#7c5cff,#a468ff);border:none;color:#fff;font-family:inherit;font-size:14px;font-weight:700;border-radius:12px;padding:14px 0;box-shadow:0 6px 18px rgba(140,92,255,.32);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>
+          <Icon name="captions" size={19} /> {jobActive ? 'Working…' : capCount > 0 ? 'Regenerate captions' : 'Generate captions'}
+        </button>
+        {jobActive && jobMsg && <div style={css('margin-top:12px;font-size:12.5px;color:#b9b9c0;text-align:center')}>{jobMsg}</div>}
+        {capCount > 0 && !jobActive && (
+          <div style={css('margin-top:14px;display:flex;align-items:center;gap:10px;background:#17171b;border-radius:12px;padding:12px 14px')}>
+            <div style={css('flex:1;font-size:13px;color:#7ed957')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>
+            <button onClick={clearCaptions} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.14);color:#cfcfd4;font-family:inherit;font-size:13px;border-radius:9px;padding:8px 14px;cursor:pointer')}>Clear</button>
           </div>
         )}
-        <div style={css('margin-top:16px;font-size:12.5px;color:#686E7B;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle clips on a text track. Tap a line on the timeline to restyle it.' : 'Run Cut Lord (or transcribe) first to get a transcript, then generate captions.'}</div>
+        <div style={css('margin-top:16px;font-size:12.5px;color:#8f8f96;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle clips on a text track. Tap a line on the timeline to restyle it.' : 'Adds subtitle clips from your speech. If you’ve run Cut Lord it reuses that transcript — otherwise it transcribes first, then captions.'}</div>
       </div>
     </Sheet>
   )

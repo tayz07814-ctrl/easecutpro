@@ -13,6 +13,7 @@ import { findClip } from '@shared/timeline/model'
 import { framesToSeconds } from '@shared/timeline/time'
 import * as C from '@shared/timeline/commands'
 import { Icon, type IconName } from './Icon'
+import MobileCropModal from './MobileCropModal'
 
 const mnum = (v: unknown, d: number): number => (typeof v === 'number' ? v : d)
 
@@ -83,8 +84,9 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
     !clip ? 'none' : clip.kind === 'text' || clip.kind === 'title' ? 'text' : clip.kind === 'audio' ? 'audio' : 'video'
 
   const [panel, setPanel] = useState<string | null>(null)
+  const [cropOpen, setCropOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
-  useEffect(() => setPanel(null), [selId]) // reset the open child panel when selection changes
+  useEffect(() => { setPanel(null); setCropOpen(false) }, [selId]) // reset open panel / crop on selection change
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 1800)
@@ -107,7 +109,6 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
         <div className="mt-row mt-main">
           <Tool icon="edit" label="Edit" onClick={() => (mainClip ? engine?.select([mainClip.id]) : onImport())} />
           <Tool icon="music" label="Music" onClick={() => (onAddAudio ? onAddAudio() : soon('Music'))} />
-          <Tool icon="effect" label="Effect" onClick={() => soon('Effects')} />
           <Tool icon="text" label="Text" onClick={() => (onAddText ? onAddText() : onEditText())} />
           <Tool icon="scriptcut" label="ScriptCut" onClick={onCutlord} tint="accent" />
           <Tool icon="captions" label="Captions" onClick={() => (onCaptions ? onCaptions() : soon('Captions'))} />
@@ -155,18 +156,6 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
           <SliderRow label="Zoom start" value={mnum(m.ovZoomStart, 1)} min={1} max={4} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => void engine?.dispatch(C.setOverlayPlacement(clip.id, { ovZoomStart: v }))} />
           <SliderRow label="Zoom end" value={mnum(m.ovZoomEnd, 1)} min={1} max={4} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => void engine?.dispatch(C.setOverlayPlacement(clip.id, { ovZoomEnd: v }))} />
           <Chips options={[{ label: 'Reset', v: 1 }, { label: 'Punch in', v: 1.3 }]} value={mnum(m.ovZoomEnd, 1)} onPick={(v) => void engine?.dispatch(C.setOverlayPlacement(clip.id, { ovZoomStart: 1, ovZoomEnd: v }))} />
-        </>
-      )
-    } else if (panel === 'crop') {
-      title = 'Crop'
-      const cr = clip.crop
-      const setCrop = (p: { left?: number; right?: number; top?: number; bottom?: number }): void => void engine?.dispatch(C.setOverlayCrop(clip.id, p))
-      body = (
-        <>
-          <SliderRow label="Left" value={cr.left} min={0} max={0.9} step={0.01} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setCrop({ left: v })} />
-          <SliderRow label="Right" value={cr.right} min={0} max={0.9} step={0.01} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setCrop({ right: v })} />
-          <SliderRow label="Top" value={cr.top} min={0} max={0.9} step={0.01} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setCrop({ top: v })} />
-          <SliderRow label="Bottom" value={cr.bottom} min={0} max={0.9} step={0.01} fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setCrop({ bottom: v })} />
         </>
       )
     } else if (panel === 'adjust') {
@@ -273,6 +262,7 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
   return (
     <div className="mt-dock">
       {toastEl}
+      {cropOpen && <MobileCropModal clip={clip} onClose={() => setCropOpen(false)} />}
       {quick}
       <div className="mt-row">
         {collapse}
@@ -280,7 +270,7 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
         <Tool icon="split" label="Split" onClick={() => engine?.splitAtPlayhead()} />
         <Tool icon="animation" label="Animation" onClick={() => setPanel('animation')} />
         <Tool icon="upscaler" label="AI Upscaler" badge="OFF" onClick={() => soon('AI Upscaler')} tint="ai" />
-        <Tool icon="crop" label="Crop" onClick={() => setPanel('crop')} />
+        <Tool icon="crop" label="Crop" onClick={() => setCropOpen(true)} />
         <Tool icon="speed" label="Speed" onClick={() => setPanel('speed')} />
         <Tool icon="zoom" label="Zoom" onClick={() => setPanel('zoom')} />
         <Tool icon="adjust" label="Adjust" onClick={() => setPanel('adjust')} />

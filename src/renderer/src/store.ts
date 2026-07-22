@@ -837,7 +837,7 @@ interface AppState {
   removeText: (id: string) => void
   /** Captions tab: turn the transcript into styled subtitle TextClips (bottom-
    *  centre, one short line at a time). Replaces any previous caption batch. */
-  generateCaptions: () => void
+  generateCaptions: () => Promise<void>
   /** remove every auto-generated caption clip (leaves hand-added text). */
   clearCaptions: () => void
   selectText: (id: string | null) => void
@@ -3362,11 +3362,50 @@ export const useStore = create<AppState>((set, get) => ({
     })
   },
 
-  generateCaptions: () => {
-    const s = get()
-    const words = (s.project.transcript?.words ?? []).filter((w) => !w.deleted && w.text.trim())
+  generateCaptions: async () => {
+    // Prefer the transcript we already have (Cut Lord / Transcribe leaves it on
+    // project.transcript). If there is none, transcribe first — this sends the
+    // audio to AssemblyAI ONCE (the result is cached, so a later Cut Lord reuses
+    // it, and vice-versa). Doc-native bases (a clip dragged onto the timeline) are
+    // folded + persisted exactly like runRetakeCutBeta so captions work there too.
+    let words = (get().project.transcript?.words ?? []).filter((w) => !w.deleted && w.text.trim())
     if (!words.length) {
-      set({ job: { active: false, percent: 0, message: 'No transcript yet — run Find Retakes or Transcribe first, then generate captions.' } })
+      if (!get().requireServer('Captions')) return
+      const stored = get().project
+      const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+      const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
+      if (!hasBase) {
+        set({ job: { active: false, percent: 0, message: 'Import a video first, then generate captions.' } })
+        return
+      }
+      set({ job: { active: true, kind: 'transcribe', percent: 3, message: 'Getting your transcript…' } })
+      try {
+        const { transcribeBackend, openaiAvailable, whisperModel } = get()
+        const backend: TranscribeBackend = transcribeBackend === 'openai' && openaiAvailable ? 'openai' : 'local'
+        let path: string
+        if (isMultiBase(p0)) {
+          const combined = await window.api.combineClips(p0.baseSequence!, true)
+          path = combined.path
+        } else {
+          path = p0.media!.path
+        }
+        const transcript: Transcript = await window.api.transcribe(path, backend, backend === 'local' ? whisperModel || undefined : undefined)
+        const cur = get().project
+        const docBase = !cur.media && !!p0.baseSequence?.length
+        set({
+          project: docBase
+            ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript }
+            : { ...cur, transcript }
+        })
+        words = transcript.words.filter((w) => !w.deleted && w.text.trim())
+      } catch (e) {
+        ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Captions transcription failed', e)
+        set({ job: { active: false, percent: 0, message: IS_CLOUD ? 'Couldn’t get a transcript — please try again.' : `Transcription failed: ${(e as Error).message}` } })
+        return
+      }
+    }
+    if (!words.length) {
+      set({ job: { active: false, percent: 0, message: 'Nothing to caption.' } })
       return
     }
     // Group words into short caption lines: break on sentence-ending punctuation,

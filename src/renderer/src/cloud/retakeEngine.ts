@@ -36,6 +36,7 @@ import { retakeBetaVadSafetyOpts } from '@shared/retakeaware/silence'
 import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
 import { getSupabase, invokeEdge } from './supabase'
 import { extractSttAudio } from './audio'
+import { cachedTranscribe, getCachedTranscript, setCachedTranscript } from './transcriptCache'
 import { transcribeVerbatimCloud } from './stt'
 import { detectSilenceFloat32, vadSilenceRegions } from './vad'
 
@@ -102,8 +103,9 @@ export async function retakeAwareCutCloud(
   op(3, 'Getting your audio ready…')
   const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
 
-  // 2. verbatim transcription (AssemblyAI -> Deepgram); emits 8..49.
-  const { vt, warnings: tw } = await transcribeVerbatimCloud(audio, op)
+  // 2. verbatim transcription (AssemblyAI -> Deepgram); emits 8..49. Cached by
+  //    mediaId — a re-run reuses the transcript and skips the STT round-trip.
+  const { vt, warnings: tw } = await cachedTranscribe(mediaId, audio, op)
   warnings.push(...tw)
 
   // 3. VAD safety scan (Retake β's own profile) — ONE pass, reused for the Opus
@@ -247,8 +249,9 @@ export async function ultracutCutCloud(
   op(3, 'Getting your audio ready…')
   const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
 
-  // 2. verbatim transcription (AssemblyAI -> Deepgram); emits 8..49.
-  const { vt, warnings: tw } = await transcribeVerbatimCloud(audio, op)
+  // 2. verbatim transcription (AssemblyAI -> Deepgram); emits 8..49. Cached by
+  //    mediaId — a re-run reuses the transcript and skips the STT round-trip.
+  const { vt, warnings: tw } = await cachedTranscribe(mediaId, audio, op)
   warnings.push(...tw)
 
   // 3. VAD safety scan (same profile as Retake β) — reused for the payload's
@@ -369,8 +372,15 @@ export async function transcribeCloud(
   onProgress?: (pct: number, msg?: string) => void
 ): Promise<Transcript> {
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
+  // Cache hit → return immediately without decoding audio or calling STT again.
+  const cached = getCachedTranscript(mediaId)
+  if (cached) {
+    op(100, 'Reusing transcript…')
+    return toAppTranscript(cached.vt)
+  }
   op(3, 'Extracting audio…')
   const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
-  const { vt } = await transcribeVerbatimCloud(audio, op)
-  return toAppTranscript(vt)
+  const r = await transcribeVerbatimCloud(audio, op)
+  setCachedTranscript(mediaId, r)
+  return toAppTranscript(r.vt)
 }
