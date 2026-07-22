@@ -74,6 +74,28 @@ function pickFolder(): Promise<File[]> {
   })
 }
 
+/** In the bundled native app, the Android picker hands back a File backed by a
+ *  transient `content://` URI whose read permission is revoked shortly after the
+ *  pick — so a LATER read (waveform/video decode) fails with "the requested file
+ *  could not be read". Copy the bytes into a stable in-memory File NOW, while the
+ *  grant is still valid, and use that. Desktop/web Files stay readable, so we skip
+ *  the (memory-heavy) copy there. */
+async function stableFile(f: File): Promise<File> {
+  if (import.meta.env.VITE_CAPACITOR !== '1') return f
+  try {
+    const buf = await f.arrayBuffer()
+    return new File([buf], f.name, { type: f.type, lastModified: f.lastModified })
+  } catch {
+    return f // fall back to the original reference
+  }
+}
+
+async function registerPicked(files: File[]): Promise<{ path: string; name: string }[]> {
+  const out: { path: string; name: string }[] = []
+  for (const f of files) out.push({ path: registerLocalFile(await stableFile(f)), name: f.name })
+  return out
+}
+
 function triggerDownload(url: string, name: string): void {
   const a = document.createElement('a')
   a.href = url
@@ -111,22 +133,22 @@ const cloudApi: Window['api'] & {
   // straight to storage; audio has its own picker (openAudioDialogMulti below).
   openMediaDialog: async () => {
     const f = await pickFile('video/*,image/*')
-    return f ? registerLocalFile(f) : null
+    return f ? registerLocalFile(await stableFile(f)) : null
   },
   openMediaDialogMulti: async () => {
     const files = await pickFiles('video/*,image/*')
-    return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
+    return registerPicked(files)
   },
   // Audio import (music / voiceover) — opens files/storage, not the gallery.
   openAudioDialogMulti: async () => {
     const files = await pickFiles('audio/*')
-    return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
+    return registerPicked(files)
   },
   importFolder: async () => {
     const MEDIA_RE = /\.(mp4|mov|mkv|webm|avi|m4v|mp3|wav|m4a|aac|png|jpe?g|webp|gif|bmp)$/i
     const files = (await pickFolder()).filter((f) => MEDIA_RE.test(f.name))
     files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
-    return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
+    return registerPicked(files)
   },
 
   // Montage: the Cut Lord flows all pass audioOnly=true and only need the base
