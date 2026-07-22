@@ -15,6 +15,7 @@ import androidx.media3.transformer.EditedMediaItem;
 import androidx.media3.transformer.EditedMediaItemSequence;
 import androidx.media3.transformer.ExportException;
 import androidx.media3.transformer.ExportResult;
+import androidx.media3.transformer.ProgressHolder;
 import androidx.media3.transformer.Transformer;
 
 import com.getcapacitor.JSArray;
@@ -103,10 +104,18 @@ public class EcNativeExportPlugin extends Plugin {
                     EditedMediaItemSequence sequence = new EditedMediaItemSequence(items);
                     Composition composition = new Composition.Builder(sequence).build();
 
+                    // Poll Transformer progress on the main thread and stream it to JS so
+                    // the export bar actually moves (Media3 has no progress callback).
+                    final android.os.Handler pollHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+                    final Transformer[] holder = new Transformer[1];
+                    final ProgressHolder progressHolder = new ProgressHolder();
+                    final Runnable[] pollRef = new Runnable[1];
+
                     Transformer transformer = new Transformer.Builder(getContext())
                             .addListener(new Transformer.Listener() {
                                 @Override
                                 public void onCompleted(Composition composition, ExportResult result) {
+                                    pollHandler.removeCallbacksAndMessages(null);
                                     JSObject ret = new JSObject();
                                     ret.put("path", out.getAbsolutePath());
                                     ret.put("durationMs", result.durationMs);
@@ -123,12 +132,32 @@ public class EcNativeExportPlugin extends Plugin {
 
                                 @Override
                                 public void onError(Composition composition, ExportResult result, ExportException exception) {
+                                    pollHandler.removeCallbacksAndMessages(null);
                                     call.reject("Export failed: " + exception.getMessage(), exception);
                                 }
                             })
                             .build();
+                    holder[0] = transformer;
+
+                    pollRef[0] = new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                int state = holder[0].getProgress(progressHolder);
+                                if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                                    JSObject ev = new JSObject();
+                                    ev.put("percent", progressHolder.progress);
+                                    notifyListeners("nativeExportProgress", ev);
+                                }
+                            } catch (Exception ignore) {
+                                // getProgress can throw if called after release — ignore.
+                            }
+                            pollHandler.postDelayed(pollRef[0], 250);
+                        }
+                    };
 
                     transformer.start(composition, out.getAbsolutePath());
+                    pollHandler.postDelayed(pollRef[0], 250);
                 } catch (Exception e) {
                     call.reject("Export could not start: " + e.getMessage(), e);
                 }

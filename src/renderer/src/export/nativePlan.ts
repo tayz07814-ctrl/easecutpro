@@ -82,7 +82,10 @@ export async function tryNativeCutExport(
   if (!(await nativeExportReady())) return null
 
   onProgress(3, 'Exporting with native codecs…')
-  const res = await nativeExport(segments, filename)
+  // Map the native encoder's 0–100 onto 3–99 so the bar animates during the encode.
+  const res = await nativeExport(segments, filename, (p) =>
+    onProgress(Math.max(3, Math.min(99, 3 + Math.round(p * 0.96))), 'Exporting with native codecs…')
+  )
   onProgress(100, res.savedTo ? `Saved to ${res.savedTo}` : 'Export complete')
   return { savedTo: res.savedTo, path: res.path }
 }

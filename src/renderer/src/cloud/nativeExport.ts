@@ -21,9 +21,17 @@ export interface NativeExportResult {
   durationMs?: number
 }
 
+interface PluginListenerHandle {
+  remove: () => void | Promise<void>
+}
+
 interface EcNativeExportPlugin {
   ping(): Promise<{ ok: boolean }>
   export(opts: { segments: NativeSegment[]; filename?: string }): Promise<NativeExportResult>
+  addListener?(
+    eventName: 'nativeExportProgress',
+    cb: (data: { percent: number }) => void
+  ): Promise<PluginListenerHandle> | PluginListenerHandle
 }
 
 interface CapGlobal {
@@ -53,12 +61,33 @@ export async function nativeExportReady(): Promise<boolean> {
 }
 
 /** Run a native hardware-codec trim+concat export. Resolves with the output path
- *  and the gallery location it was saved to. */
+ *  and the gallery location it was saved to. `onProgress` (0–100) streams the
+ *  Media3 encode progress so the export bar moves; it's best-effort (skipped if
+ *  the platform doesn't deliver events). */
 export async function nativeExport(
   segments: NativeSegment[],
-  filename?: string
+  filename?: string,
+  onProgress?: (percent: number) => void
 ): Promise<NativeExportResult> {
   const plug = cap()?.Plugins?.EcNativeExport
   if (!plug) throw new Error('native export is not available on this platform')
-  return plug.export({ segments, filename })
+  let handle: PluginListenerHandle | undefined
+  if (onProgress && typeof plug.addListener === 'function') {
+    try {
+      handle = await plug.addListener('nativeExportProgress', (d) =>
+        onProgress(Math.max(0, Math.min(100, Math.round(d?.percent ?? 0))))
+      )
+    } catch {
+      /* no progress events on this platform — the export still runs */
+    }
+  }
+  try {
+    return await plug.export({ segments, filename })
+  } finally {
+    try {
+      await handle?.remove()
+    } catch {
+      /* listener already gone */
+    }
+  }
 }
