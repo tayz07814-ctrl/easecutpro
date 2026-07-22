@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **03602a6** (Android offline app: import byte-copy fix for revoked content:// reads; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **045fc82** (native export engine — Media3 Transformer plugin, compiles + ships; import byte-copy fix for revoked content:// reads `03602a6`; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -350,10 +350,20 @@ On-device: **import didn't open the gallery** and **no permission prompt**. Two 
   stay readable) skip the memory copy. This is effectively the web-side "own the bytes" bridge. Caveat: holds
   the clip in memory → a huge 4K file could pressure low-RAM devices; if that bites, move to a
   Filesystem/IDB-backed streaming copy. Run `29963083280`→v5 (`03602a6`) GREEN.
-- **Native track (agreed with user, NOT started):** true native ExoPlayer player + Media3/MediaCodec export.
-  Hard prerequisite first — the app keeps imported media as **browser blobs** the native side can't read; a
-  native file-URI bridge (native picker + `convertFileSrc`) must land before any native player/exporter.
-  Plan is incremental + device-tested per step (perms ✓ → file bridge → native export → native player); do
-  NOT big-bang untested native code. Waiting on the user to confirm this perms/import APK works first.
+- **Native track — STARTED (user said go). Increments, each device-tested:**
+  - **Step 1 ✅ (`045fc82`) — native export ENGINE compiles + ships.** `EcNativeExportPlugin.java` (Capacitor
+    plugin) uses **Media3 Transformer 1.4.1** (`media3-transformer/effect/common` added to `app/build.gradle`)
+    to trim + concatenate source segments with hardware codecs → MP4. Registered in `MainActivity`
+    (`registerPlugin(EcNativeExportPlugin.class)`); `ping()` for detection + `export({segments})`. Runs on the
+    UI thread (Transformer owns a Looper); `@OptIn(UnstableApi)`. JS bridge `cloud/nativeExport.ts`
+    (`hasNativeExport`/`nativeExportReady`/`nativeExport`). **Compiles GREEN in CI** (run `29965099691` v6) —
+    it's in the APK but NOT wired to the Export button yet.
+  - **Step 2 (next) — native file bridge.** The engine needs a real path/URI; imports are in-memory blobs
+    (`stableFile`). Persist imports to app storage (Capacitor Filesystem) or a native persistable-URI picker,
+    expose the path, and use `convertFileSrc` for the WebView preview.
+  - **Step 3 — wire Export:** for cut-only base projects (no text/overlay/speed/KenBurns) route Export →
+    `nativeExport`; else keep WebCodecs. Return the output file to the user (save/share).
+  - **Step 4 — native player** (ExoPlayer surface composited under the HTML text/overlay layers) — hardest,
+    last. v1 native export is TRIM+CONCAT only; effects stay on the WebCodecs path.
 - **NOTE for whoever merges 0.01 → main:** `main` already has the newer `openPicker` in `cloud/api.ts`; the
   `main`-side conflict is only the accept types + `openAudioDialogMulti` (0.01 additions).
