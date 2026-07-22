@@ -71,7 +71,10 @@ export function addDocTexts(items: DocTextSpec[], select = false): string[] {
       name: it.caption ? 'Caption' : 'Text',
       start: secondsToFrames(it.startS, tb),
       duration: secondsToFrames(Math.max(0.3, it.endS - it.startS), tb),
-      text: { ...defaultTextContent(), ...it.content }
+      // it.text is the actual string (caption line / "Your text"); it.content is
+      // styling only. Previously it.text was dropped, so every caption rendered
+      // the default "Your text" — force it.text to win over the default.
+      text: { ...defaultTextContent(), ...it.content, text: it.text }
     })
     clip.transform = {
       ...clip.transform,

@@ -3,7 +3,7 @@
 // -thirds grid + dimmed surround) and centred aspect-ratio presets. The engine's
 // crop is inset-based (left/right/top/bottom fractions of the source), so the box
 // maps straight onto it — Confirm dispatches setOverlayCrop, Cancel just closes.
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getSharedEngine } from '../../timelineEngine'
 import { useStore } from '../../store'
@@ -27,12 +27,32 @@ const clamp01 = (v: number): number => Math.max(0, Math.min(1, v))
 export default function MobileCropModal({ clip, onClose }: { clip: Clip; onClose: () => void }): JSX.Element {
   const library = useStore((s) => s.library)
   const srcAspect = clip.srcW && clip.srcH ? clip.srcW / clip.srcH : 9 / 16
-  // Backdrop: the clip's own library thumbnail if we can match it, else any
-  // video/image thumbnail (a reference frame). The crop maths work regardless.
-  const thumb =
+  // Backdrop: start with the clip's library thumbnail (instant, if we can match
+  // it), then decode a REAL frame near the clip's in-point via the same thumbnail
+  // path the timeline filmstrip uses — that always produces a frame even when the
+  // library has no matching entry (which is why it was showing all-black).
+  const libThumb =
     library.find((it) => it.path === clip.sourcePath)?.thumb ??
     library.find((it) => it.kind === 'video' || it.kind === 'image')?.thumb ??
     null
+  const [thumb, setThumb] = useState<string | null>(libThumb)
+  useEffect(() => {
+    if (!clip.sourcePath) return
+    let alive = true
+    const interval = Math.max(2, Math.round(clip.sourceOut - clip.sourceIn) || 2)
+    void window.api
+      .thumbnails(clip.sourcePath, interval)
+      .then((frames) => {
+        if (!alive || !frames?.length) return
+        const best = frames.reduce((a, b) => (Math.abs(b.time - clip.sourceIn) < Math.abs(a.time - clip.sourceIn) ? b : a))
+        setThumb(best.url)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const [box, setBox] = useState<Box>({ l: clip.crop.left, r: clip.crop.right, t: clip.crop.top, b: clip.crop.bottom })
   const [preset, setPreset] = useState<string>('Free')
