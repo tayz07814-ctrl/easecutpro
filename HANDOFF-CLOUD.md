@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **febe44f** (base-video crop + caption size; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **90661d8** (timeline theme + Cut Lord label; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -181,3 +181,22 @@ Fixes from the first on-device test of the crop/captions batch.
   from these commits — prewarm already reverted, scrub-adoption + paused-seek code intact. It's the phone
   HW decoder stalling on the seek (low battery worsens it). NOT changing the player blind again — needs a
   charged-device repro / on-screen decoder debug readout before any code change.
+
+### Mobile timeline theme + "Cut Lord" label (0.01 only — `90661d8`) — VISUAL ONLY, mobile-scoped
+Purple-theming the mobile timeline to match the app, plus the tool rename. **No behaviour change**; every
+geometry helper is scoped to `MobileTimeline` so the shared desktop timeline is byte-for-byte the same.
+Files: `components/mobile/MobileTools.tsx`, `components/timeline/{WaveformCanvas,MobileTimeline}.tsx`,
+`components/timeline/timeline.css`.
+- **"ScriptCut" → "Cut Lord"** as the tool label (`MobileTools`); the handler/sheet were already Cut Lord.
+- **Track background follows the purple theme** (was sea-green teal `#2f8f9d`): base + overlay clips now
+  render dark-purple `#312a52` via a mobile-only `mTrackColor(kind)` (non-video kinds keep `TRACK_COLOR`).
+- **Waveform = thin bright-purple bars on a grey-dark band.** `WaveformCanvas` gained optional
+  `colors/barW/step` props **defaulting to the desktop teal gradient** (desktop untouched); `MobileTimeline`
+  passes `WAVE_PURPLE` (bright `#c4b5fd`/`#a78bfa`) + `barW 1.4` + `step 3`. The wave band background is
+  `#202127` (grey-dark) with a faint top hairline (`.ec-mtl-wave` in timeline.css).
+- **Trim handles = white thick bars with a black grip.** `.ec-mtl-handle::before` is a full-height white
+  bar (`#fff`, radius 4); `.ec-mtl-handle::after` is a short black grip (`#141414`) centred on it.
+- **Base + overlay lanes 20% shorter.** `mLaneHeight(t)` = `round(laneHeight(t)*0.8)` for video kinds only,
+  scoped to `MobileTimeline` (shared `laneHeight` unchanged → desktop lanes are the same height).
+- Verified: typecheck + `build:cloud` green; Chromium static mock confirmed the white-bar/black-grip trims
+  render. NOT on-device tested — needs a live check on `easecut0.01`.
