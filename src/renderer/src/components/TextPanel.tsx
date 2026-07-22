@@ -20,7 +20,7 @@ function defaultTextContent(): TextContent {
     underline: false,
     strokeWidth: 0.06,
     strokeColor: '#000000',
-    background: { enabled: false, color: '#000000', opacity: 0.6, radius: 0.3, padding: 0.3 },
+    background: { enabled: false, color: '#000000', opacity: 1, radius: 0.3, padding: 0.3 },
     shadow: { enabled: false, color: '#000000', blur: 0, dx: 0, dy: 0 },
     letterSpacing: 0,
     lineHeight: 1.2

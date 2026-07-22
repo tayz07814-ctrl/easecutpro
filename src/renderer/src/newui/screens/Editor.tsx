@@ -414,7 +414,7 @@ function CaptionsTab(): JSX.Element {
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 16px')}>
       <div style={css('font-size:10px;font-weight:700;letter-spacing:.08em;color:#686E7B;text-transform:uppercase;margin-bottom:10px')}>Auto captions</div>
-      <button onClick={generateCaptions} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;box-shadow:0 6px 18px rgba(110,106,232,.3);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>Generate captions</button>
+      <button onClick={() => void generateCaptions()} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;box-shadow:0 6px 18px rgba(110,106,232,.3);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>Generate captions</button>
       {capCount > 0 && (
         <div style={css('margin-top:10px;display:flex;align-items:center;gap:8px')}>
           <div style={css('flex:1;font-size:12px;color:#7FCBA8')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>

@@ -266,7 +266,6 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
       {quick}
       <div className="mt-row">
         {collapse}
-        <Tool icon="duration" label="Duration" onClick={() => setPanel('duration')} />
         <Tool icon="split" label="Split" onClick={() => engine?.splitAtPlayhead()} />
         <Tool icon="animation" label="Animation" onClick={() => setPanel('animation')} />
         <Tool icon="upscaler" label="AI Upscaler" badge="OFF" onClick={() => soon('AI Upscaler')} tint="ai" />

@@ -11,11 +11,14 @@ import { secondsToFrames } from '@shared/timeline/time'
 import * as C from '@shared/timeline/commands'
 import type { Command } from '@shared/timeline/commands'
 import type { TextContent, TimelineDocument } from '@shared/timeline/types'
+import { getDefaultFont } from './customFonts'
 
 export function defaultTextContent(): TextContent {
   return {
     text: 'Your text',
-    fontFamily: 'Arial Black',
+    // Honour the user's uploaded default font (falls back to the built-in) so new
+    // text AND captions pick it up automatically.
+    fontFamily: getDefaultFont() || 'Arial Black',
     fontSize: 0.08,
     color: '#ffffff',
     align: 'center',
@@ -24,7 +27,7 @@ export function defaultTextContent(): TextContent {
     underline: false,
     strokeWidth: 0.06,
     strokeColor: '#000000',
-    background: { enabled: false, color: '#000000', opacity: 0.6, radius: 0.3, padding: 0.3 },
+    background: { enabled: false, color: '#000000', opacity: 1, radius: 0.3, padding: 0.3 },
     shadow: { enabled: false, color: '#000000', blur: 0, dx: 0, dy: 0 },
     letterSpacing: 0,
     lineHeight: 1.2

@@ -63,6 +63,18 @@ const CP: Record<IconName, number> = {
 }
 
 export function Icon({ name, size = 22, fill = false }: { name: IconName; size?: number; fill?: boolean }): JSX.Element {
+  // Split gets a bespoke `]|[` mark (CapCut-style: two brackets facing a centre
+  // cut line) instead of a Material glyph — drawn as an SVG so it stays crisp and
+  // inherits the button's text colour via currentColor.
+  if (name === 'split') {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={{ display: 'block' }}>
+        <path d="M7 5 h3 v14 h-3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M12 3 v18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="2.6 2.4" />
+        <path d="M17 5 h-3 v14 h3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  }
   return (
     <span className={'ec-msym' + (fill ? ' fill' : '')} style={{ fontSize: size }} aria-hidden>
       {String.fromCodePoint(CP[name])}

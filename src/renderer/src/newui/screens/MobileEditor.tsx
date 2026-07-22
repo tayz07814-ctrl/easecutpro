@@ -7,7 +7,7 @@ import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../../components/timeline/TimelinePanel'
 import { MobileTools } from '../../components/mobile/MobileTools'
 import { Icon } from '../../components/mobile/Icon'
-import TextPanel from '../../components/TextPanel'
+import MobileTextPanel from '../../components/mobile/MobileTextPanel'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import MobileExportDrawer from '../../components/mobile/MobileExportDrawer'
@@ -16,6 +16,8 @@ import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { primePlayback } from '../../clock'
 import { addMediaToTimeline } from '../../timelineAdd'
 import { addDocTexts, countCaptionTexts } from '../../docTextClips'
+import { loadStoredFonts } from '../../customFonts'
+import { CAPTION_STYLES, DEFAULT_CAPTION_STYLE } from '../../captionStyles'
 
 // Mobile layout for the new UI editor. Same chassis the proven legacy MobileApp
 // uses — a FIXED, user-resizable stage (so the timeline never drifts), the
@@ -136,10 +138,28 @@ function CaptionsSheet({ onClose }: { onClose: () => void }): JSX.Element {
   const jobMsg = useStore((s) => s.job.message)
   const snap = useSharedEngineSnapshot()
   const capCount = countCaptionTexts(snap?.doc)
+  const [style, setStyle] = useState<string>(DEFAULT_CAPTION_STYLE)
   return (
     <Sheet onClose={onClose} header={<div style={css('flex:none;padding:6px 16px 12px;font-size:15px;font-weight:650')}>Captions</div>}>
       <div style={css('flex:1;min-height:0;overflow:auto;padding:2px 16px 20px')}>
-        <button onClick={() => void generateCaptions()} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(100deg,#7c5cff,#a468ff);border:none;color:#fff;font-family:inherit;font-size:14px;font-weight:700;border-radius:12px;padding:14px 0;box-shadow:0 6px 18px rgba(140,92,255,.32);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>
+        <div style={css('font-size:11.5px;font-weight:650;color:#8f8f96;letter-spacing:.3px;text-transform:uppercase;margin-bottom:9px')}>Style</div>
+        <div style={css('display:flex;gap:10px;margin-bottom:16px')}>
+          {CAPTION_STYLES.map((s) => {
+            const on = style === s.id
+            return (
+              <button key={s.id} onClick={() => setStyle(s.id)}
+                style={css(`flex:1;text-align:left;border-radius:13px;padding:12px 13px;cursor:pointer;background:${on ? 'rgba(124,92,255,.14)' : '#17171b'};border:1px solid ${on ? 'rgba(124,92,255,.55)' : 'rgba(255,255,255,.07)'}`)}>
+                {/* mini preview of the look */}
+                <div style={css(`height:34px;border-radius:8px;display:grid;place-items:center;margin-bottom:9px;background:${s.id === 'boxed' ? '#000' : 'linear-gradient(135deg,#2a2a33,#1b1b22)'}`)}>
+                  <span style={css(`font-size:14px;font-weight:800;color:#fff;${s.id === 'clean' ? '-webkit-text-stroke:1px #000;text-shadow:0 1px 2px rgba(0,0,0,.9)' : s.id === 'boxed' ? 'background:#000;padding:1px 7px;border-radius:3px' : ''}`)}>Aa</span>
+                </div>
+                <div style={css(`font-size:13px;font-weight:650;color:${on ? '#c9b8ff' : '#e7e7ea'}`)}>{s.label}</div>
+                <div style={css('font-size:11px;color:#8f8f96;margin-top:2px')}>{s.hint}</div>
+              </button>
+            )
+          })}
+        </div>
+        <button onClick={() => void generateCaptions(style)} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(100deg,#7c5cff,#a468ff);border:none;color:#fff;font-family:inherit;font-size:14px;font-weight:700;border-radius:12px;padding:14px 0;box-shadow:0 6px 18px rgba(140,92,255,.32);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>
           <Icon name="captions" size={19} /> {jobActive ? 'Working…' : capCount > 0 ? 'Regenerate captions' : 'Generate captions'}
         </button>
         {jobActive && jobMsg && <div style={css('margin-top:12px;font-size:12.5px;color:#b9b9c0;text-align:center')}>{jobMsg}</div>}
@@ -190,6 +210,10 @@ export default function MobileEditor(): JSX.Element {
     addDocTexts([{ text: 'Your text', startS: ph, endS: ph + 3 }], true)
     setSheet('text')
   }
+
+  // Register any user-uploaded fonts (+ the chosen default) so they render in the
+  // preview and canvas-baked export after a reload.
+  useEffect(() => { void loadStoredFonts() }, [])
 
   // The mobile timeline's empty-lane "＋ Add text / Add music" buttons dispatch
   // ec:sheet — the legacy MobileApp listened for it but this new-UI editor did
@@ -306,9 +330,7 @@ export default function MobileEditor(): JSX.Element {
       {sheet === 'captions' && <CaptionsSheet onClose={() => setSheet(null)} />}
       {sheet === 'text' && (
         <Sheet onClose={() => setSheet(null)} header={<div style={css('flex:none;padding:6px 16px 12px;font-size:15px;font-weight:650')}>Text</div>}>
-          <div className="ec-legacy" style={css('flex:1;min-height:0;overflow:auto;padding:0 14px 16px')}>
-            <TextPanel />
-          </div>
+          <MobileTextPanel />
         </Sheet>
       )}
       <SilenceSettingsModal />

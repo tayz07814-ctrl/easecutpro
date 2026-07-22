@@ -31,6 +31,7 @@ import type { Command } from '@shared/timeline/commands'
 import { getSharedEngine } from './timelineEngine'
 import { docSourceToEdited } from './docTime'
 import { addDocTexts, removeCaptionTexts } from './docTextClips'
+import { captionStyleContent } from './captionStyles'
 import { insertLibraryItemAtPlayhead } from './timelineInsert'
 import { exportOnDevice } from './export/localExport'
 import { renderTextPng } from './textRender'
@@ -836,8 +837,9 @@ interface AppState {
   updateText: (id: string, patch: Partial<TextClip>) => void
   removeText: (id: string) => void
   /** Captions tab: turn the transcript into styled subtitle TextClips (bottom-
-   *  centre, one short line at a time). Replaces any previous caption batch. */
-  generateCaptions: () => Promise<void>
+   *  centre, one short line at a time). Replaces any previous caption batch.
+   *  `styleId` picks a caption look preset (see captionStyles.ts). */
+  generateCaptions: (styleId?: string) => Promise<void>
   /** remove every auto-generated caption clip (leaves hand-added text). */
   clearCaptions: () => void
   selectText: (id: string | null) => void
@@ -3362,7 +3364,7 @@ export const useStore = create<AppState>((set, get) => ({
     })
   },
 
-  generateCaptions: async () => {
+  generateCaptions: async (styleId?: string) => {
     // Prefer the transcript we already have (Cut Lord / Transcribe leaves it on
     // project.transcript). If there is none, transcribe first — this sends the
     // audio to AssemblyAI ONCE (the result is cached, so a later Cut Lord reuses
@@ -3446,7 +3448,7 @@ export const useStore = create<AppState>((set, get) => ({
         x: 0.5,
         y: 0.85,
         caption: true,
-        content: { bold: true, fontSize: 0.0233, strokeWidth: 0.09, strokeColor: '#000000', color: '#ffffff' } /* size ~7 on the editor scale */
+        content: captionStyleContent(styleId) /* Clean (outline) or Boxed (bar); size ~7 on the editor scale */
       }
     })
     addDocTexts(specs)
