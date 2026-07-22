@@ -1,0 +1,85 @@
+name: Android test APK (0.01)
+
+# Builds an installable DEBUG Android APK that wraps the live 0.01 web preview
+# (server.url in capacitor.config.ts) in a fullscreen Capacitor WebView. The APK
+# is published as a workflow artifact AND attached to a prerelease so it can be
+# downloaded straight onto a phone. Debug-signed → installable from "unknown
+# sources"; no Play Store / keystore setup needed.
+#
+# Triggered manually, or automatically when the wrapper (config / splash / this
+# workflow) changes on easecut0.01. The APK just loads the live preview, so it
+# does NOT need rebuilding for ordinary app changes — only when the shell changes.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [easecut0.01]
+    paths:
+      - 'capacitor.config.ts'
+      - 'capacitor-www/**'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Locate APK
+        id: apk
+        run: |
+          APK=$(find android/app/build/outputs/apk/debug -name '*.apk' | head -1)
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "Built: $APK"
+          ls -la "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: easecutpro-0.01-debug-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Publish to prerelease (download link)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-apk-0.01
+          name: EaseCutPro 0.01 — Android test APK
+          prerelease: true
+          body: |
+            Debug APK that wraps the live **0.01 web preview** in a fullscreen Android app.
+
+            - Install: download `app-debug.apk` below on your phone, then open it
+              (allow "install from unknown sources" if prompted).
+            - It loads the live preview, so it always reflects the latest deployed
+              0.01 build — no need to reinstall after app changes.
+            - It runs in Android's WebView (Chromium), so the video engine behaves
+              like Chrome on the phone. Requires a network connection.
+          files: ${{ steps.apk.outputs.path }}

@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <title>EaseCutPro</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0b0b0d; color: #e7e7ea;
+        font-family: -apple-system, system-ui, sans-serif; }
+      .wrap { position: fixed; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 18px; text-align: center; padding: 24px; }
+      .logo { font-size: 22px; font-weight: 800; letter-spacing: .3px;
+        background: linear-gradient(100deg, #7c5cff, #a468ff); -webkit-background-clip: text;
+        background-clip: text; color: transparent; }
+      .spin { width: 34px; height: 34px; border-radius: 50%;
+        border: 3px solid rgba(255,255,255,.14); border-top-color: #8c5cff; animation: s .8s linear infinite; }
+      @keyframes s { to { transform: rotate(360deg); } }
+      .note { font-size: 12.5px; color: #8f8f96; line-height: 1.6; max-width: 260px; }
+    </style>
+  </head>
+  <body>
+    <!-- This page is only the boot splash. In test-APK mode Capacitor immediately
+         navigates to the live 0.01 preview (server.url in capacitor.config.ts);
+         this shows only briefly, or if the device is offline. -->
+    <div class="wrap">
+      <div class="logo">EaseCutPro</div>
+      <div class="spin"></div>
+      <div class="note">Loading the editor… If this stays, check your connection.</div>
+    </div>
+  </body>
+</html>
