@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **0662f2f** (Android offline app: import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **03602a6** (Android offline app: import byte-copy fix for revoked content:// reads; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -341,6 +341,15 @@ On-device: **import didn't open the gallery** and **no permission prompt**. Two 
 - The workflow's push-paths filter only watches the wrapper files, so an app/manifest fix needs a `# rebuild
   marker: vN` bump in `android-apk.yml` to trigger CI (or manual dispatch). Both runs GREEN (`29963083280`,
   `29963083280`→v4); APK republished at tag `android-apk-0.01`.
+- **`03602a6` — "Waveform decode failed / the requested file could not be read".** On-device the import
+  *added* the clip but decode failed: the Android picker's `File` is backed by a transient `content://` URI
+  whose read grant is revoked shortly after the pick, so the LATER waveform/video decode (`rec.file.
+  arrayBuffer()`) threw `NotReadableError`. Fix: `cloud/api.ts` `stableFile()` copies the bytes into an
+  in-memory `File` **at import time** (while the grant is valid) — `new File([await f.arrayBuffer()], …)` —
+  and `registerPicked()` runs every picked file through it. Gated on `VITE_CAPACITOR` so desktop/web (Files
+  stay readable) skip the memory copy. This is effectively the web-side "own the bytes" bridge. Caveat: holds
+  the clip in memory → a huge 4K file could pressure low-RAM devices; if that bites, move to a
+  Filesystem/IDB-backed streaming copy. Run `29963083280`→v5 (`03602a6`) GREEN.
 - **Native track (agreed with user, NOT started):** true native ExoPlayer player + Media3/MediaCodec export.
   Hard prerequisite first — the app keeps imported media as **browser blobs** the native side can't read; a
   native file-URI bridge (native picker + `convertFileSrc`) must land before any native player/exporter.
