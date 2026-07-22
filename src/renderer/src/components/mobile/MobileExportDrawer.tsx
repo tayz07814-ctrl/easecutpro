@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { probeEncodeCaps, whyNotLocal, planFromDoc, type EncodeCaps } from '../../export/localExport'
 import { useSharedEngineSnapshot } from '../../timelineEngine'
 import { useStore } from '../../store'
+import { Icon } from './Icon'
 
 const RES = [
   { label: '480p', short: 480, tag: 'Data Saver' },
@@ -24,14 +25,29 @@ const RATE = [
   { label: 'High', f: 1.6 }
 ]
 
-/** A discrete slider with clickable tick labels underneath. */
+/** A discrete slider — custom green track with a white-circle thumb + clickable
+ *  tick stops and labels (matches the design). Same {stops, idx, onIdx} API. */
 function StopSlider({ stops, idx, onIdx }: { stops: string[]; idx: number; onIdx: (i: number) => void }): JSX.Element {
+  const n = Math.max(1, stops.length - 1)
+  const pct = (idx / n) * 100
   return (
     <div className="mx-slider">
-      <input type="range" min={0} max={stops.length - 1} step={1} value={idx} onChange={(e) => onIdx(Number(e.target.value))} />
+      <div className="mx-track">
+        <div className="mx-track-bg" />
+        <div className="mx-track-fill" style={{ width: `${pct}%` }} />
+        {stops.map((s, i) => {
+          const left = (i / n) * 100
+          return (
+            <div key={s} className="mx-stop" style={{ left: `${left}%` }} onClick={() => onIdx(i)}>
+              <span className="mx-stop-tick" style={{ background: left <= pct ? '#7ed957' : '#3a3a40' }} />
+            </div>
+          )
+        })}
+        <div className="mx-thumb" style={{ left: `${pct}%` }} />
+      </div>
       <div className="mx-ticks">
         {stops.map((s, i) => (
-          <span key={s} className={'mx-tick' + (i === idx ? ' on' : '')} onClick={() => onIdx(i)}>{s}</span>
+          <span key={s} className={'mx-tick' + (i === idx ? ' on' : '')} style={{ left: `${(i / n) * 100}%` }} onClick={() => onIdx(i)}>{s}</span>
         ))}
       </div>
     </div>
@@ -101,7 +117,7 @@ export default function MobileExportDrawer(): JSX.Element | null {
         <div className="mx-head">
           <button className="mx-x" onClick={() => close(false)}>✕</button>
           <div className="mx-grow" />
-          <span className="mx-respill">{RES[resI].label}</span>
+          <span className="mx-respill">{RES[resI].label}<Icon name="chevronDown" size={16} /></span>
           <button className="mx-export" disabled={!canExport} onClick={run}>Export</button>
         </div>
 

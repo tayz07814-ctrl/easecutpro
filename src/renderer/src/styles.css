@@ -867,6 +867,34 @@ button.small { font-size: 11px; padding: 3px 8px; }
 .m-add-menu button:active { background: var(--bg3); }
 .m-add-menu button svg { color: var(--muted, #9aa3b2); flex: 0 0 auto; }
 
+/* ===== 0.01 mobile reskin (EaseCut Editor design) — visual only ===== */
+/* Material Symbols Outlined, self-hosted 17 KB codepoint subset (no CDN / no CSP
+   change; served same-origin). Drives the mobile Icon component. */
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('./newui/fonts/MaterialSymbols-subset.woff2') format('woff2');
+}
+.ec-msym {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal; font-style: normal; line-height: 1;
+  letter-spacing: normal; text-transform: none; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center;
+  direction: ltr; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'opsz' 24;
+}
+.ec-msym.fill { font-variation-settings: 'FILL' 1, 'wght' 400, 'opsz' 24; }
+
+/* Design accent (purple) scoped to the mobile editor only — desktop and every
+   other view keep the global blue theme. The mt- and mx- rules below layer the
+   exact design tile, pill and gradient colours on top. */
+.ec-m-editor {
+  --grad: linear-gradient(100deg, #7c5cff, #a468ff);
+  --accent: #a468ff;
+}
+
 /* Contextual dock (MobileTools) */
 .m-dock { padding: 0; }
 .mt-dock { position: relative; padding: 10px 12px calc(env(safe-area-inset-bottom) + 10px); min-height: 84px; }
@@ -917,65 +945,103 @@ button.small { font-size: 11px; padding: 3px 8px; }
 .mt-chip.on { background: var(--grad, linear-gradient(135deg, #8b6cff, #5b8cff)); border-color: transparent; color: #fff; }
 .mt-note { font-size: 11px; color: var(--muted); line-height: 1.4; margin: 2px 0 0; }
 
-/* ---- 0.01 mobile redesign ---- */
-/* MAIN toolbar (nothing selected): the six tools spread evenly across the width. */
-.mt-row.mt-main { justify-content: space-between; }
-.mt-row.mt-main .mt-tool { min-width: 0; flex: 1 1 0; }
+/* ---- 0.01 mobile reskin: dock tiles, sub-tools, quick pills ---- */
+/* Icons render bare inside the dock (the 46×46 chip is dropped): root tools get
+   a solid tile, selected sub-tools are bare icon-over-label, per the design. */
+.ec-m-editor .mt-tool-ic { width: auto; height: auto; background: none; border: none; }
+.ec-m-editor .mt-tool { color: #f1f1f4; }
+.ec-m-editor .mt-tool-lb { color: #d9d9de; }
 
-/* collapse (deselect) chevron that leads every selected-clip toolbar */
-.mt-collapse {
-  flex: 0 0 auto; width: 34px; height: 46px; margin-right: 4px; align-self: flex-start;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--bg3); border: 1px solid var(--border); color: var(--muted); border-radius: 12px;
+/* MAIN toolbar (nothing selected): six solid tiles centred across the width. */
+.mt-row.mt-main { justify-content: center; gap: 7px; }
+.mt-row.mt-main .mt-tool {
+  min-width: 0; flex: 1 1 0; max-width: 62px; height: 70px; gap: 6px; padding: 8px 2px;
+  justify-content: center; background: #17171b; border-radius: 13px;
 }
-.mt-collapse:active { color: var(--text); background: var(--bg2, var(--bg3)); }
+.mt-row.mt-main .mt-tool:active { background: #222228; transform: none; }
+.mt-row.mt-main .mt-tool-lb { font-size: 10.5px; }
 
-/* tiny status badge on a tool icon (e.g. AI Upscaler · OFF) */
+/* selected sub-tool active tint (bare icon + label) */
+.mt-tool.on .ec-msym, .mt-tool.on .mt-tool-lb { color: var(--accent); }
+/* per-tool accent tints: AI tools blue, ScriptCut purple (matches the design) */
+.mt-tool.ai .ec-msym { color: #5ab6ff; }
+.mt-tool.ai .mt-tool-lb { color: #8bcafe; }
+.mt-tool.accent .ec-msym { color: #b79bff; }
+
+/* collapse (deselect) chevron tile that leads every selected-clip toolbar */
+.mt-collapse {
+  flex: 0 0 auto; width: 50px; height: 62px; margin-right: 8px; align-self: center;
+  display: flex; align-items: center; justify-content: center;
+  background: #1d1d22; border: none; color: #cfcfd4; border-radius: 13px;
+}
+.mt-collapse:active { color: #fff; background: #28282e; }
+
+/* status badge on a tool icon (e.g. AI Upscaler · OFF) */
 .mt-tool-ic { position: relative; }
 .mt-tool-badge {
-  position: absolute; bottom: -4px; right: -6px; font-size: 8px; font-weight: 700; letter-spacing: 0.3px;
-  background: #2a2f3d; color: #9aa2b4; border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; line-height: 1.5;
+  position: absolute; bottom: -5px; right: -8px; font-size: 8px; font-weight: 700; letter-spacing: 0.3px;
+  background: #2a2f3d; color: #9aa2b4; border: 1px solid #33384a; border-radius: 5px; padding: 0 4px; line-height: 1.5;
 }
 
-/* two-pill floating quick-action bar (shown above the toolbar for a selected clip) */
-.mt-quick2 { display: flex; justify-content: center; gap: 10px; margin-bottom: 10px; }
+/* two-pill floating quick-action bar (above a selected clip's toolbar) */
+.mt-quick2 { display: flex; justify-content: center; gap: 8px; margin-bottom: 12px; }
 .mt-quick-grp {
-  display: flex; gap: 2px; padding: 3px; border-radius: 13px;
-  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border);
+  display: flex; gap: 2px; padding: 4px; border-radius: 11px;
+  background: #1d1d22; border: none;
 }
 .mt-quick-grp button {
-  width: 38px; height: 34px; display: flex; align-items: center; justify-content: center;
-  background: none; border: none; color: var(--text); border-radius: 9px;
+  width: 44px; height: 36px; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: #eaeaf0; border-radius: 8px;
 }
-.mt-quick-grp button:active { background: var(--bg3); }
+.mt-quick-grp button:active { background: #2a2a30; }
 .mt-quick-grp button.danger { color: #ff8a9a; }
 
-/* ---- mobile export drawer (0.01) ---- top-anchored sheet, editor dimmed below */
-.mx-back { position: fixed; inset: 0; z-index: 1200; background: rgba(8, 9, 12, 0.55); }
+/* ---- mobile export drawer (0.01 reskin) ---- top-anchored sheet, green sliders */
+@keyframes mx-down { from { transform: translateY(-30px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.mx-back { position: fixed; inset: 0; z-index: 1200; background: rgba(0, 0, 0, 0.55); }
 .mx-sheet {
   position: absolute; top: 0; left: 0; right: 0;
-  background: #1b1d24; border-bottom: 1px solid var(--border);
-  border-radius: 0 0 20px 20px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
-  padding: calc(env(safe-area-inset-top) + 10px) 18px 22px;
+  background: #0e0e12; border-radius: 0 0 26px 26px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+  padding: calc(env(safe-area-inset-top) + 14px) 18px 26px; animation: mx-down 0.22s ease;
 }
 .mx-head { display: flex; align-items: center; gap: 10px; }
-.mx-x { width: 34px; height: 34px; background: none; border: none; color: var(--text); font-size: 18px; }
+.mx-x {
+  width: 38px; height: 38px; margin-left: -8px; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: #fff; font-size: 22px; border-radius: 10px; cursor: pointer;
+}
+.mx-x:active { background: #1a1a1e; }
 .mx-grow { flex: 1; }
-.mx-respill { font-size: 13px; font-weight: 600; color: var(--text); background: var(--bg3); border: 1px solid var(--border); border-radius: 9px; padding: 7px 12px; }
-.mx-export { background: linear-gradient(135deg, #a78bff, #7c6cff); border: none; color: #fff; font-weight: 700; font-size: 14px; border-radius: 11px; padding: 9px 20px; }
-.mx-export:disabled { opacity: 0.5; }
-.mx-body { margin-top: 18px; display: flex; flex-direction: column; gap: 22px; }
-.mx-sec { display: flex; flex-direction: column; gap: 12px; }
-.mx-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.mx-label { font-size: 17px; font-weight: 650; color: var(--text); }
-.mx-desc { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
-.mx-slider { position: relative; }
-.mx-slider input[type='range'] { width: 100%; accent-color: #59d38a; height: 24px; }
-.mx-ticks { display: flex; justify-content: space-between; margin-top: 2px; }
-.mx-tick { font-size: 12px; color: var(--muted); }
-.mx-tick.on { color: var(--text); font-weight: 700; }
-.mx-est { text-align: center; font-size: 13px; color: var(--muted); margin-top: 4px; }
-.mx-note { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.mx-respill {
+  display: flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 600; color: #fff;
+  background: #1c1c20; border: none; border-radius: 9px; padding: 7px 8px 7px 12px;
+}
+.mx-respill .ec-msym { color: #bbb; }
+.mx-export {
+  background: linear-gradient(100deg, #7c5cff, #a468ff); border: none; color: #fff; font-weight: 700;
+  font-size: 14px; border-radius: 10px; padding: 8px 18px; box-shadow: 0 2px 12px rgba(140, 92, 255, 0.35); cursor: pointer;
+}
+.mx-export:disabled { opacity: 0.5; box-shadow: none; }
+.mx-body { display: flex; flex-direction: column; }
+.mx-sec { margin-top: 24px; }
+.mx-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mx-label { display: flex; align-items: center; gap: 6px; font-size: 17px; font-weight: 700; color: #fff; }
+.mx-desc { font-size: 12px; color: #b9b9c0; white-space: nowrap; }
+/* custom discrete track: grey bar + green fill + tick stops + white-circle thumb */
+.mx-track { position: relative; height: 38px; margin: 8px 10px 0; }
+.mx-track-bg { position: absolute; left: 0; right: 0; top: 17px; height: 4px; background: #2a2a2f; border-radius: 2px; }
+.mx-track-fill { position: absolute; left: 0; top: 17px; height: 4px; background: #7ed957; border-radius: 2px; }
+.mx-stop { position: absolute; top: 0; width: 44px; height: 38px; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.mx-stop-tick { width: 3px; height: 10px; border-radius: 2px; }
+.mx-thumb {
+  position: absolute; top: 8px; width: 22px; height: 22px; transform: translateX(-50%);
+  background: #0e0e12; border: 3.5px solid #fff; border-radius: 50%; box-sizing: border-box;
+  pointer-events: none; transition: left 0.15s ease;
+}
+.mx-ticks { position: relative; height: 20px; margin: 6px 10px 0; }
+.mx-tick { position: absolute; transform: translateX(-50%); font-size: 13px; color: #8f8f96; white-space: nowrap; cursor: pointer; }
+.mx-tick.on { color: #fff; font-weight: 700; }
+.mx-est { text-align: center; font-size: 14px; color: #a9a9b0; margin-top: 26px; }
+.mx-note { font-size: 11.5px; color: #9a9aa0; line-height: 1.5; margin-top: 12px; }
 
 /* toast for coming-soon / hints */
 .mt-toast, .m-toast {

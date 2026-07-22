@@ -16,10 +16,11 @@ import { Icon, type IconName } from './Icon'
 
 const mnum = (v: unknown, d: number): number => (typeof v === 'number' ? v : d)
 
-/** A labelled tool button (icon over caption). `badge` shows a tiny pill (e.g. OFF). */
-function Tool({ icon, label, onClick, active, badge }: { icon: IconName; label: string; onClick: () => void; active?: boolean; badge?: string }): JSX.Element {
+/** A labelled tool button (icon over caption). `badge` shows a tiny pill (e.g.
+ *  OFF). `tint` colours AI tools blue / ScriptCut purple, matching the design. */
+function Tool({ icon, label, onClick, active, badge, tint }: { icon: IconName; label: string; onClick: () => void; active?: boolean; badge?: string; tint?: 'ai' | 'accent' }): JSX.Element {
   return (
-    <button className={'mt-tool' + (active ? ' on' : '')} onClick={onClick}>
+    <button className={'mt-tool' + (active ? ' on' : '') + (tint ? ' ' + tint : '')} onClick={onClick}>
       <span className="mt-tool-ic">
         <Icon name={icon} />
         {badge && <span className="mt-tool-badge">{badge}</span>}
@@ -108,7 +109,7 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
           <Tool icon="music" label="Music" onClick={() => (onAddAudio ? onAddAudio() : soon('Music'))} />
           <Tool icon="effect" label="Effect" onClick={() => soon('Effects')} />
           <Tool icon="text" label="Text" onClick={() => (onAddText ? onAddText() : onEditText())} />
-          <Tool icon="scriptcut" label="ScriptCut" onClick={onCutlord} />
+          <Tool icon="scriptcut" label="ScriptCut" onClick={onCutlord} tint="accent" />
           <Tool icon="captions" label="Captions" onClick={() => (onCaptions ? onCaptions() : soon('Captions'))} />
         </div>
       </div>
@@ -278,7 +279,7 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
         <Tool icon="duration" label="Duration" onClick={() => setPanel('duration')} />
         <Tool icon="split" label="Split" onClick={() => engine?.splitAtPlayhead()} />
         <Tool icon="animation" label="Animation" onClick={() => setPanel('animation')} />
-        <Tool icon="upscaler" label="AI Upscaler" badge="OFF" onClick={() => soon('AI Upscaler')} />
+        <Tool icon="upscaler" label="AI Upscaler" badge="OFF" onClick={() => soon('AI Upscaler')} tint="ai" />
         <Tool icon="crop" label="Crop" onClick={() => setPanel('crop')} />
         <Tool icon="speed" label="Speed" onClick={() => setPanel('speed')} />
         <Tool icon="zoom" label="Zoom" onClick={() => setPanel('zoom')} />

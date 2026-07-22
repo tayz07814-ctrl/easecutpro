@@ -32,7 +32,7 @@ type SheetKind = 'cut' | 'media' | 'text' | 'music' | 'captions' | null
 function Sheet({ onClose, children, header }: { onClose: () => void; children: ReactNode; header?: ReactNode }): JSX.Element {
   return (
     <div onClick={onClose} style={css('position:fixed;inset:0;background:rgba(10,11,14,.6);z-index:1000;display:flex;flex-direction:column;justify-content:flex-end')}>
-      <div onClick={(e) => e.stopPropagation()} style={css('background:#191B20;border-top:1px solid rgba(255,255,255,.09);border-radius:18px 18px 0 0;box-shadow:0 -14px 44px rgba(0,0,0,.55);display:flex;flex-direction:column;height:82vh;max-height:92vh')}>
+      <div onClick={(e) => e.stopPropagation()} style={css('background:#141418;border-top:1px solid rgba(255,255,255,.09);border-radius:18px 18px 0 0;box-shadow:0 -14px 44px rgba(0,0,0,.55);display:flex;flex-direction:column;height:82vh;max-height:92vh')}>
         <div style={css('flex:none;display:grid;place-items:center;padding:8px 0 2px')}><div style={css('width:38px;height:4px;border-radius:2px;background:rgba(255,255,255,.18)')} /></div>
         {header}
         <div style={css('flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden')}>{children}</div>
@@ -151,7 +151,7 @@ function CaptionsSheet({ onClose }: { onClose: () => void }): JSX.Element {
   )
 }
 
-function IcBtn({ label, onClick, disabled, active }: { label: string; onClick: () => void; disabled?: boolean; active?: boolean }): JSX.Element {
+function IcBtn({ label, onClick, disabled, active }: { label: ReactNode; onClick: () => void; disabled?: boolean; active?: boolean }): JSX.Element {
   return (
     <button onClick={onClick} disabled={disabled} style={css(`width:34px;height:34px;border-radius:9px;border:1px solid ${active ? 'rgba(110,106,232,.4)' : 'transparent'};background:${active ? 'rgba(110,106,232,.16)' : 'transparent'};color:${disabled ? '#4A4F5B' : active ? '#B7B5F4' : '#C6C9D2'};font-size:16px;display:grid;place-items:center;cursor:${disabled ? 'default' : 'pointer'};font-family:inherit`)}>{label}</button>
   )
@@ -239,13 +239,15 @@ export default function MobileEditor(): JSX.Element {
   }
 
   return (
-    <div style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-m-editor">
-      {/* Top bar */}
-      <div style={css(`flex:none;display:flex;align-items:center;gap:8px;height:48px;padding:0 10px;border-bottom:1px solid ${HAIR}`)}>
-        <div onClick={goHome} style={css('font-size:20px;color:#9BA0AC;padding:4px 8px;cursor:pointer')}>‹</div>
-        <div style={css('flex:1;min-width:0;font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{name}</div>
-        <div onClick={() => setShowSettings(true)} style={css('color:#9BA0AC;font-size:16px;padding:4px 8px;cursor:pointer')}>···</div>
-        <button onClick={() => setShowExportModal(true)} style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 14px;cursor:pointer')}>Export</button>
+    <div style={css('width:100%;height:100%;background:#0b0b0d;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-m-editor">
+      {/* Top bar — back · 9:16 marker · settings + gradient Export (design) */}
+      <div style={css(`flex:none;display:flex;align-items:center;height:52px;padding:0 12px;border-bottom:1px solid ${HAIR};position:relative`)} title={name}>
+        <div onClick={goHome} style={css('width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:10px;color:#e7e7ea;cursor:pointer')}><Icon name="back" size={22} /></div>
+        <div style={css('position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;justify-content:center;width:16px;height:25px;border:1.6px solid #fff;border-radius:5px;font-size:6.5px;font-weight:700;letter-spacing:.2px;color:#fff')}>9:16</div>
+        <div style={css('margin-left:auto;display:flex;align-items:center;gap:10px')}>
+          <div onClick={() => setShowSettings(true)} style={css('width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:9px;color:#bdbdc4;cursor:pointer')}><Icon name="more" size={20} /></div>
+          <button onClick={() => setShowExportModal(true)} style={css('background:linear-gradient(100deg,#7c5cff,#a468ff);border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:700;border-radius:10px;padding:8px 18px;cursor:pointer;box-shadow:0 2px 12px rgba(140,92,255,.35)')}>Export</button>
+        </div>
       </div>
 
       {/* Stage — FIXED height; production preview (its own transport is hidden via CSS) */}
@@ -258,15 +260,13 @@ export default function MobileEditor(): JSX.Element {
         <span style={css('width:44px;height:4px;border-radius:2px;background:rgba(255,255,255,.18)')} />
       </div>
 
-      {/* Transport */}
-      <div style={css(`flex:none;display:flex;align-items:center;gap:4px;padding:7px 10px;border-top:1px solid ${HAIR}`)}>
-        <IcBtn label="↶" onClick={() => canUndo && undo()} disabled={!canUndo} />
-        <IcBtn label="↷" onClick={() => canRedo && redo()} disabled={!canRedo} />
+      {/* Transport — Material undo/redo · filled play · zoom (all wiring kept) */}
+      <div style={css(`flex:none;display:flex;align-items:center;gap:4px;padding:7px 12px;border-top:1px solid ${HAIR}`)}>
+        <IcBtn label={<Icon name="undo" size={21} />} onClick={() => canUndo && undo()} disabled={!canUndo} />
+        <IcBtn label={<Icon name="redo" size={21} />} onClick={() => canRedo && redo()} disabled={!canRedo} />
         <div style={css('flex:1')} />
-        <button onClick={() => { if (!hasBase) return; const next = !playing; if (next) primePlayback(); setPlaying(next) }} disabled={!hasBase} style={css(`width:44px;height:44px;border-radius:50%;background:${hasBase ? '#E9EAEE' : '#2A2D36'};border:none;display:grid;place-items:center;cursor:${hasBase ? 'pointer' : 'default'}`)}>
-          {playing
-            ? <span style={css('display:flex;gap:3px')}><span style={css('width:4px;height:15px;background:#17181C;border-radius:1px')} /><span style={css('width:4px;height:15px;background:#17181C;border-radius:1px')} /></span>
-            : <span style={css('width:0;height:0;border-left:12px solid #17181C;border-top:8px solid transparent;border-bottom:8px solid transparent;margin-left:3px')} />}
+        <button onClick={() => { if (!hasBase) return; const next = !playing; if (next) primePlayback(); setPlaying(next) }} disabled={!hasBase} style={css(`width:44px;height:44px;border-radius:50%;background:${hasBase ? 'rgba(255,255,255,.08)' : 'transparent'};border:none;display:grid;place-items:center;color:${hasBase ? '#fff' : '#4A4F5B'};cursor:${hasBase ? 'pointer' : 'default'}`)}>
+          <Icon name={playing ? 'pause' : 'play'} size={30} fill />
         </button>
         <div style={css('flex:1')} />
         <IcBtn label="−" onClick={() => zoomStep(1 / 1.4)} />
@@ -279,7 +279,7 @@ export default function MobileEditor(): JSX.Element {
       </div>
 
       {/* Bottom dock — Import + Cut Lord (contextual tools when a clip is selected) */}
-      <div className="ec-legacy ec-m-dock" style={css(`flex:none;border-top:1px solid ${HAIR};background:#191B20`)}>
+      <div className="ec-legacy ec-m-dock" style={css(`flex:none;border-top:1px solid ${HAIR};background:#0b0b0d`)}>
         <MobileTools
           onImport={() => setSheet('media')}
           onCutlord={() => setSheet('cut')}
