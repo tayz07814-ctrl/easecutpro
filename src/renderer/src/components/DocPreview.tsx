@@ -36,6 +36,7 @@ import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
 import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
+import { useIsMobile } from '../useMobile'
 import OverlayLayer from './OverlayLayer'
 import TextLayer from './TextLayer'
 
@@ -219,6 +220,12 @@ interface Pending {
 
 export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Element {
   const project = useStore((s) => s.project)
+  // Phones effectively have ONE hardware video-decode pipeline (iOS Safari), so a
+  // decode-ahead buddy can't truly decode ahead — it just contends for that single
+  // decoder and its prewarm seeks stall the LIVE picture (the frozen-frame bug).
+  // On mobile we run the plain single-decoder path (no buddy); same-source seams
+  // cold-seek the one element (a brief stall) instead of wedging.
+  const isMobile = useIsMobile()
   const playing = useStore((s) => s.playing)
   const setPlaying = useStore((s) => s.setPlaying)
   const playhead = useStore((s) => s.project.playhead)
@@ -245,6 +252,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // distinct one-shot clips have none and pay nothing extra.
   const buddySig = segs.map((s) => `${s.src}:${s.sourceStart}:${s.sourceEnd}:${s.start}`).join('|')
   const buddySrcs = useMemo(() => {
+    // Mobile: no buddy at all (single-decoder path) — see isMobile note above.
+    if (isMobile) return new Set<string>()
     const count = new Map<string, number>()
     for (let i = 1; i < segs.length; i++) {
       const a = segs[i - 1]
@@ -264,7 +273,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     for (const [src, n] of count) if (n > bestN) [best, bestN] = [src, n]
     return best ? new Set([best]) : new Set<string>()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buddySig])
+  }, [buddySig, isMobile])
 
   // ---- refs the reconciler reads (fresh every render) ----
   const segsRef = useRef(segs)
