@@ -199,10 +199,12 @@ export default function TextPanel(): JSX.Element {
           <div className="slider-grid">
             <label className="slider-row">
               <span className="slabel">Size</span>
-              <input type="range" min={2} max={40} step={0.5}
-                value={Number((clip.fontSize * 100).toFixed(1))}
-                onChange={(e) => set({ fontSize: Math.max(0.02, Math.min(0.6, Number(e.target.value) / 100)) })} />
-              <span className="val">{Math.round(clip.fontSize * 100)}%</span>
+              {/* Familiar point-like size numbers (default ~24) instead of a % of
+                  the frame, which read as an unrecognizable "universal" size. */}
+              <input type="range" min={6} max={180} step={1}
+                value={Math.round(clip.fontSize * 300)}
+                onChange={(e) => set({ fontSize: Math.max(0.02, Math.min(0.6, Number(e.target.value) / 300)) })} />
+              <span className="val">{Math.round(clip.fontSize * 300)}</span>
             </label>
           </div>
           <div className="field-grid">

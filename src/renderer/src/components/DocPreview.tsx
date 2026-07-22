@@ -51,7 +51,12 @@ function clamp(v: number, lo: number, hi: number): number {
 // Warm the NEXT source's decoder this many seconds before a clip/cut seam so
 // crossing it doesn't stall on a cold seek (the "slider sticks + video pauses at
 // the seam" bug — a seek issued AT the boundary freezes the clock while it lands).
-const PREWARM_LEAD_S = 0.6
+// Warm the next seam this many seconds ahead. Bumped 0.6 -> 1.2: long-GOP H.264
+// seeks take 100-800 ms, so a longer lead lets the next-source / same-source buddy
+// decoder land BEFORE the seam — fewer cold seeks at the boundary = less flicker/
+// stutter when the playhead crosses a cut. Purely behind the existing fallback: if
+// the buddy still isn't ready in time, the reconciler cold-seeks exactly as before.
+const PREWARM_LEAD_S = 1.2
 function containRect(w: number, h: number, aspect: number): { left: number; top: number; width: number; height: number } {
   if (w <= 0 || h <= 0) return { left: 0, top: 0, width: 0, height: 0 }
   if (w / h > aspect) {

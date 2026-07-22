@@ -183,7 +183,9 @@ function TextItem({
         style={{
           fontFamily: `"${view.fontFamily}", sans-serif`,
           fontSize: fontPx,
-          fontWeight: view.bold ? 700 : 400,
+          // 800 matches textRender (export) so bold captions read heavy + identical
+          // on phones (where desktop fonts fall back to the system sans) and desktop.
+          fontWeight: view.bold ? 800 : 400,
           fontStyle: view.italic ? 'italic' : 'normal',
           lineHeight: lineHeight,
           color: view.color,

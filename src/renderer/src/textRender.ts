@@ -26,7 +26,10 @@ function rgba(hex: string, opacity: number): string {
 }
 
 export function fontString(clip: TextClip, fontPx: number): string {
-  const weight = clip.bold ? '700 ' : '400 '
+  // 800 (not 700) so bold text reads as a heavy CAPTION weight everywhere — on
+  // phones the desktop 'Arial Black' etc. fall back to the system sans, and 700
+  // looked thin/inconsistent vs desktop. Matches TextLayer (preview == export).
+  const weight = clip.bold ? '800 ' : '400 '
   const style = clip.italic ? 'italic ' : ''
   return `${style}${weight}${fontPx}px "${clip.fontFamily}", sans-serif`
 }
