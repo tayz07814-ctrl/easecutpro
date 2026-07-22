@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **1cc8551** (freeze fix + on-device bug pass; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **febe44f** (base-video crop + caption size; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -162,3 +162,22 @@ Fixes from the first on-device test of the crop/captions batch.
   smarter reconciler (device-profiled), not a bigger lead. Also `generateCaptions` no longer rewrites
   `media`/`baseSequence` in its transcribe branch (captions don't cut → don't need it; only risked
   desyncing the doc-native preview) — it just stores the transcript.
+
+### Round 2 on-device fixes (0.01 only — `a9e5f86`, `e71459d`, `febe44f`)
+- **Caption "Your text"** was a real bug (`c234c5c`, shipped earlier): `addDocTexts` dropped `it.text`.
+  Default caption font size is now ~7 on the editor scale (`fontSize 0.0233`; `a9e5f86`).
+- **Base-video CROP now actually renders** (`e71459d`). It was rendered ONLY for overlay (PiP) clips —
+  the base video ignored `clip.crop` in the preview AND all exporters, so the crop tool did nothing on
+  the main clip. Fix: `cropToKenBurns(crop)` (kenBurns.ts) folds an inset crop into an equivalent Ken
+  Burns **cover-zoom + focal pan** (the base transform is already a uniform scale-about-origin, so a
+  crop-to-cover is the same shape → reuse it, no new base renderer). Preview: `DocPreview.docSegments`
+  folds it into ovScale/ovX/ovY. Export: `localExport.planFromDoc` folds it into size/ox/oy — and that
+  planner is shared by BOTH `localExportMB` (cloud) and `localExport` (desktop), so preview == export.
+  Exact for a just-cropped clip (source aspect ≈ output); COVER semantics (fills, crops excess for a
+  mismatched crop aspect); approximate if combined with a Ken Burns zoom or a letterboxed source.
+- **Crop backdrop** was a pixelated thumbnail → now a full-res `<video>` seeked to the clip in-point,
+  thumbnail as poster (`febe44f`).
+- **Playback freeze, take 2** (paused, scrub back → stuck frame, single continuous clip): confirmed NOT
+  from these commits — prewarm already reverted, scrub-adoption + paused-seek code intact. It's the phone
+  HW decoder stalling on the seek (low battery worsens it). NOT changing the player blind again — needs a
+  charged-device repro / on-screen decoder debug readout before any code change.
