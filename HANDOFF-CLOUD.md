@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **3cd0716** (3-tab text panel + text shadow + style presets; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **0c2eba3** (Android test APK via CI; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -279,3 +279,26 @@ anything; the panel was "bulky and all over the place"; the length control overl
 - Verified: typecheck + `build:cloud` green; Chromium mock confirmed the 3 tabs + preset previews render
   cleanly with no overlap. NOT on-device tested; **shadow at EXPORT still needs a real on-device export
   check** (canvas shadow bakes on the main thread, same place as the rest of the text).
+
+### Android test APK via GitHub Actions (0.01 only — `0c2eba3`)
+User asked for an installable Android APK to test. There was already a committed Capacitor Android project
+(`android/`, Capacitor 6.2.1, appId `com.easecutpro.tals`, Gradle 8.2.1, SDK 34) set up for a BUNDLED
+offline app (`webDir: out/renderer`) — but a bundled launch has no `?newui=1`, so it wouldn't reliably boot
+the 0.01 mobile UI, and the electron-renderer build assumes `window.api`. So for a **reliable test APK** the
+wrapper now loads the **live 0.01 preview** instead.
+- **`capacitor.config.ts`** (0.01): `webDir: 'capacitor-www'` (a tiny boot splash) + `server.url` = the
+  `easecut001` Vercel preview (`?newui=1`). The installed app is a fullscreen Capacitor WebView of the exact
+  build tested in the browser — new mobile UI + working Supabase/edge backend. The bundled-offline mode is
+  documented in the config comment for later. New file: `capacitor-www/index.html`.
+- **`.github/workflows/android-apk.yml`**: on `workflow_dispatch` + push to `easecut0.01` touching the
+  wrapper files. Steps: checkout → Node 20 → JDK 17 → `npm ci --ignore-scripts` (fast; no electron/esbuild
+  binary downloads, none needed) → `npx cap sync android` → `./gradlew assembleDebug` → upload the APK as an
+  artifact AND attach it to a **prerelease** (tag `android-apk-0.01`) for a phone-friendly direct download.
+- **First run GREEN** (run `29959336608`, ~2.5 min). APK: **3.75 MB**, debug-signed (installable from
+  "unknown sources"), at
+  `https://github.com/tayz07814-ctrl/easecutpro/releases/tag/android-apk-0.01` → `app-debug.apk`.
+- **Caveats**: it's an Android WebView (Chromium), so the video engine ≈ Chrome on the phone — it does NOT
+  fix the preview stutter (that's phase-2 proxy work); needs a network connection; the repo is private so
+  the download needs a signed-in GitHub session. `google-services` plugin auto-skips (no `google-services.json`).
+  The APK loads the live URL, so it reflects the latest deployed 0.01 without reinstalling — only rebuild the
+  APK when the wrapper (config/splash/workflow) changes.
