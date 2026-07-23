@@ -1,5 +1,5 @@
 name: Flutter native APK (0.01)
-# rebuild marker: v1 — first Flutter+Kotlin native slice (ExoPlayer→texture preview + Media3 export)
+# rebuild marker: v2 — release + per-ABI split APKs (smaller downloads); publish all to release
 
 # Builds the NATIVE Flutter rebuild of the mobile app (mobile/) — a real Flutter app
 # with the preview player and export written in Kotlin/Media3 (no WebView). Installs
@@ -46,22 +46,18 @@ jobs:
         working-directory: mobile
         run: flutter pub get
 
-      - name: Build debug APK
+      - name: Build release APKs (per ABI — smaller downloads)
         working-directory: mobile
-        run: flutter build apk --debug
+        run: flutter build apk --release --split-per-abi
 
-      - name: Locate APK
-        id: apk
-        run: |
-          APK=$(find mobile/build/app/outputs/flutter-apk -name '*.apk' | head -1)
-          echo "path=$APK" >> "$GITHUB_OUTPUT"
-          echo "Built: $APK"; ls -la "$APK"
+      - name: List built APKs
+        run: ls -la mobile/build/app/outputs/flutter-apk/*.apk
 
-      - name: Upload APK artifact
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: easecut-native-flutter-apk
-          path: ${{ steps.apk.outputs.path }}
+          name: easecut-native-flutter-apks
+          path: mobile/build/app/outputs/flutter-apk/*-release.apk
           if-no-files-found: error
 
       - name: Publish to prerelease (download link)
@@ -78,10 +74,12 @@ jobs:
             glassy and never sticks), and export runs on the phone's Media3 hardware
             codecs.
 
+            - **Download `app-arm64-v8a-release.apk`** (works on virtually all modern
+              phones). Install it → allow "install from unknown sources" if prompted.
             - Installs **alongside** your current app (app name: "EaseCut Native",
               id `com.easecutpro.easecut`) — the existing app is untouched.
             - This slice: import a video → native preview with play / pause / scrub →
               native export to your gallery (Movies/EaseCutPro).
             - The full editor UI (timeline, captions, Cut Lord) is being built on top
               of this foundation next.
-          files: ${{ steps.apk.outputs.path }}
+          files: mobile/build/app/outputs/flutter-apk/*-release.apk
