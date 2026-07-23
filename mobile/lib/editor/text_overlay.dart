@@ -120,6 +120,51 @@ class TextOverlay {
   }
 }
 
+/// An image (PiP / sticker) overlay shown over the preview and baked into export.
+class ImageOverlay {
+  final Uint8List bytes;
+  double x; // 0..1 (center)
+  double y; // 0..1 (center)
+  double scale; // width as a fraction of the frame width
+  int startMs;
+  int endMs;
+
+  ImageOverlay({
+    required this.bytes,
+    this.x = 0.5,
+    this.y = 0.5,
+    this.scale = 0.45,
+    required this.startMs,
+    required this.endMs,
+  });
+
+  bool activeAt(int ms) => ms >= startMs && ms < endMs;
+
+  ImageOverlay copy() =>
+      ImageOverlay(bytes: bytes, x: x, y: y, scale: scale, startMs: startMs, endMs: endMs);
+
+  /// Bake to a full-frame transparent PNG at the OUTPUT resolution (base64, no prefix).
+  Future<String> bakePngBase64(int width, int height) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final img = (await codec.getNextFrame()).image;
+    final iw = img.width.toDouble();
+    final ih = img.height.toDouble();
+    final drawW = scale * width;
+    final drawH = iw > 0 ? drawW * ih / iw : drawW;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()));
+    final dst = Rect.fromCenter(center: Offset(x * width, y * height), width: drawW, height: drawH);
+    canvas.drawImageRect(img, Rect.fromLTWH(0, 0, iw, ih), dst, Paint());
+    final picture = recorder.endRecording();
+    final out = await picture.toImage(width, height);
+    final bd = await out.toByteData(format: ui.ImageByteFormat.png);
+    img.dispose();
+    out.dispose();
+    picture.dispose();
+    return base64Encode(bd!.buffer.asUint8List());
+  }
+}
+
 /// A widget that renders an overlay over the preview at its (x,y) fraction.
 class TextOverlayView extends StatelessWidget {
   final TextOverlay t;

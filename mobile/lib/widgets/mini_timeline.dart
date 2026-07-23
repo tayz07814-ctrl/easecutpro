@@ -25,6 +25,14 @@ class MiniTimeline extends StatefulWidget {
   final ValueChanged<TextOverlay>? onSelectText;
   final ValueChanged<int>? onSelectAudio;
 
+  /// Drag a text/caption block along the time axis (shift start+end by deltaMs).
+  final void Function(TextOverlay t, int deltaMs)? onOverlayMove;
+
+  /// Trim a text/caption block edge (one of the deltas is set).
+  final void Function(TextOverlay t, {int? startDeltaMs, int? endDeltaMs})? onOverlayTrim;
+  final VoidCallback? onOverlayEditStart;
+  final VoidCallback? onOverlayEditEnd;
+
   /// Live trim of the selected clip (source ms). Committed on [onTrimEnd].
   final void Function(int index, {int? inMs, int? outMs})? onTrim;
   final VoidCallback? onTrimStart;
@@ -47,6 +55,10 @@ class MiniTimeline extends StatefulWidget {
     required this.onSelectClip,
     this.onSelectText,
     this.onSelectAudio,
+    this.onOverlayMove,
+    this.onOverlayTrim,
+    this.onOverlayEditStart,
+    this.onOverlayEditEnd,
     this.onTrim,
     this.onTrimStart,
     this.onTrimEnd,
@@ -367,13 +379,14 @@ class _MiniTimelineState extends State<MiniTimeline> {
   }
 
   /// A track of text OR caption blocks, positioned at their [start,end] on the
-  /// time axis. Tap a block to select it (opens its on-preview controls).
+  /// time axis. Tap = select; drag body = move in time; drag edges = trim.
   Widget _overlayLane(double tracksW, {required bool captions}) {
     final items = widget.texts.where((t) => t.isCaption == captions).toList();
     final accent = captions ? Ec.indigo : const Color(0xFFFFD84D);
     return SizedBox(
       height: _laneH,
       child: Stack(
+        clipBehavior: Clip.none,
         children: [
           for (final t in items)
             Positioned(
@@ -382,33 +395,79 @@ class _MiniTimelineState extends State<MiniTimeline> {
               top: 0,
               bottom: 0,
               child: GestureDetector(
-                onTap: widget.onSelectText == null ? null : () => widget.onSelectText!(t),
                 behavior: HitTestBehavior.opaque,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  alignment: Alignment.centerLeft,
-                  decoration: BoxDecoration(
-                    color: captions ? const Color(0xFF2A2550) : const Color(0xFF3A2E12),
-                    borderRadius: BorderRadius.circular(5),
-                    border: Border.all(color: accent.withValues(alpha: 0.45)),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(captions ? Icons.closed_caption : Icons.title, size: 12, color: accent),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(t.text,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Ec.text, fontSize: 10.5, fontWeight: FontWeight.w500)),
+                onTap: widget.onSelectText == null ? null : () => widget.onSelectText!(t),
+                onHorizontalDragStart: (_) => widget.onOverlayEditStart?.call(),
+                onHorizontalDragUpdate: (d) =>
+                    widget.onOverlayMove?.call(t, (d.delta.dx / _pxPerMs).round()),
+                onHorizontalDragEnd: (_) => widget.onOverlayEditEnd?.call(),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      alignment: Alignment.centerLeft,
+                      decoration: BoxDecoration(
+                        color: captions ? const Color(0xFF2A2550) : const Color(0xFF3A2E12),
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(color: accent.withValues(alpha: 0.45)),
                       ),
-                    ],
-                  ),
+                      child: Row(
+                        children: [
+                          Icon(captions ? Icons.closed_caption : Icons.title, size: 12, color: accent),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(t.text,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: Ec.text, fontSize: 10.5, fontWeight: FontWeight.w500)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _overlayTrimGrip(t, accent, left: true),
+                    _overlayTrimGrip(t, accent, left: false),
+                  ],
                 ),
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _overlayTrimGrip(TextOverlay t, Color accent, {required bool left}) {
+    return Positioned(
+      left: left ? 0 : null,
+      right: left ? null : 0,
+      top: 0,
+      bottom: 0,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: (_) => widget.onOverlayEditStart?.call(),
+        onHorizontalDragUpdate: (d) {
+          final dMs = (d.delta.dx / _pxPerMs).round();
+          if (left) {
+            widget.onOverlayTrim?.call(t, startDeltaMs: dMs);
+          } else {
+            widget.onOverlayTrim?.call(t, endDeltaMs: dMs);
+          }
+        },
+        onHorizontalDragEnd: (_) => widget.onOverlayEditEnd?.call(),
+        child: Container(
+          width: 11,
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.horizontal(
+              left: left ? const Radius.circular(5) : Radius.zero,
+              right: left ? Radius.zero : const Radius.circular(5),
+            ),
+          ),
+          child: const Center(
+            child: Icon(Icons.drag_indicator, size: 10, color: Colors.black54),
+          ),
+        ),
       ),
     );
   }

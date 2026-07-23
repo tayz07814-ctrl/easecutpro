@@ -11,6 +11,7 @@ class ExportSheet extends StatefulWidget {
   final NativeExporter exporter;
   final List<ExportSegment> segments;
   final List<TextOverlay> overlays; // baked at the CHOSEN output size on export
+  final List<ImageOverlay> imageOverlays; // PiP / stickers
   final List<ExportSegment> audioTracks;
   final Size videoSize;
   const ExportSheet({
@@ -18,6 +19,7 @@ class ExportSheet extends StatefulWidget {
     required this.exporter,
     required this.segments,
     this.overlays = const [],
+    this.imageOverlays = const [],
     this.audioTracks = const [],
     required this.videoSize,
   });
@@ -87,10 +89,17 @@ class _ExportSheetState extends State<ExportSheet> {
         final b = await t.bakePngBase64(w, h);
         caps.add(ExportOverlay(base64: b, startMs: t.startMs, endMs: t.endMs));
       }
+      final imgs = <ExportOverlay>[];
+      for (final o in widget.imageOverlays) {
+        if (o.endMs <= o.startMs) continue;
+        final b = await o.bakePngBase64(w, h);
+        imgs.add(ExportOverlay(base64: b, startMs: o.startMs, endMs: o.endMs));
+      }
       final res = await widget.exporter.export(
         ExportSpec(
           segments: widget.segments,
           captions: caps,
+          images: imgs,
           audioTracks: widget.audioTracks,
           width: w,
           height: h,

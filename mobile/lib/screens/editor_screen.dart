@@ -63,6 +63,8 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _selected = false;
   final List<TextOverlay> _texts = []; // text + caption overlays
   TextOverlay? _selectedText; // overlay being edited on the preview
+  final List<ImageOverlay> _images = []; // image / sticker overlays (PiP)
+  ImageOverlay? _selectedImage;
   final List<_EditSnap> _undoStack = [];
   final List<_EditSnap> _redoStack = [];
   List<Word>? _transcript; // cached STT (reused by Cut Lord + Captions)
@@ -388,9 +390,34 @@ class _EditorScreenState extends State<EditorScreen> {
       case 'Extract':
         _extractClipAudio();
         break;
+      case 'Overlay':
+        _addOverlay();
+        break;
       default:
         _toast('$tool — coming soon');
     }
+  }
+
+  /// Overlay tool: pick an image and drop it on the video as a PiP / sticker
+  /// (draggable + pinch-resizable on the preview, baked into export).
+  Future<void> _addOverlay() async {
+    final res = await FilePicker.pickFiles(type: FileType.image, withData: true);
+    final bytes = (res != null && res.files.isNotEmpty) ? res.files.first.bytes : null;
+    if (bytes == null) return;
+    final o = ImageOverlay(
+      bytes: bytes,
+      startMs: _positionMs,
+      endMs: (_positionMs + 4000).clamp(0, _totalMs > 0 ? _totalMs : _positionMs + 4000),
+    );
+    _pushHistory();
+    setState(() {
+      _images.add(o);
+      _selectedImage = o;
+      _selectedText = null;
+      _selected = false;
+    });
+    _model.select(-1);
+    _scheduleSave();
   }
 
   /// The clip the selected-clip tools act on (selection, else the one at the playhead).
@@ -489,6 +516,7 @@ class _EditorScreenState extends State<EditorScreen> {
       exporter: _exporter,
       segments: _model.exportSegments(),
       overlays: List<TextOverlay>.from(_texts), // baked at the chosen output size
+      imageOverlays: List<ImageOverlay>.from(_images),
       audioTracks: _audioTracks,
       videoSize: size,
     ));
@@ -933,9 +961,27 @@ class _EditorScreenState extends State<EditorScreen> {
                       children: [
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
-                          onTap: () => setState(() => _selectedText = null),
+                          onTap: () => setState(() {
+                            _selectedText = null;
+                            _selectedImage = null;
+                          }),
                           child: _cropped(Texture(textureId: _textureId!)),
                         ),
+                        for (final o in _images)
+                          if (o.activeAt(_positionMs) || identical(o, _selectedImage))
+                            EditableImageOverlay(
+                              o: o,
+                              frame: frame,
+                              selected: identical(o, _selectedImage),
+                              onSelect: () => setState(() {
+                                _selectedImage = o;
+                                _selectedText = null;
+                              }),
+                              onChange: () {
+                                setState(() {});
+                                _scheduleSave();
+                              },
+                            ),
                         for (final t in _texts)
                           if (t.activeAt(_positionMs) || identical(t, _selectedText))
                             EditableOverlay(
@@ -1078,6 +1124,31 @@ class _EditorScreenState extends State<EditorScreen> {
           await _seek(t.startMs.clamp(0, _totalMs > 0 ? _totalMs : t.startMs)); // jump so it's visible + editable
         },
         onSelectAudio: (_) => _openAudio(),
+        onOverlayEditStart: () {
+          setState(() => _selectedText = null); // avoid preview-drag interference
+          _pushHistory();
+        },
+        onOverlayMove: (t, dMs) {
+          setState(() {
+            final total = _totalMs;
+            final len = t.endMs - t.startMs;
+            final ns = (t.startMs + dMs).clamp(0, (total - len).clamp(0, total));
+            t.startMs = ns;
+            t.endMs = ns + len;
+          });
+        },
+        onOverlayTrim: (t, {startDeltaMs, endDeltaMs}) {
+          setState(() {
+            if (startDeltaMs != null) {
+              t.startMs = (t.startMs + startDeltaMs).clamp(0, t.endMs - 200);
+            }
+            if (endDeltaMs != null) {
+              final max = _totalMs > 0 ? _totalMs : t.endMs + endDeltaMs;
+              t.endMs = (t.endMs + endDeltaMs).clamp(t.startMs + 200, max);
+            }
+          });
+        },
+        onOverlayEditEnd: () => _scheduleSave(),
         onTrimStart: () {
           _scrubbing = true;
           _pushHistory();
