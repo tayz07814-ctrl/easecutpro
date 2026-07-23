@@ -7,9 +7,16 @@ import '../native/exporter.dart';
 import '../native/player.dart';
 import '../theme.dart';
 import '../widgets/tool_dock.dart';
+import '../widgets/selected_toolbar.dart';
 import '../widgets/mini_timeline.dart';
 import '../sheets/media_sheet.dart';
 import '../sheets/export_sheet.dart';
+import '../sheets/cutlord_sheet.dart';
+import '../sheets/captions_sheet.dart';
+import '../sheets/text_sheet.dart';
+import '../sheets/audio_sheet.dart';
+import '../sheets/settings_sheet.dart';
+import '../sheets/silence_modal.dart';
 
 /// The EaseCut mobile editor, rebuilt in Flutter to match newui/screens/MobileEditor.tsx:
 /// top bar (back · 9:16 · settings + purple Export) → fixed stage (native ExoPlayer
@@ -39,6 +46,7 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _scrubbing = false;
 
   double _stageFrac = 0.46; // fraction of screen height for the stage (22%–58%)
+  bool _selected = false; // main clip selected → show the selected-clip toolbar
 
   @override
   void dispose() {
@@ -148,7 +156,35 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  void _todo(String tool) => _toast('$tool — coming next in the rebuild');
+  void _openSheet(Widget sheet) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => sheet,
+    );
+  }
+
+  void _openCutLord() => _openSheet(CutLordSheet(onOpenSilence: () {
+        Navigator.of(context).pop();
+        _openSilence();
+      }));
+  void _openCaptions() => _openSheet(const CaptionsSheet());
+  void _openText() => _openSheet(const TextSheet());
+  void _openAudio() => _openSheet(const AudioSheet());
+  void _openSettings() => _openSheet(const SettingsSheet());
+  void _openSilence() => showDialog(context: context, builder: (_) => const SilenceModal());
+
+  // "Edit" tile: select the main clip if there is one, else import.
+  void _onEdit() {
+    if (_hasBase) {
+      setState(() => _selected = true);
+    } else {
+      _openMedia();
+    }
+  }
+
+  void _todo(String tool) => _toast('$tool — wires to the timeline in the next build');
 
   @override
   Widget build(BuildContext context) {
@@ -163,14 +199,20 @@ class _EditorScreenState extends State<EditorScreen> {
             _grip(),
             _transport(),
             Expanded(child: _timeline()),
-            ToolDock(
-              hasSelection: false,
-              onEdit: _openMedia, // "select main clip, else import"
-              onMusic: () => _todo('Audio'),
-              onText: () => _todo('Text'),
-              onCutLord: () => _todo('Cut Lord'),
-              onCaptions: () => _todo('Captions'),
-            ),
+            _selected
+                ? SelectedToolbar(
+                    onCollapse: () => setState(() => _selected = false),
+                    onTool: _todo,
+                    onDelete: () => setState(() => _selected = false),
+                  )
+                : ToolDock(
+                    hasSelection: false,
+                    onEdit: _onEdit,
+                    onMusic: _openAudio,
+                    onText: _openText,
+                    onCutLord: _openCutLord,
+                    onCaptions: _openCaptions,
+                  ),
           ],
         ),
       ),
@@ -191,7 +233,7 @@ class _EditorScreenState extends State<EditorScreen> {
           Row(
             children: [
               GestureDetector(
-                onTap: () {}, // Home comes with the dashboard screen
+                onTap: () => Navigator.of(context).maybePop(),
                 child: Container(
                   width: 38,
                   height: 38,
@@ -201,7 +243,7 @@ class _EditorScreenState extends State<EditorScreen> {
               ),
               const Spacer(),
               GestureDetector(
-                onTap: () => _todo('Settings'),
+                onTap: _openSettings,
                 child: const SizedBox(
                   width: 34,
                   height: 34,

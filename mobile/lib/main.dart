@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'config.dart';
-import 'screens/editor_screen.dart';
+import 'screens/auth_screen.dart';
 import 'theme.dart';
 
 Future<void> main() async {
@@ -35,7 +35,7 @@ class EaseCutApp extends StatelessWidget {
       title: 'EaseCut',
       debugShowCheckedModeBanner: false,
       theme: Ec.themeData(),
-      home: const EditorScreen(),
+      home: const AuthScreen(),
     );
   }
 }
