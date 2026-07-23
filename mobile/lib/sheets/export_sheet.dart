@@ -9,11 +9,15 @@ import 'sheet_scaffold.dart';
 class ExportSheet extends StatefulWidget {
   final NativeExporter exporter;
   final List<ExportSegment> segments;
+  final List<ExportOverlay> captions;
+  final List<ExportSegment> audioTracks;
   final Size videoSize;
   const ExportSheet({
     super.key,
     required this.exporter,
     required this.segments,
+    this.captions = const [],
+    this.audioTracks = const [],
     required this.videoSize,
   });
 
@@ -41,6 +45,8 @@ class _ExportSheetState extends State<ExportSheet> {
       final res = await widget.exporter.export(
         ExportSpec(
           segments: widget.segments,
+          captions: widget.captions,
+          audioTracks: widget.audioTracks,
           width: w,
           height: h,
           filename: 'EaseCut_${DateTime.now().millisecondsSinceEpoch}.mp4',

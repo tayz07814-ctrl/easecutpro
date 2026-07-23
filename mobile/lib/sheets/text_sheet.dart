@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../editor/text_overlay.dart';
 import '../theme.dart';
 import '../widgets/controls.dart';
 import 'sheet_scaffold.dart';
 
-/// Text panel (MobileTextPanel.tsx) — 3 tabs: Text / Font / Style. UI only; the
-/// draft commits to a real text clip once the timeline/text engine is wired.
+/// Text panel (MobileTextPanel.tsx) — 3 tabs: Text / Font / Style. "Add to
+/// timeline" emits a real [TextOverlay] the editor shows in preview and bakes on export.
 class TextSheet extends StatefulWidget {
-  const TextSheet({super.key});
+  final void Function(TextOverlay) onAdd;
+  const TextSheet({super.key, required this.onAdd});
 
   @override
   State<TextSheet> createState() => _TextSheetState();
@@ -80,9 +82,19 @@ class _TextSheetState extends State<TextSheet> {
         ),
         const SizedBox(height: 16),
         GestureDetector(
-          onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Text drops on the timeline in the next build'), backgroundColor: Ec.card),
-          ),
+          onTap: () {
+            if (_text.text.trim().isEmpty) return;
+            widget.onAdd(TextOverlay(
+              text: _text.text.trim(),
+              fontSize: _size,
+              color: _color,
+              bold: _bold,
+              bg: _bg,
+              startMs: 0,
+              endMs: 0,
+            ));
+            Navigator.of(context).pop();
+          },
           child: Container(
             height: 50,
             alignment: Alignment.center,

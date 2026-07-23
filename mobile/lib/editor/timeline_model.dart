@@ -88,6 +88,17 @@ class TimelineModel extends ChangeNotifier {
     return t;
   }
 
+  /// Map a SOURCE-time (ms) to the EDITED timeline position; null if it lies in a
+  /// removed region (used to place captions correctly after Cut Lord).
+  int? sourceToEdited(int sourceMs) {
+    int t = 0;
+    for (final c in clips) {
+      if (sourceMs >= c.inMs && sourceMs < c.outMs) return t + (sourceMs - c.inMs);
+      t += c.lengthMs;
+    }
+    return null;
+  }
+
   void select(int index) {
     selected = (index >= 0 && index < clips.length) ? index : -1;
     notifyListeners();

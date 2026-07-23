@@ -71,6 +71,14 @@ class NativeExporter {
     }
   }
 
+  /// Extract the clip's audio to a compact .m4a for transcription (Cut Lord).
+  Future<String> extractAudio(String uri) async {
+    final r = await _m.invokeMethod<Map<dynamic, dynamic>>('extractAudio', {'uri': uri});
+    final path = r?['path'] as String?;
+    if (path == null) throw Exception('audio extract returned no path');
+    return path;
+  }
+
   Future<ExportResult> export(ExportSpec spec, {void Function(double pct)? onProgress}) async {
     StreamSubscription<dynamic>? sub;
     if (onProgress != null) {

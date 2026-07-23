@@ -40,9 +40,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _openEditor() {
+  void _openEditor({String? clipPath, String? clipName}) {
     Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => const EditorScreen()))
+        .push(MaterialPageRoute(
+            builder: (_) => EditorScreen(initialClipPath: clipPath, initialClipName: clipName)))
         .then((_) => _load());
   }
 
@@ -51,12 +52,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => NewProjectWizard(onCreate: () async {
+      builder: (_) => NewProjectWizard(onCreate: (path, name) async {
         Navigator.of(context).pop();
         try {
-          await Backend.createProject('New project');
+          await Backend.createProject(name ?? 'New project');
         } catch (_) {}
-        if (mounted) _openEditor();
+        if (mounted) _openEditor(clipPath: path, clipName: name);
       }),
     );
   }

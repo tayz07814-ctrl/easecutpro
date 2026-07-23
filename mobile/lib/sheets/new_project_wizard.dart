@@ -7,7 +7,8 @@ import 'sheet_scaffold.dart';
 /// New Project wizard (NewProjectWizard.tsx) — pick file(s) + choose enhancements.
 /// UI + navigation only for now; the actual import/processing wires in next.
 class NewProjectWizard extends StatefulWidget {
-  final VoidCallback onCreate;
+  /// Called with the first picked clip (path + name) so the editor auto-loads it.
+  final void Function(String? path, String? name) onCreate;
   const NewProjectWizard({super.key, required this.onCreate});
 
   @override
@@ -15,7 +16,7 @@ class NewProjectWizard extends StatefulWidget {
 }
 
 class _NewProjectWizardState extends State<NewProjectWizard> {
-  final List<String> _files = [];
+  final List<PlatformFile> _files = [];
   bool _cutSilence = true;
   bool _autoCaptions = false;
 
@@ -25,7 +26,7 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
     setState(() {
       _files
         ..clear()
-        ..addAll(res.files.map((f) => f.name));
+        ..addAll(res.files);
     });
   }
 
@@ -70,7 +71,7 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
                           style: const TextStyle(color: Ec.textFaint, fontSize: 12.5)),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(e.value,
+                        child: Text(e.value.name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(color: Ec.textDim, fontSize: 12.5)),
@@ -109,7 +110,7 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
               ),
               const Spacer(),
               GestureDetector(
-                onTap: ready ? widget.onCreate : null,
+                onTap: ready ? () => widget.onCreate(_files.first.path, _files.first.name) : null,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                   decoration: BoxDecoration(

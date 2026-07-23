@@ -3,7 +3,11 @@ import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../cloud/stt.dart' show Word;
 import '../editor/timeline_model.dart';
+import '../editor/text_overlay.dart';
+import '../editor/cutcutpro.dart';
+import '../editor/cutlord.dart';
 import '../native/exporter.dart';
 import '../native/player.dart';
 import '../theme.dart';
@@ -22,7 +26,11 @@ import '../sheets/silence_modal.dart';
 /// next — Cut Lord) runs off a single [TimelineModel] of base-video clips fed to the
 /// native ExoPlayer (preview) and Media3 Transformer (export).
 class EditorScreen extends StatefulWidget {
-  const EditorScreen({super.key});
+  /// When opened from New Project, the clip picked in the wizard so the editor
+  /// auto-loads it (no need to import again).
+  final String? initialClipPath;
+  final String? initialClipName;
+  const EditorScreen({super.key, this.initialClipPath, this.initialClipName});
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
@@ -46,11 +54,20 @@ class _EditorScreenState extends State<EditorScreen> {
 
   double _stageFrac = 0.46;
   bool _selected = false;
+  final List<TextOverlay> _texts = []; // text + caption overlays
+  List<Word>? _transcript; // cached STT (reused by Cut Lord + Captions)
+  final List<ExportSegment> _audioTracks = []; // imported music/voiceover (mixed on export)
+  final List<String> _audioNames = [];
 
   @override
   void initState() {
     super.initState();
     _model.addListener(_onModel);
+    if (widget.initialClipPath != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _importPath(widget.initialClipPath!, widget.initialClipName),
+      );
+    }
   }
 
   @override
@@ -71,15 +88,21 @@ class _EditorScreenState extends State<EditorScreen> {
   int get _totalMs => _model.totalMs > 0 ? _model.totalMs : _sourceDurationMs;
 
   Future<void> _import() async {
+    final res = await FilePicker.pickFiles(type: FileType.video);
+    final path = res?.files.single.path;
+    if (path == null) return;
+    await _importPath(path, res!.files.single.name);
+  }
+
+  Future<void> _importPath(String path, [String? name]) async {
     try {
-      final res = await FilePicker.pickFiles(type: FileType.video);
-      final path = res?.files.single.path;
-      if (path == null) return;
       setState(() {
-        _clipName = res!.files.single.name;
+        _clipName = name ?? path.split('/').last;
         _positionMs = 0;
         _sourceDurationMs = 0;
         _playing = false;
+        _transcript = null;
+        _texts.clear();
       });
       _textureId ??= await _player.create();
       _stateSub ??= _player.states.listen(_onState);
@@ -172,11 +195,22 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   // ---- sheets ----
-  void _openExport() {
+  Future<void> _openExport() async {
     if (!_hasBase) {
       _toast('Import a clip first');
       return;
     }
+    final size = _player.videoSize;
+    final w = size.width.round().clamp(16, 4096);
+    final h = size.height.round().clamp(16, 4096);
+    // Bake text/caption overlays to full-frame PNGs at the output resolution.
+    final caps = <ExportOverlay>[];
+    for (final t in _texts) {
+      if (t.text.trim().isEmpty || t.endMs <= t.startMs) continue;
+      final b = await t.bakePngBase64(w, h);
+      caps.add(ExportOverlay(base64: b, startMs: t.startMs, endMs: t.endMs));
+    }
+    if (!mounted) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -184,7 +218,9 @@ class _EditorScreenState extends State<EditorScreen> {
       builder: (_) => ExportSheet(
         exporter: _exporter,
         segments: _model.exportSegments(),
-        videoSize: _player.videoSize,
+        captions: caps,
+        audioTracks: _audioTracks,
+        videoSize: size,
       ),
     );
   }
@@ -198,13 +234,121 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  void _openCutLord() => _openSheet(CutLordSheet(onOpenSilence: () {
+  void _openCutLord() => _openSheet(CutLordSheet(
+        onOpenSilence: () {
+          Navigator.of(context).pop();
+          _openSilence();
+        },
+        onRun: _runCutLord,
+      ));
+  void _openCaptions() => _openSheet(CaptionsSheet(onGenerate: (_) => _generateCaptions()));
+
+  // ---- Cut Lord: extract audio → transcribe → judge → apply cuts ----
+  Future<void> _runCutLord(CutLordModel model, bool cutSilence) async {
+    if (!_hasBase || _model.sourcePath == null) {
+      _toast('Import a clip first');
+      return;
+    }
+    final prog = ValueNotifier<String>('Starting…');
+    _showProgress(prog);
+    try {
+      _transcript ??=
+          await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
+      final res = await judge(_transcript!, model, _sourceDurationMs / 1000.0,
+          cutSilence: cutSilence, onProgress: (p, m) => prog.value = m);
+      _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
+      _model.applyKeepRanges(res.keeps);
+      await _reload(seekTo: 0);
+      if (mounted) Navigator.of(context).pop();
+      _toast(res.savedS < 0.4 ? 'Looks clean — nothing to cut!' : '${model.label}: trimmed ${res.savedS.toStringAsFixed(1)}s');
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      _toast('Cut Lord failed: ${_cleanErr(e)}');
+    } finally {
+      prog.dispose();
+    }
+  }
+
+  Future<void> _generateCaptions() async {
+    if (!_hasBase || _model.sourcePath == null) {
+      _toast('Import a clip first');
+      return;
+    }
+    final prog = ValueNotifier<String>('Starting…');
+    _showProgress(prog);
+    try {
+      _transcript ??=
+          await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
+      final lines = groupCaptions(_transcript!);
+      _texts.removeWhere((t) => t.isCaption);
+      for (final l in lines) {
+        final s = _model.sourceToEdited((l.startS * 1000).round());
+        if (s == null) continue;
+        final e0 = _model.sourceToEdited((l.endS * 1000).round()) ?? (s + 500);
+        final e = e0 <= s ? (s + 500) : (e0 > _totalMs ? _totalMs : e0);
+        _texts.add(TextOverlay(
+            text: l.text, y: 0.85, fontSize: 0.05, bold: true, startMs: s, endMs: e, isCaption: true));
+      }
+      if (mounted) {
         Navigator.of(context).pop();
-        _openSilence();
+        setState(() {});
+      }
+      _toast('${_texts.where((t) => t.isCaption).length} caption lines added');
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      _toast('Captions failed: ${_cleanErr(e)}');
+    } finally {
+      prog.dispose();
+    }
+  }
+
+  void _showProgress(ValueNotifier<String> msg) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Dialog(
+        backgroundColor: Ec.card,
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Ec.indigo)),
+              const SizedBox(width: 16),
+              Flexible(
+                child: ValueListenableBuilder<String>(
+                  valueListenable: msg,
+                  builder: (_, v, _) => Text(v, style: const TextStyle(color: Ec.text, fontSize: 13)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _cleanErr(Object e) {
+    var s = e.toString();
+    if (s.startsWith('Exception: ')) s = s.substring(11);
+    return s.length > 140 ? '${s.substring(0, 140)}…' : s;
+  }
+  void _openText() => _openSheet(TextSheet(onAdd: (t) {
+        t.startMs = _positionMs;
+        t.endMs = (_positionMs + 3000).clamp(0, _totalMs > 0 ? _totalMs : _positionMs + 3000);
+        setState(() => _texts.add(t));
       }));
-  void _openCaptions() => _openSheet(const CaptionsSheet());
-  void _openText() => _openSheet(const TextSheet());
-  void _openAudio() => _openSheet(const AudioSheet());
+  void _openAudio() => _openSheet(AudioSheet(
+        names: _audioNames,
+        onImport: (path, name) => setState(() {
+          _audioTracks.add(ExportSegment(uri: 'file://$path', startMs: 0, endMs: 0));
+          _audioNames.add(name);
+        }),
+        onRemove: (i) => setState(() {
+          _audioTracks.removeAt(i);
+          _audioNames.removeAt(i);
+        }),
+      ));
   void _openSettings() => _openSheet(const SettingsSheet());
   void _openSilence() => showDialog(context: context, builder: (_) => const SilenceModal());
 
@@ -311,7 +455,22 @@ class _EditorScreenState extends State<EditorScreen> {
         color: Ec.stage,
         alignment: Alignment.center,
         child: _hasBase
-            ? AspectRatio(aspectRatio: _aspect, child: Texture(textureId: _textureId!))
+            ? AspectRatio(
+                aspectRatio: _aspect,
+                child: LayoutBuilder(
+                  builder: (context, c) {
+                    final frame = Size(c.maxWidth, c.maxHeight);
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Texture(textureId: _textureId!),
+                        for (final t in _texts)
+                          if (t.activeAt(_positionMs)) TextOverlayView(t: t, frame: frame),
+                      ],
+                    );
+                  },
+                ),
+              )
             : GestureDetector(
                 onTap: _import,
                 behavior: HitTestBehavior.opaque,

@@ -10,6 +10,7 @@ import android.provider.MediaStore
 import android.util.Base64
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
@@ -95,7 +96,41 @@ class EcExport(
         when (call.method) {
             "ping" -> result.success(mapOf("ok" to true))
             "export" -> startExport(call, result)
+            "extractAudio" -> extractAudio(call, result)
             else -> result.notImplemented()
+        }
+    }
+
+    private var audioTx: Transformer? = null
+
+    /** Extract the source's audio to a compact AAC .m4a (for Cut Lord transcription). */
+    private fun extractAudio(call: MethodCall, result: MethodChannel.Result) {
+        val uri = call.argument<String>("uri")
+        if (uri == null) {
+            result.error("ec_export", "no uri", null)
+            return
+        }
+        try {
+            val item = EditedMediaItem.Builder(MediaItem.fromUri(uri)).setRemoveVideo(true).build()
+            val out = File(context.cacheDir, "ec_audio_${System.currentTimeMillis()}.m4a")
+            val t = Transformer.Builder(context)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        audioTx = null
+                        result.success(mapOf("path" to out.absolutePath))
+                    }
+
+                    override fun onError(composition: Composition, exportResult: ExportResult, exception: ExportException) {
+                        audioTx = null
+                        result.error("ec_export", "audio extract failed: ${exception.message}", null)
+                    }
+                })
+                .build()
+            audioTx = t
+            t.start(item, out.absolutePath)
+        } catch (e: Exception) {
+            result.error("ec_export", "audio extract could not start: ${e.message}", null)
         }
     }
 

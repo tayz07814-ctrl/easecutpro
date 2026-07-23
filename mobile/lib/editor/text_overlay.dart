@@ -1,0 +1,107 @@
+import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+
+/// A timed text overlay shown over the preview and baked into the export.
+class TextOverlay {
+  String text;
+  double x; // 0..1 (center)
+  double y; // 0..1 (center)
+  double fontSize; // fraction of frame height
+  Color color;
+  bool bold;
+  bool bg;
+  Color bgColor;
+  int startMs;
+  int endMs;
+  bool isCaption; // generated caption line (replaced on regenerate)
+
+  TextOverlay({
+    required this.text,
+    this.x = 0.5,
+    this.y = 0.82,
+    this.fontSize = 0.06,
+    this.color = Colors.white,
+    this.bold = true,
+    this.bg = false,
+    this.bgColor = Colors.black,
+    required this.startMs,
+    required this.endMs,
+    this.isCaption = false,
+  });
+
+  bool activeAt(int ms) => ms >= startMs && ms < endMs;
+
+  TextStyle style(double frameH) => TextStyle(
+        color: color,
+        fontSize: fontSize * frameH,
+        fontWeight: bold ? FontWeight.w800 : FontWeight.w500,
+        height: 1.15,
+        shadows: bg
+            ? null
+            : const [Shadow(color: Colors.black, blurRadius: 3, offset: Offset(0, 1))],
+      );
+
+  /// Bake to a full-frame transparent PNG at the OUTPUT resolution, returned as
+  /// base64 (no data: prefix) — the shape the native Media3 OverlayEffect wants.
+  Future<String> bakePngBase64(int width, int height) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()));
+    final tp = TextPainter(
+      text: TextSpan(text: text.isEmpty ? ' ' : text, style: style(height.toDouble())),
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.center,
+    );
+    tp.layout(maxWidth: width * 0.9);
+    final cx = x * width;
+    final cy = y * height;
+    final left = cx - tp.width / 2;
+    final top = cy - tp.height / 2;
+    if (bg) {
+      final pad = tp.height * 0.14;
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(left - pad, top - pad, tp.width + pad * 2, tp.height + pad * 2),
+        Radius.circular(tp.height * 0.14),
+      );
+      canvas.drawRRect(rect, Paint()..color = bgColor.withValues(alpha: 0.85));
+    }
+    tp.paint(canvas, Offset(left, top));
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(width, height);
+    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+    img.dispose();
+    picture.dispose();
+    final u8 = bytes!.buffer.asUint8List();
+    return base64Encode(u8);
+  }
+}
+
+/// A widget that renders an overlay over the preview at its (x,y) fraction.
+class TextOverlayView extends StatelessWidget {
+  final TextOverlay t;
+  final Size frame;
+  const TextOverlayView({super.key, required this.t, required this.frame});
+
+  @override
+  Widget build(BuildContext context) {
+    final child = Text(t.text, textAlign: TextAlign.center, style: t.style(frame.height));
+    final wrapped = t.bg
+        ? Container(
+            padding: EdgeInsets.symmetric(horizontal: t.fontSize * frame.height * 0.25, vertical: t.fontSize * frame.height * 0.1),
+            decoration: BoxDecoration(
+              color: t.bgColor.withValues(alpha: 0.85),
+              borderRadius: BorderRadius.circular(t.fontSize * frame.height * 0.14),
+            ),
+            child: child,
+          )
+        : child;
+    return Align(
+      alignment: Alignment(t.x * 2 - 1, t.y * 2 - 1),
+      child: FractionallySizedBox(widthFactor: 0.92, child: Center(child: wrapped)),
+    );
+  }
+}
+
+Uint8List b64(String s) => base64Decode(s);

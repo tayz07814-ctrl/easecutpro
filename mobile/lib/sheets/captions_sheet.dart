@@ -6,7 +6,8 @@ import 'sheet_scaffold.dart';
 /// Captions sheet (MobileEditor.tsx CaptionsSheet). Style cards + Generate button.
 /// Generation wires to the transcript/captions backend in the next build.
 class CaptionsSheet extends StatefulWidget {
-  const CaptionsSheet({super.key});
+  final void Function(String style) onGenerate;
+  const CaptionsSheet({super.key, required this.onGenerate});
 
   @override
   State<CaptionsSheet> createState() => _CaptionsSheetState();
@@ -36,9 +37,10 @@ class _CaptionsSheetState extends State<CaptionsSheet> {
           ),
           const SizedBox(height: 18),
           GestureDetector(
-            onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Captions generate from your transcript in the next build'), backgroundColor: Ec.card),
-            ),
+            onTap: () {
+              Navigator.of(context).pop();
+              widget.onGenerate(_style);
+            },
             child: Container(
               height: 50,
               alignment: Alignment.center,
