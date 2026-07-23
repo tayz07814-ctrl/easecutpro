@@ -527,52 +527,74 @@ class _EditorScreenState extends State<EditorScreen> {
       ));
   void _openCaptions() => _openSheet(CaptionsSheet(onGenerate: (_) => _generateCaptions()));
 
-  // ---- Cut Lord: extract audio → transcribe → judge → REVIEW → apply cuts ----
+  // ---- Cut Lord: transcribe → SHOW transcript → judge in background → apply ----
   Future<void> _runCutLord(CutLordModel model, bool cutSilence) async {
     if (!_hasBase || _model.sourcePath == null) {
       _toast('Import a clip first');
       return;
     }
+    // 1) Transcribe (the only blocking step — the transcript drives everything).
     final prog = ValueNotifier<String>('Starting…');
     _showProgress(prog);
     try {
       _transcript ??=
           await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
-      final res = await judge(
-        _transcript!,
-        model,
-        _sourceDurationMs / 1000.0,
-        cutSilence: cutSilence,
-        minPauseS: SilenceSettings.trimS,
-        padS: SilenceSettings.keepS,
-        onProgress: (p, m) => prog.value = m,
-      );
-      if (mounted) Navigator.of(context).pop(); // close progress dialog
-      if (res.wordCuts.isEmpty) {
-        // Nothing spoken to trim — apply silence-only (or report clean).
-        if (cutSilence) {
-          _applyCuts(const [], cutSilence, model.label);
-        } else {
-          _toast('Looks clean — nothing to cut!');
-        }
-        return;
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      prog.dispose();
+      _toast('Transcription failed: ${_cleanErr(e)}');
+      return;
+    }
+    if (mounted) Navigator.of(context).pop();
+    prog.dispose();
+    final words = _transcript!;
+    if (words.isEmpty) {
+      _toast('Couldn’t hear any speech to cut.');
+      return;
+    }
+
+    // 2) Open the transcript review immediately; the AI judge runs in the background.
+    final aiCuts = ValueNotifier<List<List<int>>>(const []);
+    final judging = ValueNotifier<bool>(true);
+    var closed = false;
+
+    // Background judge — a hard timeout so a slow/blocked model never traps the user
+    // on an empty proposal; the transcript stays fully usable for manual cuts.
+    Future(() async {
+      try {
+        final res = await judge(
+          words,
+          model,
+          _sourceDurationMs / 1000.0,
+          cutSilence: cutSilence,
+          minPauseS: SilenceSettings.trimS,
+          padS: SilenceSettings.keepS,
+        ).timeout(const Duration(seconds: 130));
+        if (!closed) aiCuts.value = res.wordCuts;
+      } catch (_) {
+        // leave the review manual — the model was slow, blocked, or found nothing
+      } finally {
+        if (!closed) judging.value = false;
       }
-      // Review pass: let the user confirm/adjust before committing.
-      _openSheet(CutReviewSheet(
-        words: _transcript!,
-        initialCuts: res.wordCuts,
+    });
+
+    if (!mounted) return;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => CutReviewSheet(
+        words: words,
+        aiCuts: aiCuts,
+        judging: judging,
         modelLabel: model.label,
         onExecute: (finalCuts) {
           Navigator.of(context).pop(); // close review sheet
           _applyCuts(finalCuts, cutSilence, model.label);
         },
-      ));
-    } catch (e) {
-      if (mounted) Navigator.of(context).pop();
-      _toast('Cut Lord failed: ${_cleanErr(e)}');
-    } finally {
-      prog.dispose();
-    }
+      ),
+    );
+    closed = true;
   }
 
   /// Compute keep-ranges from (reviewed) word cuts + silence, snapshot for undo,
@@ -930,7 +952,7 @@ class _EditorScreenState extends State<EditorScreen> {
                           child: _cropped(Texture(textureId: _textureId!)),
                         ),
                         for (final t in _texts)
-                          if (t.activeAt(_positionMs))
+                          if (t.activeAt(_positionMs) || identical(t, _selectedText))
                             EditableOverlay(
                               t: t,
                               frame: frame,

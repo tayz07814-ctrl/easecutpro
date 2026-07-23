@@ -1,22 +1,26 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../cloud/stt.dart' show Word;
 import '../theme.dart';
 import 'sheet_scaffold.dart';
 
-/// Cut Lord REVIEW pass: the AI's proposed word cuts shown over the transcript.
-/// Tap a word to keep/cut it; struck-through red = will be removed. "Execute"
-/// emits the final inclusive index ranges so the editor computes keep-ranges.
+/// Cut Lord REVIEW pass. Opens the moment transcription finishes so the transcript
+/// is ALWAYS visible; the (slow) AI judge runs in the background and its proposed
+/// cuts stream in via [aiCuts]. Tap a word to keep/cut; "Execute" emits the final
+/// inclusive index ranges. The user can cut manually even if the AI is slow/fails.
 class CutReviewSheet extends StatefulWidget {
   final List<Word> words;
-  final List<List<int>> initialCuts; // inclusive index ranges
+  final ValueListenable<List<List<int>>> aiCuts; // AI proposal (may arrive late / empty)
+  final ValueListenable<bool> judging; // true while the AI judge is still running
   final String modelLabel;
   final void Function(List<List<int>> finalCuts) onExecute;
 
   const CutReviewSheet({
     super.key,
     required this.words,
-    required this.initialCuts,
+    required this.aiCuts,
+    required this.judging,
     required this.modelLabel,
     required this.onExecute,
   });
@@ -27,14 +31,39 @@ class CutReviewSheet extends StatefulWidget {
 
 class _CutReviewSheetState extends State<CutReviewSheet> {
   final Set<int> _cut = {};
+  List<List<int>> _lastAi = const [];
 
   @override
   void initState() {
     super.initState();
-    for (final r in widget.initialCuts) {
+    _mergeAi(widget.aiCuts.value);
+    widget.aiCuts.addListener(_onAi);
+    widget.judging.addListener(_onJudging);
+  }
+
+  @override
+  void dispose() {
+    widget.aiCuts.removeListener(_onAi);
+    widget.judging.removeListener(_onJudging);
+    super.dispose();
+  }
+
+  void _onAi() {
+    setState(() => _mergeAi(widget.aiCuts.value));
+  }
+
+  void _onJudging() {
+    if (mounted) setState(() {});
+  }
+
+  /// Merge freshly-proposed AI ranges into the cut set (keeps the user's own edits).
+  void _mergeAi(List<List<int>> ranges) {
+    if (identical(ranges, _lastAi)) return;
+    _lastAi = ranges;
+    for (final r in ranges) {
       if (r.length == 2) {
-        for (int i = r[0]; i <= r[1]; i++) {
-          _cut.add(i);
+        for (int i = r[0]; i <= r[1] && i < widget.words.length; i++) {
+          if (i >= 0) _cut.add(i);
         }
       }
     }
@@ -63,11 +92,17 @@ class _CutReviewSheetState extends State<CutReviewSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final judging = widget.judging.value;
     return SheetScaffold(
       title: 'Review cuts',
       heightFactor: 0.86,
-      trailing: Text('${widget.modelLabel} · ~${_savedS.toStringAsFixed(1)}s',
-          style: const TextStyle(color: Ec.textMute, fontSize: 12)),
+      trailing: judging
+          ? const Row(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 2, color: Ec.indigo)),
+              SizedBox(width: 7),
+              Text('Finding cuts…', style: TextStyle(color: Ec.textMute, fontSize: 12)),
+            ])
+          : Text('~${_savedS.toStringAsFixed(1)}s', style: const TextStyle(color: Ec.textMute, fontSize: 12)),
       child: Column(
         children: [
           const Padding(
@@ -98,6 +133,13 @@ class _CutReviewSheetState extends State<CutReviewSheet> {
                 children: [
                   Text('${_cut.length} cut',
                       style: const TextStyle(color: Ec.textDim, fontSize: 13, fontWeight: FontWeight.w600)),
+                  if (_cut.isNotEmpty) ...[
+                    const SizedBox(width: 10),
+                    GestureDetector(
+                      onTap: () => setState(() => _cut.clear()),
+                      child: const Text('Clear', style: TextStyle(color: Ec.textMute, fontSize: 12.5)),
+                    ),
+                  ],
                   const Spacer(),
                   GestureDetector(
                     onTap: () => Navigator.of(context).pop(),
