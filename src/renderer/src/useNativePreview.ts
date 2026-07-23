@@ -109,6 +109,13 @@ export function useNativePreview(params: {
   const anchorSec = useRef(0)
   const anchorWall = useRef(0)
   const lastStoreWrite = useRef(0)
+  // Watchdog: if the native player doesn't advance shortly after Play (stuck / no
+  // events on this device), hand playback back to the HTML player so the timeline
+  // is never frozen. Tracked from the last FORWARD-progress sample.
+  const lastReportedMs = useRef(-1)
+  const lastProgressWall = useRef(0)
+  const playingRef = useRef(playing)
+  playingRef.current = playing
 
   // (Re)load the playlist whenever the eligible cut changes.
   useEffect(() => {
@@ -166,18 +173,16 @@ export function useNativePreview(params: {
     let disposed = false
     const onState = (st: NativePlayerState): void => {
       if (!nativeActiveRef.current) return
-      const sec = st.timelineMs / 1000
-      anchorSec.current = sec
-      anchorWall.current = performance.now()
-      if (st.ended) {
-        setPlaying(false)
-        return
-      }
       const now = performance.now()
-      if (now - lastStoreWrite.current > 120) {
-        lastStoreWrite.current = now
-        setPlayhead(Math.min(sec, totalRef.current))
+      // Re-anchor the interpolation clock to the native picture, and note real
+      // forward progress so the watchdog knows the player is actually advancing.
+      if (st.timelineMs > lastReportedMs.current + 5) {
+        lastReportedMs.current = st.timelineMs
+        lastProgressWall.current = now
       }
+      anchorSec.current = st.timelineMs / 1000
+      anchorWall.current = now
+      if (st.ended) setPlaying(false)
     }
     Promise.resolve(nativePlayer.onState(onState)).then((h) => {
       if (disposed) void h?.remove?.()
@@ -190,19 +195,44 @@ export function useNativePreview(params: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature])
 
-  // Smooth clock interpolation between native samples (only while active).
+  // Drive the clock + the store playhead from a wall-clock interpolation anchored
+  // to native samples — so the TIMELINE CURSOR advances on Play even if native
+  // events are sparse (the "stuck clock" fix). A watchdog hands playback back to
+  // the HTML player if native isn't actually progressing on this device.
   useEffect(() => {
     let raf = 0
     const tick = (): void => {
       if (nativeActiveRef.current) {
-        const t = anchorSec.current + (performance.now() - anchorWall.current) / 1000
-        playClock.t = Math.min(t, totalRef.current)
+        const now = performance.now()
+        const t = Math.min(anchorSec.current + (now - anchorWall.current) / 1000, totalRef.current)
+        playClock.t = t
+        if (now - lastStoreWrite.current > 90) {
+          lastStoreWrite.current = now
+          setPlayhead(t)
+        }
+        if (t >= totalRef.current - 0.02 && playingRef.current) {
+          setPlaying(false)
+        } else if (
+          playingRef.current &&
+          now - lastProgressWall.current > 1800 &&
+          anchorSec.current < totalRef.current - 0.3
+        ) {
+          // Native player isn't advancing (stuck / no state events on this device):
+          // fall back to the proven HTML preview for the rest of the session so the
+          // timeline is never frozen. A reload re-enables the native attempt.
+          disabledForSession = true
+          nativeActiveRef.current = false
+          document.body.classList.remove('ec-native-active')
+          setNativeShowing(false)
+          void nativePlayer.setActive(false)
+        }
       }
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [nativeActiveRef])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Transport: play → activate native surface + play; pause → deactivate (HTML resumes).
   useEffect(() => {
@@ -224,6 +254,9 @@ export function useNativePreview(params: {
           await nativePlayer.seek(Math.round(playhead * 1000))
           anchorSec.current = playhead
           anchorWall.current = performance.now()
+          // Arm the watchdog from this moment; native must show forward progress.
+          lastReportedMs.current = Math.round(playhead * 1000)
+          lastProgressWall.current = performance.now()
           await nativePlayer.setActive(true)
           if (cancelled) return
           nativeActiveRef.current = true

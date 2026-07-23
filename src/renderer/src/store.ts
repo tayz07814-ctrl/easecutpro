@@ -3655,11 +3655,18 @@ export const useStore = create<AppState>((set, get) => ({
       // straight to the gallery. Returns null when the timeline needs compositing,
       // which drops to the WebCodecs exporter below (unchanged on web/desktop).
       const chosenName = (settings.filename ?? '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim()
-      const native = await tryNativeCutExport(
-        get().project,
-        chosenName ? `${chosenName}.mp4` : `EaseCutPro_${Date.now()}.mp4`,
-        (percent, message) => set({ job: { active: true, kind: 'export', percent, message } })
-      )
+      let native: { savedTo?: string; path: string } | null = null
+      try {
+        native = await tryNativeCutExport(
+          get().project,
+          chosenName ? `${chosenName}.mp4` : `EaseCutPro_${Date.now()}.mp4`,
+          (percent, message) => set({ job: { active: true, kind: 'export', percent, message } })
+        )
+      } catch {
+        // Native export failed (e.g. Media3 couldn't concat this source) — don't
+        // hard-fail; fall through to the WebCodecs exporter below.
+        native = null
+      }
       if (native) {
         set({
           job: { active: false, percent: 100, message: native.savedTo ? `Saved to ${native.savedTo}` : 'Saved to your device' }
