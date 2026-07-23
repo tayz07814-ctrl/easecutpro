@@ -8,12 +8,12 @@ import 'sheet_scaffold.dart';
 /// live progress bar and reports the gallery location.
 class ExportSheet extends StatefulWidget {
   final NativeExporter exporter;
-  final String clipPath;
+  final List<ExportSegment> segments;
   final Size videoSize;
   const ExportSheet({
     super.key,
     required this.exporter,
-    required this.clipPath,
+    required this.segments,
     required this.videoSize,
   });
 
@@ -40,7 +40,7 @@ class _ExportSheetState extends State<ExportSheet> {
       final h = widget.videoSize.height.round().clamp(16, 4096);
       final res = await widget.exporter.export(
         ExportSpec(
-          segments: [ExportSegment(uri: 'file://${widget.clipPath}', startMs: 0, endMs: 0)],
+          segments: widget.segments,
           width: w,
           height: h,
           filename: 'EaseCut_${DateTime.now().millisecondsSinceEpoch}.mp4',
