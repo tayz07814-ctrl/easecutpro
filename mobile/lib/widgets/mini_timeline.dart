@@ -101,7 +101,9 @@ class _MiniTimelineState extends State<MiniTimeline> {
   double get _scrollOffset => _sc.hasClients ? _sc.offset : 0;
 
   /// Frames whose source-time falls within a clip's [in,out] (nearest if none).
+  /// Only the base source has a filmstrip; appended clips render as plain blocks.
   List<ThumbFrame> _clipThumbs(EcClip c) {
+    if (c.sourcePath != widget.model.sourcePath) return const [];
     final inR = widget.thumbs.where((t) => t.ms >= c.inMs && t.ms < c.outMs).toList();
     if (inR.isNotEmpty) return inR;
     if (widget.thumbs.isEmpty) return const [];
@@ -115,6 +117,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
 
   /// The whole-source peaks sliced to a clip's [in,out] source window.
   List<double> _clipPeaks(EcClip c) {
+    if (c.sourcePath != widget.model.sourcePath) return const [];
     final wf = widget.waveform;
     final dur = widget.sourceDurationMs;
     if (wf.isEmpty || dur <= 0) return const [];
@@ -155,8 +158,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 child: Text(
                   '${_fmt(widget.positionMs)} / ${_fmt(widget.totalMs)}',
                   style: const TextStyle(
-                      color: Color(0xFFEEF0F7), fontSize: 13, fontWeight: FontWeight.w600,
-                      fontFeatures: [FontFeature.tabularFigures()]),
+                      color: Color(0xFFEEF0F7), fontSize: 12.5, fontWeight: FontWeight.w600,
+                      fontFamily: Ec.mono, fontFeatures: [FontFeature.tabularFigures()]),
                 ),
               ),
               Positioned(

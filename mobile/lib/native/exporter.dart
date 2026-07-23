@@ -130,6 +130,16 @@ class NativeExporter {
     }
   }
 
+  /// Probe a media file's duration (ms), 0 if unknown.
+  Future<int> duration(String uri) async {
+    try {
+      final r = await _m.invokeMethod<Map<dynamic, dynamic>>('duration', {'uri': uri});
+      return (r?['durationMs'] as num?)?.toInt() ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// Decode the source's audio into [buckets] normalized (0..1) amplitude peaks.
   Future<List<double>> waveform(String uri, {int buckets = 400}) async {
     try {

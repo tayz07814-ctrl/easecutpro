@@ -40,7 +40,7 @@ class Ec {
   // Signals
   static const green = Color(0xFF7ED957);
 
-  static const mono = 'monospace';
+  static const mono = 'IBMPlexMono';
 
   static ThemeData themeData() {
     return ThemeData(
@@ -52,7 +52,7 @@ class Ec {
         secondary: indigo,
         surface: sheet,
       ),
-      fontFamily: 'Roboto',
+      fontFamily: 'InstrumentSans',
       splashFactory: InkRipple.splashFactory,
     );
   }

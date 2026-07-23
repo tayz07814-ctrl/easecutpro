@@ -233,6 +233,13 @@ class TimelineModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Append another source as a clip at the end of the timeline (multi-clip sequencing).
+  void appendClip(String path, int durationMs) {
+    if (durationMs <= 0) return;
+    clips.add(EcClip(path, 0, durationMs));
+    notifyListeners();
+  }
+
   /// Replace the whole clip list (undo/redo, restore a snapshot).
   void restore(List<EcClip> next) {
     clips

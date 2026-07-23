@@ -203,10 +203,33 @@ class _EditorScreenState extends State<EditorScreen> {
   int get _totalMs => _model.totalMs > 0 ? _model.totalMs : _sourceDurationMs;
 
   Future<void> _import() async {
-    final res = await FilePicker.pickFiles(type: FileType.video);
-    final path = res?.files.single.path;
-    if (path == null) return;
-    await _importPath(path, res!.files.single.name);
+    final res = await FilePicker.pickFiles(type: FileType.video, allowMultiple: true);
+    final files = res?.files.where((f) => f.path != null).toList() ?? [];
+    if (files.isEmpty) return;
+    if (!_hasBase) {
+      await _importPath(files.first.path!, files.first.name);
+      for (final f in files.skip(1)) {
+        await _appendClip(f.path!);
+      }
+    } else {
+      // Already have a base — append everything to the end of the timeline.
+      for (final f in files) {
+        await _appendClip(f.path!);
+      }
+    }
+  }
+
+  /// Probe [path]'s duration and append it as a clip at the end of the timeline.
+  Future<void> _appendClip(String path) async {
+    final durMs = await _exporter.duration('file://$path');
+    if (durMs <= 0) {
+      _toast('Couldn’t read one of the clips');
+      return;
+    }
+    _pushHistory();
+    _model.appendClip(path, durMs);
+    await _reload(seekTo: _positionMs);
+    _scheduleSave();
   }
 
   Future<void> _importPath(String path, [String? name]) async {

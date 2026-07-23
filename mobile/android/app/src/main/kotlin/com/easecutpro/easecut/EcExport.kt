@@ -114,6 +114,7 @@ class EcExport(
             "extractAudio" -> extractAudio(call, result)
             "thumbnails" -> thumbnails(call, result)
             "waveform" -> waveform(call, result)
+            "duration" -> duration(call, result)
             else -> result.notImplemented()
         }
     }
@@ -186,6 +187,30 @@ class EcExport(
                 }
             }
             main.post { result.success(mapOf("frames" to frames)) }
+        }.start()
+    }
+
+    /** Probe a media file's duration (ms) — cheap, for multi-clip sequencing. */
+    private fun duration(call: MethodCall, result: MethodChannel.Result) {
+        val uri = call.argument<String>("uri")
+        if (uri == null) {
+            result.error("ec_export", "no uri", null)
+            return
+        }
+        Thread {
+            var durMs = 0L
+            val r = MediaMetadataRetriever()
+            try {
+                r.setDataSource(context, Uri.parse(uri))
+                durMs = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            } catch (_: Exception) {
+            } finally {
+                try {
+                    r.release()
+                } catch (_: Exception) {
+                }
+            }
+            main.post { result.success(mapOf("durationMs" to durMs)) }
         }.start()
     }
 
