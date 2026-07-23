@@ -289,7 +289,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
   Widget _clip(TimelineModel model, int i) {
     final clip = model.clips[i];
     final selected = model.selected == i;
-    final w = (clip.lengthMs * _pxPerMs).clamp(6.0, double.infinity);
+    final w = (clip.timelineLenMs * _pxPerMs).clamp(6.0, double.infinity);
     return SizedBox(
       width: w,
       child: Stack(
@@ -401,7 +401,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
         },
         onHorizontalDragUpdate: (d) {
           final c = widget.model.clips[i];
-          final dMs = (d.delta.dx / _pxPerMs).round();
+          final s = c.speed <= 0 ? 1.0 : c.speed;
+          final dMs = (d.delta.dx / _pxPerMs * s).round(); // timeline px → source ms
           if (left) {
             widget.onTrim!(i, inMs: c.inMs + dMs);
           } else {

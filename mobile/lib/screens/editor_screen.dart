@@ -21,6 +21,7 @@ import '../sheets/text_sheet.dart';
 import '../sheets/audio_sheet.dart';
 import '../sheets/settings_sheet.dart';
 import '../sheets/silence_modal.dart';
+import '../sheets/clip_tools_sheets.dart';
 
 /// The EaseCut mobile editor. Everything (preview, export, split/trim/delete, and —
 /// next — Cut Lord) runs off a single [TimelineModel] of base-video clips fed to the
@@ -195,8 +196,96 @@ class _EditorScreenState extends State<EditorScreen> {
       case 'Split':
         _split();
         break;
+      case 'Speed':
+        _openSpeed();
+        break;
+      case 'Volume':
+        _openVolume();
+        break;
+      case 'Crop':
+        _openCrop();
+        break;
+      case 'Extract':
+        _extractClipAudio();
+        break;
       default:
-        _toast('$tool — wires in the next build');
+        _toast('$tool — coming soon');
+    }
+  }
+
+  /// The clip the selected-clip tools act on (selection, else the one at the playhead).
+  int _selectedIndex() {
+    if (_model.selected >= 0 && _model.selected < _model.clips.length) return _model.selected;
+    return _model.clipIndexAt(_positionMs);
+  }
+
+  Future<void> _openSpeed() async {
+    final i = _selectedIndex();
+    if (i < 0) return;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SpeedSheet(
+        initial: _model.clips[i].speed,
+        onChanged: (v) {
+          _model.setSpeed(i, v); // live timeline length; player reloads on close
+          setState(() {});
+        },
+      ),
+    );
+    await _reload(seekTo: _model.clipStartMs(i));
+  }
+
+  Future<void> _openVolume() async {
+    final i = _selectedIndex();
+    if (i < 0) return;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => VolumeSheet(
+        initial: _model.clips[i].volume,
+        onChanged: (v) => _model.setVolume(i, v),
+      ),
+    );
+    await _reload(seekTo: _model.clipStartMs(i));
+  }
+
+  void _openCrop() {
+    final i = _selectedIndex();
+    if (i < 0) return;
+    _openSheet(CropSheet(
+      sourceAspect: _aspect,
+      onPick: (l, t, r, b) {
+        _model.setCrop(i, l: l, t: t, r: r, b: b); // preview crop is Dart-side (no reload)
+        setState(() {});
+      },
+    ));
+  }
+
+  Future<void> _extractClipAudio() async {
+    final i = _selectedIndex();
+    if (i < 0) return;
+    final c = _model.clips[i];
+    final prog = ValueNotifier<String>('Extracting audio…');
+    _showProgress(prog);
+    try {
+      final path = await _exporter.extractAudio('file://${c.sourcePath}');
+      setState(() {
+        // Detached audio as its own track (clip window), and mute the source clip.
+        _audioTracks.add(ExportSegment(uri: 'file://$path', startMs: c.inMs, endMs: c.outMs));
+        _audioNames.add('Clip ${i + 1} audio');
+        _model.setVolume(i, 0);
+      });
+      if (mounted) Navigator.of(context).pop();
+      await _reload(seekTo: _model.clipStartMs(i));
+      _toast('Audio detached to its own track');
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      _toast('Extract failed: ${_cleanErr(e)}');
+    } finally {
+      prog.dispose();
     }
   }
 
@@ -457,6 +546,29 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  /// Cover-zoom the preview to the crop of the clip under the playhead (per-clip,
+  /// matching the export Crop effect).
+  Widget _cropped(Widget child) {
+    final idx = _model.clipIndexAt(_positionMs);
+    if (idx < 0 || idx >= _model.clips.length) return child;
+    final c = _model.clips[idx];
+    if (!c.hasCrop) return child;
+    final vw = (1 - c.cropL - c.cropR).clamp(0.05, 1.0);
+    final vh = (1 - c.cropT - c.cropB).clamp(0.05, 1.0);
+    final ax = (c.cropL + c.cropR) > 0 ? (c.cropL - c.cropR) / (c.cropL + c.cropR) : 0.0;
+    final ay = (c.cropT + c.cropB) > 0 ? (c.cropT - c.cropB) / (c.cropT + c.cropB) : 0.0;
+    return ClipRect(
+      child: LayoutBuilder(
+        builder: (_, bc) => OverflowBox(
+          alignment: Alignment(ax, ay),
+          maxWidth: bc.maxWidth / vw,
+          maxHeight: bc.maxHeight / vh,
+          child: SizedBox(width: bc.maxWidth / vw, height: bc.maxHeight / vh, child: child),
+        ),
+      ),
+    );
+  }
+
   Widget _stage(double screenH) {
     final h = (screenH * _stageFrac).clamp(160.0, screenH * 0.58);
     return SizedBox(
@@ -474,7 +586,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     return Stack(
                       fit: StackFit.expand,
                       children: [
-                        Texture(textureId: _textureId!),
+                        _cropped(Texture(textureId: _textureId!)),
                         for (final t in _texts)
                           if (t.activeAt(_positionMs)) TextOverlayView(t: t, frame: frame),
                       ],

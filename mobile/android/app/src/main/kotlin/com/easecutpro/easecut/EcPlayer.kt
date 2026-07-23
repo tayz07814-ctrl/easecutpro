@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Surface
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
@@ -47,6 +48,20 @@ class EcPlayer(
 
     private var starts = LongArray(0)
     private var ends = LongArray(0)
+    private var speeds = FloatArray(0)
+    private var vols = FloatArray(0)
+
+    /** Apply the current clip's speed + volume (per-item preview parity). */
+    private fun applyItemParams(idx: Int) {
+        val p = player ?: return
+        val s = if (idx in speeds.indices) speeds[idx] else 1f
+        val v = if (idx in vols.indices) vols[idx] else 1f
+        try {
+            p.playbackParameters = PlaybackParameters(if (s <= 0f) 1f else s)
+            p.volume = v.coerceIn(0f, 4f)
+        } catch (_: Exception) {
+        }
+    }
 
     private val main = Handler(Looper.getMainLooper())
     private var polling = false
@@ -59,11 +74,12 @@ class EcPlayer(
                     val idx = p.currentMediaItemIndex
                     val pos = maxOf(0L, p.contentPosition)
                     val base = if (idx in starts.indices) starts[idx] else 0L
+                    val sp = if (idx in speeds.indices && speeds[idx] > 0f) speeds[idx] else 1f
                     val dur = p.duration
                     sink.success(
                         mapOf(
                             "event" to "state",
-                            "timelineMs" to (base + pos),
+                            "timelineMs" to (base + (pos / sp).toLong()),
                             "durationMs" to (if (dur > 0) dur else 0L),
                             "playing" to p.isPlaying,
                             "ended" to (p.playbackState == Player.STATE_ENDED),
@@ -134,6 +150,10 @@ class EcPlayer(
                         events?.success(mapOf("event" to "size", "width" to w, "height" to h))
                     }
                 }
+
+                override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
+                    applyItemParams(player?.currentMediaItemIndex ?: 0)
+                }
             })
             player = p
         }
@@ -151,6 +171,8 @@ class EcPlayer(
         val items = ArrayList<MediaItem>()
         val s = LongArray(segs.size)
         val e = LongArray(segs.size)
+        val sp = FloatArray(segs.size) { 1f }
+        val vl = FloatArray(segs.size) { 1f }
         for (i in segs.indices) {
             val seg = segs[i]
             val uri = seg["uri"] as? String ?: continue
@@ -158,14 +180,19 @@ class EcPlayer(
             val endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
             s[i] = (seg["timelineStartMs"] as? Number)?.toLong() ?: 0L
             e[i] = (seg["timelineEndMs"] as? Number)?.toLong() ?: (s[i] + maxOf(0L, endMs - startMs))
+            sp[i] = (seg["speed"] as? Number)?.toFloat()?.coerceIn(0.1f, 8f) ?: 1f
+            vl[i] = (seg["volume"] as? Number)?.toFloat()?.coerceIn(0f, 4f) ?: 1f
             val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
             if (endMs > startMs) clip.setEndPositionMs(endMs)
             items.add(MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build())
         }
         starts = s
         ends = e
+        speeds = sp
+        vols = vl
         p.setMediaItems(items)
         p.prepare()
+        applyItemParams(p.currentMediaItemIndex)
         result.success(null)
     }
 
@@ -181,9 +208,11 @@ class EcPlayer(
                 }
                 if (i == starts.size - 1) idx = i
             }
-            val inClip = maxOf(0L, ms - (if (idx in starts.indices) starts[idx] else 0L))
+            val inClipTimeline = maxOf(0L, ms - (if (idx in starts.indices) starts[idx] else 0L))
+            val sp = if (idx in speeds.indices && speeds[idx] > 0f) speeds[idx] else 1f
+            val inClipSource = (inClipTimeline * sp).toLong()
             try {
-                p.seekTo(idx, inClip)
+                p.seekTo(idx, inClipSource)
             } catch (_: Exception) {
             }
         }

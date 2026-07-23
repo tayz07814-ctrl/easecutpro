@@ -9,6 +9,8 @@ class PlayerSegment {
   final int endMs; // trim out-point in the source (0 = to end)
   final int timelineStartMs; // where it sits on the global timeline
   final int timelineEndMs;
+  final double speed; // playback speed (timeline span = source span / speed)
+  final double volume; // 0..4 gain
 
   const PlayerSegment({
     required this.uri,
@@ -16,6 +18,8 @@ class PlayerSegment {
     required this.endMs,
     required this.timelineStartMs,
     required this.timelineEndMs,
+    this.speed = 1.0,
+    this.volume = 1.0,
   });
 
   Map<String, dynamic> toMap() => {
@@ -24,6 +28,8 @@ class PlayerSegment {
         'endMs': endMs,
         'timelineStartMs': timelineStartMs,
         'timelineEndMs': timelineEndMs,
+        'speed': speed,
+        'volume': volume,
       };
 }
 

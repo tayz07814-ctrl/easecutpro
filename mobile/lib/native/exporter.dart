@@ -24,8 +24,31 @@ class ExportSegment {
   final String uri;
   final int startMs;
   final int endMs;
-  const ExportSegment({required this.uri, required this.startMs, required this.endMs});
-  Map<String, dynamic> toMap() => {'uri': uri, 'startMs': startMs, 'endMs': endMs};
+  final double speed; // 1 = normal
+  final double volume; // 1 = unity gain, 0 = mute
+  final double cropL, cropT, cropR, cropB; // fractions cropped from each edge
+  const ExportSegment({
+    required this.uri,
+    required this.startMs,
+    required this.endMs,
+    this.speed = 1.0,
+    this.volume = 1.0,
+    this.cropL = 0,
+    this.cropT = 0,
+    this.cropR = 0,
+    this.cropB = 0,
+  });
+  Map<String, dynamic> toMap() => {
+        'uri': uri,
+        'startMs': startMs,
+        'endMs': endMs,
+        'speed': speed,
+        'volume': volume,
+        'cropL': cropL,
+        'cropT': cropT,
+        'cropR': cropR,
+        'cropB': cropB,
+      };
 }
 
 class ExportSpec {

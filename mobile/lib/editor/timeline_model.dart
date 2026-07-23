@@ -4,12 +4,40 @@ import '../native/exporter.dart';
 import '../native/player.dart';
 
 /// A trimmed slice of the source video placed on the base track.
+///
+/// Two time domains: SOURCE ([inMs]..[outMs], [lengthMs]) is the untouched media,
+/// while TIMELINE ([timelineLenMs]) is what the editor shows — the source length
+/// divided by [speed] (a 2× clip occupies half the timeline). [volume] and the
+/// [cropL]/[cropT]/[cropR]/[cropB] edge fractions are applied on export/preview.
 class EcClip {
   final String sourcePath; // absolute file path (no file:// prefix)
   int inMs; // source in-point
   int outMs; // source out-point (exclusive)
-  EcClip(this.sourcePath, this.inMs, this.outMs);
-  int get lengthMs => (outMs - inMs) < 0 ? 0 : (outMs - inMs);
+  double speed;
+  double volume;
+  double cropL, cropT, cropR, cropB; // fractions cropped from each edge (0..~0.9)
+  EcClip(
+    this.sourcePath,
+    this.inMs,
+    this.outMs, {
+    this.speed = 1.0,
+    this.volume = 1.0,
+    this.cropL = 0,
+    this.cropT = 0,
+    this.cropR = 0,
+    this.cropB = 0,
+  });
+
+  int get lengthMs => (outMs - inMs) < 0 ? 0 : (outMs - inMs); // source span
+  int get timelineLenMs {
+    final s = speed <= 0 ? 1.0 : speed;
+    return (lengthMs / s).round();
+  }
+
+  bool get hasCrop => cropL > 0 || cropT > 0 || cropR > 0 || cropB > 0;
+
+  EcClip copy() => EcClip(sourcePath, inMs, outMs,
+      speed: speed, volume: volume, cropL: cropL, cropT: cropT, cropR: cropR, cropB: cropB);
 }
 
 /// The editor's base-video timeline: an ordered list of [Clip]s. This is the
@@ -46,19 +74,21 @@ class TimelineModel extends ChangeNotifier {
     }
   }
 
-  int get totalMs => clips.fold(0, (a, c) => a + c.lengthMs);
+  int get totalMs => clips.fold(0, (a, c) => a + c.timelineLenMs);
 
   List<PlayerSegment> playerSegments() {
     final out = <PlayerSegment>[];
     int t = 0;
     for (final c in clips) {
-      final len = c.lengthMs > 0 ? c.lengthMs : 0;
+      final len = c.timelineLenMs > 0 ? c.timelineLenMs : 0;
       out.add(PlayerSegment(
         uri: 'file://${c.sourcePath}',
         startMs: c.inMs,
         endMs: c.outMs, // 0 = to end (unknown duration)
         timelineStartMs: t,
         timelineEndMs: t + len,
+        speed: c.speed,
+        volume: c.volume,
       ));
       t += len;
     }
@@ -66,15 +96,25 @@ class TimelineModel extends ChangeNotifier {
   }
 
   List<ExportSegment> exportSegments() => clips
-      .map((c) => ExportSegment(uri: 'file://${c.sourcePath}', startMs: c.inMs, endMs: c.outMs))
+      .map((c) => ExportSegment(
+            uri: 'file://${c.sourcePath}',
+            startMs: c.inMs,
+            endMs: c.outMs,
+            speed: c.speed,
+            volume: c.volume,
+            cropL: c.cropL,
+            cropT: c.cropT,
+            cropR: c.cropR,
+            cropB: c.cropB,
+          ))
       .toList();
 
   /// Clip index containing the given timeline position.
   int clipIndexAt(int timelineMs) {
     int t = 0;
     for (int i = 0; i < clips.length; i++) {
-      if (timelineMs >= t && timelineMs < t + clips[i].lengthMs) return i;
-      t += clips[i].lengthMs;
+      if (timelineMs >= t && timelineMs < t + clips[i].timelineLenMs) return i;
+      t += clips[i].timelineLenMs;
     }
     return clips.isEmpty ? -1 : clips.length - 1;
   }
@@ -83,7 +123,7 @@ class TimelineModel extends ChangeNotifier {
   int clipStartMs(int index) {
     int t = 0;
     for (int i = 0; i < index && i < clips.length; i++) {
-      t += clips[i].lengthMs;
+      t += clips[i].timelineLenMs;
     }
     return t;
   }
@@ -93,8 +133,11 @@ class TimelineModel extends ChangeNotifier {
   int? sourceToEdited(int sourceMs) {
     int t = 0;
     for (final c in clips) {
-      if (sourceMs >= c.inMs && sourceMs < c.outMs) return t + (sourceMs - c.inMs);
-      t += c.lengthMs;
+      if (sourceMs >= c.inMs && sourceMs < c.outMs) {
+        final s = c.speed <= 0 ? 1.0 : c.speed;
+        return t + ((sourceMs - c.inMs) / s).round();
+      }
+      t += c.timelineLenMs;
     }
     return null;
   }
@@ -109,19 +152,45 @@ class TimelineModel extends ChangeNotifier {
     int t = 0;
     for (int i = 0; i < clips.length; i++) {
       final c = clips[i];
-      if (timelineMs > t && timelineMs < t + c.lengthMs) {
-        final srcCut = c.inMs + (timelineMs - t);
+      if (timelineMs > t && timelineMs < t + c.timelineLenMs) {
+        final s = c.speed <= 0 ? 1.0 : c.speed;
+        final srcCut = c.inMs + ((timelineMs - t) * s).round();
+        final left = c.copy()..outMs = srcCut;
+        final right = c.copy()..inMs = srcCut;
         clips
           ..removeAt(i)
-          ..insert(i, EcClip(c.sourcePath, srcCut, c.outMs))
-          ..insert(i, EcClip(c.sourcePath, c.inMs, srcCut));
+          ..insert(i, right)
+          ..insert(i, left);
         selected = i;
         notifyListeners();
         return true;
       }
-      t += c.lengthMs;
+      t += c.timelineLenMs;
     }
     return false;
+  }
+
+  /// Per-clip tools (Speed / Volume / Crop).
+  void setSpeed(int index, double speed) {
+    if (index < 0 || index >= clips.length) return;
+    clips[index].speed = speed.clamp(0.1, 8.0);
+    notifyListeners();
+  }
+
+  void setVolume(int index, double volume) {
+    if (index < 0 || index >= clips.length) return;
+    clips[index].volume = volume.clamp(0.0, 4.0);
+    notifyListeners();
+  }
+
+  void setCrop(int index, {double? l, double? t, double? r, double? b}) {
+    if (index < 0 || index >= clips.length) return;
+    final c = clips[index];
+    if (l != null) c.cropL = l.clamp(0.0, 0.9);
+    if (t != null) c.cropT = t.clamp(0.0, 0.9);
+    if (r != null) c.cropR = r.clamp(0.0, 0.9);
+    if (b != null) c.cropB = b.clamp(0.0, 0.9);
+    notifyListeners();
   }
 
   void deleteClip(int index) {

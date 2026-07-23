@@ -20,8 +20,13 @@ import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.ChannelMixingAudioProcessor
+import androidx.media3.common.audio.ChannelMixingMatrix
+import androidx.media3.common.audio.SonicAudioProcessor
+import androidx.media3.effect.Crop
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -331,10 +336,41 @@ class EcExport(
                 }
                 val startMs = (seg["startMs"] as? Number)?.toLong() ?: 0L
                 val endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
+                val speed = (seg["speed"] as? Number)?.toFloat() ?: 1f
+                val volume = (seg["volume"] as? Number)?.toFloat() ?: 1f
+                val cl = (seg["cropL"] as? Number)?.toFloat() ?: 0f
+                val ct = (seg["cropT"] as? Number)?.toFloat() ?: 0f
+                val cr = (seg["cropR"] as? Number)?.toFloat() ?: 0f
+                val cb = (seg["cropB"] as? Number)?.toFloat() ?: 0f
                 val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
                 if (endMs > startMs) clip.setEndPositionMs(endMs)
                 val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
-                baseItems.add(EditedMediaItem.Builder(mi).build())
+
+                val builder = EditedMediaItem.Builder(mi)
+                val vfx = ArrayList<Effect>()
+                val afx = ArrayList<AudioProcessor>()
+                // Crop (fractions off each edge → NDC [-1,1]); applied before speed.
+                if (cl > 0f || ct > 0f || cr > 0f || cb > 0f) {
+                    vfx.add(Crop(-1f + 2f * cl, 1f - 2f * cr, -1f + 2f * cb, 1f - 2f * ct))
+                }
+                if (speed != 1f && speed > 0f) {
+                    vfx.add(SpeedChangeEffect(speed))
+                    val sonic = SonicAudioProcessor()
+                    sonic.setSpeed(speed)
+                    afx.add(sonic)
+                }
+                if (volume <= 0.001f) {
+                    builder.setRemoveAudio(true)
+                } else if (volume != 1f) {
+                    val mix = ChannelMixingAudioProcessor()
+                    mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
+                    mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
+                    afx.add(mix)
+                }
+                if (vfx.isNotEmpty() || afx.isNotEmpty()) {
+                    builder.setEffects(Effects(ImmutableList.copyOf(afx), ImmutableList.copyOf(vfx)))
+                }
+                baseItems.add(builder.build())
             }
             val sequences = ArrayList<EditedMediaItemSequence>()
             sequences.add(EditedMediaItemSequence(baseItems))
