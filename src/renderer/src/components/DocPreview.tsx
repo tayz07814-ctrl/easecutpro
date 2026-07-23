@@ -37,6 +37,7 @@ import { mainTrackId } from '@shared/timeline/model'
 import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
 import { useIsMobile } from '../useMobile'
+import { useNativePreview } from '../useNativePreview'
 import OverlayLayer from './OverlayLayer'
 import TextLayer from './TextLayer'
 
@@ -233,6 +234,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const setAspect = useStore((s) => s.setAspect)
 
   const stageRef = useRef<HTMLDivElement>(null)
+  // Native ExoPlayer preview (Android): when active it owns the picture + clock and
+  // the HTML base <video>s are hidden. `frameRef` positions the native surface under
+  // the preview frame. Both are inert on web/desktop (useNativePreview no-ops there).
+  const frameRef = useRef<HTMLDivElement>(null)
+  const nativeActiveRef = useRef(false)
   const [stageSize, setStageSize] = useState({ w: 0, h: 0 })
   useEffect(() => {
     const el = stageRef.current
@@ -247,6 +253,21 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const sources = useMemo(() => [...new Set(segs.map((s) => s.src))], [segs.map((s) => s.src).join('|')])
   const urlOf = new Map(segs.map((s) => [s.src, s.url]))
   const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0
+
+  // Android native player: takes over PLAYBACK of a plain cut (natively-imported base
+  // video, no speed/mute/gain/KenBurns/crop/gaps) for CapCut-smooth playback with the
+  // HTML captions composited on top. No-op on web/desktop or any ineligible timeline;
+  // on any failure it disables itself and the HTML player below runs unchanged.
+  useNativePreview({
+    segs,
+    frameRef,
+    playing,
+    playhead,
+    totalSec: total,
+    setPlaying,
+    setPlayhead,
+    nativeActiveRef
+  })
   // Sources with at least one SAME-SOURCE cut seam (adjacent same-source clips
   // joined gaplessly with a real source jump) get a decode-ahead buddy; montages of
   // distinct one-shot clips have none and pay nothing extra.
@@ -398,6 +419,20 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       const now = performance.now()
       const dt = Math.min(0.1, (now - lastWall) / 1000)
       lastWall = now
+      // Native player active: it owns the picture + drives playClock/playhead
+      // (useNativePreview). Keep every HTML base element paused + hidden so there's
+      // no double decode or a stale frame occluding the native surface, then bail.
+      if (nativeActiveRef.current) {
+        for (const [, pair] of slotsRef.current) {
+          for (const v of pair) {
+            if (!v) continue
+            if (!v.paused) v.pause()
+            if (v.style.visibility !== 'hidden') v.style.visibility = 'hidden'
+          }
+        }
+        raf = requestAnimationFrame(loop)
+        return
+      }
       const ss = segsRef.current
       const isPlaying = playingRef.current
 
@@ -662,6 +697,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       <div className="video-wrap">
         <div className="stage" ref={stageRef} onClick={() => { if (!playing) primePlayback(); setPlaying(!playing) }}>
           <div
+            ref={frameRef}
             className="frame"
             style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height, backgroundColor: '#000' }}
           >

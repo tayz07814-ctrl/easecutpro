@@ -22,6 +22,7 @@ public class MainActivity extends BridgeActivity {
     // Register native plugins BEFORE the bridge initialises.
     registerPlugin(EcNativeExportPlugin.class);
     registerPlugin(EcNativeMediaPlugin.class);
+    registerPlugin(EcNativePlayerPlugin.class);
     super.onCreate(savedInstanceState);
     requestMediaPermissions();
   }

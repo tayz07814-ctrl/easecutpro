@@ -1,5 +1,5 @@
 name: Android offline APK (0.01)
-# rebuild marker: v7 — native export progress polling (Media3 getProgress → UI bar)
+# rebuild marker: v8 — native ExoPlayer preview (TextureView under transparent WebView)
 
 # Builds an installable DEBUG Android APK that BUNDLES the cloud web app
 # (dist-cloud) inside a Capacitor shell — a real offline app, not a webpage
