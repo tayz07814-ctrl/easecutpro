@@ -1,5 +1,5 @@
 name: Android offline APK (0.01)
-# rebuild marker: v12 — fix Composition.Builder(List) so native captions export compiles
+# rebuild marker: v13 — bake captions from live doc (export) + native preview player OFF by default
 
 # Builds an installable DEBUG Android APK that BUNDLES the cloud web app
 # (dist-cloud) inside a Capacitor shell — a real offline app, not a webpage

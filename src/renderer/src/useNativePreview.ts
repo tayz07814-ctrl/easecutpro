@@ -42,9 +42,13 @@ let disabledForSession = false
 function enabled(): boolean {
   if (disabledForSession) return false
   try {
-    if (localStorage.getItem('ec.nativePlayer') === '0') return false
+    // Default OFF. On-device the native ExoPlayer preview has serious regressions
+    // (double audio for the first seconds, ~5s stuck/vibrating start, can't scrub
+    // while playing, seam stutter), so the reliable HTML <video> preview runs by
+    // default. Opt in for testing with localStorage.setItem('ec.nativePlayer','1').
+    if (localStorage.getItem('ec.nativePlayer') !== '1') return false
   } catch {
-    /* ignore */
+    return false
   }
   return hasNativePlayer()
 }

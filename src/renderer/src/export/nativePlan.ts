@@ -9,6 +9,7 @@
 // silent wrong output. Web/desktop never call this (they keep the WebCodecs path).
 
 import type { Project } from '@shared/types'
+import type { TimelineDocument } from '@shared/timeline/types'
 import { getSharedEngine } from '../timelineEngine'
 import { planFromDoc } from './localExport'
 import { nativePathFor } from '../webmedia'
@@ -30,9 +31,17 @@ export interface NativeExportOutcome {
   path: string
 }
 
-/** Bake the project's captions/text to timed full-frame PNG overlays (output res). */
-function bakeCaptions(project: Project, width: number, height: number): NativeOverlay[] {
-  const proj = project.timeline ? documentToProject(project.timeline, project) : project
+/** Bake the timeline's captions/text to timed full-frame PNG overlays (output res).
+ *  Reads text from the LIVE document (the authoritative timeline on mobile) — in
+ *  doc mode `project.texts`/`project.timeline` can be empty, which is why captions
+ *  weren't baking into the native export. */
+function bakeCaptions(
+  doc: TimelineDocument,
+  project: Project,
+  width: number,
+  height: number
+): NativeOverlay[] {
+  const proj = documentToProject(doc, project)
   const out: NativeOverlay[] = []
   for (const t of proj.texts ?? []) {
     if (t.end - t.start <= 0.05 || !(t.text ?? '').trim()) continue
@@ -84,7 +93,7 @@ export async function nativeExportFull(
     audioTracks.push({ uri: 'file://' + path, startMs, endMs: endMs > startMs ? endMs : startMs + 1 })
   }
 
-  const captions = bakeCaptions(project, settings.width, settings.height)
+  const captions = bakeCaptions(doc, project, settings.width, settings.height)
 
   if (!(await nativeExportReady())) throw new Error('native export module isn’t responding')
 
