@@ -29,6 +29,7 @@ import androidx.media3.effect.Presentation
 import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
@@ -36,6 +37,7 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import androidx.media3.transformer.VideoEncoderSettings
 import com.google.common.collect.ImmutableList
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -321,6 +323,8 @@ class EcExport(
             }
             val width = (call.argument<Number>("width"))?.toInt() ?: 1080
             val height = (call.argument<Number>("height"))?.toInt() ?: 1920
+            val fps = (call.argument<Number>("fps"))?.toInt() ?: 0
+            val bitrate = (call.argument<Number>("bitrate"))?.toInt() ?: 0
             val outName = call.argument<String>("filename")
                 ?: "EaseCutPro_${System.currentTimeMillis()}.mp4"
             val captions = call.argument<List<Map<String, Any>>>("captions")
@@ -370,6 +374,7 @@ class EcExport(
                 if (vfx.isNotEmpty() || afx.isNotEmpty()) {
                     builder.setEffects(Effects(ImmutableList.copyOf(afx), ImmutableList.copyOf(vfx)))
                 }
+                if (fps > 0) builder.setFrameRate(fps)
                 baseItems.add(builder.build())
             }
             val sequences = ArrayList<EditedMediaItemSequence>()
@@ -404,7 +409,18 @@ class EcExport(
             val composition = Composition.Builder(sequences).setEffects(effects).build()
 
             pending = result
-            val t = Transformer.Builder(context)
+            val tb = Transformer.Builder(context)
+            if (bitrate > 0) {
+                tb.setEncoderFactory(
+                    DefaultEncoderFactory.Builder(context)
+                        .setRequestedVideoEncoderSettings(
+                            VideoEncoderSettings.Builder().setBitrate(bitrate).build()
+                        )
+                        .setEnableFallback(true)
+                        .build()
+                )
+            }
+            val t = tb
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         stopPolling()

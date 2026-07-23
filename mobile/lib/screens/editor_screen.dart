@@ -60,6 +60,8 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _selected = false;
   final List<TextOverlay> _texts = []; // text + caption overlays
   TextOverlay? _selectedText; // overlay being edited on the preview
+  final List<_EditSnap> _undoStack = [];
+  final List<_EditSnap> _redoStack = [];
   List<Word>? _transcript; // cached STT (reused by Cut Lord + Captions)
   final List<ExportSegment> _audioTracks = []; // imported music/voiceover (mixed on export)
   final List<String> _audioNames = [];
@@ -173,12 +175,55 @@ class _EditorScreenState extends State<EditorScreen> {
     await _player.seek(ms);
   }
 
+  // ---- undo / redo (snapshots of clips + text overlays) ----
+  _EditSnap _snap() => _EditSnap(
+        _model.clips.map((c) => c.copy()).toList(),
+        _texts.map((t) => t.copy()).toList(),
+      );
+
+  /// Call BEFORE a structural edit so it can be undone.
+  void _pushHistory() {
+    _undoStack.add(_snap());
+    _redoStack.clear();
+    if (_undoStack.length > 60) _undoStack.removeAt(0);
+  }
+
+  void _applySnap(_EditSnap s) {
+    _model.restore(s.clips.map((c) => c.copy()).toList());
+    _texts
+      ..clear()
+      ..addAll(s.texts.map((t) => t.copy()));
+    _selectedText = null;
+  }
+
+  Future<void> _undo() async {
+    if (_undoStack.isEmpty) return;
+    _redoStack.add(_snap());
+    _applySnap(_undoStack.removeLast());
+    setState(() {});
+    await _reload(seekTo: _positionMs.clamp(0, _model.totalMs));
+  }
+
+  Future<void> _redo() async {
+    if (_redoStack.isEmpty) return;
+    _undoStack.add(_snap());
+    _applySnap(_redoStack.removeLast());
+    setState(() {});
+    await _reload(seekTo: _positionMs.clamp(0, _model.totalMs));
+  }
+
   // ---- edits ----
   Future<void> _split() async {
+    if (_model.clipIndexAt(_positionMs) < 0) {
+      _toast('Move the playhead onto a clip to split');
+      return;
+    }
+    _pushHistory();
     if (_model.splitAt(_positionMs)) {
       await _reload(seekTo: _positionMs);
       _toast('Split');
     } else {
+      _undoStack.removeLast(); // nothing changed
       _toast('Move the playhead onto a clip to split');
     }
   }
@@ -189,6 +234,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _toast('Can’t delete the only clip');
       return;
     }
+    _pushHistory();
     final startAt = _model.clipStartMs(i);
     _model.deleteClip(i);
     setState(() => _selected = false);
@@ -226,6 +272,7 @@ class _EditorScreenState extends State<EditorScreen> {
   Future<void> _openSpeed() async {
     final i = _selectedIndex();
     if (i < 0) return;
+    _pushHistory();
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -244,6 +291,7 @@ class _EditorScreenState extends State<EditorScreen> {
   Future<void> _openVolume() async {
     final i = _selectedIndex();
     if (i < 0) return;
+    _pushHistory();
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -259,6 +307,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void _openCrop() {
     final i = _selectedIndex();
     if (i < 0) return;
+    _pushHistory();
     _openSheet(CropSheet(
       sourceAspect: _aspect,
       onPick: (l, t, r, b) {
@@ -276,6 +325,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _showProgress(prog);
     try {
       final path = await _exporter.extractAudio('file://${c.sourcePath}');
+      _pushHistory();
       setState(() {
         // Detached audio as its own track (clip window), and mute the source clip.
         _audioTracks.add(ExportSegment(uri: 'file://$path', startMs: c.inMs, endMs: c.outMs));
@@ -407,7 +457,7 @@ class _EditorScreenState extends State<EditorScreen> {
       minPauseS: SilenceSettings.trimS,
       padS: SilenceSettings.keepS,
     );
-    _snapshotForUndo();
+    _pushHistory();
     _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
     _model.applyKeepRanges(keeps);
     await _reload(seekTo: 0);
@@ -416,26 +466,12 @@ class _EditorScreenState extends State<EditorScreen> {
     _showUndoSnack(saved < 0.4 ? 'Applied — barely trimmed' : '$label: trimmed ${saved.toStringAsFixed(1)}s');
   }
 
-  // ---- undo (single-level snapshot; full undo/redo is a later task) ----
-  List<EcClip>? _undoClips;
-  void _snapshotForUndo() {
-    _undoClips = _model.clips.map((c) => c.copy()).toList();
-  }
-
-  Future<void> _undoCut() async {
-    final snap = _undoClips;
-    if (snap == null) return;
-    _model.restore(snap.map((c) => c.copy()).toList());
-    _undoClips = null;
-    await _reload(seekTo: 0);
-  }
-
   void _showUndoSnack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       backgroundColor: Ec.card,
-      action: SnackBarAction(label: 'Undo', textColor: Ec.indigoText, onPressed: _undoCut),
+      action: SnackBarAction(label: 'Undo', textColor: Ec.indigoText, onPressed: _undo),
     ));
   }
 
@@ -450,6 +486,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _transcript ??=
           await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
       final lines = groupCaptions(_transcript!);
+      _pushHistory();
       _texts.removeWhere((t) => t.isCaption);
       for (final l in lines) {
         final s = _model.sourceToEdited((l.startS * 1000).round());
@@ -506,6 +543,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void _openText() => _openSheet(TextSheet(onAdd: (t) {
         t.startMs = _positionMs;
         t.endMs = (_positionMs + 3000).clamp(0, _totalMs > 0 ? _totalMs : _positionMs + 3000);
+        _pushHistory();
         setState(() {
           _texts.add(t);
           _selectedText = t; // ready to drag/resize on the preview
@@ -571,6 +609,16 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  Widget _undoRedoBtn(IconData ic, bool enabled, VoidCallback onTap) => GestureDetector(
+        onTap: enabled ? onTap : null,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: 34,
+          height: 38,
+          child: Icon(ic, size: 20, color: enabled ? Ec.text : Ec.disabled),
+        ),
+      );
+
   Widget _topBar() {
     return Container(
       height: 52,
@@ -590,6 +638,8 @@ class _EditorScreenState extends State<EditorScreen> {
                   child: const Icon(Icons.chevron_left, size: 26, color: Ec.text),
                 ),
               ),
+              _undoRedoBtn(Icons.undo, _undoStack.isNotEmpty, _undo),
+              _undoRedoBtn(Icons.redo, _redoStack.isNotEmpty, _redo),
               const Spacer(),
               GestureDetector(
                 onTap: _openSettings,
@@ -675,6 +725,7 @@ class _EditorScreenState extends State<EditorScreen> {
           }),
           btn(Icons.edit_outlined, 'Edit', () => _editOverlayText(t)),
           btn(Icons.delete_outline, 'Delete', () {
+            _pushHistory();
             setState(() {
               _texts.remove(t);
               _selectedText = null;
@@ -862,7 +913,10 @@ class _EditorScreenState extends State<EditorScreen> {
           _model.select(i);
           setState(() => _selected = true);
         },
-        onTrimStart: () => _scrubbing = true,
+        onTrimStart: () {
+          _scrubbing = true;
+          _pushHistory();
+        },
         onTrim: (i, {inMs, outMs}) {
           _model.trim(i, inMs: inMs, outMs: outMs);
           setState(() {});
@@ -874,4 +928,11 @@ class _EditorScreenState extends State<EditorScreen> {
       ),
     );
   }
+}
+
+/// An immutable snapshot of the editable state (clips + text overlays) for undo/redo.
+class _EditSnap {
+  final List<EcClip> clips;
+  final List<TextOverlay> texts;
+  _EditSnap(this.clips, this.texts);
 }

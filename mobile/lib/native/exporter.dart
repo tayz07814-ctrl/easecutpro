@@ -58,6 +58,8 @@ class ExportSpec {
   final List<ExportSegment> audioTracks;
   final int width;
   final int height;
+  final int fps; // 0 = source
+  final int bitrate; // bps, 0 = auto
   final String filename;
 
   const ExportSpec({
@@ -67,6 +69,8 @@ class ExportSpec {
     this.audioTracks = const [],
     required this.width,
     required this.height,
+    this.fps = 0,
+    this.bitrate = 0,
     required this.filename,
   });
 
@@ -77,6 +81,8 @@ class ExportSpec {
         'audioTracks': audioTracks.map((s) => s.toMap()).toList(),
         'width': width,
         'height': height,
+        'fps': fps,
+        'bitrate': bitrate,
         'filename': filename,
       };
 }

@@ -34,6 +34,20 @@ class TextOverlay {
 
   bool activeAt(int ms) => ms >= startMs && ms < endMs;
 
+  TextOverlay copy() => TextOverlay(
+        text: text,
+        x: x,
+        y: y,
+        fontSize: fontSize,
+        color: color,
+        bold: bold,
+        bg: bg,
+        bgColor: bgColor,
+        startMs: startMs,
+        endMs: endMs,
+        isCaption: isCaption,
+      );
+
   TextStyle style(double frameH) => TextStyle(
         color: color,
         fontSize: fontSize * frameH,
