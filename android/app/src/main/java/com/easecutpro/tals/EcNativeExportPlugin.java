@@ -137,14 +137,14 @@ public class EcNativeExportPlugin extends Plugin {
         }
 
         final File out = new File(getContext().getCacheDir(), "ec_export_" + System.currentTimeMillis() + ".mp4");
-        final EditedMediaItemSequence[] seqArr = sequences.toArray(new EditedMediaItemSequence[0]);
 
         getActivity().runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 try {
                     Effects effects = new Effects(ImmutableList.<AudioProcessor>of(), videoEffects);
-                    Composition composition = new Composition.Builder(seqArr).setEffects(effects).build();
+                    // Composition.Builder(List<EditedMediaItemSequence>) — pass the List directly.
+                    Composition composition = new Composition.Builder(sequences).setEffects(effects).build();
 
                     final android.os.Handler pollHandler = new android.os.Handler(android.os.Looper.getMainLooper());
                     final Transformer[] holder = new Transformer[1];
