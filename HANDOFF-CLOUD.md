@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **d9952a8** (native ExoPlayer PREVIEW PLAYER — TextureView behind a transparent WebView, HTML captions composite on top `d9952a8`; native export progress polling — Media3 `getProgress` streamed to the export bar `2e2d4f7`; native Android media import→app-file bridge + native cut export wired `d53d931`; native export engine — Media3 Transformer plugin, compiles + ships `045fc82`; import byte-copy fix for revoked content:// reads `03602a6`; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **f7ce52b** (device-test fixes: export re-entrancy guard — stops the 0→52→0→70 restart from a 2nd concurrent run — + honest error msg `f7ce52b`; native-player STUCK-CLOCK fix — interpolation now drives the store playhead so the timeline cursor advances on Play, + a watchdog that hands playback back to the HTML player if native shows no progress in ~1.8s — + native-export throw → WebCodecs fallback `40d71e6`; native ExoPlayer PREVIEW PLAYER — TextureView behind a transparent WebView, HTML captions composite on top `d9952a8`; native export progress polling — Media3 `getProgress` streamed to the export bar `2e2d4f7`; native Android media import→app-file bridge + native cut export wired `d53d931`; native export engine — Media3 Transformer plugin, compiles + ships `045fc82`; import byte-copy fix for revoked content:// reads `03602a6`; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -405,5 +405,19 @@ On-device: **import didn't open the gallery** and **no permission prompt**. Two 
     user's request) — the transparent-WebView compositing (surface z-order / rect alignment / window bg) is the
     thing to verify first; worst case is a black preview DURING PLAYBACK ONLY (pause returns to the working HTML
     preview). v1 export is still TRIM+CONCAT; effects/text/speed keep the WebCodecs export path.
+  - **Device-test round (`40d71e6`, `f7ce52b`).** User tested the APK: (1) "timeline clock stuck on Play" —
+    the store playhead (cursor) was advanced ONLY inside the native state-event handler, so if the native
+    player didn't emit progress on-device the cursor froze. Fixed: the interpolation rAF now drives the store
+    playhead from a wall-clock anchor (re-anchored to native samples) so the cursor always advances, + a
+    watchdog that reverts to the HTML player for the session if native shows no forward progress within ~1.8s
+    (`disabledForSession`). (2) "export works until cuts/text" — export could hard-fail, and the bar appeared
+    to restart 0→52→0→70 (that's a 2nd concurrent export run; the frame loop itself is monotonic 5→95). Fixed:
+    a re-entrancy guard on `exportVideoOnDevice` (ignore if an export is already active) + native-export throw
+    → WebCodecs fallback + honest error message. **STILL OPEN — captioned/overlay export:** text makes the
+    timeline native-ineligible → the WebCodecs play-harvest path, which is unreliable on the device's WebView.
+    The durable fix is **native caption compositing** (bake each caption to a bitmap → Media3 timed
+    `BitmapOverlay` with alpha 0 outside its window, applied at the Composition level; watch output-resolution
+    match + bridge payload size for many captions). Needs the on-screen export error text to confirm whether
+    the WebCodecs failure is audio-decode vs encoder vs frame-harvest before investing in it.
 - **NOTE for whoever merges 0.01 → main:** `main` already has the newer `openPicker` in `cloud/api.ts`; the
   `main`-side conflict is only the accept types + `openAudioDialogMulti` (0.01 additions).
