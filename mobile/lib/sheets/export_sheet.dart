@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../editor/text_overlay.dart';
 import '../native/exporter.dart';
 import '../theme.dart';
 import 'sheet_scaffold.dart';
@@ -9,14 +10,14 @@ import 'sheet_scaffold.dart';
 class ExportSheet extends StatefulWidget {
   final NativeExporter exporter;
   final List<ExportSegment> segments;
-  final List<ExportOverlay> captions;
+  final List<TextOverlay> overlays; // baked at the CHOSEN output size on export
   final List<ExportSegment> audioTracks;
   final Size videoSize;
   const ExportSheet({
     super.key,
     required this.exporter,
     required this.segments,
-    this.captions = const [],
+    this.overlays = const [],
     this.audioTracks = const [],
     required this.videoSize,
   });
@@ -78,10 +79,18 @@ class _ExportSheetState extends State<ExportSheet> {
     });
     try {
       final (w, h) = _outSize();
+      // Bake text/caption overlays at the ACTUAL output resolution so a full-frame
+      // PNG maps 1:1 onto the frame (otherwise they land off-screen / clipped).
+      final caps = <ExportOverlay>[];
+      for (final t in widget.overlays) {
+        if (t.text.trim().isEmpty || t.endMs <= t.startMs) continue;
+        final b = await t.bakePngBase64(w, h);
+        caps.add(ExportOverlay(base64: b, startMs: t.startMs, endMs: t.endMs));
+      }
       final res = await widget.exporter.export(
         ExportSpec(
           segments: widget.segments,
-          captions: widget.captions,
+          captions: caps,
           audioTracks: widget.audioTracks,
           width: w,
           height: h,

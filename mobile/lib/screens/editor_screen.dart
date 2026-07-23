@@ -190,7 +190,7 @@ class _EditorScreenState extends State<EditorScreen> {
       if (mounted) setState(() => _aspect = _player.aspectRatio);
     });
     await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
-    _exporter.thumbnails('file://$src', 16).then((t) {
+    _exporter.thumbnails('file://$src', 40).then((t) {
       if (mounted) setState(() => _thumbs = t);
     });
     _exporter.waveform('file://$src', buckets: 600).then((w) {
@@ -253,7 +253,7 @@ class _EditorScreenState extends State<EditorScreen> {
       await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
       if (mounted) setState(() {});
       // Filmstrip + waveform (async, non-blocking).
-      _exporter.thumbnails('file://$path', 16).then((t) {
+      _exporter.thumbnails('file://$path', 40).then((t) {
         if (mounted) setState(() => _thumbs = t);
       });
       _exporter.waveform('file://$path', buckets: 600).then((w) {
@@ -485,28 +485,13 @@ class _EditorScreenState extends State<EditorScreen> {
       return;
     }
     final size = _player.videoSize;
-    final w = size.width.round().clamp(16, 4096);
-    final h = size.height.round().clamp(16, 4096);
-    // Bake text/caption overlays to full-frame PNGs at the output resolution.
-    final caps = <ExportOverlay>[];
-    for (final t in _texts) {
-      if (t.text.trim().isEmpty || t.endMs <= t.startMs) continue;
-      final b = await t.bakePngBase64(w, h);
-      caps.add(ExportOverlay(base64: b, startMs: t.startMs, endMs: t.endMs));
-    }
-    if (!mounted) return;
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => ExportSheet(
-        exporter: _exporter,
-        segments: _model.exportSegments(),
-        captions: caps,
-        audioTracks: _audioTracks,
-        videoSize: size,
-      ),
-    );
+    _openSheet(ExportSheet(
+      exporter: _exporter,
+      segments: _model.exportSegments(),
+      overlays: List<TextOverlay>.from(_texts), // baked at the chosen output size
+      audioTracks: _audioTracks,
+      videoSize: size,
+    ));
   }
 
   void _openSheet(Widget sheet) {
@@ -1088,6 +1073,11 @@ class _EditorScreenState extends State<EditorScreen> {
           _model.select(i);
           setState(() => _selected = true);
         },
+        onSelectText: (t) async {
+          setState(() => _selectedText = t);
+          await _seek(t.startMs.clamp(0, _totalMs > 0 ? _totalMs : t.startMs)); // jump so it's visible + editable
+        },
+        onSelectAudio: (_) => _openAudio(),
         onTrimStart: () {
           _scrubbing = true;
           _pushHistory();

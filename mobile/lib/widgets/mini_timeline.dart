@@ -22,6 +22,8 @@ class MiniTimeline extends StatefulWidget {
   final ValueChanged<int> onScrub;
   final ValueChanged<int> onScrubEnd;
   final ValueChanged<int> onSelectClip;
+  final ValueChanged<TextOverlay>? onSelectText;
+  final ValueChanged<int>? onSelectAudio;
 
   /// Live trim of the selected clip (source ms). Committed on [onTrimEnd].
   final void Function(int index, {int? inMs, int? outMs})? onTrim;
@@ -43,6 +45,8 @@ class MiniTimeline extends StatefulWidget {
     required this.onScrub,
     required this.onScrubEnd,
     required this.onSelectClip,
+    this.onSelectText,
+    this.onSelectAudio,
     this.onTrim,
     this.onTrimStart,
     this.onTrimEnd,
@@ -130,6 +134,36 @@ class _MiniTimelineState extends State<MiniTimeline> {
     return wf.sublist(a, b);
   }
 
+  /// A row of fixed-width frame tiles filling [clipW] (a real filmstrip, not a
+  /// few stretched frames). Each tile shows the source frame nearest its time.
+  Widget _filmstrip(EcClip c, double clipW) {
+    final frames = _clipThumbs(c);
+    if (frames.isEmpty) return Container(width: clipW, color: const Color(0xFF312A52));
+    const tileW = 44.0;
+    final n = (clipW / tileW).ceil().clamp(1, 400);
+    return Row(
+      children: [
+        for (int i = 0; i < n; i++)
+          SizedBox(
+            width: tileW,
+            height: double.infinity,
+            child: Image.memory(_frameForTile(frames, c, i, n).jpeg,
+                fit: BoxFit.cover, gaplessPlayback: true),
+          ),
+      ],
+    );
+  }
+
+  ThumbFrame _frameForTile(List<ThumbFrame> frames, EcClip c, int i, int n) {
+    if (frames.length == 1) return frames.first;
+    final tMs = c.inMs + ((i + 0.5) / n) * (c.outMs - c.inMs);
+    ThumbFrame nearest = frames.first;
+    for (final f in frames) {
+      if ((f.ms - tMs).abs() < (nearest.ms - tMs).abs()) nearest = f;
+    }
+    return nearest;
+  }
+
   String _fmt(int ms) {
     final s = (ms / 1000).floor();
     final m = (s ~/ 60).toString().padLeft(2, '0');
@@ -215,9 +249,13 @@ class _MiniTimelineState extends State<MiniTimeline> {
                                   const SizedBox(height: 4),
                                   _audioLane(tracksW),
                                 ],
-                                if (widget.texts.isNotEmpty) ...[
+                                if (widget.texts.any((t) => t.isCaption)) ...[
                                   const SizedBox(height: 4),
-                                  _textLane(tracksW),
+                                  _overlayLane(tracksW, captions: true),
+                                ],
+                                if (widget.texts.any((t) => !t.isCaption)) ...[
+                                  const SizedBox(height: 4),
+                                  _overlayLane(tracksW, captions: false),
                                 ],
                                 const SizedBox(height: 8),
                               ],
@@ -295,69 +333,78 @@ class _MiniTimelineState extends State<MiniTimeline> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final name in widget.audioNames)
-          Container(
-            height: _laneH,
-            margin: const EdgeInsets.only(top: 3),
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            alignment: Alignment.centerLeft,
-            decoration: BoxDecoration(
-              color: const Color(0xFF1F3326),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: Ec.green.withValues(alpha: 0.35)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.music_note, size: 12, color: Ec.green),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: Color(0xFFBFE8C4), fontSize: 10.5, fontWeight: FontWeight.w500)),
-                ),
-              ],
+        for (int a = 0; a < widget.audioNames.length; a++)
+          GestureDetector(
+            onTap: widget.onSelectAudio == null ? null : () => widget.onSelectAudio!(a),
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              height: _laneH,
+              margin: const EdgeInsets.only(top: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              alignment: Alignment.centerLeft,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1F3326),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Ec.green.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.music_note, size: 12, color: Ec.green),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(widget.audioNames[a],
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Color(0xFFBFE8C4), fontSize: 10.5, fontWeight: FontWeight.w500)),
+                  ),
+                ],
+              ),
             ),
           ),
       ],
     );
   }
 
-  /// Text + caption blocks positioned at their [start,end] on the time axis.
-  Widget _textLane(double tracksW) {
+  /// A track of text OR caption blocks, positioned at their [start,end] on the
+  /// time axis. Tap a block to select it (opens its on-preview controls).
+  Widget _overlayLane(double tracksW, {required bool captions}) {
+    final items = widget.texts.where((t) => t.isCaption == captions).toList();
+    final accent = captions ? Ec.indigo : const Color(0xFFFFD84D);
     return SizedBox(
       height: _laneH,
       child: Stack(
         children: [
-          for (final t in widget.texts)
+          for (final t in items)
             Positioned(
               left: (t.startMs.clamp(0, _total) * _pxPerMs),
-              width: (((t.endMs - t.startMs).clamp(120, _total)) * _pxPerMs).clamp(14.0, tracksW),
+              width: (((t.endMs - t.startMs).clamp(120, _total)) * _pxPerMs).clamp(16.0, tracksW),
               top: 0,
               bottom: 0,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                alignment: Alignment.centerLeft,
-                decoration: BoxDecoration(
-                  color: t.isCaption ? const Color(0xFF2A2550) : const Color(0xFF3A2E12),
-                  borderRadius: BorderRadius.circular(5),
-                  border: Border.all(
-                      color: (t.isCaption ? Ec.indigo : const Color(0xFFFFD84D)).withValues(alpha: 0.4)),
-                ),
-                child: Row(
-                  children: [
-                    Icon(t.isCaption ? Icons.closed_caption : Icons.title,
-                        size: 12, color: t.isCaption ? Ec.indigoText : const Color(0xFFFFD84D)),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(t.text,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: Ec.text, fontSize: 10.5, fontWeight: FontWeight.w500)),
-                    ),
-                  ],
+              child: GestureDetector(
+                onTap: widget.onSelectText == null ? null : () => widget.onSelectText!(t),
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  alignment: Alignment.centerLeft,
+                  decoration: BoxDecoration(
+                    color: captions ? const Color(0xFF2A2550) : const Color(0xFF3A2E12),
+                    borderRadius: BorderRadius.circular(5),
+                    border: Border.all(color: accent.withValues(alpha: 0.45)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(captions ? Icons.closed_caption : Icons.title, size: 12, color: accent),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(t.text,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Ec.text, fontSize: 10.5, fontWeight: FontWeight.w500)),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -394,60 +441,51 @@ class _MiniTimelineState extends State<MiniTimeline> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  Builder(builder: (_) {
-                    final frames = _clipThumbs(clip);
-                    if (frames.isEmpty) return const SizedBox.shrink();
-                    return Row(
-                      children: [
-                        for (final t in frames)
-                          Expanded(
-                            child: Image.memory(t.jpeg,
-                                fit: BoxFit.cover, height: double.infinity, gaplessPlayback: true),
-                          ),
-                      ],
-                    );
-                  }),
+                  // Filmstrip: fixed-width frame tiles (each a distinct frame), not stretched.
+                  ClipRect(
+                    child: OverflowBox(
+                      alignment: Alignment.centerLeft,
+                      minWidth: 0,
+                      maxWidth: double.infinity,
+                      child: _filmstrip(clip, w),
+                    ),
+                  ),
+                  // Thin waveform strip along the bottom (doesn't cover the frames).
                   Builder(builder: (_) {
                     final peaks = _clipPeaks(clip);
                     if (peaks.isEmpty) return const SizedBox.shrink();
-                    return Positioned.fill(child: CustomPaint(painter: _WavePainter(peaks)));
-                  }),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      height: 22,
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.bottomCenter,
-                          end: Alignment.topCenter,
-                          colors: [Color(0x99000000), Color(0x00000000)],
-                        ),
+                    return Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 15,
+                      child: Container(
+                        color: const Color(0x66000000),
+                        child: CustomPaint(painter: _WavePainter(peaks)),
                       ),
-                    ),
-                  ),
+                    );
+                  }),
+                  // Clip name chip (top-left).
                   Positioned(
-                    left: 6,
-                    right: 6,
-                    bottom: 4,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.videocam_outlined, size: 12, color: Ec.indigoText),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
+                    left: 4,
+                    top: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0x99000000),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.videocam_outlined, size: 11, color: Ec.indigoText),
+                          const SizedBox(width: 3),
+                          Text(
                             model.clips.length == 1 ? widget.clipName : 'Clip ${i + 1}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Ec.text,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                shadows: [Shadow(color: Colors.black, blurRadius: 2)]),
+                            style: const TextStyle(color: Ec.text, fontSize: 10, fontWeight: FontWeight.w500),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ],
