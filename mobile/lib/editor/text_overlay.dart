@@ -48,6 +48,34 @@ class TextOverlay {
         isCaption: isCaption,
       );
 
+  Map<String, dynamic> toJson() => {
+        't': text,
+        'x': x,
+        'y': y,
+        'fs': fontSize,
+        'c': color.toARGB32(),
+        'b': bold,
+        'bg': bg,
+        'bgc': bgColor.toARGB32(),
+        's': startMs,
+        'e': endMs,
+        'cap': isCaption,
+      };
+
+  factory TextOverlay.fromJson(Map j) => TextOverlay(
+        text: (j['t'] as String?) ?? '',
+        x: (j['x'] as num?)?.toDouble() ?? 0.5,
+        y: (j['y'] as num?)?.toDouble() ?? 0.82,
+        fontSize: (j['fs'] as num?)?.toDouble() ?? 0.06,
+        color: Color((j['c'] as num?)?.toInt() ?? 0xFFFFFFFF),
+        bold: (j['b'] as bool?) ?? true,
+        bg: (j['bg'] as bool?) ?? false,
+        bgColor: Color((j['bgc'] as num?)?.toInt() ?? 0xFF000000),
+        startMs: (j['s'] as num?)?.toInt() ?? 0,
+        endMs: (j['e'] as num?)?.toInt() ?? 0,
+        isCaption: (j['cap'] as bool?) ?? false,
+      );
+
   TextStyle style(double frameH) => TextStyle(
         color: color,
         fontSize: fontSize * frameH,

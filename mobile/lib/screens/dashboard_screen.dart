@@ -40,10 +40,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _openEditor({String? clipPath, String? clipName}) {
+  void _openEditor({String? clipPath, String? clipName, String? projectId}) {
     Navigator.of(context)
         .push(MaterialPageRoute(
-            builder: (_) => EditorScreen(initialClipPath: clipPath, initialClipName: clipName)))
+            builder: (_) => EditorScreen(
+                initialClipPath: clipPath, initialClipName: clipName, projectId: projectId)))
         .then((_) => _load());
   }
 
@@ -54,10 +55,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       backgroundColor: Colors.transparent,
       builder: (_) => NewProjectWizard(onCreate: (path, name) async {
         Navigator.of(context).pop();
+        String? id;
         try {
-          await Backend.createProject(name ?? 'New project');
+          final meta = await Backend.createProject(name ?? 'New project');
+          id = meta.id;
         } catch (_) {}
-        if (mounted) _openEditor(clipPath: path, clipName: name);
+        if (mounted) _openEditor(clipPath: path, clipName: name, projectId: id);
       }),
     );
   }
@@ -284,7 +287,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: GestureDetector(
-        onTap: _openEditor,
+        onTap: () => _openEditor(projectId: p.id),
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(color: Ec.card, borderRadius: BorderRadius.circular(13), border: Border.all(color: Ec.border)),

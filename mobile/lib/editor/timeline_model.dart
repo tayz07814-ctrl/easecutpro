@@ -38,6 +38,30 @@ class EcClip {
 
   EcClip copy() => EcClip(sourcePath, inMs, outMs,
       speed: speed, volume: volume, cropL: cropL, cropT: cropT, cropR: cropR, cropB: cropB);
+
+  Map<String, dynamic> toJson() => {
+        'src': sourcePath,
+        'in': inMs,
+        'out': outMs,
+        'speed': speed,
+        'vol': volume,
+        'cl': cropL,
+        'ct': cropT,
+        'cr': cropR,
+        'cb': cropB,
+      };
+
+  factory EcClip.fromJson(Map j) => EcClip(
+        j['src'] as String,
+        (j['in'] as num).toInt(),
+        (j['out'] as num).toInt(),
+        speed: (j['speed'] as num?)?.toDouble() ?? 1.0,
+        volume: (j['vol'] as num?)?.toDouble() ?? 1.0,
+        cropL: (j['cl'] as num?)?.toDouble() ?? 0,
+        cropT: (j['ct'] as num?)?.toDouble() ?? 0,
+        cropR: (j['cr'] as num?)?.toDouble() ?? 0,
+        cropB: (j['cb'] as num?)?.toDouble() ?? 0,
+      );
 }
 
 /// The editor's base-video timeline: an ordered list of [Clip]s. This is the

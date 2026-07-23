@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../cloud/backend.dart';
 import '../cloud/stt.dart' show Word;
 import '../editor/timeline_model.dart';
 import '../editor/text_overlay.dart';
@@ -34,7 +36,8 @@ class EditorScreen extends StatefulWidget {
   /// auto-loads it (no need to import again).
   final String? initialClipPath;
   final String? initialClipName;
-  const EditorScreen({super.key, this.initialClipPath, this.initialClipName});
+  final String? projectId; // when set, edits autosave to this Supabase project
+  const EditorScreen({super.key, this.initialClipPath, this.initialClipName, this.projectId});
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
@@ -67,6 +70,8 @@ class _EditorScreenState extends State<EditorScreen> {
   final List<String> _audioNames = [];
   List<ThumbFrame> _thumbs = []; // filmstrip frames for the timeline
   List<double> _waveform = []; // whole-source amplitude peaks (0..1)
+  Map<String, dynamic> _projectDoc = {}; // full project jsonb (autosave target)
+  Timer? _saveTimer;
 
   @override
   void initState() {
@@ -76,11 +81,14 @@ class _EditorScreenState extends State<EditorScreen> {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _importPath(widget.initialClipPath!, widget.initialClipName),
       );
+    } else if (widget.projectId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadProject());
     }
   }
 
   @override
   void dispose() {
+    _saveTimer?.cancel();
     _model.removeListener(_onModel);
     _stateSub?.cancel();
     _sizeSub?.cancel();
@@ -90,6 +98,92 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _onModel() {
+    if (mounted) setState(() {});
+    _scheduleSave();
+  }
+
+  // ---- autosave (debounced) + reload ----
+  void _scheduleSave() {
+    if (widget.projectId == null) return;
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 1500), _saveNow);
+  }
+
+  Map<String, dynamic> _serialize() => {
+        'v': 1,
+        'sourcePath': _model.sourcePath,
+        'clipName': _clipName,
+        'durationMs': _sourceDurationMs,
+        'clips': _model.clips.map((c) => c.toJson()).toList(),
+        'texts': _texts.map((t) => t.toJson()).toList(),
+        'audio': [
+          for (int i = 0; i < _audioTracks.length; i++)
+            {
+              'uri': _audioTracks[i].uri,
+              'startMs': _audioTracks[i].startMs,
+              'endMs': _audioTracks[i].endMs,
+              'name': i < _audioNames.length ? _audioNames[i] : 'Audio',
+            }
+        ],
+      };
+
+  Future<void> _saveNow() async {
+    if (widget.projectId == null || !_model.hasBase) return;
+    _projectDoc['mobile'] = _serialize();
+    try {
+      await Backend.saveProject(widget.projectId!, _projectDoc);
+    } catch (_) {
+      // best-effort; a later edit retries
+    }
+  }
+
+  Future<void> _loadProject() async {
+    try {
+      final doc = await Backend.loadProject(widget.projectId!);
+      if (doc != null) _projectDoc = doc;
+      final m = doc?['mobile'];
+      if (m is Map) await _restoreFrom(Map<String, dynamic>.from(m));
+    } catch (_) {}
+  }
+
+  Future<void> _restoreFrom(Map<String, dynamic> m) async {
+    final src = m['sourcePath'] as String?;
+    final clipsJson = (m['clips'] as List?) ?? [];
+    if (src == null || clipsJson.isEmpty) return;
+    if (!await File(src).exists()) {
+      _toast('Media not found on this device — re-import to continue');
+      return;
+    }
+    _clipName = m['clipName'] as String?;
+    _sourceDurationMs = (m['durationMs'] as num?)?.toInt() ?? 0;
+    _model.sourcePath = src;
+    _model.sourceDurationMs = _sourceDurationMs;
+    _model.restore(clipsJson.map((c) => EcClip.fromJson(c as Map)).toList());
+    _texts
+      ..clear()
+      ..addAll(((m['texts'] as List?) ?? []).map((t) => TextOverlay.fromJson(t as Map)));
+    _audioTracks.clear();
+    _audioNames.clear();
+    for (final a in (m['audio'] as List?) ?? []) {
+      _audioTracks.add(ExportSegment(
+        uri: a['uri'] as String,
+        startMs: (a['startMs'] as num?)?.toInt() ?? 0,
+        endMs: (a['endMs'] as num?)?.toInt() ?? 0,
+      ));
+      _audioNames.add((a['name'] as String?) ?? 'Audio');
+    }
+    _textureId ??= await _player.create();
+    _stateSub ??= _player.states.listen(_onState);
+    _sizeSub ??= _player.sizes.listen((_) {
+      if (mounted) setState(() => _aspect = _player.aspectRatio);
+    });
+    await _player.load(_model.playerSegments());
+    _exporter.thumbnails('file://$src', 16).then((t) {
+      if (mounted) setState(() => _thumbs = t);
+    });
+    _exporter.waveform('file://$src', buckets: 600).then((w) {
+      if (mounted) setState(() => _waveform = w);
+    });
     if (mounted) setState(() {});
   }
 
@@ -130,6 +224,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _exporter.waveform('file://$path', buckets: 600).then((w) {
         if (mounted) setState(() => _waveform = w);
       });
+      _scheduleSave();
     } catch (e) {
       _toast('Import failed: $e');
     }
@@ -500,6 +595,7 @@ class _EditorScreenState extends State<EditorScreen> {
         Navigator.of(context).pop();
         setState(() {});
       }
+      _scheduleSave();
       _toast('${_texts.where((t) => t.isCaption).length} caption lines added');
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
@@ -548,17 +644,24 @@ class _EditorScreenState extends State<EditorScreen> {
           _texts.add(t);
           _selectedText = t; // ready to drag/resize on the preview
         });
+        _scheduleSave();
       }));
   void _openAudio() => _openSheet(AudioSheet(
         names: _audioNames,
-        onImport: (path, name) => setState(() {
-          _audioTracks.add(ExportSegment(uri: 'file://$path', startMs: 0, endMs: 0));
-          _audioNames.add(name);
-        }),
-        onRemove: (i) => setState(() {
-          _audioTracks.removeAt(i);
-          _audioNames.removeAt(i);
-        }),
+        onImport: (path, name) {
+          setState(() {
+            _audioTracks.add(ExportSegment(uri: 'file://$path', startMs: 0, endMs: 0));
+            _audioNames.add(name);
+          });
+          _scheduleSave();
+        },
+        onRemove: (i) {
+          setState(() {
+            _audioTracks.removeAt(i);
+            _audioNames.removeAt(i);
+          });
+          _scheduleSave();
+        },
       ));
   void _openSettings() => _openSheet(const SettingsSheet());
   void _openSilence() => showDialog(context: context, builder: (_) => const SilenceModal());
@@ -719,9 +822,13 @@ class _EditorScreenState extends State<EditorScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          btn(Icons.login, 'Start', () => setState(() => t.startMs = _positionMs)),
+          btn(Icons.login, 'Start', () {
+            setState(() => t.startMs = _positionMs);
+            _scheduleSave();
+          }),
           btn(Icons.logout, 'End', () {
             setState(() => t.endMs = _positionMs <= t.startMs ? t.startMs + 500 : _positionMs);
+            _scheduleSave();
           }),
           btn(Icons.edit_outlined, 'Edit', () => _editOverlayText(t)),
           btn(Icons.delete_outline, 'Delete', () {
@@ -730,6 +837,7 @@ class _EditorScreenState extends State<EditorScreen> {
               _texts.remove(t);
               _selectedText = null;
             });
+            _scheduleSave();
           }, c: const Color(0xFFFF8A9A)),
         ],
       ),
@@ -756,7 +864,10 @@ class _EditorScreenState extends State<EditorScreen> {
         ],
       ),
     );
-    if (result != null) setState(() => t.text = result);
+    if (result != null) {
+      setState(() => t.text = result);
+      _scheduleSave();
+    }
   }
 
   Widget _stage(double screenH) {
@@ -788,7 +899,10 @@ class _EditorScreenState extends State<EditorScreen> {
                               frame: frame,
                               selected: identical(t, _selectedText),
                               onSelect: () => setState(() => _selectedText = t),
-                              onChange: () => setState(() {}),
+                              onChange: () {
+                                setState(() {});
+                                _scheduleSave();
+                              },
                             ),
                         if (_selectedText != null && _selectedText!.activeAt(_positionMs))
                           Positioned(

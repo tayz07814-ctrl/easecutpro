@@ -55,6 +55,24 @@ class Backend {
   static Future<void> deleteProject(String id) async {
     await _c.from('projects').delete().eq('id', id);
   }
+
+  /// Load the full `project` jsonb (mobile edit-state lives under the "mobile" key).
+  static Future<Map<String, dynamic>?> loadProject(String id) async {
+    final row = await _c.from('projects').select('project').eq('id', id).maybeSingle();
+    final p = row?['project'];
+    if (p is Map) return Map<String, dynamic>.from(p);
+    return null;
+  }
+
+  /// Persist [fullDoc] to `project` jsonb + bump updated_at (+ optional thumb).
+  static Future<void> saveProject(String id, Map<String, dynamic> fullDoc, {String? thumb}) async {
+    final patch = <String, dynamic>{
+      'project': fullDoc,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    };
+    if (thumb != null) patch['thumb'] = thumb;
+    await _c.from('projects').update(patch).eq('id', id);
+  }
 }
 
 class ProjectMeta {
