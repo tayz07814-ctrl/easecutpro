@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **2e2d4f7** (native export progress polling — Media3 `getProgress` streamed to the export bar `2e2d4f7`; native Android media import→app-file bridge + native cut export wired `d53d931`; native export engine — Media3 Transformer plugin, compiles + ships `045fc82`; import byte-copy fix for revoked content:// reads `03602a6`; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **d9952a8** (native ExoPlayer PREVIEW PLAYER — TextureView behind a transparent WebView, HTML captions composite on top `d9952a8`; native export progress polling — Media3 `getProgress` streamed to the export bar `2e2d4f7`; native Android media import→app-file bridge + native cut export wired `d53d931`; native export engine — Media3 Transformer plugin, compiles + ships `045fc82`; import byte-copy fix for revoked content:// reads `03602a6`; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -385,9 +385,25 @@ On-device: **import didn't open the gallery** and **no permission prompt**. Two 
     `notifyListeners('nativeExportProgress')`; `nativeExport.ts` `addListener`s and forwards 0–100 (removed in
     `finally`), `nativePlan.ts` maps it onto the 3–99 UI range. Best-effort + gated (no events → no harm;
     browser/desktop untouched). CI run `29967639531` v7 GREEN; APK refreshed (37.6 MB).
-  - **Step 4 — native player** (ExoPlayer surface composited under the HTML text/overlay layers) — hardest,
-    last, still TODO. The user asked for it ("make its preview player native"); deliberately NOT shipped blind
-    while they slept (a half-baked native surface could regress the working preview — needs per-increment
-    device testing). v1 native export is TRIM+CONCAT only; effects/text/speed stay on the WebCodecs path.
+  - **Step 4 ✅ (`d9952a8`) — native preview player** (user then said "make the exoplayer in one step … start
+    it"). `EcNativePlayerPlugin.java`: Media3 **ExoPlayer** (`media3-exoplayer:1.4.1`) into a **TextureView
+    added at index 0 of the WebView's parent** (drawn BEHIND it); while active the WebView is made transparent
+    (`setBackgroundColor(TRANSPARENT)`) + the window bg forced black, so the HTML caption/overlay layers
+    composite ON TOP of the native video. Methods `load/play/pause/seek/setRect/setActive/release`; the clipped
+    playlist mirrors the export segments and it reports a GLOBAL timeline position (segment offset + in-clip
+    pos) at ~10 Hz. `setRect` uses `setX/setY` + LP width/height so it's parent-type-agnostic. JS: `cloud/
+    nativePlayer.ts` bridge + **`useNativePreview.ts`** (eligibility + orchestration) called from `DocPreview`.
+    Sync: the hook drives `playClock` + the store playhead from the native events (wall-clock interpolation
+    between samples) so captions / cursor / music stay locked; `DocPreview`'s reconciler **early-returns while
+    `nativeActiveRef` is set** (HTML base `<video>`s paused + hidden). `body.ec-native-active` makes the whole
+    preview stack (`body/.m-app/.m-stage/.preview/.video-wrap/.frame`, all normally #000) transparent so the
+    surface shows — black→video→black, no flash. **Strictly additive + gated**: activates ONLY during PLAYBACK
+    of a plain cut (natively-imported base, contiguous, no speed/mute/gain/KenBurns/crop); pause / ineligible /
+    ANY error → the proven HTML `<video>` preview (so paused + scrubbing are unchanged, and opening a project
+    looks identical). Kill switch `localStorage ec.nativePlayer=0`; auto-disables for the session on error.
+    web/desktop no-op. CI run `29972625431` v8 GREEN; APK 37.6 MB. **UNTESTED on-device** (built blind at the
+    user's request) — the transparent-WebView compositing (surface z-order / rect alignment / window bg) is the
+    thing to verify first; worst case is a black preview DURING PLAYBACK ONLY (pause returns to the working HTML
+    preview). v1 export is still TRIM+CONCAT; effects/text/speed keep the WebCodecs export path.
 - **NOTE for whoever merges 0.01 → main:** `main` already has the newer `openPicker` in `cloud/api.ts`; the
   `main`-side conflict is only the accept types + `openAudioDialogMulti` (0.01 additions).
