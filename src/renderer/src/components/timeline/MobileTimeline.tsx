@@ -111,8 +111,14 @@ function MobileClip({
           )}
         </>
       )}
-      <div className="ec-mtl-handle l" onPointerDown={(e) => onTrim(clip.id, 'in', e)} />
-      <div className="ec-mtl-handle r" onPointerDown={(e) => onTrim(clip.id, 'out', e)} />
+      {/* Trim handles belong to the SELECTED clip only — otherwise every clip
+          shows white grips, which reads as clutter (and invites mis-trims). */}
+      {selected && (
+        <>
+          <div className="ec-mtl-handle l" onPointerDown={(e) => onTrim(clip.id, 'in', e)} />
+          <div className="ec-mtl-handle r" onPointerDown={(e) => onTrim(clip.id, 'out', e)} />
+        </>
+      )}
     </div>
   )
 }
@@ -195,7 +201,10 @@ export default function MobileTimeline(): JSX.Element {
       programmatic.current = false
       return
     }
-    if (useStore.getState().playing) return
+    // A user scroll DURING playback = scrubbing intent. Pause so the finger takes
+    // over — otherwise the playback auto-scroll keeps yanking it back (the "can't
+    // drag the timeline while playing, it resists" bug), then scrub normally.
+    if (useStore.getState().playing) useStore.getState().setPlaying(false)
     const el = scrollRef.current
     if (!el) return
     engine.setPlayhead(Math.max(0, pxToFrame(el.scrollLeft, engine.sessionState.zoom, engine.document.timebase)))

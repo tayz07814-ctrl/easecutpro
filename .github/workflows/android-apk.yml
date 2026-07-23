@@ -1,5 +1,5 @@
 name: Android offline APK (0.01)
-# rebuild marker: v13 — bake captions from live doc (export) + native preview player OFF by default
+# rebuild marker: v14 — native player rebuilt (no double-audio/vibration) + trim handles selected-only + text/caption no-overlap + scrub-while-playing
 
 # Builds an installable DEBUG Android APK that BUNDLES the cloud web app
 # (dist-cloud) inside a Capacitor shell — a real offline app, not a webpage

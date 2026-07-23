@@ -42,13 +42,13 @@ let disabledForSession = false
 function enabled(): boolean {
   if (disabledForSession) return false
   try {
-    // Default OFF. On-device the native ExoPlayer preview has serious regressions
-    // (double audio for the first seconds, ~5s stuck/vibrating start, can't scrub
-    // while playing, seam stutter), so the reliable HTML <video> preview runs by
-    // default. Opt in for testing with localStorage.setItem('ec.nativePlayer','1').
-    if (localStorage.getItem('ec.nativePlayer') !== '1') return false
+    // ON by default (rebuilt: synchronous HTML silence on Play kills the double
+    // audio, the clock holds at the seek point until native truly plays so no
+    // vibration, and a watchdog reverts to the HTML preview if native stalls).
+    // Kill switch: localStorage.setItem('ec.nativePlayer','0').
+    if (localStorage.getItem('ec.nativePlayer') === '0') return false
   } catch {
-    return false
+    /* ignore */
   }
   return hasNativePlayer()
 }
@@ -118,6 +118,10 @@ export function useNativePreview(params: {
   // is never frozen. Tracked from the last FORWARD-progress sample.
   const lastReportedMs = useRef(-1)
   const lastProgressWall = useRef(0)
+  // `live` = native is genuinely playing (its reported position has advanced). Until
+  // then the clock HOLDS at the seek point instead of running ahead and snapping
+  // back (that was the ~5 s vibrating-at-the-start bug).
+  const liveRef = useRef(false)
   const playingRef = useRef(playing)
   playingRef.current = playing
 
@@ -178,14 +182,17 @@ export function useNativePreview(params: {
     const onState = (st: NativePlayerState): void => {
       if (!nativeActiveRef.current) return
       const now = performance.now()
-      // Re-anchor the interpolation clock to the native picture, and note real
-      // forward progress so the watchdog knows the player is actually advancing.
+      // Only treat the player as LIVE once its position actually advances past the
+      // seek point — then re-anchor the interpolation clock to the native picture.
+      // A flat position (still buffering) leaves the clock held, so it never runs
+      // ahead of the video.
       if (st.timelineMs > lastReportedMs.current + 5) {
         lastReportedMs.current = st.timelineMs
         lastProgressWall.current = now
+        liveRef.current = true
+        anchorSec.current = st.timelineMs / 1000
+        anchorWall.current = now
       }
-      anchorSec.current = st.timelineMs / 1000
-      anchorWall.current = now
       if (st.ended) setPlaying(false)
     }
     Promise.resolve(nativePlayer.onState(onState)).then((h) => {
@@ -208,13 +215,17 @@ export function useNativePreview(params: {
     const tick = (): void => {
       if (nativeActiveRef.current) {
         const now = performance.now()
-        const t = Math.min(anchorSec.current + (now - anchorWall.current) / 1000, totalRef.current)
+        // Until native is live, HOLD at the seek point (anchorSec); once live,
+        // interpolate forward from the last native sample.
+        const t = liveRef.current
+          ? Math.min(anchorSec.current + (now - anchorWall.current) / 1000, totalRef.current)
+          : anchorSec.current
         playClock.t = t
         if (now - lastStoreWrite.current > 90) {
           lastStoreWrite.current = now
           setPlayhead(t)
         }
-        if (t >= totalRef.current - 0.02 && playingRef.current) {
+        if (liveRef.current && t >= totalRef.current - 0.02 && playingRef.current) {
           setPlaying(false)
         } else if (
           playingRef.current &&
@@ -251,23 +262,30 @@ export function useNativePreview(params: {
       return
     }
     let cancelled = false
+    if (playing && !readyRef.current) return // still loading — HTML plays this frame
+    if (playing) {
+      // SYNCHRONOUS, before any await: flip the HTML preview off so its <video>
+      // audio is paused+muted this same tick and can't play alongside the native
+      // audio during the async native start (the "double audio" bug). Hold the
+      // clock at the seek point (liveRef=false) until native truly plays.
+      nativeActiveRef.current = true
+      liveRef.current = false
+      anchorSec.current = playhead
+      anchorWall.current = performance.now()
+      lastReportedMs.current = Math.round(playhead * 1000)
+      lastProgressWall.current = performance.now()
+      document.body.classList.add('ec-native-active')
+      setNativeShowing(true)
+    }
     ;(async () => {
       try {
         if (playing) {
-          if (!readyRef.current) return // still loading — HTML plays this frame
           await nativePlayer.seek(Math.round(playhead * 1000))
-          anchorSec.current = playhead
-          anchorWall.current = performance.now()
-          // Arm the watchdog from this moment; native must show forward progress.
-          lastReportedMs.current = Math.round(playhead * 1000)
-          lastProgressWall.current = performance.now()
           await nativePlayer.setActive(true)
           if (cancelled) return
-          nativeActiveRef.current = true
-          document.body.classList.add('ec-native-active')
-          setNativeShowing(true)
           await nativePlayer.play()
         } else {
+          liveRef.current = false
           await nativePlayer.pause()
           nativeActiveRef.current = false
           document.body.classList.remove('ec-native-active')

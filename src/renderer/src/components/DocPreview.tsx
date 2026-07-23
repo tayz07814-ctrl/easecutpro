@@ -426,6 +426,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         for (const [, pair] of slotsRef.current) {
           for (const v of pair) {
             if (!v) continue
+            if (!v.muted) v.muted = true // native owns the audio — never let HTML double it
             if (!v.paused) v.pause()
             if (v.style.visibility !== 'hidden') v.style.visibility = 'hidden'
           }

@@ -184,7 +184,9 @@ export default function MobileTextPanel(): JSX.Element {
       setDraft('')
       return
     }
-    addDocTexts([{ text, startS: playhead, endS: playhead + 3, y: 0.8 }], true)
+    // Manual text drops in the CENTER (0.5); captions own the lower third (0.85),
+    // so a fresh text never lands on top of the caption line.
+    addDocTexts([{ text, startS: playhead, endS: playhead + 3, y: 0.5 }], true)
     setDraft('')
     setTab('font') // straight to styling the new clip
   }
