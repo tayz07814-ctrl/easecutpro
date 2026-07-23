@@ -1,0 +1,87 @@
+name: Flutter native APK (0.01)
+# rebuild marker: v1 — first Flutter+Kotlin native slice (ExoPlayer→texture preview + Media3 export)
+
+# Builds the NATIVE Flutter rebuild of the mobile app (mobile/) — a real Flutter app
+# with the preview player and export written in Kotlin/Media3 (no WebView). Installs
+# ALONGSIDE the current Capacitor app (distinct appId com.easecutpro.easecut), so the
+# working app is untouched while this is validated on-device.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [easecut0.01]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/flutter-apk.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.7'
+          channel: stable
+          cache: true
+
+      - name: Accept Android licenses + ensure SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;android-36" "build-tools;36.0.0" 2>&1 | tail -3 || true
+
+      - name: Flutter pub get
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Build debug APK
+        working-directory: mobile
+        run: flutter build apk --debug
+
+      - name: Locate APK
+        id: apk
+        run: |
+          APK=$(find mobile/build/app/outputs/flutter-apk -name '*.apk' | head -1)
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "Built: $APK"; ls -la "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: easecut-native-flutter-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Publish to prerelease (download link)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-flutter-0.01
+          name: EaseCut — Native (Flutter) preview build
+          prerelease: true
+          body: |
+            **Native Flutter rebuild** — first testable slice.
+
+            This is the ground-up native app: the preview player is a hardware-decoded
+            ExoPlayer rendered into a Flutter texture (no WebView, so the preview is
+            glassy and never sticks), and export runs on the phone's Media3 hardware
+            codecs.
+
+            - Installs **alongside** your current app (app name: "EaseCut Native",
+              id `com.easecutpro.easecut`) — the existing app is untouched.
+            - This slice: import a video → native preview with play / pause / scrub →
+              native export to your gallery (Movies/EaseCutPro).
+            - The full editor UI (timeline, captions, Cut Lord) is being built on top
+              of this foundation next.
+          files: ${{ steps.apk.outputs.path }}
