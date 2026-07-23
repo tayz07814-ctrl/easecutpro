@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **f7ce52b** (device-test fixes: export re-entrancy guard — stops the 0→52→0→70 restart from a 2nd concurrent run — + honest error msg `f7ce52b`; native-player STUCK-CLOCK fix — interpolation now drives the store playhead so the timeline cursor advances on Play, + a watchdog that hands playback back to the HTML player if native shows no progress in ~1.8s — + native-export throw → WebCodecs fallback `40d71e6`; native ExoPlayer PREVIEW PLAYER — TextureView behind a transparent WebView, HTML captions composite on top `d9952a8`; native export progress polling — Media3 `getProgress` streamed to the export bar `2e2d4f7`; native Android media import→app-file bridge + native cut export wired `d53d931`; native export engine — Media3 Transformer plugin, compiles + ships `045fc82`; import byte-copy fix for revoked content:// reads `03602a6`; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **09edacb** (NATIVE-ONLY full export on Android — no WebCodecs fallback: Media3 Composition of base video (trim+concat, audio kept) + audio-only sequences (music/voiceover mixed) + a timed `OverlayEffect` compositing **captions** baked to full-frame PNGs in JS (`TimedOverlay` shows the active caption bitmap, memory-bounded), `Presentation` forces output res so bitmaps map 1:1; `store.ts` routes Android export → `nativeExportFull` only, web/desktop keep WebCodecs; the `Composition.Builder` takes a `List` not an array `09edacb`/`934f6fb`; device-test fixes: export re-entrancy guard — stops the 0→52→0→70 restart from a 2nd concurrent run — + honest error msg `f7ce52b`; native-player STUCK-CLOCK fix — interpolation now drives the store playhead so the timeline cursor advances on Play, + a watchdog that hands playback back to the HTML player if native shows no progress in ~1.8s — + native-export throw → WebCodecs fallback `40d71e6`; native ExoPlayer PREVIEW PLAYER — TextureView behind a transparent WebView, HTML captions composite on top `d9952a8`; native export progress polling — Media3 `getProgress` streamed to the export bar `2e2d4f7`; native Android media import→app-file bridge + native cut export wired `d53d931`; native export engine — Media3 Transformer plugin, compiles + ships `045fc82`; import byte-copy fix for revoked content:// reads `03602a6`; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -419,5 +419,23 @@ On-device: **import didn't open the gallery** and **no permission prompt**. Two 
     `BitmapOverlay` with alpha 0 outside its window, applied at the Composition level; watch output-resolution
     match + bridge payload size for many captions). Needs the on-screen export error text to confirm whether
     the WebCodecs failure is audio-decode vs encoder vs frame-harvest before investing in it.
+  - **Native-only full export DONE (`934f6fb` + fix `09edacb`).** User: "remove fallback, native only; bake
+    captions/audio/text/overlays/videos into Media3." Implemented: `EcNativeExportPlugin.export` now builds a
+    full `Composition` — base video sequence (trim+concat, audio kept) + one audio-only `EditedMediaItemSequence`
+    per music/voiceover track (`setRemoveVideo(true)`, mixed) + video effects `[Presentation.createForWidth-
+    AndHeight(W,H,SCALE_TO_FIT), OverlayEffect([imageTrack, textTrack])]`. **`TimedOverlay extends BitmapOverlay`**
+    (`getBitmap(presentationTimeUs)` returns the caption bitmap whose [start,end) window contains t, else a 1×1
+    transparent; only the active bitmap decoded/held → memory-bounded). Captions baked in JS by
+    `nativePlan.nativeExportFull` via `documentToProject` + `renderTextPng(t,W,H)` (full-frame at output res) →
+    base64; audio tracks gathered from `planFromDoc` with `nativePathFor`. `nativeExport.ts` `export()` now takes
+    a `NativeExportSpec` (segments/captions/images/audioTracks/width/height). **`store.exportVideoOnDevice`: on
+    `hasNativeExport()` it calls `nativeExportFull` ONLY — no WebCodecs fallback**; web/desktop keep WebCodecs.
+    Throws a clear reason (missing native path / image on main track) instead of silent wrong output. CI compile
+    gotcha fixed: `Composition.Builder(List<EditedMediaItemSequence>)` — pass the List, not an array. Run
+    `29987217424` v12 GREEN; APK 37.6 MB. **NOT yet native:** per-clip speed, Ken Burns/crop, VIDEO b-roll
+    overlays, image-overlay baking (the `images` track is wired on the native side but nativePlan doesn't bake
+    image overlays yet), and audio-track TIME OFFSET (audio sequences start at 0 — no gap/`atMs`). A project
+    using those exports without them (no fallback). UNTESTED on device — captions timing/position + audio mix
+    are the things to verify first.
 - **NOTE for whoever merges 0.01 → main:** `main` already has the newer `openPicker` in `cloud/api.ts`; the
   `main`-side conflict is only the accept types + `openAudioDialogMulti` (0.01 additions).
