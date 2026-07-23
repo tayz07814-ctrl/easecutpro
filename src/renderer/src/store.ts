@@ -3648,6 +3648,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   exportVideoOnDevice: async (settings) => {
+    // Re-entrancy guard: an export already running must not be started again — a
+    // second concurrent run is what made the progress bar appear to restart
+    // (0→52%→0→70%…) as two passes fought over the same worker/decoders.
+    const jb = get().job
+    if (jb.active && jb.kind === 'export') return
     set({ showExportModal: false, job: { active: true, kind: 'export', percent: 1, message: 'Getting ready to export…' } })
     try {
       // Android fast path: a plain cut (trim + join, no text/overlay/speed/audio)
@@ -3691,7 +3696,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 100, message: `Saved ${dl} to this device` } })
     } catch (e) {
       set({
-        job: { active: false, percent: 0, message: `On-device export: ${safeErrMessage(e)} — use the normal Export instead` }
+        job: { active: false, kind: 'export', percent: 0, message: `Export failed: ${safeErrMessage(e)}` }
       })
     }
   },
