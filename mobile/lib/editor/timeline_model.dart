@@ -209,6 +209,15 @@ class TimelineModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Replace the whole clip list (undo/redo, restore a snapshot).
+  void restore(List<EcClip> next) {
+    clips
+      ..clear()
+      ..addAll(next);
+    selected = -1;
+    notifyListeners();
+  }
+
   /// Cut Lord: replace the base with only these kept source ranges (in order).
   void applyKeepRanges(List<List<int>> rangesMs) {
     if (sourcePath == null) return;

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../editor/silence_settings.dart';
 import '../theme.dart';
 import '../widgets/controls.dart';
 
@@ -14,8 +15,8 @@ class SilenceModal extends StatefulWidget {
 
 class _SilenceModalState extends State<SilenceModal> {
   String _preset = 'Balanced';
-  double _trim = 0.35;
-  double _keep = 0.08;
+  double _trim = SilenceSettings.trimS;
+  double _keep = SilenceSettings.keepS;
   double _strict = 0.7;
   bool _breaths = true;
   bool _blend = false;
@@ -114,7 +115,10 @@ class _SilenceModalState extends State<SilenceModal> {
                     ),
                   ),
                   GestureDetector(
-                    onTap: () => Navigator.of(context).pop(),
+                    onTap: () {
+                      SilenceSettings.apply(trimS: _trim, keepS: _keep);
+                      Navigator.of(context).pop();
+                    },
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
                       decoration: BoxDecoration(color: Ec.indigo, borderRadius: BorderRadius.circular(9)),

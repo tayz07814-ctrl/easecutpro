@@ -8,12 +8,14 @@ import '../editor/timeline_model.dart';
 import '../editor/text_overlay.dart';
 import '../editor/cutcutpro.dart';
 import '../editor/cutlord.dart';
+import '../editor/silence_settings.dart';
 import '../native/exporter.dart';
 import '../native/player.dart';
 import '../theme.dart';
 import '../widgets/tool_dock.dart';
 import '../widgets/selected_toolbar.dart';
 import '../widgets/mini_timeline.dart';
+import '../widgets/editable_overlay.dart';
 import '../sheets/export_sheet.dart';
 import '../sheets/cutlord_sheet.dart';
 import '../sheets/captions_sheet.dart';
@@ -22,6 +24,7 @@ import '../sheets/audio_sheet.dart';
 import '../sheets/settings_sheet.dart';
 import '../sheets/silence_modal.dart';
 import '../sheets/clip_tools_sheets.dart';
+import '../sheets/cut_review_sheet.dart';
 
 /// The EaseCut mobile editor. Everything (preview, export, split/trim/delete, and —
 /// next — Cut Lord) runs off a single [TimelineModel] of base-video clips fed to the
@@ -56,6 +59,7 @@ class _EditorScreenState extends State<EditorScreen> {
   double _stageFrac = 0.46;
   bool _selected = false;
   final List<TextOverlay> _texts = []; // text + caption overlays
+  TextOverlay? _selectedText; // overlay being edited on the preview
   List<Word>? _transcript; // cached STT (reused by Cut Lord + Captions)
   final List<ExportSegment> _audioTracks = []; // imported music/voiceover (mixed on export)
   final List<String> _audioNames = [];
@@ -343,7 +347,7 @@ class _EditorScreenState extends State<EditorScreen> {
       ));
   void _openCaptions() => _openSheet(CaptionsSheet(onGenerate: (_) => _generateCaptions()));
 
-  // ---- Cut Lord: extract audio → transcribe → judge → apply cuts ----
+  // ---- Cut Lord: extract audio → transcribe → judge → REVIEW → apply cuts ----
   Future<void> _runCutLord(CutLordModel model, bool cutSilence) async {
     if (!_hasBase || _model.sourcePath == null) {
       _toast('Import a clip first');
@@ -354,19 +358,85 @@ class _EditorScreenState extends State<EditorScreen> {
     try {
       _transcript ??=
           await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
-      final res = await judge(_transcript!, model, _sourceDurationMs / 1000.0,
-          cutSilence: cutSilence, onProgress: (p, m) => prog.value = m);
-      _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
-      _model.applyKeepRanges(res.keeps);
-      await _reload(seekTo: 0);
-      if (mounted) Navigator.of(context).pop();
-      _toast(res.savedS < 0.4 ? 'Looks clean — nothing to cut!' : '${model.label}: trimmed ${res.savedS.toStringAsFixed(1)}s');
+      final res = await judge(
+        _transcript!,
+        model,
+        _sourceDurationMs / 1000.0,
+        cutSilence: cutSilence,
+        minPauseS: SilenceSettings.trimS,
+        padS: SilenceSettings.keepS,
+        onProgress: (p, m) => prog.value = m,
+      );
+      if (mounted) Navigator.of(context).pop(); // close progress dialog
+      if (res.wordCuts.isEmpty) {
+        // Nothing spoken to trim — apply silence-only (or report clean).
+        if (cutSilence) {
+          _applyCuts(const [], cutSilence, model.label);
+        } else {
+          _toast('Looks clean — nothing to cut!');
+        }
+        return;
+      }
+      // Review pass: let the user confirm/adjust before committing.
+      _openSheet(CutReviewSheet(
+        words: _transcript!,
+        initialCuts: res.wordCuts,
+        modelLabel: model.label,
+        onExecute: (finalCuts) {
+          Navigator.of(context).pop(); // close review sheet
+          _applyCuts(finalCuts, cutSilence, model.label);
+        },
+      ));
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       _toast('Cut Lord failed: ${_cleanErr(e)}');
     } finally {
       prog.dispose();
     }
+  }
+
+  /// Compute keep-ranges from (reviewed) word cuts + silence, snapshot for undo,
+  /// then apply to the timeline.
+  Future<void> _applyCuts(List<List<int>> wordCuts, bool cutSilence, String label) async {
+    if (_transcript == null) return;
+    final keeps = keepRanges(
+      _transcript!,
+      wordCuts,
+      _sourceDurationMs / 1000.0,
+      cutSilence: cutSilence,
+      minPauseS: SilenceSettings.trimS,
+      padS: SilenceSettings.keepS,
+    );
+    _snapshotForUndo();
+    _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
+    _model.applyKeepRanges(keeps);
+    await _reload(seekTo: 0);
+    final keptMs = keeps.fold<int>(0, (a, k) => a + (k[1] - k[0]));
+    final saved = (_sourceDurationMs / 1000.0) - keptMs / 1000.0;
+    _showUndoSnack(saved < 0.4 ? 'Applied — barely trimmed' : '$label: trimmed ${saved.toStringAsFixed(1)}s');
+  }
+
+  // ---- undo (single-level snapshot; full undo/redo is a later task) ----
+  List<EcClip>? _undoClips;
+  void _snapshotForUndo() {
+    _undoClips = _model.clips.map((c) => c.copy()).toList();
+  }
+
+  Future<void> _undoCut() async {
+    final snap = _undoClips;
+    if (snap == null) return;
+    _model.restore(snap.map((c) => c.copy()).toList());
+    _undoClips = null;
+    await _reload(seekTo: 0);
+  }
+
+  void _showUndoSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: Ec.card,
+      action: SnackBarAction(label: 'Undo', textColor: Ec.indigoText, onPressed: _undoCut),
+    ));
   }
 
   Future<void> _generateCaptions() async {
@@ -436,7 +506,10 @@ class _EditorScreenState extends State<EditorScreen> {
   void _openText() => _openSheet(TextSheet(onAdd: (t) {
         t.startMs = _positionMs;
         t.endMs = (_positionMs + 3000).clamp(0, _totalMs > 0 ? _totalMs : _positionMs + 3000);
-        setState(() => _texts.add(t));
+        setState(() {
+          _texts.add(t);
+          _selectedText = t; // ready to drag/resize on the preview
+        });
       }));
   void _openAudio() => _openSheet(AudioSheet(
         names: _audioNames,
@@ -569,6 +642,72 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  /// Floating controls for the selected overlay: re-time to the playhead, edit,
+  /// or delete. Drag to move + pinch to resize are on the overlay itself.
+  Widget _textControlBar(TextOverlay t) {
+    Widget btn(IconData ic, String label, VoidCallback onTap, {Color? c}) => GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(ic, size: 18, color: c ?? Ec.text),
+                const SizedBox(height: 2),
+                Text(label, style: TextStyle(fontSize: 9.5, color: c ?? Ec.textDim)),
+              ],
+            ),
+          ),
+        );
+    return Container(
+      decoration: BoxDecoration(
+        color: Ec.sheet.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Ec.hair2),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          btn(Icons.login, 'Start', () => setState(() => t.startMs = _positionMs)),
+          btn(Icons.logout, 'End', () {
+            setState(() => t.endMs = _positionMs <= t.startMs ? t.startMs + 500 : _positionMs);
+          }),
+          btn(Icons.edit_outlined, 'Edit', () => _editOverlayText(t)),
+          btn(Icons.delete_outline, 'Delete', () {
+            setState(() {
+              _texts.remove(t);
+              _selectedText = null;
+            });
+          }, c: const Color(0xFFFF8A9A)),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editOverlayText(TextOverlay t) async {
+    final ctrl = TextEditingController(text: t.text);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Ec.card,
+        title: const Text('Edit text', style: TextStyle(color: Ec.text, fontSize: 16)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: null,
+          style: const TextStyle(color: Ec.text),
+          decoration: const InputDecoration(hintText: 'Text', hintStyle: TextStyle(color: Ec.textFaint)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(context).pop(ctrl.text), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (result != null) setState(() => t.text = result);
+  }
+
   Widget _stage(double screenH) {
     final h = (screenH * _stageFrac).clamp(160.0, screenH * 0.58);
     return SizedBox(
@@ -586,9 +725,27 @@ class _EditorScreenState extends State<EditorScreen> {
                     return Stack(
                       fit: StackFit.expand,
                       children: [
-                        _cropped(Texture(textureId: _textureId!)),
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => setState(() => _selectedText = null),
+                          child: _cropped(Texture(textureId: _textureId!)),
+                        ),
                         for (final t in _texts)
-                          if (t.activeAt(_positionMs)) TextOverlayView(t: t, frame: frame),
+                          if (t.activeAt(_positionMs))
+                            EditableOverlay(
+                              t: t,
+                              frame: frame,
+                              selected: identical(t, _selectedText),
+                              onSelect: () => setState(() => _selectedText = t),
+                              onChange: () => setState(() {}),
+                            ),
+                        if (_selectedText != null && _selectedText!.activeAt(_positionMs))
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 6,
+                            child: Center(child: _textControlBar(_selectedText!)),
+                          ),
                       ],
                     );
                   },
