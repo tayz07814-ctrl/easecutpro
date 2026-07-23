@@ -16,6 +16,7 @@ class MiniTimeline extends StatefulWidget {
   final List<ThumbFrame> thumbs;
   final List<double> waveform; // whole-source amplitude peaks (0..1)
   final int sourceDurationMs;
+  final List<String> audioNames; // extra audio tracks (music / voiceover)
   final VoidCallback onScrubStart;
   final ValueChanged<int> onScrub;
   final ValueChanged<int> onScrubEnd;
@@ -35,6 +36,7 @@ class MiniTimeline extends StatefulWidget {
     this.thumbs = const [],
     this.waveform = const [],
     this.sourceDurationMs = 0,
+    this.audioNames = const [],
     required this.onScrubStart,
     required this.onScrub,
     required this.onScrubEnd,
@@ -255,6 +257,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
                       ],
                     ),
                   ),
+                  if (widget.audioNames.isNotEmpty) _audioLane(),
                 ],
               );
             },
@@ -282,6 +285,41 @@ class _MiniTimelineState extends State<MiniTimeline> {
           border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
         ),
         child: Icon(icon, size: 15, color: enabled ? Ec.text : Ec.textFaint),
+      ),
+    );
+  }
+
+  Widget _audioLane() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(_pad, 0, _pad, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final name in widget.audioNames)
+            Container(
+              height: 22,
+              margin: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              alignment: Alignment.centerLeft,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1F3326),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Ec.green.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.music_note, size: 12, color: Ec.green),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Color(0xFFBFE8C4), fontSize: 10.5, fontWeight: FontWeight.w500)),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }

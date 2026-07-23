@@ -51,6 +51,10 @@ class EcPlayer(
     private var speeds = FloatArray(0)
     private var vols = FloatArray(0)
 
+    // Extra audio tracks (music / voiceover), previewed via follow-the-leader players.
+    private val audioPlayers = ArrayList<ExoPlayer>()
+    private var audioStarts = LongArray(0) // each track's timeline start (ms)
+
     /** Apply the current clip's speed + volume (per-item preview parity). */
     private fun applyItemParams(idx: Int) {
         val p = player ?: return
@@ -61,6 +65,46 @@ class EcPlayer(
             p.volume = v.coerceIn(0f, 4f)
         } catch (_: Exception) {
         }
+    }
+
+    /** Global timeline position (ms) from the video player. */
+    private fun currentTimelineMs(): Long {
+        val p = player ?: return 0L
+        val idx = p.currentMediaItemIndex
+        val pos = maxOf(0L, p.contentPosition)
+        val base = if (idx in starts.indices) starts[idx] else 0L
+        val sp = if (idx in speeds.indices && speeds[idx] > 0f) speeds[idx] else 1f
+        return base + (pos / sp).toLong()
+    }
+
+    /** Point every audio track at the given timeline position and match play state. */
+    private fun syncAudio(play: Boolean) {
+        val tl = currentTimelineMs()
+        for (i in audioPlayers.indices) {
+            val ap = audioPlayers[i]
+            val startAt = if (i in audioStarts.indices) audioStarts[i] else 0L
+            val local = tl - startAt
+            try {
+                if (local < 0) {
+                    ap.playWhenReady = false
+                } else {
+                    if (kotlin.math.abs(ap.currentPosition - local) > 120) ap.seekTo(local)
+                    ap.playWhenReady = play
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun releaseAudio() {
+        for (ap in audioPlayers) {
+            try {
+                ap.release()
+            } catch (_: Exception) {
+            }
+        }
+        audioPlayers.clear()
+        audioStarts = LongArray(0)
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -86,12 +130,18 @@ class EcPlayer(
                             "ready" to (p.playbackState == Player.STATE_READY)
                         )
                     )
+                    // Keep audio tracks aligned (only corrects when drift > threshold).
+                    if (audioPlayers.isNotEmpty()) {
+                        pollTick++
+                        if (p.isPlaying && pollTick % 10 == 0) syncAudio(true)
+                    }
                 } catch (_: Exception) {
                 }
             }
             if (polling) main.postDelayed(this, 100)
         }
     }
+    private var pollTick = 0
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -113,10 +163,12 @@ class EcPlayer(
                 "load" -> load(call, result)
                 "play" -> {
                     player?.playWhenReady = true
+                    syncAudio(true)
                     result.success(null)
                 }
                 "pause" -> {
                     player?.playWhenReady = false
+                    syncAudio(false)
                     result.success(null)
                 }
                 "seek" -> seek(call, result)
@@ -193,6 +245,35 @@ class EcPlayer(
         p.setMediaItems(items)
         p.prepare()
         applyItemParams(p.currentMediaItemIndex)
+
+        // Extra audio tracks (music / voiceover) — previewed via follow-the-leader players.
+        releaseAudio()
+        @Suppress("UNCHECKED_CAST")
+        val audio = (call.argument<List<Map<String, Any>>>("audioTracks")) ?: emptyList()
+        if (audio.isNotEmpty()) {
+            val aStarts = ArrayList<Long>()
+            for (a in audio) {
+                val uri = a["uri"] as? String ?: continue
+                val aStart = (a["startMs"] as? Number)?.toLong() ?: 0L
+                val aEnd = (a["endMs"] as? Number)?.toLong() ?: 0L
+                val tlStart = (a["timelineStartMs"] as? Number)?.toLong() ?: 0L
+                val vol = (a["volume"] as? Number)?.toFloat() ?: 1f
+                try {
+                    val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(aStart)
+                    if (aEnd > aStart) clip.setEndPositionMs(aEnd)
+                    val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
+                    val ap = ExoPlayer.Builder(context).build()
+                    ap.repeatMode = Player.REPEAT_MODE_OFF
+                    ap.volume = vol.coerceIn(0f, 4f)
+                    ap.setMediaItem(mi)
+                    ap.prepare()
+                    audioPlayers.add(ap)
+                    aStarts.add(tlStart)
+                } catch (_: Exception) {
+                }
+            }
+            audioStarts = aStarts.toLongArray()
+        }
         result.success(null)
     }
 
@@ -215,6 +296,7 @@ class EcPlayer(
                 p.seekTo(idx, inClipSource)
             } catch (_: Exception) {
             }
+            syncAudio(p.playWhenReady)
         }
         result.success(null)
     }
@@ -233,6 +315,7 @@ class EcPlayer(
 
     private fun releaseInternal() {
         stopPolling()
+        releaseAudio()
         player?.let {
             try {
                 it.release()

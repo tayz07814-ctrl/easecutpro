@@ -127,6 +127,18 @@ class _EditorScreenState extends State<EditorScreen> {
         ],
       };
 
+  /// Audio tracks as native-player maps (previewed alongside the video, from t=0).
+  List<Map<String, dynamic>> _audioTrackMaps() => [
+        for (final a in _audioTracks)
+          {
+            'uri': a.uri,
+            'startMs': a.startMs,
+            'endMs': a.endMs,
+            'timelineStartMs': 0,
+            'volume': 1.0,
+          }
+      ];
+
   Future<void> _saveNow() async {
     if (widget.projectId == null || !_model.hasBase) return;
     _projectDoc['mobile'] = _serialize();
@@ -177,7 +189,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _sizeSub ??= _player.sizes.listen((_) {
       if (mounted) setState(() => _aspect = _player.aspectRatio);
     });
-    await _player.load(_model.playerSegments());
+    await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
     _exporter.thumbnails('file://$src', 16).then((t) {
       if (mounted) setState(() => _thumbs = t);
     });
@@ -215,7 +227,7 @@ class _EditorScreenState extends State<EditorScreen> {
         if (mounted) setState(() => _aspect = _player.aspectRatio);
       });
       _model.setBase(path, 0); // duration filled in when the player reports it
-      await _player.load(_model.playerSegments());
+      await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
       if (mounted) setState(() {});
       // Filmstrip + waveform (async, non-blocking).
       _exporter.thumbnails('file://$path', 16).then((t) {
@@ -234,7 +246,7 @@ class _EditorScreenState extends State<EditorScreen> {
   /// playhead at [seekTo] (clamped).
   Future<void> _reload({int? seekTo}) async {
     if (!_model.hasBase) return;
-    await _player.load(_model.playerSegments());
+    await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
     final pos = (seekTo ?? _positionMs).clamp(0, _totalMs);
     await _player.seek(pos);
     setState(() => _positionMs = pos);
@@ -654,6 +666,7 @@ class _EditorScreenState extends State<EditorScreen> {
             _audioNames.add(name);
           });
           _scheduleSave();
+          if (_hasBase) _reload(seekTo: _positionMs); // preview the new track
         },
         onRemove: (i) {
           setState(() {
@@ -661,6 +674,7 @@ class _EditorScreenState extends State<EditorScreen> {
             _audioNames.removeAt(i);
           });
           _scheduleSave();
+          if (_hasBase) _reload(seekTo: _positionMs);
         },
       ));
   void _openSettings() => _openSheet(const SettingsSheet());
@@ -1017,6 +1031,7 @@ class _EditorScreenState extends State<EditorScreen> {
         thumbs: _thumbs,
         waveform: _waveform,
         sourceDurationMs: _sourceDurationMs,
+        audioNames: _audioNames,
         onScrubStart: () => _scrubbing = true,
         onScrub: (ms) => setState(() => _positionMs = ms),
         onScrubEnd: (ms) async {

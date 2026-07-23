@@ -90,8 +90,11 @@ class NativePlayer {
     }
   }
 
-  Future<void> load(List<PlayerSegment> segs) =>
-      _m.invokeMethod('load', {'segments': segs.map((s) => s.toMap()).toList()});
+  Future<void> load(List<PlayerSegment> segs, {List<Map<String, dynamic>> audioTracks = const []}) =>
+      _m.invokeMethod('load', {
+        'segments': segs.map((s) => s.toMap()).toList(),
+        'audioTracks': audioTracks,
+      });
 
   Future<void> play() => _m.invokeMethod('play');
   Future<void> pause() => _m.invokeMethod('pause');
