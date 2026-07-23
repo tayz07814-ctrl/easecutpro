@@ -51,7 +51,7 @@ the device**; only the extracted 16 kHz mono audio (WAV) is uploaded to the STT 
 - If re-attempting the iOS silent-export fix: **cloud-only** (`IS_CLOUD` gate), never in shared `localExport`.
 
 ## 4. `easecut0.01` branch (test only — beta LLM judges; DO NOT touch main)
-`easecut0.01` = **d53d931** (native Android media import→app-file bridge + native cut export wired `d53d931`; native export engine — Media3 Transformer plugin, compiles + ships `045fc82`; import byte-copy fix for revoked content:// reads `03602a6`; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
+`easecut0.01` = **2e2d4f7** (native export progress polling — Media3 `getProgress` streamed to the export bar `2e2d4f7`; native Android media import→app-file bridge + native cut export wired `d53d931`; native export engine — Media3 Transformer plugin, compiles + ships `045fc82`; import byte-copy fix for revoked content:// reads `03602a6`; import picker fix + runtime media permissions; a `59ef87b` "macOS cloud desktop shell" from ANOTHER session also sits on this branch; OFFLINE app — bundled dist-cloud + gallery/files picker `09f70ea`; Android test APK via CI `0c2eba3`; 3-tab text panel + text shadow + style presets `3cd0716`; mobile single-decoder preview `21be3e1`; text-drawer batch `4d033e0`: drop Duration, `]|[` split, modern text panel, caption styles, custom fonts, bg-opacity 100%; timeline theme `90661d8`; base-video crop + caption size `febe44f`; freeze fix `1cc8551`; crop/captions/transcript-reuse `6d38a08`; reskin `2b088a1`). Tests alternate
 LLM cut judges via OpenRouter (the key stays
 **server-side** in the `ultracut-judge` edge fn). The user tests these manually; main is unaffected.
 - **Retake Beta** button → `meta-llama/llama-4-maverick` (promptVariant `sharp`, reasoning off). `e4ed28e`.
@@ -379,7 +379,15 @@ On-device: **import didn't open the gallery** and **no permission prompt**. Two 
     gallery. Everything gated on the Capacitor native platform + plugin — **browser/desktop export untouched**
     (cloud build GREEN locally; CI run `29967051155` v6). This is the fix for the user's "0→52→70% restart"
     grind + slowness: a plain cut now exports with hardware codecs instead of per-frame `<video>` seeking.
+  - **Step 3b ✅ (`2e2d4f7`) — export progress bar.** The native export jumped 3%→100% with no motion
+    (Media3 has no progress callback), which read as "stuck". `EcNativeExportPlugin` now polls
+    `Transformer.getProgress(ProgressHolder)` on the main thread every 250 ms and pushes it via
+    `notifyListeners('nativeExportProgress')`; `nativeExport.ts` `addListener`s and forwards 0–100 (removed in
+    `finally`), `nativePlan.ts` maps it onto the 3–99 UI range. Best-effort + gated (no events → no harm;
+    browser/desktop untouched). CI run `29967639531` v7 GREEN; APK refreshed (37.6 MB).
   - **Step 4 — native player** (ExoPlayer surface composited under the HTML text/overlay layers) — hardest,
-    last, still TODO. v1 native export is TRIM+CONCAT only; effects/text/speed stay on the WebCodecs path.
+    last, still TODO. The user asked for it ("make its preview player native"); deliberately NOT shipped blind
+    while they slept (a half-baked native surface could regress the working preview — needs per-increment
+    device testing). v1 native export is TRIM+CONCAT only; effects/text/speed stay on the WebCodecs path.
 - **NOTE for whoever merges 0.01 → main:** `main` already has the newer `openPicker` in `cloud/api.ts`; the
   `main`-side conflict is only the accept types + `openAudioDialogMulti` (0.01 additions).
