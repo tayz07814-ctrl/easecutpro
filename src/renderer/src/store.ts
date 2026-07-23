@@ -34,7 +34,7 @@ import { addDocTexts, removeCaptionTexts } from './docTextClips'
 import { captionStyleContent } from './captionStyles'
 import { insertLibraryItemAtPlayhead } from './timelineInsert'
 import { exportOnDevice } from './export/localExport'
-import { tryNativeCutExport } from './export/nativePlan'
+import { nativeExportFull, hasNativeExport } from './export/nativePlan'
 import { renderTextPng } from './textRender'
 import { TIMELINE_TRACK_COUNT } from '@shared/types'
 import { detectFillerIds, detectRepeatIds, snapRetakeFlags, DEFAULT_FILLERS } from '@shared/fillers'
@@ -3654,30 +3654,24 @@ export const useStore = create<AppState>((set, get) => ({
     const jb = get().job
     if (jb.active && jb.kind === 'export') return
     set({ showExportModal: false, job: { active: true, kind: 'export', percent: 1, message: 'Getting ready to export…' } })
+    const chosenName = (settings.filename ?? '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim()
     try {
-      // Android fast path: a plain cut (trim + join, no text/overlay/speed/audio)
-      // exports via native hardware codecs (Media3) — fast + smooth, and saved
-      // straight to the gallery. Returns null when the timeline needs compositing,
-      // which drops to the WebCodecs exporter below (unchanged on web/desktop).
-      const chosenName = (settings.filename ?? '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').trim()
-      let native: { savedTo?: string; path: string } | null = null
-      try {
-        native = await tryNativeCutExport(
+      // Android: NATIVE-ONLY export. Media3 encodes the whole edit with the phone's
+      // hardware codecs — base video (trim+concat, audio kept), captions composited,
+      // extra audio tracks mixed — and saves to the gallery. No WebCodecs fallback.
+      if (hasNativeExport()) {
+        const out = await nativeExportFull(
           get().project,
+          { width: settings.width, height: settings.height, bitrateMbps: settings.bitrateMbps },
           chosenName ? `${chosenName}.mp4` : `EaseCutPro_${Date.now()}.mp4`,
           (percent, message) => set({ job: { active: true, kind: 'export', percent, message } })
         )
-      } catch {
-        // Native export failed (e.g. Media3 couldn't concat this source) — don't
-        // hard-fail; fall through to the WebCodecs exporter below.
-        native = null
-      }
-      if (native) {
         set({
-          job: { active: false, percent: 100, message: native.savedTo ? `Saved to ${native.savedTo}` : 'Saved to your device' }
+          job: { active: false, kind: 'export', percent: 100, message: out.savedTo ? `Saved to ${out.savedTo}` : 'Saved to your device' }
         })
         return
       }
+      // Web / desktop: on-device WebCodecs export (unchanged).
       const { blob, name } = await exportOnDevice(
         get().project,
         { width: settings.width, height: settings.height, bitrateMbps: settings.bitrateMbps },

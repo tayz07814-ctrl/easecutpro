@@ -1,5 +1,5 @@
 name: Android offline APK (0.01)
-# rebuild marker: v10 — export re-entrancy guard (stops the 0→52→0→70 restart) + clearer error
+# rebuild marker: v11 — native-only full export: Media3 composition (captions + audio), no WebCodecs fallback on Android
 
 # Builds an installable DEBUG Android APK that BUNDLES the cloud web app
 # (dist-cloud) inside a Capacitor shell — a real offline app, not a webpage

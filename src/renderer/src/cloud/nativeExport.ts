@@ -13,6 +13,31 @@ export interface NativeSegment {
   endMs: number
 }
 
+/** A timed full-frame bitmap (caption / text / image overlay) baked in JS. */
+export interface NativeOverlay {
+  /** base64 PNG (no data: prefix), baked at the OUTPUT resolution. */
+  base64: string
+  startMs: number
+  endMs: number
+}
+
+export interface NativeAudioTrack {
+  uri: string
+  startMs: number
+  endMs: number
+}
+
+/** Full native composition: base video + captions/images overlays + audio tracks. */
+export interface NativeExportSpec {
+  segments: NativeSegment[]
+  captions?: NativeOverlay[]
+  images?: NativeOverlay[]
+  audioTracks?: NativeAudioTrack[]
+  width: number
+  height: number
+  filename?: string
+}
+
 export interface NativeExportResult {
   /** cache-file path of the encoded mp4. */
   path: string
@@ -27,7 +52,7 @@ interface PluginListenerHandle {
 
 interface EcNativeExportPlugin {
   ping(): Promise<{ ok: boolean }>
-  export(opts: { segments: NativeSegment[]; filename?: string }): Promise<NativeExportResult>
+  export(opts: NativeExportSpec): Promise<NativeExportResult>
   addListener?(
     eventName: 'nativeExportProgress',
     cb: (data: { percent: number }) => void
@@ -60,13 +85,12 @@ export async function nativeExportReady(): Promise<boolean> {
   }
 }
 
-/** Run a native hardware-codec trim+concat export. Resolves with the output path
- *  and the gallery location it was saved to. `onProgress` (0–100) streams the
- *  Media3 encode progress so the export bar moves; it's best-effort (skipped if
- *  the platform doesn't deliver events). */
+/** Run a native hardware-codec composition export (base video + captions/images +
+ *  audio tracks). Resolves with the output path and the gallery location it was
+ *  saved to. `onProgress` (0–100) streams the Media3 encode progress so the export
+ *  bar moves; it's best-effort (skipped if the platform doesn't deliver events). */
 export async function nativeExport(
-  segments: NativeSegment[],
-  filename?: string,
+  spec: NativeExportSpec,
   onProgress?: (percent: number) => void
 ): Promise<NativeExportResult> {
   const plug = cap()?.Plugins?.EcNativeExport
@@ -82,7 +106,7 @@ export async function nativeExport(
     }
   }
   try {
-    return await plug.export({ segments, filename })
+    return await plug.export(spec)
   } finally {
     try {
       await handle?.remove()

@@ -1,89 +1,103 @@
-// Native (Android) hardware-codec export planner.
+// Native (Android) full export planner — builds the Media3 composition spec from
+// the timeline and hands it to the native encoder. On Android this is the ONLY
+// export path (no WebCodecs fallback): base video (trim + concat, audio kept),
+// captions/text baked to full-frame bitmaps and composited by the native encoder,
+// and extra audio tracks (music / voiceover) mixed in.
 //
-// The on-device WebCodecs exporter decodes/re-encodes every frame by seeking a
-// <video> — correct, but slow on a phone WebView and memory-heavy (the source of
-// the "0→52%→restart" grind). For the COMMON case — a plain cut: trim + join base
-// video clips, no text/overlays/speed/Ken Burns/added audio — Media3 Transformer
-// does the same job with the device's hardware codecs in a fraction of the time,
-// exactly like CapCut.
-//
-// This module decides whether the current timeline is that simple case and, if so,
-// hands Media3 a list of {sourceFile, in, out} segments. Anything fancier returns
-// null so the caller keeps the proven WebCodecs path. Native-only: every guard
-// fails closed on web/desktop, so the browser export is untouched.
+// Throws a clear error when it can't proceed (missing native file path, an image
+// on the main track, no timeline) so the UI shows a real reason instead of a
+// silent wrong output. Web/desktop never call this (they keep the WebCodecs path).
 
 import type { Project } from '@shared/types'
 import { getSharedEngine } from '../timelineEngine'
 import { planFromDoc } from './localExport'
 import { nativePathFor } from '../webmedia'
-import { hasNativeExport, nativeExportReady, nativeExport } from '../cloud/nativeExport'
+import { documentToProject } from '@shared/timeline/bridge'
+import { renderTextPng } from '../textRender'
+import {
+  hasNativeExport,
+  nativeExportReady,
+  nativeExport,
+  type NativeExportSpec,
+  type NativeOverlay,
+  type NativeAudioTrack
+} from '../cloud/nativeExport'
 
-const EPS = 1e-3
-const isOne = (v: number): boolean => Math.abs(v - 1) < EPS
-const isZero = (v: number): boolean => Math.abs(v) < EPS
+export { hasNativeExport }
 
-export interface NativeCutResult {
+export interface NativeExportOutcome {
   savedTo?: string
   path: string
 }
 
+/** Bake the project's captions/text to timed full-frame PNG overlays (output res). */
+function bakeCaptions(project: Project, width: number, height: number): NativeOverlay[] {
+  const proj = project.timeline ? documentToProject(project.timeline, project) : project
+  const out: NativeOverlay[] = []
+  for (const t of proj.texts ?? []) {
+    if (t.end - t.start <= 0.05 || !(t.text ?? '').trim()) continue
+    const dataUrl = renderTextPng(t, width, height)
+    const base64 = dataUrl.split(',')[1] ?? ''
+    if (!base64) continue
+    out.push({ base64, startMs: Math.round(t.start * 1000), endMs: Math.round(t.end * 1000) })
+  }
+  return out
+}
+
 /**
- * Try a native trim+concat export of the current timeline. Returns the result on
- * success, or null when the project isn't a plain cut (caller must fall back to the
- * WebCodecs exporter). Never throws for ineligibility — only a genuine native
- * failure rejects.
+ * Run the full native export. Resolves with the gallery location, or throws with a
+ * human-readable reason. Android-only (guarded by hasNativeExport()).
  */
-export async function tryNativeCutExport(
+export async function nativeExportFull(
   project: Project,
+  settings: { width: number; height: number; bitrateMbps: number },
   filename: string,
   onProgress: (pct: number, msg: string) => void
-): Promise<NativeCutResult | null> {
-  if (!hasNativeExport()) return null
+): Promise<NativeExportOutcome> {
   const doc = getSharedEngine()?.document
-  if (!doc) return null
+  if (!doc) throw new Error('timeline not ready')
 
-  // Only the MAIN track may carry clips. Any audio lane, video overlay, text, or
-  // sticker track with clips means compositing is needed → WebCodecs path.
-  const main = doc.tracks.find((t) => t.isMain)
-  if (!main || !main.clips.length) return null
-  for (const t of doc.tracks) {
-    if (t === main) continue
-    if (t.clips && t.clips.length) return null
-  }
-  // Added music also needs mixing.
-  if (project.music?.path) return null
-  // Baked text overlays (legacy field) need compositing too.
-  if (project.texts && project.texts.some((t) => t.text?.trim())) return null
+  const { segs, audio } = planFromDoc(doc, project)
+  if (!segs.length) throw new Error('nothing on the timeline to export')
 
-  const { segs, audio, total } = planFromDoc(doc, project)
-  if (!segs.length || total <= 0) return null
-  if (audio.length) return null // any separate audio clip → mix in WebCodecs
-
-  // Every base clip must be a plain, untransformed video slice whose source was
-  // imported natively (so a real file path exists for Media3 to read).
-  const segments: { uri: string; startMs: number; endMs: number }[] = []
-  for (const s of segs) {
-    if (s.isImage) return null
-    if (!isOne(s.speed)) return null
-    if (s.muted) return null
-    if (!isOne(s.gain)) return null
-    // No Ken Burns / crop / overlay transform.
-    if (!isOne(s.size) || !isOne(s.zs) || !isOne(s.ze) || !isZero(s.ox) || !isZero(s.oy)) return null
-    const nativePath = nativePathFor(s.src)
-    if (!nativePath) return null
+  // Base video segments — must be native-imported video (no in-browser decode).
+  const segments = segs.map((s) => {
+    if (s.isImage) {
+      throw new Error('images on the main track aren’t supported by native export yet — remove them or re-add as video')
+    }
+    const path = nativePathFor(s.src)
+    if (!path) {
+      throw new Error('a source video isn’t available for native export — re-import it in the app')
+    }
     const startMs = Math.max(0, Math.round(s.sourceStart * 1000))
     const endMs = Math.round(s.sourceEnd * 1000)
-    if (endMs <= startMs) return null
-    segments.push({ uri: 'file://' + nativePath, startMs, endMs })
-  }
-  if (!segments.length) return null
+    return { uri: 'file://' + path, startMs, endMs: endMs > startMs ? endMs : startMs + 1 }
+  })
 
-  // Confirm the native module actually answers before committing to it.
-  if (!(await nativeExportReady())) return null
+  // Extra audio tracks (music / voiceover) that were natively imported.
+  const audioTracks: NativeAudioTrack[] = []
+  for (const a of audio) {
+    const path = nativePathFor(a.src)
+    if (!path) continue // can't include a non-native source; skip rather than fail the whole export
+    const startMs = Math.max(0, Math.round(a.sourceIn * 1000))
+    const endMs = Math.round((a.sourceIn + a.dur) * 1000)
+    audioTracks.push({ uri: 'file://' + path, startMs, endMs: endMs > startMs ? endMs : startMs + 1 })
+  }
+
+  const captions = bakeCaptions(project, settings.width, settings.height)
+
+  if (!(await nativeExportReady())) throw new Error('native export module isn’t responding')
 
   onProgress(3, 'Exporting with native codecs…')
-  // Map the native encoder's 0–100 onto 3–99 so the bar animates during the encode.
-  const res = await nativeExport(segments, filename, (p) =>
+  const spec: NativeExportSpec = {
+    segments,
+    captions,
+    audioTracks,
+    width: settings.width,
+    height: settings.height,
+    filename
+  }
+  const res = await nativeExport(spec, (p) =>
     onProgress(Math.max(3, Math.min(99, 3 + Math.round(p * 0.96))), 'Exporting with native codecs…')
   )
   onProgress(100, res.savedTo ? `Saved to ${res.savedTo}` : 'Export complete')
