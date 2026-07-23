@@ -1,6 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/services.dart';
+
+/// A timeline filmstrip frame: a small JPEG at a source-time (ms).
+class ThumbFrame {
+  final int ms;
+  final Uint8List jpeg;
+  ThumbFrame(this.ms, this.jpeg);
+}
 
 /// A timed full-frame overlay (caption / text / image) baked to a base64 PNG in Dart.
 class ExportOverlay {
@@ -77,6 +85,31 @@ class NativeExporter {
     final path = r?['path'] as String?;
     if (path == null) throw Exception('audio extract returned no path');
     return path;
+  }
+
+  /// Extract [count] evenly-spaced filmstrip frames from the source.
+  Future<List<ThumbFrame>> thumbnails(String uri, int count) async {
+    try {
+      final r = await _m.invokeMethod<Map<dynamic, dynamic>>('thumbnails', {'uri': uri, 'count': count});
+      final frames = (r?['frames'] as List?) ?? [];
+      return frames.map((f) {
+        final m = f as Map;
+        return ThumbFrame((m['ms'] as num).toInt(), base64Decode(m['jpeg'] as String));
+      }).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Decode the source's audio into [buckets] normalized (0..1) amplitude peaks.
+  Future<List<double>> waveform(String uri, {int buckets = 400}) async {
+    try {
+      final r = await _m.invokeMethod<Map<dynamic, dynamic>>('waveform', {'uri': uri, 'buckets': buckets});
+      final peaks = (r?['peaks'] as List?) ?? [];
+      return peaks.map((p) => (p as num).toDouble()).toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   Future<ExportResult> export(ExportSpec spec, {void Function(double pct)? onProgress}) async {

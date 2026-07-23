@@ -2,12 +2,20 @@ package com.easecutpro.easecut
 
 import android.content.Context
 import android.content.ContentValues
+import android.graphics.Bitmap
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Base64
+import java.io.ByteArrayOutputStream
+import java.nio.ByteOrder
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -97,6 +105,8 @@ class EcExport(
             "ping" -> result.success(mapOf("ok" to true))
             "export" -> startExport(call, result)
             "extractAudio" -> extractAudio(call, result)
+            "thumbnails" -> thumbnails(call, result)
+            "waveform" -> waveform(call, result)
             else -> result.notImplemented()
         }
     }
@@ -132,6 +142,164 @@ class EcExport(
         } catch (e: Exception) {
             result.error("ec_export", "audio extract could not start: ${e.message}", null)
         }
+    }
+
+    /** Evenly-spaced frames as small JPEGs (base64) for the timeline filmstrip. */
+    private fun thumbnails(call: MethodCall, result: MethodChannel.Result) {
+        val uri = call.argument<String>("uri")
+        val count = (call.argument<Number>("count"))?.toInt() ?: 10
+        if (uri == null) {
+            result.error("ec_export", "no uri", null)
+            return
+        }
+        Thread {
+            val frames = ArrayList<Map<String, Any>>()
+            val r = MediaMetadataRetriever()
+            try {
+                r.setDataSource(context, Uri.parse(uri))
+                val durMs = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                val n = count.coerceIn(1, 40)
+                for (i in 0 until n) {
+                    val tMs = if (n == 1) durMs / 2 else durMs * i / (n - 1)
+                    val bmp = r.getFrameAtTime(tMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: continue
+                    val th = 160
+                    val tw = (bmp.width * th / maxOf(1, bmp.height)).coerceAtLeast(1)
+                    val scaled = Bitmap.createScaledBitmap(bmp, tw, th, true)
+                    val baos = ByteArrayOutputStream()
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 55, baos)
+                    frames.add(mapOf("ms" to tMs, "jpeg" to Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)))
+                    if (scaled != bmp) scaled.recycle()
+                    bmp.recycle()
+                }
+            } catch (_: Exception) {
+            } finally {
+                try {
+                    r.release()
+                } catch (_: Exception) {
+                }
+            }
+            main.post { result.success(mapOf("frames" to frames)) }
+        }.start()
+    }
+
+    /** Decode the audio track to PCM and return [buckets] normalized (0..1) abs-max peaks. */
+    private fun waveform(call: MethodCall, result: MethodChannel.Result) {
+        val uri = call.argument<String>("uri")
+        val buckets = (call.argument<Number>("buckets"))?.toInt()?.coerceIn(32, 2000) ?: 400
+        if (uri == null) {
+            result.error("ec_export", "no uri", null)
+            return
+        }
+        Thread {
+            val peaks = ArrayList<Float>() // downsampled abs-max, ~one per 1024 samples
+            var extractor: MediaExtractor? = null
+            var codec: MediaCodec? = null
+            try {
+                extractor = MediaExtractor()
+                extractor.setDataSource(context, Uri.parse(uri), null)
+                var trackIndex = -1
+                var format: MediaFormat? = null
+                for (i in 0 until extractor.trackCount) {
+                    val f = extractor.getTrackFormat(i)
+                    val mime = f.getString(MediaFormat.KEY_MIME) ?: ""
+                    if (mime.startsWith("audio/")) {
+                        trackIndex = i
+                        format = f
+                        break
+                    }
+                }
+                if (trackIndex >= 0 && format != null) {
+                    extractor.selectTrack(trackIndex)
+                    codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!)
+                    codec.configure(format, null, null, 0)
+                    codec.start()
+                    val info = MediaCodec.BufferInfo()
+                    var sawInputEOS = false
+                    var sawOutputEOS = false
+                    var acc = 0f
+                    var accCount = 0
+                    val downs = 1024
+                    while (!sawOutputEOS) {
+                        if (!sawInputEOS) {
+                            val inIndex = codec.dequeueInputBuffer(10000)
+                            if (inIndex >= 0) {
+                                val inBuf = codec.getInputBuffer(inIndex)!!
+                                val sampleSize = extractor.readSampleData(inBuf, 0)
+                                if (sampleSize < 0) {
+                                    codec.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                    sawInputEOS = true
+                                } else {
+                                    codec.queueInputBuffer(inIndex, 0, sampleSize, extractor.sampleTime, 0)
+                                    extractor.advance()
+                                }
+                            }
+                        }
+                        val outIndex = codec.dequeueOutputBuffer(info, 10000)
+                        if (outIndex >= 0) {
+                            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) sawOutputEOS = true
+                            if (info.size > 0) {
+                                val outBuf = codec.getOutputBuffer(outIndex)!!
+                                outBuf.position(info.offset)
+                                outBuf.limit(info.offset + info.size)
+                                val sb = outBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                                val n = sb.remaining()
+                                var k = 0
+                                while (k < n) {
+                                    val v = kotlin.math.abs(sb.get(k).toInt()) / 32768f
+                                    if (v > acc) acc = v
+                                    accCount++
+                                    if (accCount >= downs) {
+                                        peaks.add(acc)
+                                        acc = 0f
+                                        accCount = 0
+                                    }
+                                    k++
+                                }
+                            }
+                            codec.releaseOutputBuffer(outIndex, false)
+                        }
+                    }
+                    if (accCount > 0) peaks.add(acc)
+                }
+            } catch (_: Exception) {
+            } finally {
+                try {
+                    codec?.stop()
+                } catch (_: Exception) {
+                }
+                try {
+                    codec?.release()
+                } catch (_: Exception) {
+                }
+                try {
+                    extractor?.release()
+                } catch (_: Exception) {
+                }
+            }
+            // Resample the downsampled peaks to exactly [buckets] (max per segment), normalized.
+            val out = DoubleArray(buckets)
+            if (peaks.isNotEmpty()) {
+                var maxV = 0f
+                for (i in 0 until buckets) {
+                    val a = (i.toLong() * peaks.size / buckets).toInt()
+                    var b = ((i + 1).toLong() * peaks.size / buckets).toInt()
+                    if (b <= a) b = a + 1
+                    if (b > peaks.size) b = peaks.size
+                    var m = 0f
+                    var j = a
+                    while (j < b) {
+                        if (peaks[j] > m) m = peaks[j]
+                        j++
+                    }
+                    out[i] = m.toDouble()
+                    if (m > maxV) maxV = m
+                }
+                if (maxV > 0f) {
+                    for (i in out.indices) out[i] = (out[i] / maxV).coerceIn(0.0, 1.0)
+                }
+            }
+            main.post { result.success(mapOf("peaks" to out.toList())) }
+        }.start()
     }
 
     @Suppress("UNCHECKED_CAST")

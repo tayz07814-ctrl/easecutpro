@@ -58,6 +58,8 @@ class _EditorScreenState extends State<EditorScreen> {
   List<Word>? _transcript; // cached STT (reused by Cut Lord + Captions)
   final List<ExportSegment> _audioTracks = []; // imported music/voiceover (mixed on export)
   final List<String> _audioNames = [];
+  List<ThumbFrame> _thumbs = []; // filmstrip frames for the timeline
+  List<double> _waveform = []; // whole-source amplitude peaks (0..1)
 
   @override
   void initState() {
@@ -103,6 +105,8 @@ class _EditorScreenState extends State<EditorScreen> {
         _playing = false;
         _transcript = null;
         _texts.clear();
+        _thumbs = [];
+        _waveform = [];
       });
       _textureId ??= await _player.create();
       _stateSub ??= _player.states.listen(_onState);
@@ -112,6 +116,13 @@ class _EditorScreenState extends State<EditorScreen> {
       _model.setBase(path, 0); // duration filled in when the player reports it
       await _player.load(_model.playerSegments());
       if (mounted) setState(() {});
+      // Filmstrip + waveform (async, non-blocking).
+      _exporter.thumbnails('file://$path', 16).then((t) {
+        if (mounted) setState(() => _thumbs = t);
+      });
+      _exporter.waveform('file://$path', buckets: 600).then((w) {
+        if (mounted) setState(() => _waveform = w);
+      });
     } catch (e) {
       _toast('Import failed: $e');
     }
@@ -569,6 +580,9 @@ class _EditorScreenState extends State<EditorScreen> {
         clipName: _clipName ?? '',
         positionMs: _positionMs,
         totalMs: _totalMs,
+        thumbs: _thumbs,
+        waveform: _waveform,
+        sourceDurationMs: _sourceDurationMs,
         onScrubStart: () => _scrubbing = true,
         onScrub: (ms) => setState(() => _positionMs = ms),
         onScrubEnd: (ms) async {
@@ -578,6 +592,15 @@ class _EditorScreenState extends State<EditorScreen> {
         onSelectClip: (i) {
           _model.select(i);
           setState(() => _selected = true);
+        },
+        onTrimStart: () => _scrubbing = true,
+        onTrim: (i, {inMs, outMs}) {
+          _model.trim(i, inMs: inMs, outMs: outMs);
+          setState(() {});
+        },
+        onTrimEnd: () async {
+          _scrubbing = false;
+          await _reload(seekTo: _model.clipStartMs(_model.selected < 0 ? 0 : _model.selected));
         },
       ),
     );
