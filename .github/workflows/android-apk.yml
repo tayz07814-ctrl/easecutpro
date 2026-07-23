@@ -1,5 +1,5 @@
 name: Android offline APK (0.01)
-# rebuild marker: v14 — native player rebuilt (no double-audio/vibration) + trim handles selected-only + text/caption no-overlap + scrub-while-playing
+# rebuild marker: v15 — native preview player OFF by default (HTML <video> preview restored, no stuck/black surface); native export unchanged
 
 # Builds an installable DEBUG Android APK that BUNDLES the cloud web app
 # (dist-cloud) inside a Capacitor shell — a real offline app, not a webpage

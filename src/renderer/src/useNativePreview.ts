@@ -40,15 +40,16 @@ const zero = (v: number | undefined): boolean => Math.abs(v ?? 0) < EPS
 // preview. Also flipped true if the native player ever errors, so we never thrash.
 let disabledForSession = false
 function enabled(): boolean {
+  // OFF. The TextureView-under-transparent-WebView compositing does not render
+  // reliably on-device (video plays in the background but the preview surface
+  // stays black/stuck), so the Capacitor native player is disabled — the reliable
+  // HTML <video> preview runs instead. The real fix is the native (Flutter/Kotlin)
+  // rebuild, not more WebView compositing. Escape hatch to test: ec.nativePlayer='1'.
   if (disabledForSession) return false
   try {
-    // ON by default (rebuilt: synchronous HTML silence on Play kills the double
-    // audio, the clock holds at the seek point until native truly plays so no
-    // vibration, and a watchdog reverts to the HTML preview if native stalls).
-    // Kill switch: localStorage.setItem('ec.nativePlayer','0').
-    if (localStorage.getItem('ec.nativePlayer') === '0') return false
+    if (localStorage.getItem('ec.nativePlayer') !== '1') return false
   } catch {
-    /* ignore */
+    return false
   }
   return hasNativePlayer()
 }
