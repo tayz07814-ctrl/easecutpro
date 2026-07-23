@@ -1077,6 +1077,7 @@ class _EditorScreenState extends State<EditorScreen> {
         waveform: _waveform,
         sourceDurationMs: _sourceDurationMs,
         audioNames: _audioNames,
+        texts: _texts,
         onScrubStart: () => _scrubbing = true,
         onScrub: (ms) => setState(() => _positionMs = ms),
         onScrubEnd: (ms) async {

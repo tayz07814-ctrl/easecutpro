@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../editor/text_overlay.dart';
 import '../editor/timeline_model.dart';
 import '../native/exporter.dart' show ThumbFrame;
 import '../theme.dart';
 
-/// Base-track timeline: renders the [TimelineModel]'s clips as a filmstrip
-/// (frame thumbnails + waveform), with a top scrub-ruler, a red playhead,
-/// pinch-free zoom (− / +) that makes the strip horizontally scrollable, and
-/// drag trim-handles on the selected clip.
+/// CapCut / EaseCut-style timeline: a FIXED red playhead pinned at the centre,
+/// with stacked tracks (video filmstrip + waveform, audio, text/captions) that
+/// SCROLL under it. Dragging the film scrubs; − / + (and pinch) zoom the scale.
 class MiniTimeline extends StatefulWidget {
   final TimelineModel model;
   final String clipName;
@@ -17,6 +17,7 @@ class MiniTimeline extends StatefulWidget {
   final List<double> waveform; // whole-source amplitude peaks (0..1)
   final int sourceDurationMs;
   final List<String> audioNames; // extra audio tracks (music / voiceover)
+  final List<TextOverlay> texts; // text + caption overlays
   final VoidCallback onScrubStart;
   final ValueChanged<int> onScrub;
   final ValueChanged<int> onScrubEnd;
@@ -37,6 +38,7 @@ class MiniTimeline extends StatefulWidget {
     this.waveform = const [],
     this.sourceDurationMs = 0,
     this.audioNames = const [],
+    this.texts = const [],
     required this.onScrubStart,
     required this.onScrub,
     required this.onScrubEnd,
@@ -51,23 +53,25 @@ class MiniTimeline extends StatefulWidget {
 }
 
 class _MiniTimelineState extends State<MiniTimeline> {
-  static const double _pad = 14;
-  final ScrollController _sc = ScrollController();
-  double _zoom = 1.0; // 1 = fit-to-width; >1 = scrollable
-  bool _scrubbing = false;
-  bool _trimming = false;
+  static const double _basePxPerMs = 0.09; // 90 px/s at zoom 1
+  static const double _clipsH = 54;
+  static const double _laneH = 22;
 
-  // Cached from the last build so auto-follow can position the scroll.
-  double _pxPerMs = 0;
+  final ScrollController _sc = ScrollController();
+  double _zoom = 1.0;
+  bool _userScrolling = false;
+
+  double _pxPerMs = _basePxPerMs;
   double _viewW = 0;
-  double _contentW = 0;
+  bool _didInit = false;
 
   @override
   void initState() {
     super.initState();
     _sc.addListener(() {
-      if (mounted) setState(() {}); // playhead x depends on the scroll offset
+      if (mounted) setState(() {}); // (kept for any offset-dependent chrome)
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _alignToPlayhead());
   }
 
   @override
@@ -79,29 +83,28 @@ class _MiniTimelineState extends State<MiniTimeline> {
   @override
   void didUpdateWidget(MiniTimeline old) {
     super.didUpdateWidget(old);
-    if (widget.positionMs != old.positionMs && !_scrubbing && !_trimming && _zoom > 1) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _followPlayhead());
+    if (widget.positionMs != old.positionMs && !_userScrolling) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _alignToPlayhead());
     }
   }
 
-  void _followPlayhead() {
+  /// Scroll so the playhead (screen centre) sits on the current position.
+  void _alignToPlayhead() {
     if (!_sc.hasClients || _pxPerMs <= 0) return;
-    final target = (_pad + widget.positionMs * _pxPerMs) - _viewW / 2;
-    final maxOff = (_contentW - _viewW).clamp(0.0, double.infinity);
-    _sc.jumpTo(target.clamp(0.0, maxOff));
+    final target = widget.positionMs * _pxPerMs;
+    final maxOff = _sc.position.maxScrollExtent;
+    final clamped = target.clamp(0.0, maxOff);
+    if ((_sc.offset - clamped).abs() > 0.5) _sc.jumpTo(clamped);
   }
 
   void _setZoom(double z) {
-    setState(() => _zoom = z.clamp(1.0, 10.0));
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_zoom > 1) _followPlayhead();
-    });
+    setState(() => _zoom = z.clamp(0.3, 8.0));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _alignToPlayhead());
   }
 
-  double get _scrollOffset => _sc.hasClients ? _sc.offset : 0;
+  int get _total => widget.totalMs > 0 ? widget.totalMs : 1;
 
   /// Frames whose source-time falls within a clip's [in,out] (nearest if none).
-  /// Only the base source has a filmstrip; appended clips render as plain blocks.
   List<ThumbFrame> _clipThumbs(EcClip c) {
     if (c.sourcePath != widget.model.sourcePath) return const [];
     final inR = widget.thumbs.where((t) => t.ms >= c.inMs && t.ms < c.outMs).toList();
@@ -115,7 +118,6 @@ class _MiniTimelineState extends State<MiniTimeline> {
     return [nearest];
   }
 
-  /// The whole-source peaks sliced to a clip's [in,out] source window.
   List<double> _clipPeaks(EcClip c) {
     if (c.sourcePath != widget.model.sourcePath) return const [];
     final wf = widget.waveform;
@@ -144,7 +146,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
             style: TextStyle(color: Ec.textFaint, fontSize: 12.5)),
       );
     }
-    final total = widget.totalMs > 0 ? widget.totalMs : 1;
+    _pxPerMs = _basePxPerMs * _zoom;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -158,8 +161,11 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 child: Text(
                   '${_fmt(widget.positionMs)} / ${_fmt(widget.totalMs)}',
                   style: const TextStyle(
-                      color: Color(0xFFEEF0F7), fontSize: 12.5, fontWeight: FontWeight.w600,
-                      fontFamily: Ec.mono, fontFeatures: [FontFeature.tabularFigures()]),
+                      color: Color(0xFFEEF0F7),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: Ec.mono,
+                      fontFeatures: [FontFeature.tabularFigures()]),
                 ),
               ),
               Positioned(
@@ -168,9 +174,9 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 bottom: 0,
                 child: Row(
                   children: [
-                    _zoomBtn(Icons.remove, () => _setZoom(_zoom - 0.5), _zoom > 1),
-                    const SizedBox(width: 2),
-                    _zoomBtn(Icons.add, () => _setZoom(_zoom + 0.5), _zoom < 10),
+                    _zoomBtn(Icons.zoom_out, () => _setZoom(_zoom - 0.4), _zoom > 0.3),
+                    const SizedBox(width: 4),
+                    _zoomBtn(Icons.zoom_in, () => _setZoom(_zoom + 0.4), _zoom < 8),
                   ],
                 ),
               ),
@@ -181,88 +187,66 @@ class _MiniTimelineState extends State<MiniTimeline> {
           child: LayoutBuilder(
             builder: (context, c) {
               _viewW = c.maxWidth;
-              final basePxPerMs = (_viewW - 2 * _pad) / total;
-              _pxPerMs = basePxPerMs * _zoom;
-              _contentW = total * _pxPerMs + 2 * _pad;
-              final scrollable = _zoom > 1.0;
-              final playheadX = _pad + widget.positionMs.clamp(0, total) * _pxPerMs - _scrollOffset;
-
-              return Column(
+              final tracksW = _total * _pxPerMs;
+              final side = _viewW / 2; // pad so t=0 and t=total can reach the centre
+              if (!_didInit) {
+                _didInit = true;
+                WidgetsBinding.instance.addPostFrameCallback((_) => _alignToPlayhead());
+              }
+              return Stack(
                 children: [
-                  // Scrub ruler (maps viewport-x + scroll → source time).
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onHorizontalDragStart: (d) {
-                      _scrubbing = true;
-                      widget.onScrubStart();
-                      widget.onScrub(_msAt(d.localPosition.dx, total));
-                    },
-                    onHorizontalDragUpdate: (d) => widget.onScrub(_msAt(d.localPosition.dx, total)),
-                    onHorizontalDragEnd: (_) {
-                      _scrubbing = false;
-                      widget.onScrubEnd(widget.positionMs);
-                    },
-                    onTapDown: (d) {
-                      widget.onScrubStart();
-                      widget.onScrub(_msAt(d.localPosition.dx, total));
-                      widget.onScrubEnd(_msAt(d.localPosition.dx, total));
-                    },
-                    child: Container(
-                      height: 18,
-                      color: const Color(0xFF141821),
-                      alignment: Alignment.center,
-                      child: const Icon(Icons.drag_handle, size: 14, color: Color(0xFF3A4152)),
-                    ),
-                  ),
-                  // Filmstrip (scrollable when zoomed).
-                  Expanded(
-                    child: Stack(
-                      children: [
-                        SingleChildScrollView(
-                          controller: _sc,
-                          scrollDirection: Axis.horizontal,
-                          physics: scrollable
-                              ? const ClampingScrollPhysics()
-                              : const NeverScrollableScrollPhysics(),
+                  NotificationListener<ScrollNotification>(
+                    onNotification: _onScroll,
+                      child: SingleChildScrollView(
+                        controller: _sc,
+                        scrollDirection: Axis.horizontal,
+                        physics: const ClampingScrollPhysics(),
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: side),
                           child: SizedBox(
-                            width: _contentW,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: _pad, vertical: 10),
-                              child: Row(
-                                children: [
-                                  for (int i = 0; i < model.clips.length; i++) ...[
-                                    if (i > 0) const SizedBox(width: 2),
-                                    _clip(model, i),
-                                  ],
+                            width: tracksW,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                const SizedBox(height: 8),
+                                SizedBox(height: _clipsH, child: _clipsRow(model)),
+                                if (widget.audioNames.isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  _audioLane(tracksW),
                                 ],
-                              ),
+                                if (widget.texts.isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  _textLane(tracksW),
+                                ],
+                                const SizedBox(height: 8),
+                              ],
                             ),
                           ),
                         ),
-                        // Playhead line + knob.
-                        Positioned(
-                          left: playheadX - 1,
-                          top: 0,
-                          bottom: 0,
-                          child: IgnorePointer(child: Container(width: 2, color: const Color(0xFFFF5D6C))),
-                        ),
-                        Positioned(
-                          left: playheadX - 6,
-                          top: 2,
-                          child: IgnorePointer(
-                            child: Container(
+                      ),
+                    ),
+                    // Fixed centre playhead.
+                    Positioned(
+                      left: side - 1,
+                      top: 0,
+                      bottom: 0,
+                      child: IgnorePointer(
+                        child: Column(
+                          children: [
+                            Container(
                               width: 12,
                               height: 12,
-                              decoration: const BoxDecoration(color: Color(0xFFFF5D6C), shape: BoxShape.circle),
+                              decoration: const BoxDecoration(
+                                  color: Color(0xFFFF5D6C), shape: BoxShape.circle),
                             ),
-                          ),
+                            Expanded(child: Container(width: 2, color: const Color(0xFFFF5D6C))),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                  if (widget.audioNames.isNotEmpty) _audioLane(),
-                ],
-              );
+                  ],
+                );
             },
           ),
         ),
@@ -270,56 +254,111 @@ class _MiniTimelineState extends State<MiniTimeline> {
     );
   }
 
-  int _msAt(double localX, int total) {
-    final contentX = _scrollOffset + localX;
-    return (((contentX - _pad) / _pxPerMs)).round().clamp(0, total);
+  bool _onScroll(ScrollNotification n) {
+    if (n is ScrollStartNotification && n.dragDetails != null) {
+      _userScrolling = true;
+      widget.onScrubStart();
+    } else if (n is ScrollUpdateNotification && _userScrolling) {
+      widget.onScrub((_sc.offset / _pxPerMs).round().clamp(0, _total));
+    } else if (n is ScrollEndNotification && _userScrolling) {
+      _userScrolling = false;
+      widget.onScrubEnd((_sc.offset / _pxPerMs).round().clamp(0, _total));
+    }
+    return false;
+  }
+
+  Widget _clipsRow(TimelineModel model) {
+    return Row(
+      children: [
+        for (int i = 0; i < model.clips.length; i++) _clip(model, i),
+      ],
+    );
   }
 
   Widget _zoomBtn(IconData icon, VoidCallback onTap, bool enabled) {
     return GestureDetector(
       onTap: enabled ? onTap : null,
       child: Container(
-        width: 26,
+        width: 30,
         height: 24,
-        margin: const EdgeInsets.symmetric(vertical: 5),
         decoration: BoxDecoration(
           color: const Color(0xFF23252b),
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
         ),
-        child: Icon(icon, size: 15, color: enabled ? Ec.text : Ec.textFaint),
+        child: Icon(icon, size: 16, color: enabled ? Ec.text : Ec.textFaint),
       ),
     );
   }
 
-  Widget _audioLane() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(_pad, 0, _pad, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget _audioLane(double tracksW) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final name in widget.audioNames)
+          Container(
+            height: _laneH,
+            margin: const EdgeInsets.only(top: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            alignment: Alignment.centerLeft,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1F3326),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: Ec.green.withValues(alpha: 0.35)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.music_note, size: 12, color: Ec.green),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Color(0xFFBFE8C4), fontSize: 10.5, fontWeight: FontWeight.w500)),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Text + caption blocks positioned at their [start,end] on the time axis.
+  Widget _textLane(double tracksW) {
+    return SizedBox(
+      height: _laneH,
+      child: Stack(
         children: [
-          for (final name in widget.audioNames)
-            Container(
-              height: 22,
-              margin: const EdgeInsets.only(top: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              alignment: Alignment.centerLeft,
-              decoration: BoxDecoration(
-                color: const Color(0xFF1F3326),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: Ec.green.withValues(alpha: 0.35)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.music_note, size: 12, color: Ec.green),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Color(0xFFBFE8C4), fontSize: 10.5, fontWeight: FontWeight.w500)),
-                  ),
-                ],
+          for (final t in widget.texts)
+            Positioned(
+              left: (t.startMs.clamp(0, _total) * _pxPerMs),
+              width: (((t.endMs - t.startMs).clamp(120, _total)) * _pxPerMs).clamp(14.0, tracksW),
+              top: 0,
+              bottom: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                alignment: Alignment.centerLeft,
+                decoration: BoxDecoration(
+                  color: t.isCaption ? const Color(0xFF2A2550) : const Color(0xFF3A2E12),
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(
+                      color: (t.isCaption ? Ec.indigo : const Color(0xFFFFD84D)).withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(t.isCaption ? Icons.closed_caption : Icons.title,
+                        size: 12, color: t.isCaption ? Ec.indigoText : const Color(0xFFFFD84D)),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(t.text,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Ec.text, fontSize: 10.5, fontWeight: FontWeight.w500)),
+                    ),
+                  ],
+                ),
               ),
             ),
         ],
@@ -339,6 +378,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
           GestureDetector(
             onTap: () => widget.onSelectClip(i),
             child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 1),
               decoration: BoxDecoration(
                 color: const Color(0xFF312A52),
                 borderRadius: BorderRadius.circular(7),
@@ -361,12 +401,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
                       children: [
                         for (final t in frames)
                           Expanded(
-                            child: Image.memory(
-                              t.jpeg,
-                              fit: BoxFit.cover,
-                              height: double.infinity,
-                              gaplessPlayback: true,
-                            ),
+                            child: Image.memory(t.jpeg,
+                                fit: BoxFit.cover, height: double.infinity, gaplessPlayback: true),
                           ),
                       ],
                     );
@@ -381,7 +417,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
                     right: 0,
                     bottom: 0,
                     child: Container(
-                      height: 24,
+                      height: 22,
                       decoration: const BoxDecoration(
                         gradient: LinearGradient(
                           begin: Alignment.bottomCenter,
@@ -418,7 +454,6 @@ class _MiniTimelineState extends State<MiniTimeline> {
               ),
             ),
           ),
-          // Trim handles (only on the selected clip).
           if (selected && widget.onTrim != null) ...[
             _trimHandle(i, left: true),
             _trimHandle(i, left: false),
@@ -436,26 +471,20 @@ class _MiniTimelineState extends State<MiniTimeline> {
       bottom: 0,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onHorizontalDragStart: (_) {
-          _trimming = true;
-          widget.onTrimStart?.call();
-        },
+        onHorizontalDragStart: (_) => widget.onTrimStart?.call(),
         onHorizontalDragUpdate: (d) {
           final c = widget.model.clips[i];
           final s = c.speed <= 0 ? 1.0 : c.speed;
-          final dMs = (d.delta.dx / _pxPerMs * s).round(); // timeline px → source ms
+          final dMs = (d.delta.dx / _pxPerMs * s).round();
           if (left) {
             widget.onTrim!(i, inMs: c.inMs + dMs);
           } else {
             widget.onTrim!(i, outMs: c.outMs + dMs);
           }
         },
-        onHorizontalDragEnd: (_) {
-          _trimming = false;
-          widget.onTrimEnd?.call();
-        },
+        onHorizontalDragEnd: (_) => widget.onTrimEnd?.call(),
         child: Container(
-          width: 16,
+          width: 15,
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.horizontal(
@@ -464,7 +493,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
             ),
           ),
           alignment: Alignment.center,
-          child: Container(width: 3, height: 22, color: const Color(0xFF312A52)),
+          child: Container(width: 3, height: 20, color: const Color(0xFF312A52)),
         ),
       ),
     );
@@ -484,7 +513,6 @@ class _WavePainter extends CustomPainter {
       ..color = Colors.white.withValues(alpha: 0.55)
       ..strokeWidth = 1.4
       ..strokeCap = StrokeCap.round;
-    // Draw ~1 bar every ~2.5px so wide clips don't over-draw thousands of lines.
     final bars = (size.width / 2.5).floor().clamp(1, peaks.length);
     for (int b = 0; b < bars; b++) {
       final x = (b + 0.5) / bars * size.width;
