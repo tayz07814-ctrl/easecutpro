@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
+import '../cloud/backend.dart';
 import '../theme.dart';
 import 'dashboard_screen.dart';
 
@@ -15,6 +17,7 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   bool _signup = false;
   bool _busy = false;
+  String? _err;
   final _email = TextEditingController();
   final _password = TextEditingController();
 
@@ -27,13 +30,27 @@ class _AuthScreenState extends State<AuthScreen> {
 
   Future<void> _submit() async {
     if (_email.text.isEmpty || _password.text.isEmpty) return;
-    setState(() => _busy = true);
-    // Backend auth comes next; for now proceed to the dashboard.
-    await Future<void>.delayed(const Duration(milliseconds: 350));
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const DashboardScreen()),
-    );
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    try {
+      if (_signup) {
+        await Backend.signUp(_email.text, _password.text);
+      } else {
+        await Backend.signIn(_email.text, _password.text);
+      }
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+      );
+    } on AuthException catch (e) {
+      if (mounted) setState(() => _err = e.message);
+    } catch (e) {
+      if (mounted) setState(() => _err = 'Something went wrong. Check your connection and try again.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -71,6 +88,12 @@ class _AuthScreenState extends State<AuthScreen> {
                 _field(_email, 'Email', keyboard: TextInputType.emailAddress),
                 const SizedBox(height: 12),
                 _field(_password, 'Password', obscure: true),
+                if (_err != null) ...[
+                  const SizedBox(height: 12),
+                  Text(_err!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFFE09BA0), fontSize: 12.5)),
+                ],
                 const SizedBox(height: 20),
                 GestureDetector(
                   onTap: _busy ? null : _submit,

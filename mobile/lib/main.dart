@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'cloud/backend.dart';
 import 'config.dart';
 import 'screens/auth_screen.dart';
+import 'screens/dashboard_screen.dart';
 import 'theme.dart';
 
 Future<void> main() async {
@@ -35,7 +37,8 @@ class EaseCutApp extends StatelessWidget {
       title: 'EaseCut',
       debugShowCheckedModeBanner: false,
       theme: Ec.themeData(),
-      home: const AuthScreen(),
+      // Restore the persisted Supabase session: skip login if already signed in.
+      home: Backend.signedIn ? const DashboardScreen() : const AuthScreen(),
     );
   }
 }

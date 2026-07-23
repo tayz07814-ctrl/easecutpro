@@ -1,20 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../cloud/backend.dart';
 import '../theme.dart';
 import '../sheets/new_project_wizard.dart';
 import 'auth_screen.dart';
 import 'editor_screen.dart';
 
-class ProjectItem {
-  final String id;
-  String name;
-  final String sub;
-  final double? progress; // 0..1 while processing, null when ready
-  ProjectItem(this.id, this.name, this.sub, {this.progress});
-}
-
-/// Home / dashboard (MobileDashboard.tsx). UI + navigation only for now; real
-/// project sync (Supabase) is wired in the next pass.
+/// Home / dashboard (MobileDashboard.tsx) — now backed by the real Supabase
+/// `projects` table (RLS owner-only): list / create / rename / delete + logout.
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -23,15 +16,34 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  final List<ProjectItem> _projects = [
-    ProjectItem('1', 'Gym reel — final', 'Edited 2h ago · 0:42'),
-    ProjectItem('2', 'Podcast clip #7', 'Edited yesterday · 1:16'),
-    ProjectItem('3', 'Store b-roll', 'Processing…', progress: 0.6),
-  ];
+  List<ProjectMeta> _projects = [];
+  bool _loading = true;
+  String? _error;
   String _query = '';
 
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final list = await Backend.listProjects();
+      if (mounted) setState(() { _projects = list; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _error = 'Couldn’t load projects. Pull to retry.'; _loading = false; });
+    }
+  }
+
   void _openEditor() {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EditorScreen()));
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const EditorScreen()))
+        .then((_) => _load());
   }
 
   void _newProject() {
@@ -39,14 +51,54 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => NewProjectWizard(onCreate: () {
+      builder: (_) => NewProjectWizard(onCreate: () async {
         Navigator.of(context).pop();
-        _openEditor();
+        try {
+          await Backend.createProject('New project');
+        } catch (_) {}
+        if (mounted) _openEditor();
       }),
     );
   }
 
-  void _logout() {
+  Future<void> _rename(ProjectMeta p) async {
+    final ctrl = TextEditingController(text: p.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Ec.card,
+        title: const Text('Rename project', style: TextStyle(color: Ec.text, fontSize: 16)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: Ec.text),
+          decoration: const InputDecoration(hintText: 'Project name', hintStyle: TextStyle(color: Ec.textFaint)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Ec.textMute))),
+          TextButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()), child: const Text('Save', style: TextStyle(color: Ec.indigoText))),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty) return;
+    try {
+      await Backend.renameProject(p.id, name);
+      await _load();
+    } catch (_) {}
+  }
+
+  Future<void> _delete(ProjectMeta p) async {
+    setState(() => _projects.remove(p));
+    try {
+      await Backend.deleteProject(p.id);
+    } catch (_) {
+      _load();
+    }
+  }
+
+  Future<void> _logout() async {
+    await Backend.signOut();
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const AuthScreen()));
   }
 
@@ -55,6 +107,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final filtered = _query.isEmpty
         ? _projects
         : _projects.where((p) => p.name.toLowerCase().contains(_query.toLowerCase())).toList();
+    final now = DateTime.now();
     return Scaffold(
       backgroundColor: const Color(0xFF17181C),
       body: SafeArea(
@@ -62,29 +115,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
           children: [
             _topBar(),
             Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 18, 16, 40),
-                children: [
-                  _search(),
-                  const SizedBox(height: 20),
-                  const Text('Your projects',
-                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: Ec.text)),
-                  const SizedBox(height: 4),
-                  const Text('Saved automatically as you edit.',
-                      style: TextStyle(color: Color(0xFF9BA0AC), fontSize: 13)),
-                  const SizedBox(height: 16),
-                  _actionRow(),
-                  const SizedBox(height: 16),
-                  if (filtered.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 40),
-                      child: Text('No projects yet — tap ＋ New project to start.',
+              child: RefreshIndicator(
+                onRefresh: _load,
+                color: Ec.indigo,
+                backgroundColor: Ec.card,
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 40),
+                  children: [
+                    _search(),
+                    const SizedBox(height: 20),
+                    const Text('Your projects',
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: Ec.text)),
+                    const SizedBox(height: 4),
+                    const Text('Saved automatically as you edit.',
+                        style: TextStyle(color: Color(0xFF9BA0AC), fontSize: 13)),
+                    const SizedBox(height: 16),
+                    _actionRow(),
+                    const SizedBox(height: 16),
+                    if (_loading)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 40),
+                        child: Center(child: CircularProgressIndicator(color: Ec.indigo)),
+                      )
+                    else if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 40),
+                        child: Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Ec.textFaint, fontSize: 13)),
+                      )
+                    else if (filtered.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 40),
+                        child: Text(
+                          _query.isEmpty ? 'No projects yet — tap ＋ New project to start.' : 'No projects match “$_query”.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: Ec.textFaint, fontSize: 13)),
-                    )
-                  else
-                    ...filtered.map(_projectCard),
-                ],
+                          style: const TextStyle(color: Ec.textFaint, fontSize: 13),
+                        ),
+                      )
+                    else
+                      ...filtered.map((p) => _projectCard(p, now)),
+                  ],
+                ),
               ),
             ),
           ],
@@ -100,16 +170,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Ec.hair))),
       child: Row(
         children: [
-          // Logo mark: rounded indigo square + rotated white diamond
           Container(
             width: 22,
             height: 22,
             decoration: BoxDecoration(color: Ec.indigo, borderRadius: BorderRadius.circular(6)),
             alignment: Alignment.center,
-            child: Transform.rotate(
-              angle: 0.785398, // 45°
-              child: Container(width: 8, height: 8, color: Colors.white),
-            ),
+            child: Transform.rotate(angle: 0.785398, child: Container(width: 8, height: 8, color: Colors.white)),
           ),
           const SizedBox(width: 9),
           const Text('Easecut',
@@ -123,9 +189,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               if (v == 'logout') _logout();
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(
+              PopupMenuItem(
                 enabled: false,
-                child: Text('tayz07814@gmail.com', style: TextStyle(color: Ec.textMute, fontSize: 12)),
+                child: Text(Backend.email.isEmpty ? 'Signed in' : Backend.email,
+                    style: const TextStyle(color: Ec.textMute, fontSize: 12)),
               ),
               const PopupMenuItem(value: 'logout', child: Text('Log out', style: TextStyle(color: Ec.text))),
             ],
@@ -134,8 +201,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               height: 34,
               decoration: const BoxDecoration(color: Color(0xFF33364A), shape: BoxShape.circle),
               alignment: Alignment.center,
-              child: const Text('TZ',
-                  style: TextStyle(color: Ec.indigoText, fontSize: 12, fontWeight: FontWeight.w700)),
+              child: Text(_initials(),
+                  style: const TextStyle(color: Ec.indigoText, fontSize: 12, fontWeight: FontWeight.w700)),
             ),
           ),
         ],
@@ -143,15 +210,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  String _initials() {
+    final e = Backend.email;
+    if (e.isEmpty) return '·';
+    final name = e.split('@').first;
+    final parts = name.split(RegExp(r'[._-]'));
+    if (parts.length >= 2 && parts[0].isNotEmpty && parts[1].isNotEmpty) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
+  }
+
   Widget _search() {
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: Ec.card,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Ec.border),
-      ),
+      decoration: BoxDecoration(color: Ec.card, borderRadius: BorderRadius.circular(12), border: Border.all(color: Ec.border)),
       child: Row(
         children: [
           const Icon(Icons.search, size: 18, color: Ec.textFaint),
@@ -185,9 +259,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               decoration: BoxDecoration(
                 color: Ec.indigo,
                 borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(color: Ec.indigo.withValues(alpha: 0.35), blurRadius: 20, offset: const Offset(0, 6)),
-                ],
+                boxShadow: [BoxShadow(color: Ec.indigo.withValues(alpha: 0.35), blurRadius: 20, offset: const Offset(0, 6))],
               ),
               child: const Text('＋ New project',
                   style: TextStyle(color: Colors.white, fontSize: 14.5, fontWeight: FontWeight.w600)),
@@ -199,10 +271,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           onTap: () {},
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Ec.border),
-            ),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), border: Border.all(color: Ec.border)),
             child: const Text('Batch', style: TextStyle(color: Ec.textDim, fontSize: 14.5)),
           ),
         ),
@@ -210,18 +279,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _projectCard(ProjectItem p) {
+  Widget _projectCard(ProjectMeta p, DateTime now) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: GestureDetector(
-        onTap: p.progress == null ? _openEditor : null,
+        onTap: _openEditor,
         child: Container(
           padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Ec.card,
-            borderRadius: BorderRadius.circular(13),
-            border: Border.all(color: Ec.border),
-          ),
+          decoration: BoxDecoration(color: Ec.card, borderRadius: BorderRadius.circular(13), border: Border.all(color: Ec.border)),
           child: Row(
             children: [
               Container(
@@ -229,10 +294,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 height: 50,
                 decoration: BoxDecoration(color: Ec.chip, borderRadius: BorderRadius.circular(8)),
                 alignment: Alignment.center,
-                child: p.progress == null
-                    ? const Icon(Icons.play_arrow, color: Ec.textFaint, size: 22)
-                    : Text('${(p.progress! * 100).round()}%',
-                        style: const TextStyle(color: Ec.indigoText, fontSize: 13, fontWeight: FontWeight.w600)),
+                child: const Icon(Icons.play_arrow, color: Ec.textFaint, size: 22),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -244,19 +306,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(color: Ec.text, fontSize: 14, fontWeight: FontWeight.w500)),
                     const SizedBox(height: 2),
-                    Text(p.sub, style: const TextStyle(color: Color(0xFF9BA0AC), fontSize: 12)),
-                    if (p.progress != null) ...[
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(2),
-                        child: LinearProgressIndicator(
-                          value: p.progress,
-                          minHeight: 3,
-                          backgroundColor: Ec.chip,
-                          valueColor: const AlwaysStoppedAnimation(Ec.indigo),
-                        ),
-                      ),
-                    ],
+                    Text(p.relative(now), style: const TextStyle(color: Color(0xFF9BA0AC), fontSize: 12)),
                   ],
                 ),
               ),
@@ -265,12 +315,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 color: const Color(0xFF262932),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 onSelected: (v) {
-                  if (v == 'delete') setState(() => _projects.remove(p));
+                  if (v == 'rename') _rename(p);
+                  if (v == 'delete') _delete(p);
                 },
                 itemBuilder: (_) => [
                   const PopupMenuItem(value: 'rename', child: Text('Rename', style: TextStyle(color: Ec.text))),
-                  const PopupMenuItem(
-                      value: 'delete', child: Text('Delete', style: TextStyle(color: Color(0xFFD9686E)))),
+                  const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Color(0xFFD9686E)))),
                 ],
               ),
             ],
