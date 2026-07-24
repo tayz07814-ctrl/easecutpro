@@ -45,7 +45,12 @@ const DEEPSEEK_DIRECT = new Set(['deepseek-v4-flash', 'deepseek-v4-pro'])
 
 // Per-request model override — whitelisted so a signed-in user can't route to an
 // arbitrary/expensive model. ULTRACUT_MODEL env still wins over the code default.
+// easecut0.04 A/B: Retake β sends gpt-oss-20b, Ultracut β sends gpt-oss-120b — both
+// OpenRouter, both cheaper + faster than deepseek-v4-flash. (gemini-2.5-flash-lite
+// kept from the earlier trial; harmless — no caller requests it now.)
 const MODEL_WHITELIST = new Set([
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
   'z-ai/glm-5.2',
   'google/gemini-2.5-flash-lite',
   'google/gemini-3.1-pro-preview',

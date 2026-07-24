@@ -96,7 +96,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (retake04-judge — new prompt + gemini-2.5-flash-lite, easecut0.04):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (retake04-judge — new prompt + gpt-oss-20b, easecut0.04):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -123,11 +123,12 @@ export async function retakeAwareCutCloud(
   }
 
   // 4. WORD-CUT BRAIN — easecut0.04 TEST: the creator's new retake-editor prompt on
-  //    google/gemini-2.5-flash-lite (OpenRouter). Routed to the ISOLATED
+  //    openai/gpt-oss-20b (OpenRouter, reasoning:medium). Routed to the ISOLATED
   //    `retake04-judge` edge fn (a clone of ultracut-judge whose only difference is
-  //    that prompt) so this branch can A/B both the new prompt AND the model WITHOUT
-  //    touching the shared `ultracut-judge` that main/production use. main never
-  //    calls retake04-judge, so main stays as-is.
+  //    that prompt) so this branch A/Bs the new prompt WITHOUT touching the shared
+  //    `ultracut-judge` that main/production use. This is the SMALL-model lane; the
+  //    Ultracut β button runs the SAME prompt on gpt-oss-120b for comparison. main
+  //    never calls retake04-judge, so main stays as-is.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -140,8 +141,8 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('retake04-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'google/gemini-2.5-flash-lite',
-      reasoning: 'off'
+      model: 'openai/gpt-oss-20b',
+      reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
@@ -227,14 +228,13 @@ export async function retakeAwareCutCloud(
  *  debug stream — so the two can be A/B'd in-app. The result shape
  *  (RetakeAwareResult) is identical, so the review-first contract, the
  *  transcript/highlight UX and Execute all reuse the exact beta path. Cloud-only. */
-// 0.01 Ultracut judge. DeepSeek-V4-flash via OPENROUTER (the 'deepseek/' slug routes
-// through OpenRouter on the user's OpenRouter key/credit; the edge fn sends NO
-// provider preference, so routing follows the account's own enabled providers) WITH
-// reasoning:'medium'. Reverted from the DeepSeek first-party route (api.deepseek.com,
-// bare id) per request: that account ran out of balance, so OpenRouter v4-flash is
-// the single model for this button now. Paired with promptVariant:'sharp' (word-list
-// SYSTEM + Rules A/B). Scoped to the Ultracut Beta button only.
-const ULTRACUT_MODEL = 'deepseek/deepseek-v4-flash'
+// easecut0.04 A/B: the Ultracut Beta button runs the SAME new retake-editor prompt as
+// Retake β (both on the isolated `retake04-judge` edge fn), but on the LARGER model —
+// openai/gpt-oss-120b via OpenRouter, reasoning:'medium'. Retake β uses gpt-oss-20b,
+// so the two buttons compare the 120b vs 20b judge on identical prompt + payload.
+// Scoped to this branch: retake04-judge is never called from main. gpt-oss-120b is
+// cheaper + faster than the old deepseek-v4-flash judge.
+const ULTRACUT_MODEL = 'openai/gpt-oss-120b'
 export async function ultracutCutCloud(
   mediaId: string,
   onProgress?: (pct: number, msg?: string) => void,
@@ -242,7 +242,7 @@ export async function ultracutCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[ultracut] cloud job start (DeepSeek first-party judge):', mediaId, ULTRACUT_MODEL)
+  console.log('[ultracut] cloud job start (retake04-judge — new prompt + gpt-oss-120b, easecut0.04):', mediaId, ULTRACUT_MODEL)
 
   // 1. audio — decoded ONCE; transcription, VAD safety scan and the silence
   //    engine all read from this single decode (shared clock).
@@ -267,28 +267,20 @@ export async function ultracutCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — the OpenRouter TEST model (ultracut-judge) over the FULL
-  //    transcript, empty first pass. Same index-anchored payload + validateEdl as
-  //    Retake β; only the judge endpoint + provider differ.
+  // 4. WORD-CUT BRAIN — the isolated retake04-judge (our new prompt) on gpt-oss-120b
+  //    over the FULL transcript. Same index-anchored WORD-LIST payload (buildAiPayload)
+  //    + validateEdl as Retake β; only the model size differs (120b here vs 20b there),
+  //    so this button is the LARGE-model half of the easecut0.04 A/B.
   op(72, 'Ultracut is judging your takes…')
   const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
-  // 0.01 Ultracut runs the WORD-LIST payload (buildAiPayload) + the 'sharp' SYSTEM
-  // variant. The segment prompt was reverted: real creator footage has mid-SENTENCE
-  // retakes ("They pretty—", "the way that I—", "Food can, food can") buried inside
-  // long run-on segments, and the segment prompt's "never cut inside a segment" rule
-  // can't reach them — DeepSeek responded by cutting EVERY segment (rejected by
-  // validateEdl's runaway guard → "no cuts"). The word-list prompt (partial/tail-
-  // retake + stutter rules, plus the 'sharp' Rules A/B) makes surgical word cuts
-  // instead — validated on the exact failing clip: 7 correct cuts, no over-cut.
   const payload = buildAiPayload(map)
   let baseCutSpans: CutSpan[] = []
   let modelRaw: string | null = null
   try {
-    const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
+    const res = await invokeEdge<ProcutJudgeRes>('retake04-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
       model: ULTRACUT_MODEL,
-      promptVariant: 'sharp',
       reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     modelRaw = res.raw
