@@ -47,6 +47,7 @@ const DEEPSEEK_DIRECT = new Set(['deepseek-v4-flash', 'deepseek-v4-pro'])
 // arbitrary/expensive model. ULTRACUT_MODEL env still wins over the code default.
 const MODEL_WHITELIST = new Set([
   'z-ai/glm-5.2',
+  'google/gemini-2.5-flash-lite',
   'google/gemini-3.1-pro-preview',
   'google/gemini-3.5-flash',
   'qwen/qwen3.7-plus',

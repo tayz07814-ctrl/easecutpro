@@ -96,7 +96,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (retake04-judge — new retake prompt, easecut0.04):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (retake04-judge — new prompt + gemini-2.5-flash-lite, easecut0.04):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -122,12 +122,12 @@ export async function retakeAwareCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — easecut0.04 TEST: the creator's new retake-editor prompt.
-  //    Routed to the ISOLATED `retake04-judge` edge fn (a clone of ultracut-judge
-  //    whose only difference is that prompt) so this branch can A/B the new prompt
-  //    WITHOUT touching the shared `ultracut-judge` that main/production use. Model
-  //    + reasoning are unchanged from Retake β today (same request), so ONLY the
-  //    prompt differs. main never calls retake04-judge, so main stays as-is.
+  // 4. WORD-CUT BRAIN — easecut0.04 TEST: the creator's new retake-editor prompt on
+  //    google/gemini-2.5-flash-lite (OpenRouter). Routed to the ISOLATED
+  //    `retake04-judge` edge fn (a clone of ultracut-judge whose only difference is
+  //    that prompt) so this branch can A/B both the new prompt AND the model WITHOUT
+  //    touching the shared `ultracut-judge` that main/production use. main never
+  //    calls retake04-judge, so main stays as-is.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -140,7 +140,7 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('retake04-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'meta-llama/llama-4-maverick',
+      model: 'google/gemini-2.5-flash-lite',
       reasoning: 'off'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
