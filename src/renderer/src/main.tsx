@@ -34,6 +34,12 @@ import './design/editor.css'
 import './design/media.css'
 import './newui/newui.css'
 
+// Build tag — lets a tester confirm which preview build is live. This branch
+// (easecut0.04) is the retake-engine test build. Console-only: no UI surface,
+// no behavior change; it also gives the branch a distinct commit so the cloud
+// preview deploys to its own URL instead of deduping onto another branch's build.
+console.info('[ec] build easecut0.04 — retake engine test')
+
 // Opt-in premium redesign (P1–P6, gated by VITE_NEW_EASECUT_UI): mark the root
 // so the scoped design CSS applies. OFF by default → legacy UI unchanged. This
 // attempt is dormant in production (the env var is unset); kept inert, not removed.
