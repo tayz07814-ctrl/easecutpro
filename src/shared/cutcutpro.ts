@@ -326,13 +326,24 @@ export function refineEdl(edl: Edl, map: TimestampMap): { edl: Edl; notes: strin
   raw0 = raw0.filter((c) => {
     if (!DUP_REASON.test(c.reason)) return true
     const open: string[] = []
-    for (let i = c.from; i <= c.to && open.length < 4; i++) if (contentTok(i)) open.push(contentTok(i))
-    if (open.length < 2) return true
+    for (let i = c.from; i <= c.to && open.length < 6; i++) if (contentTok(i)) open.push(contentTok(i))
+    if (open.length < 3) return true
     let realWords = 0
     for (let i = c.from; i <= c.to; i++) if (contentTok(i)) realWords++
     const after: string[] = []
     for (let i = c.to + 1; i < W.length && after.length < 8; i++) if (contentTok(i)) after.push(contentTok(i))
-    const redelivered = after.some((_, s) => open.every((t, k) => after[s + k] === t))
+    // A retake's redo re-delivers the cut's content right after it: look for a
+    // contiguous run of >=3 shared tokens between the cut's opening (allowing a
+    // small leading skip — the redo often drops an "Okay,"/"So,") and the start
+    // of the following window. No such run = the match (if any) lives elsewhere,
+    // so this is an intentional hook / call-back / motif — keep it.
+    let redelivered = false
+    for (let a = 0; a <= 2 && !redelivered; a++)
+      for (let b = 0; b <= 2 && !redelivered; b++) {
+        let n = 0
+        while (a + n < open.length && b + n < after.length && open[a + n] && open[a + n] === after[b + n]) n++
+        if (n >= 3) redelivered = true
+      }
     if (!redelivered && realWords >= 4) {
       notes.push(
         `kept intentional repeat "${W.slice(c.from, c.to + 1).map((w) => w.text).join(' ')}" — not re-said right after the cut (stacked hook / call-back / motif, not a retake)`
