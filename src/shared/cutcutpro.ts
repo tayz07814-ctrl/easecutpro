@@ -46,35 +46,6 @@ export interface TimestampMap {
 const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9']/g, '')
 const ENDS_SENTENCE = /[.!?…]["')\]]*$/
 
-// Closed-class function words: the ONLY adjacent duplicates that are accidental
-// STUTTERS ("I I", "the the", "to to"). A doubled CONTENT word ("never never",
-// "no no", "so so", "stop stop") is intentional EMPHASIS — keep both. Function
-// words are a finite, fixed set, so allow-listing them is reliable; emphasis
-// words are open-ended, so "keep the pair unless it's a known function-word
-// stutter" covers every emphasis case without enumerating them.
-const FUNCTION_WORDS = new Set(
-  ('a an the i you he she it we they me him her us them this that these those my your his its our their ' +
-    'and but or nor to of in on at for with from by up as if because than ' +
-    'is was are were am be been being has have had do does did will would shall should can could may might must ' +
-    'um uh er hmm like').split(' ')
-)
-
-// A word_cut whose reason marks it a DUPLICATE / retake removal (vs a production
-// artifact, filler, or dead-air cut). The contiguity guard only second-guesses
-// these — artifact/filler cuts are left untouched.
-const DUP_REASON =
-  /earlier (take|attempt|occurrence)|kept (the )?(final|last)|final (take|occurrence)|repeated (clause|idea|take|sentence|line)|duplicat|same (idea|line|clause|sentence)|restart/i
-
-/** An adjacent identical pair is intentional EMPHASIS (keep both) when a beat
- *  (comma/pause punctuation) separates them, or the word is NOT a function word.
- *  Only a bare function-word repeat with no beat is an accidental stutter. */
-function isEmphasisDoubling(prevText: string, word: string): boolean {
-  const a = norm(prevText)
-  if (!a || a !== norm(word)) return false
-  if (/[,.!?;:—–-]$/.test(prevText.trim())) return true // deliberate beat between them
-  return !FUNCTION_WORDS.has(a)
-}
-
 export function buildTimestampMap(words: Word[], vad: { start: number; end: number }[]): TimestampMap {
   const alive = words.filter((w) => !w.deleted)
   const ws = alive.map((w, i) => ({ i, text: w.text, start: w.start, end: w.end }))
@@ -127,11 +98,7 @@ export function buildTimestampMap(words: Word[], vad: { start: number; end: numb
     const a = norm(ws[i].text)
     const b = norm(ws[i + 1].text)
     if (!a) continue
-    // Exact repeat: a stutter ONLY for a short function word with no beat between
-    // ("I I", "the the"). A repeated content word ("never never") or a pair split
-    // by a comma/pause is intentional emphasis — don't tag it (so the judge isn't
-    // nudged to cut it).
-    if (a === b && a.length <= 8 && !isEmphasisDoubling(ws[i].text, ws[i + 1].text)) stutter_word_idxs.push(i)
+    if (a === b && a.length <= 8) stutter_word_idxs.push(i)
     else if (/[-–—]$/.test(ws[i].text.trim()) && b.startsWith(a.slice(0, 2))) stutter_word_idxs.push(i)
     else if (a.length >= 2 && a.length < b.length && b.startsWith(a) && b.length - a.length >= 2) {
       // "pow" -> "powerful": fragment abandoned mid-word.
@@ -303,73 +270,7 @@ export function refineEdl(edl: Edl, map: TimestampMap): { edl: Edl; notes: strin
   const tok = W.map((w) => norm(w.text))
   const endsSentence = (i: number): boolean => ENDS_SENTENCE.test(W[i].text.trim())
 
-  const fillerIdx = new Set(map.filler_word_idxs)
-  const contentTok = (i: number): string => (fillerIdx.has(i) ? '' : tok[i])
-
-  // The intentional-repeat guards run on the RAW cuts BEFORE mergeWordCuts. Merging
-  // first would fuse many adjacent cuts (a whole production-chatter run + one
-  // "earlier take") into ONE span whose blended reason trips DUP_REASON, and the
-  // contiguity check would then drop the WHOLE span — wiping out legit artifact
-  // cutting on production-heavy footage. Per-cut, each reason is clean.
-  let raw0 = edl.word_cuts
-
-  // ---- pass 0a: contiguity guard (keep intentional repeats) ------------------
-  // A real retake is CONTIGUOUS: the redo immediately follows the flub, so the
-  // words right after the cut re-deliver the cut's opening. When they DON'T, a
-  // duplication-justified cut removed a passage whose match lives elsewhere — an
-  // intentional stacked hook / call-back / motif — so keep it. Scoped to
-  // DUP_REASON cuts (artifact/filler cuts untouched) and substantial spans (>=4
-  // real words), so a short restart like "the new one—" is unaffected. The
-  // re-delivery check spans the words that FOLLOW regardless of whether they're
-  // in another cut — a retake's redo is itself often cut (kept-final removes the
-  // earlier take, or the judge over-cut both) — so "kept-only" would miss it.
-  raw0 = raw0.filter((c) => {
-    if (!DUP_REASON.test(c.reason)) return true
-    const open: string[] = []
-    for (let i = c.from; i <= c.to && open.length < 6; i++) if (contentTok(i)) open.push(contentTok(i))
-    if (open.length < 3) return true
-    let realWords = 0
-    for (let i = c.from; i <= c.to; i++) if (contentTok(i)) realWords++
-    const after: string[] = []
-    for (let i = c.to + 1; i < W.length && after.length < 8; i++) if (contentTok(i)) after.push(contentTok(i))
-    // A retake's redo re-delivers the cut's content right after it: look for a
-    // contiguous run of >=3 shared tokens between the cut's opening (allowing a
-    // small leading skip — the redo often drops an "Okay,"/"So,") and the start
-    // of the following window. No such run = the match (if any) lives elsewhere,
-    // so this is an intentional hook / call-back / motif — keep it.
-    let redelivered = false
-    for (let a = 0; a <= 2 && !redelivered; a++)
-      for (let b = 0; b <= 2 && !redelivered; b++) {
-        let n = 0
-        while (a + n < open.length && b + n < after.length && open[a + n] && open[a + n] === after[b + n]) n++
-        if (n >= 3) redelivered = true
-      }
-    if (!redelivered && realWords >= 4) {
-      notes.push(
-        `kept intentional repeat "${W.slice(c.from, c.to + 1).map((w) => w.text).join(' ')}" — not re-said right after the cut (stacked hook / call-back / motif, not a retake)`
-      )
-      return false
-    }
-    return true
-  })
-
-  // ---- pass 0b: emphasis guard (keep intentional word-doubling) --------------
-  // The judge shouldn't even see a <STUTTER> tag on "never never" now, but guard
-  // it here too: drop a lone 1-word cut that removes one half of an EMPHASIS pair.
-  raw0 = raw0.filter((c) => {
-    if (c.to !== c.from || !tok[c.from]) return true
-    const i = c.from
-    const emph =
-      (i > 0 && tok[i - 1] === tok[i] && isEmphasisDoubling(W[i - 1].text, W[i].text)) ||
-      (i + 1 < W.length && tok[i + 1] === tok[i] && isEmphasisDoubling(W[i].text, W[i + 1].text))
-    if (emph) {
-      notes.push(`kept emphasis repeat "${W[i].text}" (intentional doubling, not a stutter)`)
-      return false
-    }
-    return true
-  })
-
-  let cuts = mergeWordCuts(raw0)
+  let cuts = mergeWordCuts(edl.word_cuts)
   const inCut = (i: number, list = cuts): boolean => list.some((c) => i >= c.from && i <= c.to)
 
   // ---- pass 1: boundary dedupe / backward extension --------------------------
