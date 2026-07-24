@@ -8,3 +8,8 @@ verify_jwt = true
 
 [functions.llm-judge]
 verify_jwt = true
+
+# easecut0.04 test branch only — the retake-editor prompt A/B. Isolated clone of
+# ultracut-judge so the new prompt never touches main/production.
+[functions.retake04-judge]
+verify_jwt = true

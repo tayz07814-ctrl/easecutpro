@@ -96,7 +96,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (Llama-4-Maverick + sharp judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (retake04-judge — new retake prompt, easecut0.04):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -122,11 +122,12 @@ export async function retakeAwareCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript: Llama 4
-  //    Maverick (ultracut-judge edge fn, OpenRouter) on the 'sharp' word-list prompt.
-  //    Maverick is a non-reasoning model, so reasoning is 'off' (matches the A/B
-  //    config it was validated on: fast, no reasoning trace). 0.01 ONLY — production
-  //    (main) keeps DeepSeek-V4-flash + reasoning:medium, untouched.
+  // 4. WORD-CUT BRAIN — easecut0.04 TEST: the creator's new retake-editor prompt.
+  //    Routed to the ISOLATED `retake04-judge` edge fn (a clone of ultracut-judge
+  //    whose only difference is that prompt) so this branch can A/B the new prompt
+  //    WITHOUT touching the shared `ultracut-judge` that main/production use. Model
+  //    + reasoning are unchanged from Retake β today (same request), so ONLY the
+  //    prompt differs. main never calls retake04-judge, so main stays as-is.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -136,11 +137,10 @@ export async function retakeAwareCutCloud(
   let baseCutSpans: CutSpan[] = []
   let claudeRaw: string | null = null
   try {
-    const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
+    const res = await invokeEdge<ProcutJudgeRes>('retake04-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
       model: 'meta-llama/llama-4-maverick',
-      promptVariant: 'sharp',
       reasoning: 'off'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
