@@ -8,6 +8,7 @@ import '../cloud/backend.dart';
 import '../cloud/stt.dart' show Word;
 import '../editor/timeline_model.dart';
 import '../editor/text_overlay.dart';
+import '../editor/audio_track.dart';
 import '../editor/cutcutpro.dart';
 import '../editor/cutlord.dart';
 import '../editor/silence_settings.dart';
@@ -68,8 +69,8 @@ class _EditorScreenState extends State<EditorScreen> {
   final List<_EditSnap> _undoStack = [];
   final List<_EditSnap> _redoStack = [];
   List<Word>? _transcript; // cached STT (reused by Cut Lord + Captions)
-  final List<ExportSegment> _audioTracks = []; // imported music/voiceover (mixed on export)
-  final List<String> _audioNames = [];
+  final List<AudioTrack> _audios = []; // imported music/voiceover (mixed on export)
+  int _selectedAudio = -1; // audio block selected on the timeline
   List<ThumbFrame> _thumbs = []; // filmstrip frames for the timeline
   List<double> _waveform = []; // whole-source amplitude peaks (0..1)
   Map<String, dynamic> _projectDoc = {}; // full project jsonb (autosave target)
@@ -118,26 +119,19 @@ class _EditorScreenState extends State<EditorScreen> {
         'durationMs': _sourceDurationMs,
         'clips': _model.clips.map((c) => c.toJson()).toList(),
         'texts': _texts.map((t) => t.toJson()).toList(),
-        'audio': [
-          for (int i = 0; i < _audioTracks.length; i++)
-            {
-              'uri': _audioTracks[i].uri,
-              'startMs': _audioTracks[i].startMs,
-              'endMs': _audioTracks[i].endMs,
-              'name': i < _audioNames.length ? _audioNames[i] : 'Audio',
-            }
-        ],
+        'audio': _audios.map((a) => a.toJson()).toList(),
       };
 
-  /// Audio tracks as native-player maps (previewed alongside the video, from t=0).
+  /// Audio tracks as native-player maps (previewed alongside the video, placed at
+  /// their timeline offset with their gain).
   List<Map<String, dynamic>> _audioTrackMaps() => [
-        for (final a in _audioTracks)
+        for (final a in _audios)
           {
             'uri': a.uri,
-            'startMs': a.startMs,
-            'endMs': a.endMs,
-            'timelineStartMs': 0,
-            'volume': 1.0,
+            'startMs': a.inMs,
+            'endMs': a.outMs,
+            'timelineStartMs': a.timelineStartMs,
+            'volume': a.volume,
           }
       ];
 
@@ -176,15 +170,10 @@ class _EditorScreenState extends State<EditorScreen> {
     _texts
       ..clear()
       ..addAll(((m['texts'] as List?) ?? []).map((t) => TextOverlay.fromJson(t as Map)));
-    _audioTracks.clear();
-    _audioNames.clear();
+    _audios.clear();
+    _selectedAudio = -1;
     for (final a in (m['audio'] as List?) ?? []) {
-      _audioTracks.add(ExportSegment(
-        uri: a['uri'] as String,
-        startMs: (a['startMs'] as num?)?.toInt() ?? 0,
-        endMs: (a['endMs'] as num?)?.toInt() ?? 0,
-      ));
-      _audioNames.add((a['name'] as String?) ?? 'Audio');
+      _audios.add(AudioTrack.fromJson(a as Map));
     }
     _textureId ??= await _player.create();
     _stateSub ??= _player.states.listen(_onState);
@@ -311,6 +300,7 @@ class _EditorScreenState extends State<EditorScreen> {
   _EditSnap _snap() => _EditSnap(
         _model.clips.map((c) => c.copy()).toList(),
         _texts.map((t) => t.copy()).toList(),
+        _audios.map((a) => a.copy()).toList(),
       );
 
   /// Call BEFORE a structural edit so it can be undone.
@@ -325,7 +315,11 @@ class _EditorScreenState extends State<EditorScreen> {
     _texts
       ..clear()
       ..addAll(s.texts.map((t) => t.copy()));
+    _audios
+      ..clear()
+      ..addAll(s.audios.map((a) => a.copy()));
     _selectedText = null;
+    _selectedAudio = -1;
   }
 
   Future<void> _undo() async {
@@ -484,9 +478,16 @@ class _EditorScreenState extends State<EditorScreen> {
       final path = await _exporter.extractAudio('file://${c.sourcePath}');
       _pushHistory();
       setState(() {
-        // Detached audio as its own track (clip window), and mute the source clip.
-        _audioTracks.add(ExportSegment(uri: 'file://$path', startMs: c.inMs, endMs: c.outMs));
-        _audioNames.add('Clip ${i + 1} audio');
+        // Detached audio as its own track — windowed to the clip and placed at the
+        // clip's timeline position — then mute the source clip.
+        _audios.add(AudioTrack(
+          uri: 'file://$path',
+          name: 'Clip ${i + 1} audio',
+          inMs: c.inMs,
+          outMs: c.outMs,
+          durMs: _sourceDurationMs > 0 ? _sourceDurationMs : c.outMs,
+          timelineStartMs: _model.clipStartMs(i),
+        ));
         _model.setVolume(i, 0);
       });
       if (mounted) Navigator.of(context).pop();
@@ -517,7 +518,16 @@ class _EditorScreenState extends State<EditorScreen> {
       segments: _model.exportSegments(),
       overlays: List<TextOverlay>.from(_texts), // baked at the chosen output size
       imageOverlays: List<ImageOverlay>.from(_images),
-      audioTracks: _audioTracks,
+      audioTracks: [
+        for (final a in _audios)
+          ExportSegment(
+            uri: a.uri,
+            startMs: a.inMs,
+            endMs: a.outMs,
+            volume: a.volume,
+            timelineStartMs: a.timelineStartMs,
+          ),
+      ],
       videoSize: size,
     ));
   }
@@ -717,20 +727,36 @@ class _EditorScreenState extends State<EditorScreen> {
         _scheduleSave();
       }));
   void _openAudio() => _openSheet(AudioSheet(
-        names: _audioNames,
-        onImport: (path, name) {
+        names: [for (final a in _audios) a.name],
+        volumes: [for (final a in _audios) a.volume],
+        selected: _selectedAudio,
+        onImport: (path, name) async {
+          final dur = await _exporter.duration('file://$path');
+          _pushHistory();
           setState(() {
-            _audioTracks.add(ExportSegment(uri: 'file://$path', startMs: 0, endMs: 0));
-            _audioNames.add(name);
+            _audios.add(AudioTrack(
+              uri: 'file://$path',
+              name: name,
+              inMs: 0,
+              outMs: dur > 0 ? dur : 0,
+              durMs: dur > 0 ? dur : 0,
+              timelineStartMs: 0,
+            ));
           });
           _scheduleSave();
           if (_hasBase) _reload(seekTo: _positionMs); // preview the new track
         },
         onRemove: (i) {
+          _pushHistory();
           setState(() {
-            _audioTracks.removeAt(i);
-            _audioNames.removeAt(i);
+            _audios.removeAt(i);
+            if (_selectedAudio >= _audios.length) _selectedAudio = -1;
           });
+          _scheduleSave();
+          if (_hasBase) _reload(seekTo: _positionMs);
+        },
+        onVolume: (i, v) {
+          setState(() => _audios[i].volume = v);
           _scheduleSave();
           if (_hasBase) _reload(seekTo: _positionMs);
         },
@@ -1107,7 +1133,8 @@ class _EditorScreenState extends State<EditorScreen> {
         thumbs: _thumbs,
         waveform: _waveform,
         sourceDurationMs: _sourceDurationMs,
-        audioNames: _audioNames,
+        audios: _audios,
+        selectedAudio: _selectedAudio,
         texts: _texts,
         onScrubStart: () => _scrubbing = true,
         onScrub: (ms) => setState(() => _positionMs = ms),
@@ -1123,7 +1150,47 @@ class _EditorScreenState extends State<EditorScreen> {
           setState(() => _selectedText = t);
           await _seek(t.startMs.clamp(0, _totalMs > 0 ? _totalMs : t.startMs)); // jump so it's visible + editable
         },
-        onSelectAudio: (_) => _openAudio(),
+        onSelectAudio: (i) async {
+          setState(() {
+            _selectedAudio = i;
+            _selectedText = null;
+          });
+          if (i >= 0 && i < _audios.length) {
+            await _seek(_audios[i].timelineStartMs.clamp(0, _totalMs > 0 ? _totalMs : _audios[i].timelineStartMs));
+          }
+        },
+        onAudioEditStart: () {
+          setState(() => _selectedText = null);
+          _pushHistory();
+        },
+        onAudioMove: (i, dMs) {
+          setState(() {
+            _selectedAudio = i;
+            final a = _audios[i];
+            a.timelineStartMs = (a.timelineStartMs + dMs).clamp(0, 1 << 30);
+          });
+        },
+        onAudioTrim: (i, {startDeltaMs, endDeltaMs}) {
+          setState(() {
+            _selectedAudio = i;
+            final a = _audios[i];
+            if (startDeltaMs != null) {
+              // Move the left edge: shift in-point AND timeline start together,
+              // clamped so ≥0 and at least 200ms of content remains.
+              final d = startDeltaMs.clamp(-a.inMs, a.outMs - a.inMs - 200);
+              a.inMs += d;
+              a.timelineStartMs = (a.timelineStartMs + d).clamp(0, 1 << 30);
+            }
+            if (endDeltaMs != null) {
+              final maxOut = a.durMs > 0 ? a.durMs : a.outMs + endDeltaMs;
+              a.outMs = (a.outMs + endDeltaMs).clamp(a.inMs + 200, maxOut);
+            }
+          });
+        },
+        onAudioEditEnd: () async {
+          _scheduleSave();
+          if (_hasBase) await _reload(seekTo: _positionMs);
+        },
         onOverlayEditStart: () {
           setState(() => _selectedText = null); // avoid preview-drag interference
           _pushHistory();
@@ -1170,5 +1237,6 @@ class _EditorScreenState extends State<EditorScreen> {
 class _EditSnap {
   final List<EcClip> clips;
   final List<TextOverlay> texts;
-  _EditSnap(this.clips, this.texts);
+  final List<AudioTrack> audios;
+  _EditSnap(this.clips, this.texts, this.audios);
 }

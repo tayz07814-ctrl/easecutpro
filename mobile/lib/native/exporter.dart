@@ -27,6 +27,7 @@ class ExportSegment {
   final double speed; // 1 = normal
   final double volume; // 1 = unity gain, 0 = mute
   final double cropL, cropT, cropR, cropB; // fractions cropped from each edge
+  final int timelineStartMs; // audio: lead-in offset before the track plays
   const ExportSegment({
     required this.uri,
     required this.startMs,
@@ -37,6 +38,7 @@ class ExportSegment {
     this.cropT = 0,
     this.cropR = 0,
     this.cropB = 0,
+    this.timelineStartMs = 0,
   });
   Map<String, dynamic> toMap() => {
         'uri': uri,
@@ -48,6 +50,7 @@ class ExportSegment {
         'cropT': cropT,
         'cropR': cropR,
         'cropB': cropB,
+        'timelineStartMs': timelineStartMs,
       };
 }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../editor/audio_track.dart';
 import '../editor/text_overlay.dart';
 import '../editor/timeline_model.dart';
 import '../native/exporter.dart' show ThumbFrame;
@@ -16,7 +17,8 @@ class MiniTimeline extends StatefulWidget {
   final List<ThumbFrame> thumbs;
   final List<double> waveform; // whole-source amplitude peaks (0..1)
   final int sourceDurationMs;
-  final List<String> audioNames; // extra audio tracks (music / voiceover)
+  final List<AudioTrack> audios; // extra audio tracks (music / voiceover)
+  final int selectedAudio; // -1 = none
   final List<TextOverlay> texts; // text + caption overlays
   final VoidCallback onScrubStart;
   final ValueChanged<int> onScrub;
@@ -24,6 +26,14 @@ class MiniTimeline extends StatefulWidget {
   final ValueChanged<int> onSelectClip;
   final ValueChanged<TextOverlay>? onSelectText;
   final ValueChanged<int>? onSelectAudio;
+
+  /// Drag an audio block along the time axis (shift its timeline start by deltaMs).
+  final void Function(int index, int deltaMs)? onAudioMove;
+
+  /// Trim an audio block edge (one of the deltas is set).
+  final void Function(int index, {int? startDeltaMs, int? endDeltaMs})? onAudioTrim;
+  final VoidCallback? onAudioEditStart;
+  final VoidCallback? onAudioEditEnd;
 
   /// Drag a text/caption block along the time axis (shift start+end by deltaMs).
   final void Function(TextOverlay t, int deltaMs)? onOverlayMove;
@@ -47,7 +57,8 @@ class MiniTimeline extends StatefulWidget {
     this.thumbs = const [],
     this.waveform = const [],
     this.sourceDurationMs = 0,
-    this.audioNames = const [],
+    this.audios = const [],
+    this.selectedAudio = -1,
     this.texts = const [],
     required this.onScrubStart,
     required this.onScrub,
@@ -55,6 +66,10 @@ class MiniTimeline extends StatefulWidget {
     required this.onSelectClip,
     this.onSelectText,
     this.onSelectAudio,
+    this.onAudioMove,
+    this.onAudioTrim,
+    this.onAudioEditStart,
+    this.onAudioEditEnd,
     this.onOverlayMove,
     this.onOverlayTrim,
     this.onOverlayEditStart,
@@ -257,7 +272,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
                               children: [
                                 const SizedBox(height: 8),
                                 SizedBox(height: _clipsH, child: _clipsRow(model)),
-                                if (widget.audioNames.isNotEmpty) ...[
+                                if (widget.audios.isNotEmpty) ...[
                                   const SizedBox(height: 4),
                                   _audioLane(tracksW),
                                 ],
@@ -341,40 +356,114 @@ class _MiniTimelineState extends State<MiniTimeline> {
     );
   }
 
+  /// One row per audio track: a block at its [timelineStart, +len] on the axis.
+  /// Tap = select; drag body = move in time; drag edges = trim in/out.
   Widget _audioLane(double tracksW) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (int a = 0; a < widget.audioNames.length; a++)
-          GestureDetector(
-            onTap: widget.onSelectAudio == null ? null : () => widget.onSelectAudio!(a),
-            behavior: HitTestBehavior.opaque,
-            child: Container(
-              height: _laneH,
-              margin: const EdgeInsets.only(top: 3),
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              alignment: Alignment.centerLeft,
-              decoration: BoxDecoration(
-                color: const Color(0xFF1F3326),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: Ec.green.withValues(alpha: 0.35)),
-              ),
-              child: Row(
+        for (int a = 0; a < widget.audios.length; a++) _audioRow(a, tracksW),
+      ],
+    );
+  }
+
+  Widget _audioRow(int a, double tracksW) {
+    final t = widget.audios[a];
+    final sel = a == widget.selectedAudio;
+    final len = t.lenMs > 0 ? t.lenMs : _total;
+    return Container(
+      height: _laneH,
+      margin: const EdgeInsets.only(top: 3),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            left: t.timelineStartMs.clamp(0, _total) * _pxPerMs,
+            width: (len * _pxPerMs).clamp(20.0, tracksW),
+            top: 0,
+            bottom: 0,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onSelectAudio == null ? null : () => widget.onSelectAudio!(a),
+              onHorizontalDragStart: (_) => widget.onAudioEditStart?.call(),
+              onHorizontalDragUpdate: (d) =>
+                  widget.onAudioMove?.call(a, (d.delta.dx / _pxPerMs).round()),
+              onHorizontalDragEnd: (_) => widget.onAudioEditEnd?.call(),
+              child: Stack(
+                clipBehavior: Clip.none,
                 children: [
-                  const Icon(Icons.music_note, size: 12, color: Ec.green),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(widget.audioNames[a],
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Color(0xFFBFE8C4), fontSize: 10.5, fontWeight: FontWeight.w500)),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    alignment: Alignment.centerLeft,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1F3326),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: sel ? Ec.green : Ec.green.withValues(alpha: 0.35),
+                        width: sel ? 2 : 1,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.music_note, size: 12, color: Ec.green),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: Text(t.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Color(0xFFBFE8C4),
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w500)),
+                        ),
+                        if (t.volume < 0.999)
+                          const Icon(Icons.volume_down, size: 11, color: Color(0xFF8FCB9A)),
+                      ],
+                    ),
                   ),
+                  if (sel && widget.onAudioTrim != null) ...[
+                    _audioTrimGrip(a, left: true),
+                    _audioTrimGrip(a, left: false),
+                  ],
                 ],
               ),
             ),
           ),
-      ],
+        ],
+      ),
+    );
+  }
+
+  Widget _audioTrimGrip(int a, {required bool left}) {
+    return Positioned(
+      left: left ? 0 : null,
+      right: left ? null : 0,
+      top: 0,
+      bottom: 0,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: (_) => widget.onAudioEditStart?.call(),
+        onHorizontalDragUpdate: (d) {
+          final dMs = (d.delta.dx / _pxPerMs).round();
+          if (left) {
+            widget.onAudioTrim?.call(a, startDeltaMs: dMs);
+          } else {
+            widget.onAudioTrim?.call(a, endDeltaMs: dMs);
+          }
+        },
+        onHorizontalDragEnd: (_) => widget.onAudioEditEnd?.call(),
+        child: Container(
+          width: 11,
+          decoration: BoxDecoration(
+            color: Ec.green.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.horizontal(
+              left: left ? const Radius.circular(5) : Radius.zero,
+              right: left ? Radius.zero : const Radius.circular(5),
+            ),
+          ),
+          child: const Center(child: Icon(Icons.drag_indicator, size: 10, color: Colors.black54)),
+        ),
+      ),
     );
   }
 

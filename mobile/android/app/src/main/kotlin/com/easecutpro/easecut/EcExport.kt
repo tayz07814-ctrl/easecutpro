@@ -405,16 +405,34 @@ class EcExport(
             val sequences = ArrayList<EditedMediaItemSequence>()
             sequences.add(EditedMediaItemSequence(baseItems))
 
-            // --- extra audio sequences (music / voiceover) — audio only, mixed in ---
+            // --- extra audio sequences (music / voiceover) — audio only, mixed in.
+            // A track placed later on the timeline gets a silent WAV lead-in so it
+            // starts at the right moment; per-track gain via a channel-mixing matrix.
             audioTracks?.forEach { a ->
                 val uri = a["uri"] as? String ?: return@forEach
                 val startMs = (a["startMs"] as? Number)?.toLong() ?: 0L
                 val endMs = (a["endMs"] as? Number)?.toLong() ?: 0L
+                val tlStart = (a["timelineStartMs"] as? Number)?.toLong() ?: 0L
+                val vol = (a["volume"] as? Number)?.toFloat() ?: 1f
+                if (vol <= 0.001f) return@forEach // fully muted — nothing to mix
                 val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
                 if (endMs > startMs) clip.setEndPositionMs(endMs)
                 val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
-                val item = EditedMediaItem.Builder(mi).setRemoveVideo(true).build()
-                sequences.add(EditedMediaItemSequence(listOf(item)))
+                val ab = EditedMediaItem.Builder(mi).setRemoveVideo(true)
+                if (vol != 1f) {
+                    val mix = ChannelMixingAudioProcessor()
+                    mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(vol))
+                    mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(vol))
+                    ab.setEffects(Effects(ImmutableList.of<AudioProcessor>(mix), ImmutableList.of<Effect>()))
+                }
+                val seqItems = ArrayList<EditedMediaItem>()
+                if (tlStart > 0) {
+                    silentWav(tlStart)?.let { s ->
+                        seqItems.add(EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(s))).build())
+                    }
+                }
+                seqItems.add(ab.build())
+                sequences.add(EditedMediaItemSequence(seqItems))
             }
 
             // --- video effects: force output size + composite caption / image overlays ---
@@ -483,6 +501,60 @@ class EcExport(
             transformer = null
             result.error("ec_export", "could not start: ${e.message}", null)
         }
+    }
+
+    // Cache of silent lead-in WAVs by duration so repeated exports reuse them.
+    private val silenceCache = HashMap<Long, File>()
+
+    /** A [durationMs] file of PCM silence (44.1k/stereo/16-bit) to offset an audio track. */
+    private fun silentWav(durationMs: Long): File? {
+        if (durationMs <= 0) return null
+        silenceCache[durationMs]?.let { if (it.exists()) return it }
+        return try {
+            val sampleRate = 44100
+            val channels = 2
+            val bytesPerSample = 2
+            val frames = (durationMs * sampleRate / 1000L).toInt()
+            val dataSize = frames * channels * bytesPerSample
+            val f = File(context.cacheDir, "ec_silence_${durationMs}.wav")
+            FileOutputStream(f).use { fos ->
+                fos.write(wavHeader(dataSize, sampleRate, channels, bytesPerSample))
+                val zeros = ByteArray(8192)
+                var remaining = dataSize
+                while (remaining > 0) {
+                    val n = minOf(zeros.size, remaining)
+                    fos.write(zeros, 0, n)
+                    remaining -= n
+                }
+            }
+            silenceCache[durationMs] = f
+            f
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun wavHeader(dataSize: Int, sampleRate: Int, channels: Int, bytesPerSample: Int): ByteArray {
+        val byteRate = sampleRate * channels * bytesPerSample
+        val blockAlign = channels * bytesPerSample
+        val h = ByteArray(44)
+        fun putStr(off: Int, s: String) { for (i in s.indices) h[off + i] = s[i].code.toByte() }
+        fun putIntLE(off: Int, v: Int) {
+            h[off] = (v and 0xff).toByte()
+            h[off + 1] = ((v shr 8) and 0xff).toByte()
+            h[off + 2] = ((v shr 16) and 0xff).toByte()
+            h[off + 3] = ((v shr 24) and 0xff).toByte()
+        }
+        fun putShortLE(off: Int, v: Int) {
+            h[off] = (v and 0xff).toByte()
+            h[off + 1] = ((v shr 8) and 0xff).toByte()
+        }
+        putStr(0, "RIFF"); putIntLE(4, dataSize + 36); putStr(8, "WAVE")
+        putStr(12, "fmt "); putIntLE(16, 16); putShortLE(20, 1)
+        putShortLE(22, channels); putIntLE(24, sampleRate); putIntLE(28, byteRate)
+        putShortLE(32, blockAlign); putShortLE(34, bytesPerSample * 8)
+        putStr(36, "data"); putIntLE(40, dataSize)
+        return h
     }
 
     /** Build a timed overlay track from [{ base64, startMs, endMs }], or null if empty. */
