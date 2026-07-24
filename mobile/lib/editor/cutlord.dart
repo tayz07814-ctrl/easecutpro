@@ -14,8 +14,8 @@ class CutLordModel {
   const CutLordModel(this.label, this.slug, this.model, this.reasoning);
 }
 
-const cutLordRetake = CutLordModel('Retake Beta', 'ultracut-judge', 'meta-llama/llama-4-maverick', 'off');
-const cutLordUltra = CutLordModel('Ultracut Beta', 'ultracut-judge', 'deepseek/deepseek-v4-flash', 'medium');
+const cutLordRetake = CutLordModel('Retake Beta', 'ultracut-judge', 'deepseek-v4-flash', 'off');
+const cutLordUltra = CutLordModel('Ultracut Beta', 'ultracut-judge', 'deepseek-v4-flash', 'medium');
 const cutLordPremium = CutLordModel('Premium Cut', 'procut-judge', null, null);
 
 /// Extract the clip's audio and transcribe it (AssemblyAI → Deepgram).
