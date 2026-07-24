@@ -622,7 +622,8 @@ async function callModel(
   model: string,
   payload: string,
   system: string,
-  reasoningIntent: unknown
+  reasoningIntent: unknown,
+  timeoutMs = 105_000
 ): Promise<{ ok: boolean; status: number; cleaned: string }> {
   const direct = DEEPSEEK_DIRECT.has(model)
   const base = direct ? DEEPSEEK_BASE_URL : BASE_URL
@@ -652,16 +653,41 @@ async function callModel(
     const provider = providerConfig()
     if (provider) body.provider = provider
   }
-  const r = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json',
-      'HTTP-Referer': 'https://easecutpro.com',
-      'X-Title': 'EaseCutPro Ultracut'
-    },
-    body: JSON.stringify(body)
-  })
+  // Abort the model call before Supabase's ~150s edge wall-clock kills the WHOLE
+  // function (which returns raw:null → the client sees "judge failed / HTTP 546"
+  // and gets ZERO cuts). On timeout/abort we return ok:false so finalize() falls
+  // back to the fast non-reasoning model and still returns cuts within budget.
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  let r: Response
+  try {
+    r = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+        'HTTP-Referer': 'https://easecutpro.com',
+        'X-Title': 'EaseCutPro Ultracut'
+      },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    })
+  } catch (e) {
+    clearTimeout(timer)
+    const aborted = ctrl.signal.aborted
+    await logDebug({
+      model,
+      provider: direct ? 'deepseek' : 'openrouter',
+      http_status: aborted ? 408 : 0,
+      ok: false,
+      aborted,
+      timeout_ms: timeoutMs,
+      err_body: (e as Error).message?.slice(0, 500) ?? null,
+      req_payload: payload.slice(0, 16000)
+    })
+    return { ok: false, status: aborted ? 408 : 0, cleaned: '' }
+  }
+  clearTimeout(timer)
   const bodyText = await r.text()
   let content = ''
   if (r.ok) {
@@ -702,10 +728,12 @@ async function finalize(
   system: string,
   reasoningIntent: unknown
 ): Promise<{ raw: string; model: string }> {
-  const primary = await callModel(keys, model, payload, system, reasoningIntent)
+  // Primary gets ~105s (leaves headroom under the 150s edge wall-clock for the
+  // fallback); the fallback (fast, non-reasoning) gets ~35s. Worst case ≈140s < 150s.
+  const primary = await callModel(keys, model, payload, system, reasoningIntent, 105_000)
   if (primary.ok) return { raw: primary.cleaned, model }
   if (model !== FALLBACK_MODEL) {
-    const fb = await callModel(keys, FALLBACK_MODEL, payload, system, 'off')
+    const fb = await callModel(keys, FALLBACK_MODEL, payload, system, 'off', 35_000)
     if (fb.ok) return { raw: fb.cleaned, model: FALLBACK_MODEL }
   }
   throw new Error(
