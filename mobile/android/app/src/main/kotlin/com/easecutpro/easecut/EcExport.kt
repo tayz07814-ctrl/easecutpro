@@ -356,8 +356,16 @@ class EcExport(
             val images = call.argument<List<Map<String, Any>>>("images")
             val audioTracks = call.argument<List<Map<String, Any>>>("audioTracks")
 
-            // --- base video sequence (trim + concat, audio kept) ---
+            // Overlays (images UNDER captions/text), decoded once, sliced per clip below.
+            val capOvs = parseOvs(captions)
+            val imgOvs = parseOvs(images)
+
+            // --- base video sequence (trim + concat, audio kept). Output sizing +
+            // timed overlays are ITEM-level effects (Crop/Speed already prove item
+            // effects composite here, whereas composition-level video effects don't),
+            // so each caption/text/image is mapped into its clip's local timeline. ---
             val baseItems = ArrayList<EditedMediaItem>()
+            var tlCursor = 0L
             for (seg in segments) {
                 val uri = seg["uri"] as? String ?: run {
                     result.error("ec_export", "a segment has no uri", null)
@@ -371,6 +379,14 @@ class EcExport(
                 val ct = (seg["cropT"] as? Number)?.toFloat() ?: 0f
                 val cr = (seg["cropR"] as? Number)?.toFloat() ?: 0f
                 val cb = (seg["cropB"] as? Number)?.toFloat() ?: 0f
+                // This clip's window on the OUTPUT timeline (post-trim, post-speed) —
+                // used to slice the overlays that fall over it.
+                val srcLen = (endMs - startMs).coerceAtLeast(0L)
+                val outLen = if (speed > 0f) (srcLen / speed).toLong() else srcLen
+                val ts = tlCursor
+                val te = tlCursor + outLen
+                tlCursor = te
+
                 val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
                 if (endMs > startMs) clip.setEndPositionMs(endMs)
                 val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
@@ -388,6 +404,13 @@ class EcExport(
                     sonic.setSpeed(speed)
                     afx.add(sonic)
                 }
+                // Force output size, then composite this clip's slice of the overlays.
+                vfx.add(Presentation.createForWidthAndHeight(width, height, Presentation.LAYOUT_SCALE_TO_FIT))
+                val ovTracks = ArrayList<TextureOverlay>()
+                trackForWindow(imgOvs, ts, te)?.let { ovTracks.add(it) }
+                trackForWindow(capOvs, ts, te)?.let { ovTracks.add(it) }
+                if (ovTracks.isNotEmpty()) vfx.add(OverlayEffect(ImmutableList.copyOf(ovTracks)))
+
                 if (volume <= 0.001f) {
                     builder.setRemoveAudio(true)
                 } else if (volume != 1f) {
@@ -396,9 +419,7 @@ class EcExport(
                     mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
                     afx.add(mix)
                 }
-                if (vfx.isNotEmpty() || afx.isNotEmpty()) {
-                    builder.setEffects(Effects(ImmutableList.copyOf(afx), ImmutableList.copyOf(vfx)))
-                }
+                builder.setEffects(Effects(ImmutableList.copyOf(afx), ImmutableList.copyOf(vfx)))
                 if (fps > 0) builder.setFrameRate(fps)
                 baseItems.add(builder.build())
             }
@@ -435,21 +456,10 @@ class EcExport(
                 sequences.add(EditedMediaItemSequence(seqItems))
             }
 
-            // --- video effects: force output size + composite caption / image overlays ---
-            val videoEffects = ArrayList<Effect>()
-            videoEffects.add(
-                Presentation.createForWidthAndHeight(width, height, Presentation.LAYOUT_SCALE_TO_FIT)
-            )
-            val overlays = ArrayList<TextureOverlay>()
-            buildTrack(images)?.let { overlays.add(it) } // images UNDER text
-            buildTrack(captions)?.let { overlays.add(it) }
-            if (overlays.isNotEmpty()) {
-                videoEffects.add(OverlayEffect(ImmutableList.copyOf(overlays)))
-            }
-
+            // Output sizing + overlays are applied per item above; the composition just
+            // concatenates the (already output-sized) clips and mixes the audio sequences.
             val out = File(context.cacheDir, "ec_export_${System.currentTimeMillis()}.mp4")
-            val effects = Effects(ImmutableList.of<AudioProcessor>(), videoEffects)
-            val composition = Composition.Builder(sequences).setEffects(effects).build()
+            val composition = Composition.Builder(sequences).build()
 
             pending = result
             val tb = Transformer.Builder(context)
@@ -557,20 +567,33 @@ class EcExport(
         return h
     }
 
-    /** Build a timed overlay track from [{ base64, startMs, endMs }], or null if empty. */
-    private fun buildTrack(arr: List<Map<String, Any>>?): TimedOverlay? {
-        if (arr == null || arr.isEmpty()) return null
-        val items = ArrayList<TimedOverlay.Item>()
-        try {
-            for (o in arr) {
-                val b64 = o["base64"] as? String ?: continue
-                val png = Base64.decode(b64, Base64.DEFAULT)
-                val s = ((o["startMs"] as? Number)?.toLong() ?: 0L) * 1000L
-                val e = ((o["endMs"] as? Number)?.toLong() ?: 0L) * 1000L
-                items.add(TimedOverlay.Item(png, s, e))
+    /** A baked overlay PNG with its window on the OUTPUT timeline (ms). */
+    private class Ov(val png: ByteArray, val startMs: Long, val endMs: Long)
+
+    /** Decode [{ base64, startMs, endMs }] overlays into timeline-space [Ov]s. */
+    private fun parseOvs(arr: List<Map<String, Any>>?): List<Ov> {
+        val out = ArrayList<Ov>()
+        if (arr == null) return out
+        for (o in arr) {
+            val b64 = o["base64"] as? String ?: continue
+            val png = try {
+                Base64.decode(b64, Base64.DEFAULT)
+            } catch (_: Exception) {
+                continue
             }
-        } catch (_: Exception) {
-            return null
+            out.add(Ov(png, (o["startMs"] as? Number)?.toLong() ?: 0L, (o["endMs"] as? Number)?.toLong() ?: 0L))
+        }
+        return out
+    }
+
+    /** Overlays intersecting the clip window [ts,te), shifted to clip-local µs. */
+    private fun trackForWindow(all: List<Ov>, ts: Long, te: Long): TimedOverlay? {
+        val items = ArrayList<TimedOverlay.Item>()
+        for (o in all) {
+            if (o.endMs <= ts || o.startMs >= te) continue
+            val s = (maxOf(o.startMs, ts) - ts) * 1000L
+            val e = (minOf(o.endMs, te) - ts) * 1000L
+            if (e > s) items.add(TimedOverlay.Item(o.png, s, e))
         }
         return if (items.isEmpty()) null else TimedOverlay(items)
     }

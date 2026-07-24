@@ -98,37 +98,38 @@ class _EditableOverlayState extends State<EditableOverlay> {
           )
         : Text(t.text, textAlign: TextAlign.center, style: t.style(widget.frame.height));
 
+    // Position the text box by (x,y) so it moves freely and matches the export
+    // bake (which centres the text at x·width) — no full-width Center that would
+    // pin every overlay to the horizontal centre and make them stack.
     return Align(
       alignment: Alignment(t.x * 2 - 1, t.y * 2 - 1),
-      child: FractionallySizedBox(
-        widthFactor: 0.96,
-        child: Center(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: widget.onSelect,
-            onScaleStart: (_) {
-              widget.onSelect();
-              _baseFont = t.fontSize;
-            },
-            onScaleUpdate: (d) {
-              // Pan (focal delta) moves; pinch (scale) resizes.
-              t.x = (t.x + d.focalPointDelta.dx / widget.frame.width).clamp(0.04, 0.96);
-              t.y = (t.y + d.focalPointDelta.dy / widget.frame.height).clamp(0.04, 0.96);
-              if (d.scale != 1.0) {
-                t.fontSize = (_baseFont * d.scale).clamp(0.02, 0.32);
-              }
-              widget.onChange();
-            },
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: widget.selected
-                  ? BoxDecoration(
-                      border: Border.all(color: Ec.accentB, width: 1.5),
-                      borderRadius: BorderRadius.circular(6),
-                    )
-                  : null,
-              child: content,
-            ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: widget.frame.width * 0.92),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onSelect,
+          onScaleStart: (_) {
+            widget.onSelect();
+            _baseFont = t.fontSize;
+          },
+          onScaleUpdate: (d) {
+            // Pan (focal delta) moves; pinch (scale) resizes.
+            t.x = (t.x + d.focalPointDelta.dx / widget.frame.width).clamp(0.04, 0.96);
+            t.y = (t.y + d.focalPointDelta.dy / widget.frame.height).clamp(0.04, 0.96);
+            if (d.scale != 1.0) {
+              t.fontSize = (_baseFont * d.scale).clamp(0.02, 0.32);
+            }
+            widget.onChange();
+          },
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: widget.selected
+                ? BoxDecoration(
+                    border: Border.all(color: Ec.accentB, width: 1.5),
+                    borderRadius: BorderRadius.circular(6),
+                  )
+                : null,
+            child: content,
           ),
         ),
       ),

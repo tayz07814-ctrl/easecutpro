@@ -186,7 +186,10 @@ class TextOverlayView extends StatelessWidget {
         : child;
     return Align(
       alignment: Alignment(t.x * 2 - 1, t.y * 2 - 1),
-      child: FractionallySizedBox(widthFactor: 0.92, child: Center(child: wrapped)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: frame.width * 0.92),
+        child: wrapped,
+      ),
     );
   }
 }
