@@ -30,27 +30,34 @@ class _EditableImageOverlayState extends State<EditableImageOverlay> {
   Widget build(BuildContext context) {
     final o = widget.o;
     final w = (o.scale * widget.frame.width).clamp(24.0, widget.frame.width);
-    return Align(
-      alignment: Alignment(o.x * 2 - 1, o.y * 2 - 1),
-      child: GestureDetector(
-        behavior: HitTestBehavior.deferToChild,
-        onTap: widget.onSelect,
-        onScaleStart: (_) {
-          widget.onSelect();
-          _baseScale = o.scale;
-        },
-        onScaleUpdate: (d) {
-          o.x = (o.x + d.focalPointDelta.dx / widget.frame.width).clamp(0.0, 1.0);
-          o.y = (o.y + d.focalPointDelta.dy / widget.frame.height).clamp(0.0, 1.0);
-          if (d.scale != 1.0) o.scale = (_baseScale * d.scale).clamp(0.05, 1.0);
-          widget.onChange();
-        },
-        child: Container(
-          width: w,
-          decoration: widget.selected
-              ? BoxDecoration(border: Border.all(color: Ec.accentB, width: 1.5))
-              : null,
-          child: Image.memory(o.bytes, fit: BoxFit.contain, gaplessPlayback: true),
+    // Position the CENTRE at (x,y)·frame via a top-left Positioned + half-size
+    // translate, so a finger-drag maps 1:1 to movement (Align maps x→position by
+    // child size, so overlays don't track the finger and pile up).
+    return Positioned(
+      left: o.x * widget.frame.width,
+      top: o.y * widget.frame.height,
+      child: FractionalTranslation(
+        translation: const Offset(-0.5, -0.5),
+        child: GestureDetector(
+          behavior: HitTestBehavior.deferToChild,
+          onTap: widget.onSelect,
+          onScaleStart: (_) {
+            widget.onSelect();
+            _baseScale = o.scale;
+          },
+          onScaleUpdate: (d) {
+            o.x = (o.x + d.focalPointDelta.dx / widget.frame.width).clamp(0.0, 1.0);
+            o.y = (o.y + d.focalPointDelta.dy / widget.frame.height).clamp(0.0, 1.0);
+            if (d.scale != 1.0) o.scale = (_baseScale * d.scale).clamp(0.05, 1.0);
+            widget.onChange();
+          },
+          child: Container(
+            width: w,
+            decoration: widget.selected
+                ? BoxDecoration(border: Border.all(color: Ec.accentB, width: 1.5))
+                : null,
+            child: Image.memory(o.bytes, fit: BoxFit.contain, gaplessPlayback: true),
+          ),
         ),
       ),
     );
@@ -98,38 +105,43 @@ class _EditableOverlayState extends State<EditableOverlay> {
           )
         : Text(t.text, textAlign: TextAlign.center, style: t.style(widget.frame.height));
 
-    // Position the text box by (x,y) so it moves freely and matches the export
-    // bake (which centres the text at x·width) — no full-width Center that would
-    // pin every overlay to the horizontal centre and make them stack.
-    return Align(
-      alignment: Alignment(t.x * 2 - 1, t.y * 2 - 1),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: widget.frame.width * 0.92),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onSelect,
-          onScaleStart: (_) {
-            widget.onSelect();
-            _baseFont = t.fontSize;
-          },
-          onScaleUpdate: (d) {
-            // Pan (focal delta) moves; pinch (scale) resizes.
-            t.x = (t.x + d.focalPointDelta.dx / widget.frame.width).clamp(0.04, 0.96);
-            t.y = (t.y + d.focalPointDelta.dy / widget.frame.height).clamp(0.04, 0.96);
-            if (d.scale != 1.0) {
-              t.fontSize = (_baseFont * d.scale).clamp(0.02, 0.32);
-            }
-            widget.onChange();
-          },
-          child: Container(
-            padding: const EdgeInsets.all(4),
-            decoration: widget.selected
-                ? BoxDecoration(
-                    border: Border.all(color: Ec.accentB, width: 1.5),
-                    borderRadius: BorderRadius.circular(6),
-                  )
-                : null,
-            child: content,
+    // Centre the text box on (x,y)·frame via a top-left Positioned + half-size
+    // translate. A finger-drag then maps 1:1 to movement and matches the export
+    // bake (text centred at x·width) — Align mapped x→position by the box's own
+    // width, so overlays refused to move apart and stacked at centre.
+    return Positioned(
+      left: t.x * widget.frame.width,
+      top: t.y * widget.frame.height,
+      child: FractionalTranslation(
+        translation: const Offset(-0.5, -0.5),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: widget.frame.width * 0.92),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onSelect,
+            onScaleStart: (_) {
+              widget.onSelect();
+              _baseFont = t.fontSize;
+            },
+            onScaleUpdate: (d) {
+              // Pan (focal delta) moves; pinch (scale) resizes.
+              t.x = (t.x + d.focalPointDelta.dx / widget.frame.width).clamp(0.04, 0.96);
+              t.y = (t.y + d.focalPointDelta.dy / widget.frame.height).clamp(0.04, 0.96);
+              if (d.scale != 1.0) {
+                t.fontSize = (_baseFont * d.scale).clamp(0.02, 0.32);
+              }
+              widget.onChange();
+            },
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: widget.selected
+                  ? BoxDecoration(
+                      border: Border.all(color: Ec.accentB, width: 1.5),
+                      borderRadius: BorderRadius.circular(6),
+                    )
+                  : null,
+              child: content,
+            ),
           ),
         ),
       ),

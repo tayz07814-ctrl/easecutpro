@@ -96,6 +96,39 @@ class _MiniTimelineState extends State<MiniTimeline> {
   double _viewW = 0;
   bool _didInit = false;
 
+  // Two-finger pinch-to-zoom (a passive Listener, so single-finger scrub still scrolls).
+  final Map<int, Offset> _pointers = {};
+  double _pinchStartDist = 0;
+  double _pinchStartZoom = 1;
+  bool _pinching = false;
+
+  double _pinchDist() {
+    final p = _pointers.values.toList();
+    return p.length < 2 ? 0 : (p[0] - p[1]).distance;
+  }
+
+  void _onPinchDown(PointerDownEvent e) {
+    _pointers[e.pointer] = e.position;
+    if (_pointers.length == 2) {
+      _pinchStartDist = _pinchDist();
+      _pinchStartZoom = _zoom;
+      setState(() => _pinching = true);
+    }
+  }
+
+  void _onPinchMove(PointerMoveEvent e) {
+    if (!_pointers.containsKey(e.pointer)) return;
+    _pointers[e.pointer] = e.position;
+    if (_pinching && _pointers.length >= 2 && _pinchStartDist > 8) {
+      _setZoom(_pinchStartZoom * _pinchDist() / _pinchStartDist);
+    }
+  }
+
+  void _onPinchUp(PointerEvent e) {
+    _pointers.remove(e.pointer);
+    if (_pointers.length < 2 && _pinching) setState(() => _pinching = false);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -254,14 +287,22 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 _didInit = true;
                 WidgetsBinding.instance.addPostFrameCallback((_) => _alignToPlayhead());
               }
-              return Stack(
+              return Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: _onPinchDown,
+                onPointerMove: _onPinchMove,
+                onPointerUp: _onPinchUp,
+                onPointerCancel: _onPinchUp,
+                child: Stack(
                 children: [
                   NotificationListener<ScrollNotification>(
                     onNotification: _onScroll,
                       child: SingleChildScrollView(
                         controller: _sc,
                         scrollDirection: Axis.horizontal,
-                        physics: const ClampingScrollPhysics(),
+                        physics: _pinching
+                            ? const NeverScrollableScrollPhysics()
+                            : const ClampingScrollPhysics(),
                         child: Padding(
                           padding: EdgeInsets.symmetric(horizontal: side),
                           child: SizedBox(
@@ -311,7 +352,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
                       ),
                     ),
                   ],
-                );
+                ),
+              );
             },
           ),
         ),

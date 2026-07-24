@@ -77,6 +77,9 @@ class EcExport(
     private val progressHolder = ProgressHolder()
     private val main = Handler(Looper.getMainLooper())
     private var polling = false
+    // Map a pass's 0–100 progress onto a slice of the overall bar (two-pass export).
+    private var progBase = 0
+    private var progScale = 1f
 
     private val poller = object : Runnable {
         override fun run() {
@@ -85,7 +88,7 @@ class EcExport(
                 try {
                     val state = t.getProgress(progressHolder)
                     if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
-                        events?.success(mapOf("percent" to progressHolder.progress))
+                        events?.success(mapOf("percent" to (progBase + progressHolder.progress * progScale)))
                     }
                 } catch (_: Exception) {
                 }
@@ -356,16 +359,15 @@ class EcExport(
             val images = call.argument<List<Map<String, Any>>>("images")
             val audioTracks = call.argument<List<Map<String, Any>>>("audioTracks")
 
-            // Overlays (images UNDER captions/text), decoded once, sliced per clip below.
+            // Overlays (images UNDER captions/text), decoded once; composited in a
+            // SECOND pass over the finished single video (see below).
             val capOvs = parseOvs(captions)
             val imgOvs = parseOvs(images)
 
-            // --- base video sequence (trim + concat, audio kept). Output sizing +
-            // timed overlays are ITEM-level effects (Crop/Speed already prove item
-            // effects composite here, whereas composition-level video effects don't),
-            // so each caption/text/image is mapped into its clip's local timeline. ---
+            // --- pass 1: base video sequence (trim + concat + crop/speed/size, audio
+            // kept). Crop/Speed/Presentation are item-level effects (which composite
+            // reliably); overlays are NOT applied here. ---
             val baseItems = ArrayList<EditedMediaItem>()
-            var tlCursor = 0L
             for (seg in segments) {
                 val uri = seg["uri"] as? String ?: run {
                     result.error("ec_export", "a segment has no uri", null)
@@ -379,14 +381,6 @@ class EcExport(
                 val ct = (seg["cropT"] as? Number)?.toFloat() ?: 0f
                 val cr = (seg["cropR"] as? Number)?.toFloat() ?: 0f
                 val cb = (seg["cropB"] as? Number)?.toFloat() ?: 0f
-                // This clip's window on the OUTPUT timeline (post-trim, post-speed) —
-                // used to slice the overlays that fall over it.
-                val srcLen = (endMs - startMs).coerceAtLeast(0L)
-                val outLen = if (speed > 0f) (srcLen / speed).toLong() else srcLen
-                val ts = tlCursor
-                val te = tlCursor + outLen
-                tlCursor = te
-
                 val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
                 if (endMs > startMs) clip.setEndPositionMs(endMs)
                 val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
@@ -404,12 +398,8 @@ class EcExport(
                     sonic.setSpeed(speed)
                     afx.add(sonic)
                 }
-                // Force output size, then composite this clip's slice of the overlays.
+                // Force output size (every clip normalised so the concat is uniform).
                 vfx.add(Presentation.createForWidthAndHeight(width, height, Presentation.LAYOUT_SCALE_TO_FIT))
-                val ovTracks = ArrayList<TextureOverlay>()
-                trackForWindow(imgOvs, ts, te)?.let { ovTracks.add(it) }
-                trackForWindow(capOvs, ts, te)?.let { ovTracks.add(it) }
-                if (ovTracks.isNotEmpty()) vfx.add(OverlayEffect(ImmutableList.copyOf(ovTracks)))
 
                 if (volume <= 0.001f) {
                     builder.setRemoveAudio(true)
@@ -456,61 +446,101 @@ class EcExport(
                 sequences.add(EditedMediaItemSequence(seqItems))
             }
 
-            // Output sizing + overlays are applied per item above; the composition just
-            // concatenates the (already output-sized) clips and mixes the audio sequences.
-            val out = File(context.cacheDir, "ec_export_${System.currentTimeMillis()}.mp4")
-            val composition = Composition.Builder(sequences).build()
+            val pass1Comp = Composition.Builder(sequences).build()
+            val finalOut = File(context.cacheDir, "ec_export_${System.currentTimeMillis()}.mp4")
+            val hasOverlays = capOvs.isNotEmpty() || imgOvs.isNotEmpty()
 
             pending = result
-            val tb = Transformer.Builder(context)
-            if (bitrate > 0) {
-                tb.setEncoderFactory(
-                    DefaultEncoderFactory.Builder(context)
-                        .setRequestedVideoEncoderSettings(
-                            VideoEncoderSettings.Builder().setBitrate(bitrate).build()
-                        )
-                        .setEnableFallback(true)
-                        .build()
-                )
+            if (!hasOverlays) {
+                // No overlays → pass 1 IS the export.
+                progBase = 0
+                progScale = 1f
+                runPass(pass1Comp, finalOut, bitrate,
+                    { finishOk(finalOut, outName, it) }, { failExport(it.message) })
+            } else {
+                // Pass 1 → temp; then pass 2 composites the overlays onto the finished
+                // single video at OUTPUT time (item-level overlays only render on the
+                // first clip, so we overlay the whole concatenated video in one go).
+                val tmp = File(context.cacheDir, "ec_pass1_${System.currentTimeMillis()}.mp4")
+                progBase = 0
+                progScale = 0.6f
+                runPass(pass1Comp, tmp, bitrate, { _ ->
+                    try {
+                        val ovTracks = ArrayList<TextureOverlay>()
+                        trackAll(imgOvs)?.let { ovTracks.add(it) } // images UNDER text
+                        trackAll(capOvs)?.let { ovTracks.add(it) }
+                        val vEff = ArrayList<Effect>()
+                        if (ovTracks.isNotEmpty()) vEff.add(OverlayEffect(ImmutableList.copyOf(ovTracks)))
+                        val item = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(tmp)))
+                            .setEffects(Effects(ImmutableList.of<AudioProcessor>(), vEff))
+                            .build()
+                        val comp2 = Composition.Builder(EditedMediaItemSequence(listOf(item))).build()
+                        progBase = 60
+                        progScale = 0.4f
+                        runPass(comp2, finalOut, bitrate,
+                            { tmp.delete(); finishOk(finalOut, outName, it) },
+                            { tmp.delete(); failExport(it.message) })
+                    } catch (e: Exception) {
+                        tmp.delete()
+                        failExport(e.message)
+                    }
+                }, { failExport(it.message) })
             }
-            val t = tb
-                .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                        stopPolling()
-                        var savedTo: String? = null
-                        try {
-                            savedTo = saveToGallery(out, outName)
-                        } catch (_: Exception) {
-                        }
-                        val ret = HashMap<String, Any?>()
-                        ret["path"] = out.absolutePath
-                        ret["durationMs"] = exportResult.durationMs
-                        if (savedTo != null) ret["savedTo"] = savedTo
-                        pending?.success(ret)
-                        pending = null
-                        transformer = null
-                    }
-
-                    override fun onError(
-                        composition: Composition,
-                        exportResult: ExportResult,
-                        exception: ExportException
-                    ) {
-                        stopPolling()
-                        pending?.error("ec_export", exception.message, null)
-                        pending = null
-                        transformer = null
-                    }
-                })
-                .build()
-            transformer = t
-            t.start(composition, out.absolutePath)
             startPolling()
         } catch (e: Exception) {
             pending = null
             transformer = null
             result.error("ec_export", "could not start: ${e.message}", null)
         }
+    }
+
+    /** Start a Transformer pass; [onDone]/[onErr] fire on the main thread. */
+    private fun runPass(
+        composition: Composition,
+        outFile: File,
+        bitrate: Int,
+        onDone: (ExportResult) -> Unit,
+        onErr: (ExportException) -> Unit,
+    ) {
+        val tb = Transformer.Builder(context)
+        if (bitrate > 0) {
+            tb.setEncoderFactory(
+                DefaultEncoderFactory.Builder(context)
+                    .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
+                    .setEnableFallback(true)
+                    .build()
+            )
+        }
+        val t = tb.addListener(object : Transformer.Listener {
+            override fun onCompleted(composition: Composition, exportResult: ExportResult) = onDone(exportResult)
+            override fun onError(composition: Composition, exportResult: ExportResult, exception: ExportException) =
+                onErr(exception)
+        }).build()
+        transformer = t
+        t.start(composition, outFile.absolutePath)
+    }
+
+    private fun finishOk(out: File, outName: String, r: ExportResult) {
+        stopPolling()
+        var savedTo: String? = null
+        try {
+            savedTo = saveToGallery(out, outName)
+        } catch (_: Exception) {
+        }
+        val ret = HashMap<String, Any?>()
+        ret["path"] = out.absolutePath
+        ret["durationMs"] = r.durationMs
+        if (savedTo != null) ret["savedTo"] = savedTo
+        pending?.success(ret)
+        pending = null
+        transformer = null
+    }
+
+    private fun failExport(msg: String?) {
+        stopPolling()
+        pending?.error("ec_export", msg, null)
+        pending = null
+        transformer = null
     }
 
     // Cache of silent lead-in WAVs by duration so repeated exports reuse them.
@@ -586,13 +616,12 @@ class EcExport(
         return out
     }
 
-    /** Overlays intersecting the clip window [ts,te), shifted to clip-local µs. */
-    private fun trackForWindow(all: List<Ov>, ts: Long, te: Long): TimedOverlay? {
+    /** All overlays as one timed track at OUTPUT time (µs) — for the single-item pass 2. */
+    private fun trackAll(all: List<Ov>): TimedOverlay? {
         val items = ArrayList<TimedOverlay.Item>()
         for (o in all) {
-            if (o.endMs <= ts || o.startMs >= te) continue
-            val s = (maxOf(o.startMs, ts) - ts) * 1000L
-            val e = (minOf(o.endMs, te) - ts) * 1000L
+            val s = o.startMs * 1000L
+            val e = o.endMs * 1000L
             if (e > s) items.add(TimedOverlay.Item(o.png, s, e))
         }
         return if (items.isEmpty()) null else TimedOverlay(items)

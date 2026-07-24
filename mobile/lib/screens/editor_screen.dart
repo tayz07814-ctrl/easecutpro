@@ -347,7 +347,6 @@ class _EditorScreenState extends State<EditorScreen> {
     _pushHistory();
     if (_model.splitAt(_positionMs)) {
       await _reload(seekTo: _positionMs);
-      _toast('Split');
     } else {
       _undoStack.removeLast(); // nothing changed
       _toast('Move the playhead onto a clip to split');
@@ -636,18 +635,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
     _model.applyKeepRanges(keeps);
     await _reload(seekTo: 0);
-    final keptMs = keeps.fold<int>(0, (a, k) => a + (k[1] - k[0]));
-    final saved = (_sourceDurationMs / 1000.0) - keptMs / 1000.0;
-    _showUndoSnack(saved < 0.4 ? 'Applied — barely trimmed' : '$label: trimmed ${saved.toStringAsFixed(1)}s');
-  }
-
-  void _showUndoSnack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: Ec.card,
-      action: SnackBarAction(label: 'Undo', textColor: Ec.indigoText, onPressed: _undo),
-    ));
+    // No snackbar — the top-bar / transport undo buttons are the undo affordance.
   }
 
   Future<void> _generateCaptions() async {
@@ -676,7 +664,6 @@ class _EditorScreenState extends State<EditorScreen> {
         setState(() {});
       }
       _scheduleSave();
-      _toast('${_texts.where((t) => t.isCaption).length} caption lines added');
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       _toast('Captions failed: ${_cleanErr(e)}');
@@ -1090,8 +1077,8 @@ class _EditorScreenState extends State<EditorScreen> {
       decoration: const BoxDecoration(border: Border(top: BorderSide(color: Ec.hair))),
       child: Row(
         children: [
-          _icBtn(Icons.undo, () {}, enabled: false),
-          _icBtn(Icons.redo, () {}, enabled: false),
+          _icBtn(Icons.undo, _undo, enabled: _undoStack.isNotEmpty),
+          _icBtn(Icons.redo, _redo, enabled: _redoStack.isNotEmpty),
           const Spacer(),
           GestureDetector(
             onTap: _togglePlay,
