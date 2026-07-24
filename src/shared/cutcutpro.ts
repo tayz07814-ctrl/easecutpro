@@ -303,20 +303,27 @@ export function refineEdl(edl: Edl, map: TimestampMap): { edl: Edl; notes: strin
   const tok = W.map((w) => norm(w.text))
   const endsSentence = (i: number): boolean => ENDS_SENTENCE.test(W[i].text.trim())
 
-  let cuts = mergeWordCuts(edl.word_cuts)
-  const inCut = (i: number, list = cuts): boolean => list.some((c) => i >= c.from && i <= c.to)
+  const fillerIdx = new Set(map.filler_word_idxs)
+  const contentTok = (i: number): string => (fillerIdx.has(i) ? '' : tok[i])
+
+  // The intentional-repeat guards run on the RAW cuts BEFORE mergeWordCuts. Merging
+  // first would fuse many adjacent cuts (a whole production-chatter run + one
+  // "earlier take") into ONE span whose blended reason trips DUP_REASON, and the
+  // contiguity check would then drop the WHOLE span — wiping out legit artifact
+  // cutting on production-heavy footage. Per-cut, each reason is clean.
+  let raw0 = edl.word_cuts
 
   // ---- pass 0a: contiguity guard (keep intentional repeats) ------------------
   // A real retake is CONTIGUOUS: the redo immediately follows the flub, so the
-  // KEPT words right after the cut re-deliver the cut's opening. When they don't,
-  // a duplication-justified cut removed a passage whose match lives elsewhere —
-  // an intentional stacked hook / call-back / motif, not a retake. Drop those.
-  // Scoped to DUP_REASON cuts (artifact/filler cuts untouched) and to substantial
-  // spans (>=4 real words), so a short contiguous restart like "the new one—" is
-  // never affected. Fillers between the takes don't block the match.
-  const fillerIdx = new Set(map.filler_word_idxs)
-  const contentTok = (i: number): string => (fillerIdx.has(i) ? '' : tok[i])
-  cuts = cuts.filter((c) => {
+  // words right after the cut re-deliver the cut's opening. When they DON'T, a
+  // duplication-justified cut removed a passage whose match lives elsewhere — an
+  // intentional stacked hook / call-back / motif — so keep it. Scoped to
+  // DUP_REASON cuts (artifact/filler cuts untouched) and substantial spans (>=4
+  // real words), so a short restart like "the new one—" is unaffected. The
+  // re-delivery check spans the words that FOLLOW regardless of whether they're
+  // in another cut — a retake's redo is itself often cut (kept-final removes the
+  // earlier take, or the judge over-cut both) — so "kept-only" would miss it.
+  raw0 = raw0.filter((c) => {
     if (!DUP_REASON.test(c.reason)) return true
     const open: string[] = []
     for (let i = c.from; i <= c.to && open.length < 4; i++) if (contentTok(i)) open.push(contentTok(i))
@@ -324,7 +331,7 @@ export function refineEdl(edl: Edl, map: TimestampMap): { edl: Edl; notes: strin
     let realWords = 0
     for (let i = c.from; i <= c.to; i++) if (contentTok(i)) realWords++
     const after: string[] = []
-    for (let i = c.to + 1; i < W.length && after.length < 8; i++) if (!inCut(i) && contentTok(i)) after.push(contentTok(i))
+    for (let i = c.to + 1; i < W.length && after.length < 8; i++) if (contentTok(i)) after.push(contentTok(i))
     const redelivered = after.some((_, s) => open.every((t, k) => after[s + k] === t))
     if (!redelivered && realWords >= 4) {
       notes.push(
@@ -338,7 +345,7 @@ export function refineEdl(edl: Edl, map: TimestampMap): { edl: Edl; notes: strin
   // ---- pass 0b: emphasis guard (keep intentional word-doubling) --------------
   // The judge shouldn't even see a <STUTTER> tag on "never never" now, but guard
   // it here too: drop a lone 1-word cut that removes one half of an EMPHASIS pair.
-  cuts = cuts.filter((c) => {
+  raw0 = raw0.filter((c) => {
     if (c.to !== c.from || !tok[c.from]) return true
     const i = c.from
     const emph =
@@ -350,6 +357,9 @@ export function refineEdl(edl: Edl, map: TimestampMap): { edl: Edl; notes: strin
     }
     return true
   })
+
+  let cuts = mergeWordCuts(raw0)
+  const inCut = (i: number, list = cuts): boolean => list.some((c) => i >= c.from && i <= c.to)
 
   // ---- pass 1: boundary dedupe / backward extension --------------------------
   for (let sweep = 0; sweep < 4; sweep++) {
