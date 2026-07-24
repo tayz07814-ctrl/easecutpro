@@ -2,9 +2,12 @@
 //
 // WORD CUTS are LLM-first: the FULL index-anchored transcript (shared/cutcutpro
 // buildAiPayload) goes to the SINGLE-PASS ultracut judge (the `ultracut-judge`
-// edge fn, OpenRouter). Production runs google/gemini-3.5-flash on the creator's
-// single-pass retake prompt (no first/second-pass framing) and it returns the cut
-// EDL. (procut-judge / Opus is still deployed but the cloud retake no longer uses it.)
+// edge fn). Production runs deepseek-v4-flash on DeepSeek's FIRST-PARTY API
+// (api.deepseek.com, DEEPSEEK_API_KEY) with the creator's single-pass retake
+// prompt (no first/second-pass framing) and it returns the cut EDL. If the
+// DeepSeek call fails the edge fn falls back to deepseek-chat via OpenRouter, so
+// a transient outage never yields zero cuts. (procut-judge / Opus is still
+// deployed but the cloud retake no longer uses it.)
 //
 // SILENCE now uses the UNIFIED configurable VAD pass shared with ProCut
 // (vad.ts vadSilenceRegions, driven by the store's VadSilenceSettings): raw
@@ -135,7 +138,10 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'deepseek/deepseek-v4-flash',
+      // Un-prefixed id → the edge fn routes this to DeepSeek's FIRST-PARTY API
+      // (api.deepseek.com, DEEPSEEK_API_KEY), not OpenRouter. DeepSeek caps by
+      // concurrency, not a shared rate pool, so this dodges the OpenRouter 429s.
+      model: 'deepseek-v4-flash',
       promptVariant: 'sharp',
       reasoning: 'medium'
     } satisfies ProcutJudgeReq)
