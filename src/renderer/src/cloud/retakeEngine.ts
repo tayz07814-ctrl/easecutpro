@@ -145,19 +145,19 @@ export async function retakeAwareCutCloud(
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
-      warnings.push('Retake β couldn't analyze this clip — please try again.')
+      warnings.push("Retake Beta couldn't analyze this clip — please try again.")
     } else if (res.raw == null) {
-      warnings.push('Retake β couldn't analyze this clip — no takes were cut.')
+      warnings.push("Retake Beta couldn't analyze this clip — no takes were cut.")
     } else {
       const v = validateEdl(res.raw, map)
       if (!v.ok) {
-        warnings.push('Retake β couldn't read the result — no takes were cut.')
+        warnings.push("Retake Beta couldn't read the result — no takes were cut.")
       } else {
         baseCutSpans = edlToRetakeCutSpans(refineEdl(v.edl, map).edl, map)
       }
     }
   } catch {
-    warnings.push('Retake β couldn't finish — please try again.')
+    warnings.push("Retake Beta couldn't finish — please try again.")
   }
 
   // 5. SILENCE — the UNIFIED configurable VAD pass (shared with ProCut). ASR-
