@@ -123,8 +123,8 @@ export async function retakeAwareCutCloud(
   }
 
   // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
-  //    (ultracut-judge edge fn, OpenRouter). Production runs deepseek/deepseek-v4-flash
-  //    on the 'sharp' word-list retake prompt + reasoning:medium; it scans everything
+  //    (ultracut-judge edge fn, OpenRouter). Production runs deepseek/deepseek-v3.2-exp
+  //    on the 'sharp' word-list retake prompt + reasoning:low; it scans everything
   //    and returns the cut EDL.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
@@ -138,12 +138,12 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      // Un-prefixed id → the edge fn routes this to DeepSeek's FIRST-PARTY API
-      // (api.deepseek.com, DEEPSEEK_API_KEY), not OpenRouter. DeepSeek caps by
-      // concurrency, not a shared rate pool, so this dodges the OpenRouter 429s.
-      model: 'deepseek-v4-flash',
+      // '/'-prefixed slug → the edge fn routes this via OpenRouter (OpenRouter key),
+      // NOT DeepSeek first-party. NOTE: requires 'deepseek/deepseek-v3.2-exp' in the
+      // edge fn's MODEL_WHITELIST, otherwise resolveModel falls back to the default.
+      model: 'deepseek/deepseek-v3.2-exp',
       promptVariant: 'sharp',
-      reasoning: 'medium'
+      reasoning: 'low'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
