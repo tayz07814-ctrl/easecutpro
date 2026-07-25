@@ -35,14 +35,13 @@ function preflight(req: Request): Response | null {
 }
 
 const BASE_URL = Deno.env.get('ULTRACUT_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('ULTRACUT_MODEL') ?? 'xai/grok-4.5-latest'
+const MODEL = Deno.env.get('ULTRACUT_MODEL') ?? 'x-ai/grok-4.5'
 
 const DEEPSEEK_BASE_URL = Deno.env.get('DEEPSEEK_BASE_URL') ?? 'https://api.deepseek.com'
 const DEEPSEEK_DIRECT = new Set(['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat'])
 
 const MODEL_WHITELIST = new Set([
-  'xai/grok-4.5-latest',
-  'xai/grok-4.5',
+  'x-ai/grok-4.5',
   'z-ai/glm-5.2',
   'deepseek/deepseek-v3.2-exp',
   'google/gemini-3.6-flash',
