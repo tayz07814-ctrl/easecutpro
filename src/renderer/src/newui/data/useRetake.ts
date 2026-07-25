@@ -76,6 +76,8 @@ export function useRetake(): RetakeModel {
   const runUltracut = useStore((s) => s.runUltracut)
   // Premium Cut — Gemini 3.5 Flash multimodal engine, wired to its own button.
   const runPremiumCut = useStore((s) => s.runPremiumCut)
+  // embudje — the EMBEDDING judge (embudje-judge), wired to its own button. easecut0.04.
+  const runEmbudje = useStore((s) => s.runEmbudje)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
   const deleteSelected = useStore((s) => s.deleteSelected)
@@ -163,6 +165,7 @@ export function useRetake(): RetakeModel {
     find: () => void runRetakeCutBeta(),
     findUltracut: () => void runUltracut(),
     findPremium: () => void runPremiumCut(),
+    embudje: () => void runEmbudje(),
     execute: () => void executeCuts(),
     /** cut the currently-selected words (used to add cuts in the executed review). */
     cutSelected: () => deleteSelected(),

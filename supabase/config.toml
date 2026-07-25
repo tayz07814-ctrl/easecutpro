@@ -13,3 +13,8 @@ verify_jwt = true
 # ultracut-judge so the new prompt never touches main/production.
 [functions.retake04-judge]
 verify_jwt = true
+
+# easecut0.04 — the "embudje" embedding judge: embeds the transcript, clusters
+# retakes + flags production chatter, then a small LLM makes segment-level cuts.
+[functions.embudje-judge]
+verify_jwt = true

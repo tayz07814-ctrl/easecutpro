@@ -743,6 +743,11 @@ interface AppState {
    *  an OpenRouter test model (ultracut-judge, GLM 5.2). Shares nothing with Retake
    *  Beta's Opus judge — its own edge fn — so the two can be A/B'd. Cloud-only. */
   runUltracut: () => Promise<void>
+  /** embudje (easecut0.04): the EMBEDDING judge. Embeds the transcript, clusters
+   *  retakes + flags production chatter, then a small LLM makes segment-level cuts
+   *  (embudje-judge edge fn). Always cuts words AND silence. Same review-first
+   *  contract (highlight + stage, apply on Execute cuts). Cloud-only. */
+  runEmbudje: () => Promise<void>
   /** Premium Cut (Beta): a SEPARATE experimental engine — Gemini 3.5 Flash LISTENS
    *  to the raw audio (premium-cut edge fn) and returns the verbatim transcript +
    *  ALL cuts (retakes + silence) itself; no STT, no ONNX VAD. Same review-first
@@ -2311,6 +2316,74 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 0,
           message: IS_CLOUD ? 'Ultracut couldn’t finish — please try again.' : `Ultracut failed: ${(e as Error).message}`
+        }
+      })
+    }
+  },
+
+  runEmbudje: async () => {
+    if (!get().requireServer('embudje')) return
+    // embudje (easecut0.04) — the EMBEDDING judge (window.api.embudjeCut →
+    // embudje-judge edge fn). Embeds the transcript, clusters retakes + flags
+    // production chatter, then a small LLM makes segment-level cuts. ALWAYS cuts words
+    // AND silence. Same review-first contract (highlight + stage, apply on Execute).
+    const runEmb = (window.api as { embudjeCut?: typeof window.api.retakeAwareCut }).embudjeCut
+    if (!runEmb) {
+      // embudje's judge only exists in the cloud build. Off-cloud fall back to Retake β.
+      await get().runRetakeCutBeta()
+      return
+    }
+    const stored = get().project
+    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+    const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
+    if (!hasBase) {
+      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
+      return
+    }
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up embudje…' } })
+    try {
+      let path: string
+      if (isMultiBase(p0)) {
+        const combined = await window.api.combineClips(p0.baseSequence!, true)
+        path = combined.path
+      } else {
+        path = p0.media!.path
+      }
+      const res = await runEmb(path, get().retakeBetaSilenceSettings, get().vadSilenceSettings)
+      const cur = get().project
+      const docBase = !cur.media && !!p0.baseSequence?.length
+      const nextProject: typeof cur = docBase
+        ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript: res.transcript }
+        : { ...cur, transcript: res.transcript }
+      const flagIds = res.deleteWordIds
+      // embudje ALWAYS cuts silence too (the button runs both) — stage it regardless
+      // of the Smart Silence toggle.
+      const silenceRegions = res.silenceRegions ?? []
+      set({
+        project: nextProject,
+        selectedWordIds: new Set(flagIds),
+        stagedSilences: silenceRegions,
+        stagedSilenceSel: new Set(silenceRegions.map((r) => r.id)),
+        retakeSilenceStaged: true
+      })
+      set({
+        job: {
+          active: false,
+          percent: 100,
+          message:
+            `${res.summary} — ${flagIds.length} word(s) highlighted` +
+            (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
+            `, review then Execute cuts` +
+            (!IS_CLOUD && res.warnings.length ? ` · ${res.warnings.length} warning(s)` : '')
+        }
+      })
+    } catch (e) {
+      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (embudje) failed', e)
+      set({
+        job: {
+          active: false,
+          percent: 0,
+          message: IS_CLOUD ? 'embudje couldn’t finish — please try again.' : `embudje failed: ${(e as Error).message}`
         }
       })
     }

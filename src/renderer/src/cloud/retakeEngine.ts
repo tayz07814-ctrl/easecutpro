@@ -223,6 +223,119 @@ export async function retakeAwareCutCloud(
   }
 }
 
+/** embudje (easecut0.04) — the EMBEDDING judge. Same review-first pipeline as
+ *  Retake β (audio → transcript → judge → silence), but the word-cut brain is the
+ *  `embudje-judge` edge fn: the whole transcript is EMBEDDED (gemini-embedding-2),
+ *  near-duplicate retakes are clustered and production chatter is flagged by the
+ *  embeddings, then a small LLM (gpt-oss-120b, deepseek-v3.2 fallback) makes
+ *  segment-level keep/cut decisions over the annotated transcript. The SILENCE engine
+ *  ALWAYS runs (the button cuts words AND silences). Result shape is identical to
+ *  Retake β, so the transcript/highlight/Execute review UX is unchanged. Cloud-only. */
+export async function embudjeCutCloud(
+  mediaId: string,
+  onProgress?: (pct: number, msg?: string) => void,
+  vadSettings: VadSilenceSettings = DEFAULT_VAD_SILENCE_SETTINGS
+): Promise<RetakeAwareResult> {
+  const warnings: string[] = []
+  const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
+  console.log('[embudje] cloud job start (embedding judge — embudje-judge, easecut0.04):', mediaId)
+
+  // 1. audio — decoded ONCE (shared clock for transcription, VAD scan, silence).
+  op(3, 'Getting your audio ready…')
+  const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
+
+  // 2. verbatim transcription (cached by mediaId).
+  const { vt, warnings: tw } = await cachedTranscribe(mediaId, audio, op)
+  warnings.push(...tw)
+
+  // 3. VAD safety scan — reused for the payload's pause markers AND the silence engine.
+  op(56, 'Listening for pauses…')
+  let vadSil: { start: number; end: number }[] = []
+  try {
+    vadSil = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadSafetyOpts(), audio.durationS)).map((r) => ({
+      start: r.start,
+      end: r.end
+    }))
+  } catch (e) {
+    warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
+  }
+
+  // 4. WORD-CUT BRAIN — the EMBEDDING judge. Same index-anchored payload + validateEdl
+  //    as Retake β; the embudje-judge fn embeds + clusters + flags chatter server-side
+  //    and returns a word-index EDL.
+  op(72, 'embudje is judging your takes…')
+  const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
+  const payload = buildAiPayload(map)
+  let baseCutSpans: CutSpan[] = []
+  let modelRaw: string | null = null
+  try {
+    const res = await invokeEdge<ProcutJudgeRes>('embudje-judge', {
+      payload,
+      proposal: { word_cuts: [], pause_cuts: [] }
+    } satisfies ProcutJudgeReq)
+    modelRaw = res.raw
+    if (res.judge === 'none') {
+      warnings.push('embudje needs the OpenRouter key configured on the server — no takes were cut.')
+    } else if (res.raw == null) {
+      warnings.push('embudje couldn’t analyze this clip — no takes were cut.')
+    } else {
+      const v = validateEdl(res.raw, map)
+      if (!v.ok) {
+        warnings.push('embudje couldn’t read the result — no takes were cut.')
+      } else {
+        baseCutSpans = edlToRetakeCutSpans(refineEdl(v.edl, map).edl, map)
+      }
+    }
+  } catch {
+    warnings.push('embudje couldn’t finish — please try again.')
+  }
+
+  // 5. SILENCE — the UNIFIED configurable VAD pass (always on for embudje).
+  op(90, 'Cleaning silence…')
+  const artifacts = detectArtifacts(vt.words, baseCutSpans, vadSil)
+  const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
+  const cutSpans = [...baseCutSpans, ...artifacts.orphanCutSpans].sort((a, b) => a.start - b.start)
+  const deleteWordIds = spansToWordIds(cutSpans, transcript)
+  const keptWords = artifacts.repairedWords.filter((w) => {
+    const m = (w.start + w.end) / 2
+    return !cutSpans.some((s) => m >= s.start && m <= s.end)
+  })
+  let silenceRegions: SilenceRegion[] = []
+  try {
+    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
+  } catch (e) {
+    warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
+  }
+
+  // 6. debug JSON (best-effort, private bucket) — its own mode.
+  const debugPath = await saveRetakeDebug({
+    mode: 'embudje',
+    provider: vt.provider,
+    ai_payload: payload,
+    model_raw: modelRaw,
+    cut_spans: cutSpans,
+    delete_word_ids_count: deleteWordIds.length,
+    silence: { regions_count: silenceRegions.length, total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3)) },
+    warnings
+  })
+
+  op(100, 'embudje finished')
+  return {
+    cut_mode: 'retake_aware_beta',
+    provider: vt.provider,
+    verbatim: vt,
+    transcript,
+    deleteWordIds,
+    cutSpans,
+    silenceRegions,
+    retakeGroups: [],
+    fillerDecisions: [],
+    debugPath,
+    warnings,
+    summary: `embudje: ${deleteWordIds.length} word(s) flagged, ${silenceRegions.length} pause(s)`
+  }
+}
+
 /** Ultracut (Beta) — a SEPARATE experimental engine, structurally like the retake
  *  cloud path but whose judge is the `ultracut-judge` edge fn running an OpenRouter
  *  TEST model (GLM 5.2). It shares NOTHING with Retake Beta's Opus judge

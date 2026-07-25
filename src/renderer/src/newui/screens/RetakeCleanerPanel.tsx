@@ -203,7 +203,8 @@ export default function RetakeCleanerPanel(): JSX.Element {
           <button onClick={r.findUltracut} style={css('flex:1;background:#E8843A;border:none;color:#fff;font-family:inherit;font-size:11px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 20px rgba(232,132,58,.32)')}>Ultracut Beta</button>
           <button onClick={r.findPremium} style={css('flex:1;background:#2E9C6A;border:none;color:#fff;font-family:inherit;font-size:11px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 20px rgba(46,156,106,.32)')}>Premium Cut</button>
         </div>
-        <div style={css('font-size:10.5px;color:#686E7B;margin-top:7px;line-height:1.5;text-align:center')}>Retake Beta = Opus · Ultracut = DeepSeek · Premium = Gemini 3.5 Flash (listens)</div>
+        <button onClick={r.embudje} style={css('width:100%;margin-top:8px;background:linear-gradient(90deg,#B14AE8,#E84A9C);border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:700;border-radius:10px;padding:12px 0;cursor:pointer;box-shadow:0 6px 20px rgba(177,74,232,.35)')}>🧠 embudje — embedding judge + silence</button>
+        <div style={css('font-size:10.5px;color:#686E7B;margin-top:7px;line-height:1.5;text-align:center')}>embudje = embedding judge (finds retakes + production chatter) and cuts silence too · Retake / Ultracut / Premium are the older engines</div>
         <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:10px;background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 0;cursor:pointer')}>Silence Settings</button>
         <div style={css('display:flex;align-items:center;gap:9px;margin-top:14px')}>
           <Toggle on={r.smartSilence} onClick={() => r.setSmartSilence(!r.smartSilence)} />

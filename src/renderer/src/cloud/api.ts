@@ -16,7 +16,7 @@ import {
   combineSequenceAudioWav,
   requestPersistentStorage
 } from '../webmedia'
-import { retakeAwareCutCloud, ultracutCutCloud, transcribeCloud } from './retakeEngine'
+import { retakeAwareCutCloud, ultracutCutCloud, embudjeCutCloud, transcribeCloud } from './retakeEngine'
 import { premiumCutCloud } from './premiumEngine'
 import { cutCutProCloud } from './procutEngine'
 import { detectSilenceCloud } from './vad'
@@ -87,6 +87,7 @@ function needLocal(path: string): string {
 const cloudApi: Window['api'] & {
   ultracutCut: Window['api']['retakeAwareCut']
   premiumCut: Window['api']['retakeAwareCut']
+  embudjeCut: Window['api']['retakeAwareCut']
   openAudioDialogMulti: () => Promise<{ path: string; name: string }[]>
 } = {
   // No PC binaries in the cloud — feature gating happens via IS_CLOUD in the
@@ -189,6 +190,11 @@ const cloudApi: Window['api'] & {
   // independently. Cloud-only (easecut0.01).
   premiumCut: (path, _silenceSettings, vadSilenceSettings) =>
     premiumCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
+
+  // embudje — the EMBEDDING judge (embudje-judge edge fn). Its own method so the
+  // "embudje" button routes independently; always runs word cuts + silence. easecut0.04.
+  embudjeCut: (path, _silenceSettings, vadSilenceSettings) =>
+    embudjeCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
 
   openaiStatus: async () => ({ available: false }),
   whisperModels: async () => [],
