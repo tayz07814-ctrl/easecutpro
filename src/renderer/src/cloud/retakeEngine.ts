@@ -141,9 +141,9 @@ export async function retakeAwareCutCloud(
       // '/'-prefixed slug → the edge fn routes this via OpenRouter (OpenRouter key),
       // NOT DeepSeek first-party. NOTE: requires 'google/gemini-3.6-flash' in the
       // edge fn's MODEL_WHITELIST, otherwise resolveModel falls back to the default.
-      model: 'deepseek/deepseek-v3.2-exp',
+      model: 'google/gemini-3.6-flash',
       promptVariant: 'sharp',
-      reasoning: 'medium'
+      reasoning: 'low'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
