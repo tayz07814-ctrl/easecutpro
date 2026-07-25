@@ -14,7 +14,7 @@ class CutLordModel {
   const CutLordModel(this.label, this.slug, this.model, this.reasoning);
 }
 
-const cutLordRetake = CutLordModel('Retake Beta', 'ultracut-judge', 'deepseek-v4-flash', 'off');
+const cutLordRetake = CutLordModel('Retake Beta', 'ultracut-judge', 'google/gemini-3.6-flash', 'low');
 const cutLordUltra = CutLordModel('Ultracut Beta', 'ultracut-judge', 'deepseek-v4-flash', 'medium');
 const cutLordPremium = CutLordModel('Premium Cut', 'procut-judge', null, null);
 
