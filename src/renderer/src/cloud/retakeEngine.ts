@@ -142,8 +142,7 @@ export async function retakeAwareCutCloud(
       // NOT DeepSeek first-party. NOTE: requires 'google/gemini-3.6-flash' in the
       // edge fn's MODEL_WHITELIST, otherwise resolveModel falls back to the default.
       model: 'google/gemini-3.6-flash',
-      promptVariant: 'sharp',
-      reasoning: 'low'
+      reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
