@@ -139,7 +139,7 @@ export async function retakeAwareCutCloud(
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
       // OpenRouter slug for Grok 4.5 model.
-      model: 'xai/grok-4.5-latest',
+      model: 'x-ai/grok-4.5',
       promptVariant: 'sharp',
       reasoning: 'low'
     } satisfies ProcutJudgeReq)
