@@ -3,13 +3,18 @@
 // makes segment-level keep/cut decisions over the annotated transcript. Returns a
 // word-index EDL ({raw}) shaped like ultracut-judge so the browser reuses validateEdl.
 // Primary model gpt-oss-120b; falls back to deepseek-v3.2-exp so it never hangs.
+// EaseCutPro embudje-judge (easecut0.05): Micro-decision architecture.
+// Segments by punctuation/length -> Local Window Cosine (≥0.88) -> Regex Chatter -> Micro LLM Prompt.
+// Returns word-index EDL.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const BASE = Deno.env.get('ULTRACUT_BASE_URL') ?? 'https://openrouter.ai/api/v1'
 const EMBED_MODEL = Deno.env.get('EMBUDJE_EMBED_MODEL') ?? 'gemini-embedding-2'
 const PRIMARY = Deno.env.get('EMBUDJE_MODEL') ?? 'google/gemini-3.6-flash'
+const FALLBACK = 'deepseek/deepseek-v3.2-exp'
+
 // Configuration for new architecture
-const SIMILARITY_THRESHOLD = 0.95;
+const SIMILARITY_THRESHOLD = 0.88;
 const LOOKAHEAD_WINDOW = 8; // Only compare a segment to the next 8 segments
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' }
@@ -77,8 +82,7 @@ RULES FOR CUTTING:
 2. CHATTER: Cut segments that are production chatter (e.g., talking to the camera, false starts, "say that again"). Keep it if it's part of the actual video content.
 
 Output VALID JSON ONLY matching this schema:
-{"cuts": [list of segment IDs to remove]}
-Do not include reasoning or markdown formatting.`;
+{"cuts": [list of segment IDs to remove]}`;
 
 async function callMicroLLM(key: string, model: string, userPrompt: string, timeoutMs: number): Promise<number[] | null> {
   const ctrl = new AbortController(); 
@@ -87,9 +91,22 @@ async function callMicroLLM(key: string, model: string, userPrompt: string, time
     const body = JSON.stringify({ 
       model, 
       stream: false, 
+      temperature: 0.0, // Force deterministic output
       response_format: { type: "json_object" }, // Enforce JSON mode
       max_tokens: 1500, 
-      messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userPrompt }] 
+      reasoning: {
+        effort: "none" // Disables reasoning entirely to ensure speed
+      },
+      messages: [
+        { 
+          role: 'system', 
+          content: SYSTEM_PROMPT + "\n\nDo not output any reasoning, thinking process, or explanation. Output ONLY the raw JSON object." 
+        }, 
+        { 
+          role: 'user', 
+          content: userPrompt 
+        }
+      ] 
     });
 
     const r = await fetch(`${BASE}/chat/completions`, { 
