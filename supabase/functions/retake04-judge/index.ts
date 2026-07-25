@@ -45,12 +45,14 @@ const DEEPSEEK_DIRECT = new Set(['deepseek-v4-flash', 'deepseek-v4-pro'])
 
 // Per-request model override — whitelisted so a signed-in user can't route to an
 // arbitrary/expensive model. ULTRACUT_MODEL env still wins over the code default.
-// easecut0.04 A/B: Retake β sends gpt-oss-20b, Ultracut β sends gpt-oss-120b — both
-// OpenRouter, both cheaper + faster than deepseek-v4-flash. (gemini-2.5-flash-lite
-// kept from the earlier trial; harmless — no caller requests it now.)
+// easecut0.04 A/B: Retake β sends qwen3-30b-a3b-instruct-2507 (reasoning off — the
+// instruct/non-thinking variant), Ultracut β sends gpt-oss-120b (reasoning medium).
+// Both OpenRouter, both cheaper + faster than deepseek-v4-flash. (gpt-oss-20b +
+// gemini-2.5-flash-lite kept from earlier trials; harmless — no caller requests them.)
 const MODEL_WHITELIST = new Set([
   'openai/gpt-oss-120b',
   'openai/gpt-oss-20b',
+  'qwen/qwen3-30b-a3b-instruct-2507',
   'z-ai/glm-5.2',
   'google/gemini-2.5-flash-lite',
   'google/gemini-3.1-pro-preview',
@@ -78,7 +80,8 @@ function reasoningConfig(): Record<string, unknown> {
   return { effort: 'low' }
 }
 
-// Per-request reasoning override (whitelisted values only). Retake β sends 'off'.
+// Per-request reasoning override (whitelisted values only). Retake β sends 'off'
+// (qwen instruct = non-thinking); Ultracut β sends 'medium' (gpt-oss-120b).
 function reasoningOverride(v: unknown): Record<string, unknown> | null {
   if (v === 'off' || v === false) return { enabled: false }
   if (v === 'low' || v === 'medium' || v === 'high') return { effort: v }

@@ -96,7 +96,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (retake04-judge — new prompt + gpt-oss-20b, easecut0.04):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (retake04-judge — new prompt + qwen3-30b-a3b-instruct-2507, easecut0.04):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -123,12 +123,14 @@ export async function retakeAwareCutCloud(
   }
 
   // 4. WORD-CUT BRAIN — easecut0.04 TEST: the creator's new retake-editor prompt on
-  //    openai/gpt-oss-20b (OpenRouter, reasoning:medium). Routed to the ISOLATED
-  //    `retake04-judge` edge fn (a clone of ultracut-judge whose only difference is
-  //    that prompt) so this branch A/Bs the new prompt WITHOUT touching the shared
-  //    `ultracut-judge` that main/production use. This is the SMALL-model lane; the
-  //    Ultracut β button runs the SAME prompt on gpt-oss-120b for comparison. main
-  //    never calls retake04-judge, so main stays as-is.
+  //    qwen/qwen3-30b-a3b-instruct-2507 (OpenRouter). It's the INSTRUCT/non-thinking
+  //    variant, so reasoning is 'off' (medium would be a no-op it could reject).
+  //    Routed to the ISOLATED `retake04-judge` edge fn (a clone of ultracut-judge
+  //    whose only difference is that prompt) so this branch A/Bs the new prompt
+  //    WITHOUT touching the shared `ultracut-judge` that main/production use. This is
+  //    the SMALL-model lane; the Ultracut β button runs the SAME prompt on
+  //    gpt-oss-120b (reasoning medium) for comparison. main never calls
+  //    retake04-judge, so main stays as-is.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -141,8 +143,8 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('retake04-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'openai/gpt-oss-20b',
-      reasoning: 'medium'
+      model: 'qwen/qwen3-30b-a3b-instruct-2507',
+      reasoning: 'off'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
