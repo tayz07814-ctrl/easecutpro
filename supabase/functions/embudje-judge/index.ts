@@ -6,8 +6,6 @@
 
 // word-index EDL ({raw}) shaped like ultracut-judge so the browser reuses validateEdl.
 
-// Primary model gpt-oss-120b; falls back to deepseek-v3.2-exp so it never hangs.
-
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const BASE = Deno.env.get('ULTRACUT_BASE_URL') ?? 'https://openrouter.ai/api/v1'
