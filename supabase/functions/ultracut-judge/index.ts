@@ -156,10 +156,6 @@ Return ONLY valid JSON:
 }
 
 `
-function resolvePrompt(variant: unknown): string {
-  if (variant === 'sharp') return SYSTEM.replace(SHARP_ANCHOR, SHARP_RULES + SHARP_ANCHOR)
-  return typeof variant === 'string' && PROMPT_VARIANTS[variant] ? PROMPT_VARIANTS[variant] : SYSTEM
-}
 
 async function requireUser(req: Request): Promise<boolean> {
   const auth = req.headers.get('Authorization') ?? ''
