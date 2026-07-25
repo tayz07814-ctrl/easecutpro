@@ -11,10 +11,9 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 const BASE = Deno.env.get('ULTRACUT_BASE_URL') ?? 'https://openrouter.ai/api/v1'
 const EMBED_MODEL = Deno.env.get('EMBUDJE_EMBED_MODEL') ?? 'gemini-embedding-2'
 const PRIMARY = Deno.env.get('EMBUDJE_MODEL') ?? 'google/gemini-3.6-flash'
-const FALLBACK = 'deepseek/deepseek-v3.2-exp'
 
 // Configuration for new architecture
-const SIMILARITY_THRESHOLD = 0.88;
+const SIMILARITY_THRESHOLD = 0.95;
 const LOOKAHEAD_WINDOW = 8; // Only compare a segment to the next 8 segments
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' }
