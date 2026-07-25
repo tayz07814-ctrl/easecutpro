@@ -1,17 +1,12 @@
-// EaseCutPro embudje-judge (easecut0.04): the EMBEDDING judge. Full transcript is
-// embedded, near-duplicates clustered + production-chatter flagged, then a small LLM
-// makes segment-level keep/cut decisions over the annotated transcript. Returns a
-// word-index EDL ({raw}) shaped like ultracut-judge so the browser reuses validateEdl.
-// Primary model gpt-oss-120b; falls back to deepseek-v3.2-exp so it never hangs.
-// EaseCutPro embudje-judge (easecut0.05): Micro-decision architecture.
+// EaseCutPro embudje-judge (easecut0.04): Micro-decision architecture.
 // Segments by punctuation/length -> Local Window Cosine (≥0.88) -> Regex Chatter -> Micro LLM Prompt.
 // Returns word-index EDL.
+// Primary model google/gemini-3.6-flash; falls back to deepseek-v3.2-exp so it never hangs.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const BASE = Deno.env.get('ULTRACUT_BASE_URL') ?? 'https://openrouter.ai/api/v1'
 const EMBED_MODEL = Deno.env.get('EMBUDJE_EMBED_MODEL') ?? 'gemini-embedding-2'
 const PRIMARY = Deno.env.get('EMBUDJE_MODEL') ?? 'google/gemini-3.6-flash'
-
 // Configuration for new architecture
 const SIMILARITY_THRESHOLD = 0.95;
 const LOOKAHEAD_WINDOW = 8; // Only compare a segment to the next 8 segments
