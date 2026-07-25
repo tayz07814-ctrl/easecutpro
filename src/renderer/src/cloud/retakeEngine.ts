@@ -138,8 +138,8 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      // OpenRouter slug for Grok 4.5 model.
-      model: 'google/gemini-3.6-flash',
+      // OpenRouter slug for Gemma-4-31b model.
+      model: 'google/gemma-4-31b-it',
       promptVariant: 'sharp',
       reasoning: 'low'
     } satisfies ProcutJudgeReq)
