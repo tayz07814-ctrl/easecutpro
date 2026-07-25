@@ -123,7 +123,7 @@ export async function retakeAwareCutCloud(
   }
 
   // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
-  //    (ultracut-judge edge fn, OpenRouter). Production runs deepseek/deepseek-v3.2-exp
+  //    (ultracut-judge edge fn, OpenRouter). Production runs google/gemini-3.6-flash
   //    on the 'sharp' word-list retake prompt + reasoning:low; it scans everything
   //    and returns the cut EDL.
   op(72, 'Cut Lord is judging your takes…')
@@ -139,9 +139,9 @@ export async function retakeAwareCutCloud(
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
       // '/'-prefixed slug → the edge fn routes this via OpenRouter (OpenRouter key),
-      // NOT DeepSeek first-party. NOTE: requires 'deepseek/deepseek-v3.2-exp' in the
+      // NOT DeepSeek first-party. NOTE: requires 'google/gemini-3.6-flash' in the
       // edge fn's MODEL_WHITELIST, otherwise resolveModel falls back to the default.
-      model: 'deepseek/deepseek-v3.2-exp',
+      model: 'google/gemini-3.6-flash',
       promptVariant: 'sharp',
       reasoning: 'low'
     } satisfies ProcutJudgeReq)
