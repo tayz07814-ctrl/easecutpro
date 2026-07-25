@@ -1,7 +1,7 @@
-// EaseCutPro embudje-judge (easecut0.05): Micro-decision architecture.
+// EaseCutPro embudje-judge (easecut0.04): Micro-decision architecture.
 // Segments by punctuation/length -> Local Window Cosine (≥0.95) -> Regex Chatter -> Micro LLM Prompt.
 // Returns word-index EDL.
-// Primary model google/gemini-3.6-flash; falls back to deepseek-v3.2-exp so it never hangs.
+// Primary model google/gemini-3.6-flash.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const BASE = Deno.env.get('ULTRACUT_BASE_URL') ?? 'https://openrouter.ai/api/v1'
