@@ -2,10 +2,10 @@
 //
 // WORD CUTS are LLM-first: the FULL index-anchored transcript (shared/cutcutpro
 // buildAiPayload) goes to the SINGLE-PASS ultracut judge (the `ultracut-judge`
-// edge fn). Production runs deepseek-v3.2-exp on OpenRouter
+// edge fn). Production runs xai/grok-4.5-latest on OpenRouter
 // (OpenRouter key) with the creator's single-pass retake
 // prompt (no first/second-pass framing) and it returns the cut EDL. If the
-// DeepSeek call fails the edge fn falls back to deepseek-chat via OpenRouter, so
+// Grok call fails the edge fn falls back to deepseek-v4-pro via OpenRouter, so
 // a transient outage never yields zero cuts. (procut-judge / Opus is still
 // deployed but the cloud retake no longer uses it.)
 //
@@ -97,7 +97,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (DeepSeek-v3.2-exp + sharp judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (Grok-4.5 + sharp judge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -123,7 +123,7 @@ export async function retakeAwareCutCloud(
   }
 
   // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
-  //    (ultracut-judge edge fn, OpenRouter). Production runs deepseek/deepseek-v3.2-exp
+  //    (ultracut-judge edge fn, OpenRouter). Production runs xai/grok-4.5-latest
   //    on the 'sharp' word-list retake prompt + reasoning:low; it scans everything
   //    and returns the cut EDL.
   op(72, 'Cut Lord is judging your takes…')
@@ -138,8 +138,8 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      // OpenRouter slug for DeepSeek v3.2 experimental model.
-      model: 'deepseek/deepseek-v3.2-exp',
+      // OpenRouter slug for Grok 4.5 model.
+      model: 'xai/grok-4.5-latest',
       promptVariant: 'sharp',
       reasoning: 'low'
     } satisfies ProcutJudgeReq)
