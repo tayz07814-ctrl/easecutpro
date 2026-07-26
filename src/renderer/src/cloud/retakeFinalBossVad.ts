@@ -8,7 +8,7 @@ import {
   type FinalBossSpeechWord,
   type RetakeFinalBossSettings
 } from '@shared/retakefinalboss'
-import { detectSilenceFloat32 } from './vad'
+import { detectFsmnSilences } from './fsmnVad'
 
 export async function detectRetakeFinalBossSilences(
   float32: Float32Array,
@@ -17,16 +17,12 @@ export async function detectRetakeFinalBossSilences(
   settings: RetakeFinalBossSettings,
   survivingWords: FinalBossSpeechWord[]
 ): Promise<SilenceRegion[]> {
-  const raw = await detectSilenceFloat32(float32, sampleRate, {
-    mode: 'vad',
-    noiseDb: -40,
-    vadThreshold: settings.speechThreshold,
-    minDuration: RETAKE_FINAL_BOSS_MIN_SILENCE_S,
-    speechPadMs: 0,
-    padBeforeMs: 0,
-    padAfterMs: 0,
-    edgeTrimMs: 0,
-    removeBreaths: false
-  }, durationS)
+  const raw = await detectFsmnSilences(
+    float32,
+    sampleRate,
+    durationS,
+    settings.speechThreshold,
+    RETAKE_FINAL_BOSS_MIN_SILENCE_S
+  )
   return planFinalBossSilenceCuts(raw, survivingWords, settings, durationS)
 }

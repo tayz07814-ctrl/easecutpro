@@ -72,8 +72,11 @@ check('Cerebras transport is absent', !/api\.cerebras\.ai|CEREBRAS_API_KEY|X-Cer
 console.log('7) engine is isolated from previous Retake silence logic')
 const engine = readFileSync(new URL('../src/renderer/src/cloud/retakeFinalBossEngine.ts', import.meta.url), 'utf8')
 const vad = readFileSync(new URL('../src/renderer/src/cloud/retakeFinalBossVad.ts', import.meta.url), 'utf8')
+const fsmn = readFileSync(new URL('../src/renderer/src/cloud/fsmnVad.ts', import.meta.url), 'utf8')
 check('engine never imports the old Retake engine or timestamp-map payload', !/retakeEngine|buildTimestampMap|buildAiPayload|detectArtifacts|retakeBetaVadSafetyOpts/.test(engine))
 check('Final Boss VAD never imports an old silence planner or settings profile', !/retakeSilenceCutter|retakesilence|vadsilence|vadSilenceRegions|clampSilenceRegions/.test(vad))
+check('Final Boss uses FunASR FSMN-VAD, not Silero', /detectFsmnSilences/.test(vad) && !/detectSilenceFloat32|vad-web|silero/i.test(vad))
+check('FSMN runtime supplies fbank, LFR, CMVN and recurrent caches', /fbankLfrCmvn/.test(fsmn) && /LFR_M = 5/.test(fsmn) && /parseCmvn/.test(fsmn) && /in_cache/.test(fsmn))
 
 console.log(okay ? '\nRETAKE FINAL BOSS OK' : '\nRETAKE FINAL BOSS FAILED')
 process.exit(okay ? 0 : 1)

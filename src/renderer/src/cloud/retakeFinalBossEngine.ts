@@ -114,6 +114,7 @@ export async function retakeFinalBossCloud(
 
   const debugPath = await saveFinalBossDebug({
     provider: 'assemblyai',
+    silence_detector: 'funasr_fsmn_vad_onnx',
     verbatim_word_count: verbatim.words.length,
     gemma_payload: payload,
     judge_raw: judgeRaw,

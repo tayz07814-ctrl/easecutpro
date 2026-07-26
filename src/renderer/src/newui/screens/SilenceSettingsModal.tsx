@@ -58,7 +58,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         <div style={css('display:flex;align-items:flex-start;justify-content:space-between')}>
           <div>
             <div style={css('font-size:16px;font-weight:650')}>Retake Final Boss · Silence</div>
-            <div style={css('font-size:12.5px;color:#9BA0AC;margin-top:5px;line-height:1.5')}>A fresh VAD pass runs after Gemma. These settings belong only to this engine.</div>
+            <div style={css('font-size:12.5px;color:#9BA0AC;margin-top:5px;line-height:1.5')}>FunASR FSMN-VAD runs after Gemma. These settings belong only to this engine.</div>
           </div>
           <div onClick={model.close} style={css('color:#9BA0AC;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
         </div>
