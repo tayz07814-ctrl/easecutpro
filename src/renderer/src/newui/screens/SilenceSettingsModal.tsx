@@ -90,7 +90,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
           />
           <Slider
             label="Trim edges"
-            description="Consumes part of the padding for tighter cuts, without entering a surviving word."
+            description="Consumes part of your selected padding for a tighter seam. At zero padding, speech boundaries remain protected."
             value={draft.trimEdgesS}
             min={0}
             max={0.2}
@@ -117,7 +117,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         </div>
 
         <div style={css('font-size:11px;color:#7E8393;line-height:1.5;margin-top:18px;padding:10px 12px;background:#191B20;border-radius:8px')}>
-          Final Boss never uses transcript-predicted silence. Oversized VAD regions are split around surviving AssemblyAI words, so background noise can be removed without cutting through speech.
+          Final Boss never uses transcript-predicted silence. FSMN runs at its published defaults; the cut adapter removes its fixed endpoint timestamp cushion before applying your padding.
         </div>
 
         <div style={css('display:flex;align-items:center;margin-top:20px')}>

@@ -24,6 +24,32 @@ export const DEFAULT_RETAKE_FINAL_BOSS_SETTINGS: RetakeFinalBossSettings = {
   audioOverlapMs: 20
 }
 
+// The fixed FunASR endpoint state machine intentionally widens every returned
+// speech segment. With the published defaults used by fsmnVad.ts, its reported
+// end sits 160 ms after the speech transition and its reported start sits
+// 260 ms before it. Inverting those segments therefore produces silence gaps
+// that are too narrow by exactly these timestamp cushions. These are not VAD
+// tuning values: removing them restores the underlying speech transitions so
+// the creator's padding controls start from a truthful zero.
+export const FSMN_AFTER_SPEECH_CUSHION_S = 0.16
+export const FSMN_BEFORE_SPEECH_CUSHION_S = 0.26
+
+export function alignFinalBossFsmnGaps(
+  rawGaps: { start: number; end: number }[],
+  durationS: number
+): { start: number; end: number }[] {
+  const edgeEpsilon = 0.002
+  return rawGaps.map((raw) => {
+    const start = Math.max(0, Math.min(durationS, raw.start))
+    const end = Math.max(start, Math.min(durationS, raw.end))
+    return {
+      // Leading/trailing media edges have no neighbouring speech cushion.
+      start: start <= edgeEpsilon ? start : Math.max(0, start - FSMN_AFTER_SPEECH_CUSHION_S),
+      end: end >= durationS - edgeEpsilon ? end : Math.min(durationS, end + FSMN_BEFORE_SPEECH_CUSHION_S)
+    }
+  })
+}
+
 export function normalizeRetakeFinalBossSettings(
   value: Partial<RetakeFinalBossSettings> | null | undefined
 ): RetakeFinalBossSettings {
@@ -112,9 +138,9 @@ export function validateFinalBossWordCuts(raw: string, wordCount: number): Final
 
 /** Convert raw Final Boss VAD gaps to exact protected cuts.
  *
- * FSMN-VAD owns speech/non-speech classification and endpoint decisions. No
- * transcript, sentence, duration, confidence, or background-noise rules are
- * added here. This only applies the requested cut-edge padding. */
+ * FSMN-VAD owns speech/non-speech classification and endpoint decisions. The
+ * caller first removes FSMN's fixed timestamp cushion; this function then
+ * applies only the requested cut-edge padding. */
 export function planFinalBossSilenceCuts(
   rawGaps: { start: number; end: number }[],
   settings: RetakeFinalBossSettings,

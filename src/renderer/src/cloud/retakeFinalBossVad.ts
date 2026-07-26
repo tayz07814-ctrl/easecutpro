@@ -3,6 +3,7 @@
 
 import type { SilenceRegion } from '@shared/types'
 import {
+  alignFinalBossFsmnGaps,
   planFinalBossSilenceCuts,
   type RetakeFinalBossSettings
 } from '@shared/retakefinalboss'
@@ -19,5 +20,8 @@ export async function detectRetakeFinalBossSilences(
     sampleRate,
     durationS
   )
-  return planFinalBossSilenceCuts(raw, settings, durationS)
+  // Keep FSMN completely at its published defaults, then remove only the fixed
+  // endpoint timestamp cushion before applying the user's seam geometry.
+  const aligned = alignFinalBossFsmnGaps(raw, durationS)
+  return planFinalBossSilenceCuts(aligned, settings, durationS)
 }

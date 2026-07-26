@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs'
 import {
   DEFAULT_RETAKE_FINAL_BOSS_SETTINGS,
+  FSMN_AFTER_SPEECH_CUSHION_S,
+  FSMN_BEFORE_SPEECH_CUSHION_S,
+  alignFinalBossFsmnGaps,
   buildFinalBossVerbatimPayload,
   normalizeRetakeFinalBossSettings,
   planFinalBossSilenceCuts,
@@ -37,11 +40,29 @@ const normalized = normalizeRetakeFinalBossSettings({ padBeforeS: -1, padAfterS:
 check('paddings, trim, and overlap use Final Boss bounds', normalized.padBeforeS === 0 && normalized.padAfterS === 0.2 && normalized.trimEdgesS === 0.2 && normalized.audioOverlapMs === 60)
 check('defaults expose only cut geometry controls', Object.keys(DEFAULT_RETAKE_FINAL_BOSS_SETTINGS).sort().join(',') === ['audioOverlapMs', 'padAfterS', 'padBeforeS', 'trimEdgesS'].sort().join(','))
 
+const fsmn = readFileSync(new URL('../src/renderer/src/cloud/fsmnVad.ts', import.meta.url), 'utf8')
+
 console.log('4) fresh Final Boss silence planner')
 const settings = { ...DEFAULT_RETAKE_FINAL_BOSS_SETTINGS, padAfterS: 0.12, padBeforeS: 0.18, trimEdgesS: 0.02 }
-const planned = planFinalBossSilenceCuts([{ start: 0.5, end: 2 }], settings, 3)
+const aligned = alignFinalBossFsmnGaps([{ start: 0.5, end: 2 }], 3)
+check('fixed FSMN endpoint cushions are removed exactly', aligned.length === 1 && Math.abs(aligned[0].start - 0.34) < 1e-9 && Math.abs(aligned[0].end - 2.26) < 1e-9)
+check(
+  'alignment constants match the fixed endpoint state machine',
+  FSMN_AFTER_SPEECH_CUSHION_S === 0.16 &&
+    FSMN_BEFORE_SPEECH_CUSHION_S === 0.26 &&
+    /OFFICIAL_WINDOW_FRAMES = 20/.test(fsmn) &&
+    /OFFICIAL_TRANSITION_FRAMES = 15/.test(fsmn) &&
+    /OFFICIAL_START_LOOKBACK_FRAMES = 20/.test(fsmn) &&
+    /OFFICIAL_END_SILENCE_FRAMES = 65/.test(fsmn) &&
+    /OFFICIAL_END_LOOKAHEAD_FRAMES = 10/.test(fsmn)
+)
+const planned = planFinalBossSilenceCuts(aligned, settings, 3)
 check('one protected cut is produced', planned.length === 1 && planned[0].protect === true && planned[0].action === 'remove')
-check('padding and edge trim produce exact independent geometry', Math.abs(planned[0].start - 0.6) < 1e-9 && Math.abs(planned[0].end - 1.84) < 1e-9)
+check('padding and edge trim are applied after alignment', Math.abs(planned[0].start - 0.44) < 1e-9 && Math.abs(planned[0].end - 2.1) < 1e-9)
+const zeroPadding = planFinalBossSilenceCuts(aligned, { ...settings, padAfterS: 0, padBeforeS: 0, trimEdgesS: 0.05 }, 3)
+check('zero padding reaches aligned speech transitions without trimming into them', Math.abs(zeroPadding[0].start - 0.34) < 1e-9 && Math.abs(zeroPadding[0].end - 2.26) < 1e-9)
+const mediaEdges = alignFinalBossFsmnGaps([{ start: 0, end: 0.5 }, { start: 2, end: 3 }], 3)
+check('media edges receive no nonexistent neighbouring-speech correction', mediaEdges[0].start === 0 && mediaEdges[1].end === 3)
 const oversized = planFinalBossSilenceCuts([{ start: 0, end: 3 }], settings, 3)
 check('raw FSMN gap is accepted without transcript carving', oversized.length === 1)
 check('planner source contains no transcript or sentence rules', !/survivingWords|sentenceBoundary|carveWords/.test(readFileSync(new URL('../src/shared/retakefinalboss.ts', import.meta.url), 'utf8')))
@@ -62,7 +83,6 @@ check('Cerebras transport is absent', !/api\.cerebras\.ai|CEREBRAS_API_KEY|X-Cer
 console.log('7) engine is isolated from previous Retake silence logic')
 const engine = readFileSync(new URL('../src/renderer/src/cloud/retakeFinalBossEngine.ts', import.meta.url), 'utf8')
 const vad = readFileSync(new URL('../src/renderer/src/cloud/retakeFinalBossVad.ts', import.meta.url), 'utf8')
-const fsmn = readFileSync(new URL('../src/renderer/src/cloud/fsmnVad.ts', import.meta.url), 'utf8')
 check('engine never imports the old Retake engine or timestamp-map payload', !/retakeEngine|buildTimestampMap|buildAiPayload|detectArtifacts|retakeBetaVadSafetyOpts/.test(engine))
 check('Final Boss VAD never imports an old silence planner or settings profile', !/retakeSilenceCutter|retakesilence|vadsilence|vadSilenceRegions|clampSilenceRegions/.test(vad))
 check('Final Boss uses FunASR FSMN-VAD, not Silero', /detectFsmnSilences/.test(vad) && !/detectSilenceFloat32|vad-web|silero/i.test(vad))
