@@ -34,3 +34,4 @@ tsconfig*.tsbuildinfo
 dist-cloud/
 .cloud-public/
 .vercel/
+supabase/.temp/

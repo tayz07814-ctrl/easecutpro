@@ -69,5 +69,12 @@ check('sentence punctuation retains approximately 420ms total', Math.abs((senten
 check('gapless profile still removes the whole cuttable pause', decideVadPause({ start: 1.1, end: 1.9 }, words, presetValues('aggressive'), 0, 0).action === 'remove')
 check('leading dead air remains a trim', decideVadPause({ start: 0, end: 0.8 }, words, bal, bal.padBeforeS, bal.padAfterS).action === 'remove')
 
+console.log('9) intra-sentence rhythm is never cut')
+const commaWords = [{ start: 0, end: 1, text: 'Well,' }, { start: 2, end: 2.5, text: 'today' }]
+const plainWords = [{ start: 0, end: 1, text: 'what' }, { start: 2, end: 2.5, text: 'happened' }]
+check('pause after a comma is kept', decideVadPause({ start: 1.1, end: 1.9 }, commaWords, bal, bal.padBeforeS, bal.padAfterS).action === 'keep')
+check('unpunctuated rhythmic pause is kept', decideVadPause({ start: 1.1, end: 1.9 }, plainWords, bal, bal.padBeforeS, bal.padAfterS).action === 'keep')
+check('Gapless cannot override the sentence-boundary safety rule', decideVadPause({ start: 1.1, end: 1.9 }, plainWords, presetValues('aggressive'), 0, 0).action === 'keep')
+
 console.log(ok ? '\nSILENCE-PRESETS OK' : '\nSILENCE-PRESETS FAILED')
 process.exit(ok ? 0 : 1)

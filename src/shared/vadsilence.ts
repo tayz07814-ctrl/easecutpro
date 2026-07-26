@@ -65,28 +65,32 @@ export interface PauseContextWord {
   text?: string
 }
 
-/** Editorial policy for an already word-safe VAD pause. Detection and pacing are
- * deliberately separate: the detector says where quiet audio is; this function
- * decides how much natural rhythm to retain. `shortenTo` applies only to the
- * cuttable interior, so word guards are subtracted from the desired total pause. */
+/** Editorial policy for an already word-safe VAD pause. Interior pauses are
+ * eligible ONLY at a transcript sentence boundary. Rhythmic gaps inside a
+ * sentence are kept even when VAD calls them silence. `shortenTo` applies only
+ * to the cuttable interior, so word guards are subtracted from the desired total. */
 export function decideVadPause(
   region: { start: number; end: number },
   keptWords: PauseContextWord[],
   settings: VadSilenceSettings,
   guardBeforeS: number,
   guardAfterS: number
-): { action: 'remove' | 'shorten'; shortenTo?: number } {
+): { action: 'keep' | 'remove' | 'shorten'; shortenTo?: number } {
   const words = [...keptWords].sort((a, b) => a.start - b.start)
   const previous = [...words].reverse().find((w) => w.end <= region.start + guardAfterS + 0.001)
   const next = words.find((w) => w.start >= region.end - guardBeforeS - 0.001)
 
   // Leading/trailing dead air is trim, not conversational pacing.
-  if (!previous || !next || settings.targetPauseS <= 0.001) return { action: 'remove' }
+  if (!previous || !next) return { action: 'remove' }
 
-  let target = settings.targetPauseS
+  // Hard safety rule: never cut a pause inside the rhythm of a sentence. The
+  // previous word must carry terminal punctuation; commas, colons, semicolons,
+  // and unpunctuated gaps remain completely untouched.
   const punctuation = previous.text?.trim().slice(-1) ?? ''
-  if (/[.!?]/.test(punctuation)) target = Math.max(target, 0.42)
-  else if (/[,;:]/.test(punctuation)) target = Math.max(target, 0.32)
+  if (!/[.!?]/.test(punctuation)) return { action: 'keep' }
+
+  if (settings.targetPauseS <= 0.001) return { action: 'remove' }
+  const target = Math.max(settings.targetPauseS, 0.42)
 
   const interiorKeep = Math.max(0, target - guardBeforeS - guardAfterS)
   if (interiorKeep <= 0.001) return { action: 'remove' }

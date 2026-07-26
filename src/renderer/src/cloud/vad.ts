@@ -318,11 +318,14 @@ export function clampSilenceRegions(
     })
   }
 
-  return pieces.map((r, i) => {
+  return pieces.flatMap((r, i) => {
     const decision = targetPauseS == null
       ? { action: 'remove' as const }
       : decideVadPause(r, keptWords, { ...DEFAULT_VAD_SILENCE_SETTINGS, targetPauseS }, guardBeforeS, guardAfterS)
-    return { id: `${idPrefix}-${i}`, start: r.start, end: r.end, ...decision, protect: true }
+    // Kept intra-sentence rhythm should not become a review chip at all.
+    return decision.action === 'keep'
+      ? []
+      : [{ id: `${idPrefix}-${i}`, start: r.start, end: r.end, ...decision, protect: true }]
   })
 }
 
