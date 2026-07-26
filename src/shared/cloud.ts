@@ -124,3 +124,15 @@ export interface RetakeJudgeRes {
   raw: string | null
   judge: string
 }
+
+// ---- retakefinalboss edge function (0.07 Retake button) ----
+// One fixed Gemma judge. The payload contains only immutable word indices and
+// verbatim AssemblyAI words — never pauses, timing, confidence, utterances,
+// filler labels, or incomplete-sentence predictions.
+export interface RetakeFinalBossJudgeReq {
+  payload: string
+}
+export interface RetakeFinalBossJudgeRes {
+  raw: string | null
+  judge: string
+}

@@ -11,22 +11,17 @@
 // opening the project shows the cleaned timeline and export stitches the kept
 // ranges — exactly as if the user had pressed Execute cuts.
 //
-// This mirrors runRetakeCutBeta (stage) + executeCuts (apply) from the store,
+// This mirrors Retake Final Boss (stage) + executeCuts (apply) from the store,
 // but writes into an off-screen Project object so many files can be processed
 // one-by-one without thrashing the live editor.
 import type { Project } from '@shared/types'
 import { createEmptyProject } from '@shared/project'
-import type { RetakeBetaSilenceSettings } from '@shared/retakeaware/silence'
-import type { VadSilenceSettings } from '@shared/vadsilence'
+import type { RetakeFinalBossSettings } from '@shared/retakefinalboss'
 
 export type BatchStep = (step: string) => void
 
 export interface RetakeCleanOptions {
-  retakeSilenceSettings: RetakeBetaSilenceSettings
-  vadSilenceSettings: VadSilenceSettings
-  /** Smart Silence Cutter — when false, retake runs but its silence chips are
-   *  discarded (word cuts only), matching the new-UI toggle in executeCuts. */
-  smartSilence: boolean
+  finalBossSettings: RetakeFinalBossSettings
   /** word-splice trim (frames of extra padding around a word cut) from the
    *  Cut Lord profile — mirrors executeCuts' `wordCutPad(cutLordSettings)`. */
   wordCutPad: number
@@ -53,12 +48,12 @@ export async function retakeCleanVideo(
     hasVideo: info.hasVideo
   }
 
-  // --- Retake-aware analysis (transcribe + procut-judge, same as Retake β) ---
-  // retakeAwareCut owns the whole transcribe → judge → word-clamped-silence
+  // --- Retake Final Boss: AssemblyAI -> Gemma -> fresh VAD ---
+  // The engine owns the complete transcribe → judge → silence
   // pipeline; it emits its own progress through window.api.onProgress, but we
   // surface a coarse label here so the queue row shows life.
   onStep('Finding retakes & silence…')
-  const res = await window.api.retakeAwareCut(path, opts.retakeSilenceSettings, opts.vadSilenceSettings)
+  const res = await window.api.retakeAwareCut(path, undefined, opts.finalBossSettings)
 
   // --- Apply the proposal headlessly (mirror of executeCuts) ---
   // The engine ALWAYS returns its full verbatim transcript; the flagged ids
@@ -72,16 +67,14 @@ export async function retakeCleanVideo(
     segments: res.transcript.segments.map((seg) => ({ ...seg, words: seg.words.map(mark) }))
   }
 
-  // Retake β silence is its own conservative, word-clamped path — stage it as
-  // remove regions. Smart Silence OFF → word cuts only (discard the silences),
-  // matching the new-UI executeCuts branch.
-  const regions = opts.smartSilence ? res.silenceRegions ?? [] : []
+  // Final Boss always applies the fresh post-Gemma VAD proposal.
+  const regions = res.silenceRegions ?? []
   project.silences = regions.map((r) => ({ ...r, action: 'remove' as const })).sort((a, b) => a.start - b.start)
 
   // Match executeCuts' export-time settings so a batch project cuts and fades
   // identically to one cleaned by hand.
   project.wordCutPad = opts.wordCutPad
-  project.smoothAudioFadeMs = 25
+  project.smoothAudioFadeMs = opts.finalBossSettings.audioOverlapMs
 
   // --- Best-effort preview thumbnail (web returns [] for local media on some paths) ---
   let thumb: string | undefined

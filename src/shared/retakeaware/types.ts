@@ -177,7 +177,7 @@ export interface CutSpan {
   start: number
   end: number
   type: 'failed_retake' | 'filler' | 'retake_marker' | 'false_start' | 'self_correction' | 'repeated_setup' | 'orphan_connector' | 'orphan_word_artifact' | 'production_chatter'
-  source: 'retake_aware_beta'
+  source: 'retake_aware_beta' | 'retake_final_boss'
   reason: string
 }
 
@@ -278,7 +278,7 @@ export interface RetakeAwareDebug {
 }
 
 export interface RetakeAwareResult {
-  cut_mode: 'retake_aware_beta'
+  cut_mode: 'retake_aware_beta' | 'retake_final_boss'
   provider: VerbatimProvider
   verbatim: VerbatimTranscript
   /** App-format transcript built from the verbatim words — adopted by the UI

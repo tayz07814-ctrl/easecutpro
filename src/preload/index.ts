@@ -29,6 +29,7 @@ import type { CutCutProResult } from '../shared/cutcutpro'
 import type { RetakeAwareResult } from '../shared/retakeaware/types'
 import type { RetakeBetaSilenceSettings } from '../shared/retakeaware/silence'
 import type { VadSilenceSettings } from '../shared/vadsilence'
+import type { RetakeFinalBossSettings } from '../shared/retakefinalboss'
 
 const api = {
   toolStatus: (): Promise<ToolStatus> => ipcRenderer.invoke(IPC.toolStatus),
@@ -60,9 +61,9 @@ const api = {
   retakeAwareCut: (
     path: string,
     silenceSettings?: RetakeBetaSilenceSettings,
-    vadSilenceSettings?: VadSilenceSettings
+    finalBossSettings?: RetakeFinalBossSettings
   ): Promise<RetakeAwareResult> =>
-    ipcRenderer.invoke(IPC.retakeAwareCut, path, silenceSettings, vadSilenceSettings),
+    ipcRenderer.invoke(IPC.retakeAwareCut, path, silenceSettings, finalBossSettings),
   /** Smart Smooth Cut (beta): AI pause judge — JSON in, raw JSON text out. */
   cutJudge: (payload: unknown): Promise<string> => ipcRenderer.invoke(IPC.cutJudge, payload),
   /** Smart Smooth Cut (beta): persist the per-run debug JSON; returns the path. */

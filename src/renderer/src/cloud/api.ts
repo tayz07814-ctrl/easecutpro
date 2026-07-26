@@ -16,11 +16,13 @@ import {
   combineSequenceAudioWav,
   requestPersistentStorage
 } from '../webmedia'
-import { retakeAwareCutCloud, transcribeCloud } from './retakeEngine'
+import { transcribeCloud } from './retakeEngine'
+import { retakeFinalBossCloud } from './retakeFinalBossEngine'
 import { cutCutProCloud } from './procutEngine'
 import { detectSilenceCloud } from './vad'
 import { cloudListProjects, cloudCreateProject, cloudGetProject, cloudSaveProject, cloudDeleteProject } from './projects'
 import { initSettingsSync } from './settings'
+import { normalizeRetakeFinalBossSettings } from '@shared/retakefinalboss'
 
 const progressListeners = new Set<(e: ProgressEvent) => void>()
 
@@ -176,8 +178,12 @@ const cloudApi: Window['api'] = {
     }
   },
 
-  retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
-    retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
+  retakeAwareCut: (path, _silenceSettings, finalBossSettings) =>
+    retakeFinalBossCloud(
+      needLocal(path),
+      (pct, msg) => emit('transcribe', pct, msg),
+      normalizeRetakeFinalBossSettings(finalBossSettings)
+    ),
 
   openaiStatus: async () => ({ available: false }),
   whisperModels: async () => [],

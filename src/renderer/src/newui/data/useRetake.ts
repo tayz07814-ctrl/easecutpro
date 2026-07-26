@@ -1,7 +1,7 @@
 // Stage C — Retake Cleaner adapter (screens 1c + the 1b right panel).
 // DERIVES the design's 6-state machine and summary tiles from existing store
-// fields; ORCHESTRATES existing actions (runRetakeCutBeta / executeCuts /
-// selectWord / …). Does not touch Retake β or silence-engine internals.
+// fields; ORCHESTRATES the 0.07 Retake Final Boss action, review staging, and
+// Execute flow without duplicating engine state in React.
 
 import { useState } from 'react'
 import { useStore } from '../../store'
@@ -29,7 +29,6 @@ export interface RetakeModel {
   /** committed (already-executed) cut — word.deleted in the transcript. */
   isDeleted: (id: string) => boolean
   isChipSel: (stagedId?: string) => boolean
-  smartSilence: boolean
   /** count of committed (executed) word cuts still in effect. */
   deletedCount: number
   // actions
@@ -44,7 +43,6 @@ export interface RetakeModel {
   /** seek the preview to a word's SOURCE start time (double-click) and play. */
   seekWord: (sourceStartS: number) => void
   openSilenceSettings: () => void
-  setSmartSilence: (v: boolean) => void
 }
 
 export function useRetake(): RetakeModel {
@@ -54,14 +52,8 @@ export function useRetake(): RetakeModel {
   const selected = useStore((s) => s.selectedWordIds)
   const staged = useStore((s) => s.stagedSilences)
   const stagedSel = useStore((s) => s.stagedSilenceSel)
-  const smartSilence = useStore((s) => s.smartSilenceCutter)
-  const setSmartSilence = useStore((s) => s.setSmartSilenceCutter)
-  // "Find Retakes & Silence" runs the REAL Retake β (runRetakeCutBeta →
-  // procut-judge, Opus on our official Anthropic key): the production-artifact-aware
-  // prompt that removes slates / count-ins / off-camera direction / intro-outro
-  // chatter and cuts whole takes precisely (never mid-sentence, only-copy
-  // untouchable). (Retake δ / delta-judge was removed — its narrow whole-take
-  // prompt left intro/outro + off-camera chatter behind and over-cut wide spans.)
+  // On the cloud 0.07 branch this action resolves to Retake Final Boss:
+  // AssemblyAI-only verbatim words -> fixed Gemma judge -> fresh Final Boss VAD.
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
@@ -101,7 +93,7 @@ export function useRetake(): RetakeModel {
 
   const words = selected.size
   const selStaged = staged.filter((r) => stagedSel.has(r.id))
-  const pauses = smartSilence ? selStaged.length : 0
+  const pauses = selStaged.length
 
   // committed cuts (word.deleted) — struck-through in the executed-state review.
   const deletedIds = new Set<string>()
@@ -121,9 +113,9 @@ export function useRetake(): RetakeModel {
   // time saved (derived): staged word durations + selected silence durations.
   let timeSavedS = 0
   if (transcript) for (const w of transcript.words) if (selected.has(w.id)) timeSavedS += Math.max(0, w.end - w.start)
-  if (smartSilence) for (const r of selStaged) timeSavedS += Math.max(0, r.end - r.start)
+  for (const r of selStaged) timeSavedS += Math.max(0, r.end - r.start)
 
-  const chips = transcript ? buildSilenceChips(transcript.words, smartSilence ? staged : [], projSilences) : []
+  const chips = transcript ? buildSilenceChips(transcript.words, staged, projSilences) : []
   const chipAfter = new Map(chips.map((c) => [c.afterWordId, c]))
 
   return {
@@ -142,7 +134,6 @@ export function useRetake(): RetakeModel {
     isSelected: (id) => selected.has(id),
     isDeleted: (id) => deletedIds.has(id),
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
-    smartSilence,
     find: () => { setExecuted(false); void runRetakeCutBeta() },
     execute: () => { setExecuted(true); void executeCuts() },
     restore: () => restoreSelected(),
@@ -157,7 +148,6 @@ export function useRetake(): RetakeModel {
       setPlayhead(docSourceToEdited(doc, sourceStartS))
       setPlaying(true)
     },
-    openSilenceSettings: () => setShowSilenceSettings(true),
-    setSmartSilence
+    openSilenceSettings: () => setShowSilenceSettings(true)
   }
 }

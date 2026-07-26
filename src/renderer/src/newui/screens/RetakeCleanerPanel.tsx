@@ -11,23 +11,11 @@ const HAIR = 'rgba(255,255,255,.06)'
 const CHIP = "background:rgba(217,164,74,.14);color:#D9A44A;border:1px solid rgba(217,164,74,.3);border-radius:6px;padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-size:10px;margin:0 4px;white-space:nowrap"
 const CUT = 'background:rgba(217,104,110,.13);color:#D9868B;border-radius:5px;padding:1px 4px;text-decoration:line-through;text-decoration-color:rgba(217,134,139,.55)'
 
-function Toggle({ on, onClick }: { on: boolean; onClick: () => void }): JSX.Element {
-  return on ? (
-    <div onClick={onClick} style={css('width:32px;height:18px;border-radius:9px;background:#6E6AE8;position:relative;flex:none;cursor:pointer')}>
-      <div style={css('position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff')} />
-    </div>
-  ) : (
-    <div onClick={onClick} style={css('width:32px;height:18px;border-radius:9px;background:#3A3E48;position:relative;flex:none;cursor:pointer')}>
-      <div style={css('position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
-    </div>
-  )
-}
-
 function Header(): JSX.Element {
   return (
     <div style={css('display:flex;align-items:center;gap:8px')}>
-      <div style={css('font-size:15px;font-weight:650;letter-spacing:-.01em')}>Retake Cleaner</div>
-      <span style={css('font-size:9.5px;font-weight:600;letter-spacing:.05em;color:#9BA0AC;border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:2px 6px')}>BETA</span>
+      <div style={css('font-size:15px;font-weight:650;letter-spacing:-.01em')}>Retake Final Boss</div>
+      <span style={css('font-size:9.5px;font-weight:600;letter-spacing:.05em;color:#9BA0AC;border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:2px 6px')}>0.07</span>
       <div style={css('flex:1')} />
       <div style={css('color:#9BA0AC;font-size:14px;padding:3px 6px;border-radius:7px;cursor:pointer')}>···</div>
     </div>
@@ -105,25 +93,12 @@ export default function RetakeCleanerPanel(): JSX.Element {
     </div>
   )
 
-  const smartRow = (
-    <div style={css('display:flex;align-items:center;gap:9px;margin-top:12px')}>
-      <Toggle on={r.smartSilence} onClick={() => r.setSmartSilence(!r.smartSilence)} />
-      <div style={css('font-size:12px;color:#C6C9D2')}>Smart Silence Cutter</div>
-      <div style={css('flex:1')} />
-      <div style={css('font-size:11px;color:#686E7B')}>{r.pauseCount} pauses</div>
-    </div>
-  )
-
   if (r.state === 'idle') {
     return shell(
       <>
         <div style={css('font-size:12.5px;line-height:1.5;color:#9BA0AC;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
         <button onClick={r.find} style={css('width:100%;margin-top:16px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>Find Retakes &amp; Silence</button>
         <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 0;cursor:pointer')}>Silence Settings</button>
-        <div style={css('display:flex;align-items:center;gap:9px;margin-top:14px')}>
-          <Toggle on={r.smartSilence} onClick={() => r.setSmartSilence(!r.smartSilence)} />
-          <div style={css('font-size:12px;color:#C6C9D2')}>Smart Silence Cutter</div>
-        </div>
         <button disabled style={css('width:100%;margin-top:14px;background:#22242b;border:none;color:#565C68;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:not-allowed')}>Execute cuts</button>
         <div style={css('font-size:11px;color:#686E7B;margin-top:12px;line-height:1.5')}>Beta — review proposed cuts before executing. Nothing is removed without you.</div>
       </>
@@ -162,7 +137,6 @@ export default function RetakeCleanerPanel(): JSX.Element {
             </svg>
           </button>
         </div>
-        {smartRow}
         <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
           <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review cuts</div>
           <div style={css('flex:1')} />
@@ -204,7 +178,6 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <button onClick={r.execute} disabled={!r.executable} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.3)')}>Execute {r.executable} cuts</button>
         <button onClick={r.openSilenceSettings} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 14px;cursor:pointer')}>Silence Settings</button>
       </div>
-      {smartRow}
       <div style={css(`display:flex;align-items:center;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid ${HAIR}`)}>
         <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review transcript</div>
         <div style={css('flex:1')} />

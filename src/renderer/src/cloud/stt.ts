@@ -114,6 +114,41 @@ async function deepgramTranscribe(path: string, onProgress?: ProgressFn): Promis
   return finish({ provider: 'deepgram', mode: 'verbatim', words, segments: utterances, utterances })
 }
 
+/** Retake Final Boss transcription. This path is intentionally AssemblyAI-only:
+ * no provider fallback and no derived pause/incomplete-sentence analysis. The
+ * returned transcript remains verbatim; the Final Boss payload builder later
+ * selects only its indexed words for Gemma. */
+export async function transcribeAssemblyAiOnlyCloud(
+  audio: { blob: Blob; ext: string },
+  onProgress?: ProgressFn
+): Promise<VerbatimTranscript> {
+  const status = await sttEdge<SttStatusRes>({ action: 'status' })
+  if (!status.assemblyai) throw new Error('Retake Final Boss requires AssemblyAI, but it is not configured on the server.')
+
+  onProgress?.(8, 'Preparing your video…')
+  let signed: SttSignUploadRes
+  try {
+    signed = await sttEdge<SttSignUploadRes>({ action: 'sign-upload', ext: audio.ext })
+  } catch (error) {
+    if (isTrialLimit(error)) {
+      openAccountPanel('trial')
+      throw new TrialLimitError()
+    }
+    throw error
+  }
+
+  const { path, token } = signed
+  try {
+    const upload = await getSupabase().storage.from('stt-audio').uploadToSignedUrl(path, token, audio.blob)
+    if (upload.error) throw new Error(`Audio upload failed: ${upload.error.message}`)
+    const transcript = await assemblyAiTranscribe(path, onProgress)
+    if (!transcript.words.length) throw new Error('AssemblyAI returned no words')
+    return transcript
+  } finally {
+    void sttEdge({ action: 'cleanup', path }).catch(() => undefined)
+  }
+}
+
 /** Transcribe the extracted STT audio with the best configured provider; on
  *  failure fall through to the next one. Throws a clean error only when
  *  NOTHING is configured/works. The temp audio object is ALWAYS cleaned up

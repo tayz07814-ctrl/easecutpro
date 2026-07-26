@@ -55,6 +55,11 @@ import {
   type RetakeBetaSilenceSettings
 } from '@shared/retakeaware/silence'
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
+import {
+  DEFAULT_RETAKE_FINAL_BOSS_SETTINGS,
+  normalizeRetakeFinalBossSettings,
+  type RetakeFinalBossSettings
+} from '@shared/retakefinalboss'
 import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage, errorCode, isTrialLimit, TRIAL_LIMIT_MESSAGE } from './safeError'
@@ -774,6 +779,9 @@ interface AppState {
    *  planner; ProCut continues through its existing VAD adapter. */
   vadSilenceSettings: VadSilenceSettings
   setVadSilenceSettings: (patch: Partial<VadSilenceSettings>) => void
+  /** Isolated Retake Final Boss VAD + render settings (0.07 branch only). */
+  retakeFinalBossSettings: RetakeFinalBossSettings
+  setRetakeFinalBossSettings: (patch: Partial<RetakeFinalBossSettings>) => void
   /** Seam blend ("overlap") at every cut: a short incoming-only fade that de-clicks
    *  the splice. Stored separately for rendering, but Natural/Balanced/Snappy
    *  apply their matching 15/20/25ms value. Custom supports 0–60ms. */
@@ -2006,6 +2014,25 @@ export const useStore = create<AppState>((set, get) => ({
     set({ vadSilenceSettings: next })
   },
 
+  retakeFinalBossSettings: (() => {
+    try {
+      const raw = localStorage.getItem('ec.retakeFinalBoss')
+      if (raw) return normalizeRetakeFinalBossSettings(JSON.parse(raw))
+    } catch {
+      /* ignore */
+    }
+    return { ...DEFAULT_RETAKE_FINAL_BOSS_SETTINGS }
+  })(),
+  setRetakeFinalBossSettings: (patch) => {
+    const next = normalizeRetakeFinalBossSettings({ ...get().retakeFinalBossSettings, ...patch })
+    try {
+      localStorage.setItem('ec.retakeFinalBoss', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+    set({ retakeFinalBossSettings: next })
+  },
+
   seamFade: ((): SeamFadeSettings => {
     try {
       const raw = localStorage.getItem('ec.seamFade')
@@ -2153,11 +2180,10 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   runRetakeCutBeta: async () => {
-    if (!get().requireServer('Retake β')) return
-    // Retake-Aware Cut Beta — fully separate path (cut_mode: retake_aware_beta).
-    // Same review-first contract as FastCut/ProCut: highlight + stage, apply on
-    // Execute cuts. Deliberately does NOT call snapRetakeFlags or any standard-
-    // engine helper: the beta engine guarantees whole-attempt spans itself.
+    if (!get().requireServer('Retake Final Boss')) return
+    // Cloud 0.07 resolves this button to the isolated Retake Final Boss path.
+    // It keeps the existing review-first contract: highlight + stage, then
+    // apply only when Execute is clicked.
     // Doc-native projects (new UI) hold the base on the timeline DOCUMENT, not the
     // legacy media/baseSequence fields — a clip dragged straight onto the timeline
     // lives only in the doc (setTimelineDoc doesn't touch media/baseSequence). Fold
@@ -2169,7 +2195,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Import a video first' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Cut Lord…' } })
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Starting Retake Final Boss…' } })
     try {
       let path: string
       if (isMultiBase(p0)) {
@@ -2178,10 +2204,13 @@ export const useStore = create<AppState>((set, get) => ({
       } else {
         path = p0.media!.path
       }
-      const res = await window.api.retakeAwareCut(path, get().retakeBetaSilenceSettings, get().vadSilenceSettings)
+      const finalBossSettings = get().retakeFinalBossSettings
+      // Final Boss owns the overlap value used by preview/export at Execute.
+      get().setSeamFade({ enabled: finalBossSettings.audioOverlapMs > 0, ms: finalBossSettings.audioOverlapMs })
+      const res = await window.api.retakeAwareCut(path, undefined, finalBossSettings)
       const cur = get().project
       // REVIEW-STATE CONTRACT (the whole point of this fix):
-      //  - ALWAYS show the beta's FULL raw/verbatim transcript. Its decisions
+      //  - ALWAYS show Final Boss's FULL AssemblyAI verbatim transcript. Its decisions
       //    were made on these exact words, so the displayed words and the
       //    flagged ids are guaranteed to reference the same list (rw*). We do
       //    NOT keep a prior transcript and time-map onto it — a mismatched
@@ -2212,17 +2241,10 @@ export const useStore = create<AppState>((set, get) => ({
         : { ...cur, transcript: res.transcript }
       const flagIds = res.deleteWordIds
       const wordsBefore = cur.transcript?.words.length ?? 0
-      // Retake β silence is its OWN conservative, word-clamped VAD path (engine),
-      // NOT the aggressive shared Cut Lord VAD. Stage the protected regions as
-      // review-first chips; the retakeSilenceStaged flag tells Execute cuts NOT
-      // to re-run the shared VAD pass over them (which would clobber the clamp).
-      // Smart Silence Cutter (redesigned UI): when OFF, discard Retake β's silence
-      // suggestions here — the engine already ran unchanged, we simply don't stage
-      // them. Flag-off/legacy or toggle-ON keep the exact current behavior.
-      // retakeSilenceStaged stays true regardless so Execute never re-runs the
-      // shared VAD and re-introduces silence.
-      const includeSilence = !IS_NEW_UI || get().smartSilenceCutter
-      const silenceRegions = includeSilence ? (res.silenceRegions ?? []) : []
+      // Final Boss silence is the fresh post-Gemma VAD result. Stage its protected
+      // regions directly; retakeSilenceStaged prevents Execute from invoking any
+      // previous/shared silence pass over them.
+      const silenceRegions = res.silenceRegions ?? []
       set({
         project: nextProject,
         selectedWordIds: new Set(flagIds),
@@ -2238,7 +2260,7 @@ export const useStore = create<AppState>((set, get) => ({
       const missingFlags = flagIds.filter((id) => !shownIds.has(id))
       const preDeleted = t?.words.filter((w) => w.deleted).length ?? 0
       const audit = {
-        mode: 'retake_aware_beta' as const,
+        mode: 'retake_final_boss' as const,
         provider: res.provider,
         raw_provider_words_count: res.verbatim.words.length,
         project_transcript_words_count_before: wordsBefore,
@@ -2374,8 +2396,7 @@ export const useStore = create<AppState>((set, get) => ({
   executeCuts: async () => {
     // VAD switch OFF: the Silero VAD silence pass was decoupled from FastCut/ProCut —
     // run + stage it now, at Execute, so silence is applied here (auto-selected).
-    // BUT never for Retake β: it already staged its own word-clamped silence, and
-    // re-running the aggressive shared VAD here would clobber it.
+    // BUT never for Final Boss: it already staged its own post-Gemma VAD result.
     if (
       !get().retakeSilenceStaged &&
       !get().cutLordSettings.vadDuringAnalysis &&
@@ -2384,14 +2405,10 @@ export const useStore = create<AppState>((set, get) => ({
       await get()._stageVadSilences('Execute')
     }
     const s = get()
-    // Smart Silence Cutter OFF (new UI) must also block executing Retake β silences
-    // that were staged while it was ON. Scoped to retakeSilenceStaged so FastCut /
-    // ProCut (which set it false) are never affected; legacy (flag off) is unchanged.
-    const dropRetakeSilence = IS_NEW_UI && s.retakeSilenceStaged && !s.smartSilenceCutter
-    const enabled = dropRetakeSilence ? [] : s.stagedSilences.filter((r) => s.stagedSilenceSel.has(r.id))
+    const enabled = s.stagedSilences.filter((r) => s.stagedSilenceSel.has(r.id))
     const hadWords = s.selectedWordIds.size
     if (!hadWords && !enabled.length) {
-      set({ job: { active: false, percent: 0, message: 'Nothing staged — run FastCut / ProCut or select words first' } })
+      set({ job: { active: false, percent: 0, message: 'Nothing staged — run Retake Final Boss or select words first' } })
       return
     }
     if (hadWords) s.deleteSelected()
@@ -3761,9 +3778,7 @@ export const useStore = create<AppState>((set, get) => ({
     // Same retake+silence the "Find Retakes & Silence" button runs, applied
     // headlessly per file, one at a time (transcription + judge are heavy).
     const opts = {
-      retakeSilenceSettings: get().retakeBetaSilenceSettings,
-      vadSilenceSettings: get().vadSilenceSettings,
-      smartSilence: get().smartSilenceCutter,
+      finalBossSettings: get().retakeFinalBossSettings,
       wordCutPad: wordCutPad(get().cutLordSettings)
     }
     try {
