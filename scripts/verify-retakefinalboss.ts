@@ -40,15 +40,21 @@ check('defaults expose only the five Final Boss controls', Object.keys(DEFAULT_R
 
 console.log('4) fresh Final Boss silence planner')
 const settings = { ...DEFAULT_RETAKE_FINAL_BOSS_SETTINGS, padAfterS: 0.12, padBeforeS: 0.18, trimEdgesS: 0.02 }
-const speech = [{ start: 0, end: 0.5 }, { start: 2, end: 2.5 }]
+const speech = [{ word: 'Done.', start: 0, end: 0.5 }, { word: 'Next', start: 2, end: 2.5 }]
 const planned = planFinalBossSilenceCuts([{ start: 0.5, end: 2 }], speech, settings, 3)
 check('one protected cut is produced', planned.length === 1 && planned[0].protect === true && planned[0].action === 'remove')
 check('padding and edge trim produce exact independent geometry', Math.abs(planned[0].start - 0.6) < 1e-9 && Math.abs(planned[0].end - 1.84) < 1e-9)
 const oversized = planFinalBossSilenceCuts([{ start: 0, end: 3 }], speech, settings, 3)
-check('whole-clip VAD gap is split around surviving words', oversized.length === 2)
+check('whole-clip VAD miss is carved while short edge rhythm stays', oversized.length === 1)
 check('carved cuts never enter surviving words', oversized.every((cut) => speech.every((word) => cut.end <= word.start || cut.start >= word.end)))
 check('candidate fully inside a surviving word is rejected', planFinalBossSilenceCuts([{ start: 0.1, end: 0.4 }], speech, settings, 3).length === 0)
 check('candidate with no transcript context is rejected', planFinalBossSilenceCuts([{ start: 0, end: 3 }], [], settings, 3).length === 0)
+const rhythm = [{ word: 'I', start: 0, end: 0.2 }, { word: 'think', start: 0.7, end: 1 }]
+check('short mid-sentence rhythm is preserved', planFinalBossSilenceCuts([{ start: 0.2, end: 0.7 }], rhythm, settings, 1).length === 0)
+const sentencePause = [{ word: 'Done.', start: 0, end: 0.2 }, { word: 'Next', start: 0.7, end: 1 }]
+check('short silence at a sentence boundary is tightened', planFinalBossSilenceCuts([{ start: 0.2, end: 0.7 }], sentencePause, settings, 1).length === 1)
+const longPause = [{ word: 'I', start: 0, end: 0.2 }, { word: 'think', start: 1.2, end: 1.5 }]
+check('long background-noise gap is tightened without punctuation', planFinalBossSilenceCuts([{ start: 0.2, end: 1.2 }], longPause, settings, 1.5).length === 1)
 
 console.log('5) edge prompt contains no silence-boundary instructions')
 const edge = readFileSync(new URL('../supabase/functions/retakefinalboss/index.ts', import.meta.url), 'utf8')

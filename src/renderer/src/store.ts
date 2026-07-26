@@ -2413,10 +2413,29 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Nothing staged — run Retake Final Boss or select words first' } })
       return
     }
-    if (hadWords) s.deleteSelected()
+    const selectedWordIds = new Set(s.selectedWordIds)
+    // Commit word cuts and Final Boss silence cuts ATOMICALLY. In document mode
+    // each project change is translated into real main-lane ripple deletions.
+    // Two separate writes let the timeline consume the word update first and
+    // could leave the following silence update mapped against a stale document.
+    // One transaction gives the bridge one complete, deterministic cut set.
     set((st) => ({
       project: {
         ...st.project,
+        transcript: hadWords && st.project.transcript
+          ? {
+              ...st.project.transcript,
+              words: st.project.transcript.words.map((w) =>
+                selectedWordIds.has(w.id) ? { ...w, deleted: true } : w
+              ),
+              segments: st.project.transcript.segments.map((seg) => ({
+                ...seg,
+                words: seg.words.map((w) =>
+                  selectedWordIds.has(w.id) ? { ...w, deleted: true } : w
+                )
+              }))
+            }
+          : st.project.transcript,
         silences: [...st.project.silences, ...enabled].sort((a, b) => a.start - b.start),
         // "trim cuts" from the ⚙ profile becomes the word-splice trim.
         wordCutPad: wordCutPad(st.cutLordSettings),
@@ -2425,6 +2444,7 @@ export const useStore = create<AppState>((set, get) => ({
       },
       stagedSilences: [],
       stagedSilenceSel: new Set<string>(),
+      selectedWordIds: new Set<string>(),
       retakeSilenceStaged: false,
       job: {
         active: false,

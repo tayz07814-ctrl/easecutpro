@@ -120,9 +120,19 @@ export function validateFinalBossWordCuts(raw: string, wordCount: number): Final
 }
 
 export interface FinalBossSpeechWord {
+  /** Verbatim AssemblyAI token. Used locally only to recognize punctuation at
+   * a sentence boundary; it is never added to Gemma's timing payload. */
+  word?: string
   start: number
   end: number
 }
+
+/** Mid-sentence hesitation shorter than this is speaking rhythm, not dead air.
+ * Longer gaps are safe to shorten even when punctuation is missing (ASR does
+ * not always punctuate an abandoned sentence or production direction). */
+export const RETAKE_FINAL_BOSS_LONG_GAP_S = 0.75
+/** A clearly punctuated sentence boundary may be tightened sooner. */
+export const RETAKE_FINAL_BOSS_SENTENCE_GAP_S = 0.35
 
 /** Convert raw Final Boss VAD gaps to exact protected cuts.
  *
@@ -130,8 +140,11 @@ export interface FinalBossSpeechWord {
  * region (at threshold 1 it can legitimately return the whole clip). Rejecting
  * that whole candidate because it touched one AssemblyAI word made the most
  * aggressive threshold produce no cuts. Instead, subtract every surviving word
- * span and keep the word-free pieces. Padding is applied only after carving, so
- * no cut can enter a surviving word. */
+ * span and inspect the word-free pieces. A piece is accepted only when it is a
+ * real long gap, or a shorter gap after sentence punctuation. This prevents a
+ * threshold of 1 from turning ordinary between-word rhythm into hundreds of
+ * micro-splices. Padding is applied only after carving, so no cut can enter a
+ * surviving word. */
 export function planFinalBossSilenceCuts(
   rawGaps: { start: number; end: number }[],
   survivingWords: FinalBossSpeechWord[],
@@ -166,10 +179,19 @@ export function planFinalBossSilenceCuts(
       // micro-splices between normally adjacent words.
       if (piece.end - piece.start < RETAKE_FINAL_BOSS_MIN_SILENCE_S) continue
 
-      const hasPrevious = words.some((word) => word.end <= piece.start + epsilon)
-      const hasNext = words.some((word) => word.start >= piece.end - epsilon)
+      const previous = [...words].reverse().find((word) => word.end <= piece.start + epsilon)
+      const next = words.find((word) => word.start >= piece.end - epsilon)
+      const hasPrevious = !!previous
+      const hasNext = !!next
       // With no transcript context there is no safe speech boundary to cut to.
       if (!hasPrevious && !hasNext) continue
+
+      const gapS = piece.end - piece.start
+      const sentenceBoundary = !!previous?.word && /[.!?…][\"'’”)]*$/.test(previous.word.trim())
+      const minimumSafeGap = sentenceBoundary && hasNext
+        ? RETAKE_FINAL_BOSS_SENTENCE_GAP_S
+        : RETAKE_FINAL_BOSS_LONG_GAP_S
+      if (gapS < minimumSafeGap) continue
 
       const keepAfter = hasPrevious ? Math.max(0, settings.padAfterS - settings.trimEdgesS) : 0
       const keepBefore = hasNext ? Math.max(0, settings.padBeforeS - settings.trimEdgesS) : 0
