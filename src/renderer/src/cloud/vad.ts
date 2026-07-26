@@ -403,8 +403,20 @@ export async function vadSilenceRegions(
   }
   if (extra.length) bridged = bridgeWordlessIslands([...bridged, ...extra])
 
-  // Word-guard tied to the padding sliders (0 → crisp gapless cut), trim the
-  // leading/trailing dead air of the whole clip, and require every carved piece to
-  // still be a pause the creator asked to cut (>= their minGap).
-  return clampSilenceRegions(bridged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, settings.minGapS, settings.edgeTrimS)
+  // Word-guard tied to the padding sliders (0 → crisp gapless cut) and trim the
+  // leading/trailing dead air of the whole clip.
+  //
+  // The "is this a pause worth cutting? (>= minGap)" gate ALREADY ran in the raw
+  // VAD pass (detectSilenceFloat32's minDur filter above), so the post-carve floor
+  // here must be a small FIXED sliver floor — NOT minGap again. Passing minGap here
+  // double-counted it: because the pads are carved off BEFORE this check, the
+  // effective cut threshold became (minGap + padBefore + padAfter), so any pause
+  // shorter than that was kept WHOLE instead of trimmed down to the pads. That is
+  // the "leaves a lot of silence at sentence endings / behaves unpredictably on
+  // Custom & non-Balanced presets" bug: bigger pads pushed the cliff higher, and
+  // pauses either side of it flipped between kept-whole and trimmed. The 0.1s floor
+  // only drops the 50–110ms coarticulation slivers word-carving can leave between
+  // fluent words; real >= minGap pauses now always trim to the pads, predictably.
+  const SLIVER_FLOOR_S = 0.1
+  return clampSilenceRegions(bridged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, SLIVER_FLOOR_S, settings.edgeTrimS)
 }
