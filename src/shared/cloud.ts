@@ -111,3 +111,16 @@ export interface ProcutJudgeRes {
   raw: string | null
   judge: string
 }
+
+// ---- retakejudge edge function (Retake button: one fixed Gemma model) ----
+// Deliberately has no model, prompt, provider, or reasoning controls. The edge
+// function owns those fixed choices so model experiments cannot leak into the
+// Retake client again.
+export interface RetakeJudgeReq {
+  /** buildAiPayload(map) — the complete index-anchored transcript. */
+  payload: string
+}
+export interface RetakeJudgeRes {
+  raw: string | null
+  judge: string
+}

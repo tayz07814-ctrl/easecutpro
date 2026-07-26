@@ -1,13 +1,10 @@
 // Cloud build — Retake-Aware Cut Beta for the browser (no PC server).
 //
 // WORD CUTS are LLM-first: the FULL index-anchored transcript (shared/cutcutpro
-// buildAiPayload) goes to the SINGLE-PASS ultracut judge (the `ultracut-judge`
-// edge fn). Production runs xai/grok-4.5-latest on OpenRouter
-// (OpenRouter key) with the creator's single-pass retake
-// prompt (no first/second-pass framing) and it returns the cut EDL. If the
-// Grok call fails the edge fn falls back to deepseek-v4-pro via OpenRouter, so
-// a transient outage never yields zero cuts. (procut-judge / Opus is still
-// deployed but the cloud retake no longer uses it.)
+// buildAiPayload) goes to the dedicated `retakejudge` edge function. That judge
+// has one fixed path only: google/gemma-4-31b-it through OpenRouter, using the
+// preserved UltraCut retake prompt. Model selection and fallback experiments do
+// not live in this engine.
 //
 // SILENCE now uses the UNIFIED configurable VAD pass shared with ProCut
 // (vad.ts vadSilenceRegions, driven by the store's VadSilenceSettings): raw
@@ -22,7 +19,7 @@
 
 import type { RetakeAwareResult, CutSpan } from '@shared/retakeaware/types'
 import type { Transcript, SilenceRegion } from '@shared/types'
-import type { ProcutJudgeReq, ProcutJudgeRes } from '@shared/cloud'
+import type { RetakeJudgeReq, RetakeJudgeRes } from '@shared/cloud'
 import {
   buildTimestampMap,
   buildAiPayload,
@@ -41,7 +38,7 @@ import { extractSttAudio } from './audio'
 import { transcribeVerbatimCloud } from './stt'
 import { detectSilenceFloat32, vadSilenceRegions } from './vad'
 
-/** Opus EDL (inclusive word-index cuts) -> Retake β time-based CutSpans. The
+/** Judge EDL (inclusive word-index cuts) -> Retake β time-based CutSpans. The
  *  silence engine + spansToWordIds both work in time, so this is the only bridge
  *  needed between ProCut's index EDL and Retake β's span pipeline. */
 function edlToRetakeCutSpans(edl: Edl, map: TimestampMap): CutSpan[] {
@@ -61,7 +58,7 @@ function edlToRetakeCutSpans(edl: Edl, map: TimestampMap): CutSpan[] {
   return spans
 }
 
-/** Persist every run's debug JSON (transcription + Opus payload/reply + the cuts
+/** Persist every run's debug JSON (transcription + Gemma payload/reply + the cuts
  *  and silence it produced) to the private `retake-aware-debugs` bucket so
  *  detection mistakes can be reviewed against real data. Best-effort: a failed
  *  upload logs and returns null; it never fails the run. */
@@ -71,10 +68,10 @@ async function saveRetakeDebug(debug: Record<string, unknown>): Promise<string |
     const { data } = await sb.auth.getUser()
     const uid = data.user?.id ?? 'anon'
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const path = `${uid}/${stamp}-opus.json`
+    const path = `${uid}/${stamp}-gemma.json`
     const { error } = await sb.storage
       .from('retake-aware-debugs')
-      .upload(path, new Blob([JSON.stringify({ mode: 'retake_aware_beta_opus', ...debug }, null, 2)], { type: 'application/json' }), {
+      .upload(path, new Blob([JSON.stringify({ mode: 'retake_aware_beta_gemma', ...debug }, null, 2)], { type: 'application/json' }), {
         contentType: 'application/json',
         upsert: false
       })
@@ -97,7 +94,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (Grok-4.5 + sharp judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (Gemma 4 31B retakejudge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -108,7 +105,7 @@ export async function retakeAwareCutCloud(
   const { vt, warnings: tw } = await transcribeVerbatimCloud(audio, op)
   warnings.push(...tw)
 
-  // 3. VAD safety scan (Retake β's own profile) — ONE pass, reused for the Opus
+  // 3. VAD safety scan (Retake β's own profile) — ONE pass, reused for the judge
   //    payload's pause markers AND the silence engine below (same as the rules
   //    path's safety scan). If it fails we fall back to transcript-gap pauses.
   op(56, 'Listening for pauses…')
@@ -122,10 +119,9 @@ export async function retakeAwareCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
-  //    (ultracut-judge edge fn, OpenRouter). Production runs xai/grok-4.5-latest
-  //    on the 'sharp' word-list retake prompt + reasoning:low; it scans everything
-  //    and returns the cut EDL.
+  // 4. WORD-CUT BRAIN — one dedicated edge endpoint over the full transcript.
+  //    retakejudge always uses OpenRouter Gemma 4 31B with the preserved sharp
+  //    UltraCut prompt. The client sends no model or reasoning controls.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -133,17 +129,10 @@ export async function retakeAwareCutCloud(
   const map = buildTimestampMap(toAppTranscript(vt).words, vadSil)
   const payload = buildAiPayload(map)
   let baseCutSpans: CutSpan[] = []
-  let claudeRaw: string | null = null
+  let judgeRaw: string | null = null
   try {
-    const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
-      payload,
-      proposal: { word_cuts: [], pause_cuts: [] },
-      // OpenRouter slug for Gemma-4-31b model.
-      model: 'google/gemma-4-31b-it',
-      promptVariant: 'sharp',
-      reasoning: 'low'
-    } satisfies ProcutJudgeReq)
-    claudeRaw = res.raw
+    const res = await invokeEdge<RetakeJudgeRes>('retakejudge', { payload } satisfies RetakeJudgeReq)
+    judgeRaw = res.raw
     if (res.judge === 'none') {
       warnings.push("Retake Beta couldn't analyze this clip — please try again.")
     } else if (res.raw == null) {
@@ -197,7 +186,7 @@ export async function retakeAwareCutCloud(
   const debugPath = await saveRetakeDebug({
     provider: vt.provider,
     ai_payload: payload,
-    claude_raw: claudeRaw,
+    judge_raw: judgeRaw,
     cut_spans: cutSpans,
     delete_word_ids_count: deleteWordIds.length,
     silence: silenceDebug,
@@ -213,7 +202,7 @@ export async function retakeAwareCutCloud(
     deleteWordIds,
     cutSpans,
     silenceRegions,
-    // Opus judges the whole transcript holistically — there are no per-group
+    // Gemma judges the whole transcript holistically — there are no per-group
     // rule structures to surface (the store's review UX reads only the flags).
     retakeGroups: [],
     fillerDecisions: [],
