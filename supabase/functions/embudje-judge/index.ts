@@ -8,6 +8,10 @@ const BASE = Deno.env.get('ULTRACUT_BASE_URL') ?? 'https://openrouter.ai/api/v1'
 const EMBED_MODEL = Deno.env.get('EMBUDJE_EMBED_MODEL') ?? 'gemini-embedding-2'
 
 const PRIMARY = Deno.env.get('EMBUDJE_MODEL') ?? 'google/gemini-3.6-flash'
+// Reliability fallback for the micro-LLM pass (line ~200 references it; it was lost
+// in the rewrite -> ReferenceError whenever the primary call failed). gpt-oss-120b:
+// served by Cerebras, so it stays reachable even under a restricted provider list.
+const FALLBACK = 'openai/gpt-oss-120b'
 
 // Configuration for new architecture
 const SIMILARITY_THRESHOLD = 0.95;
