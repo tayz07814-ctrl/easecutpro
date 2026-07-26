@@ -2,14 +2,14 @@
 // friendly sliders onto the existing vadSilenceSettings profile (persisted via
 // setVadSilenceSettings). It uses the SHARED canonical presets (silencePresets.ts
 // — the same unit-tested bundles the stable app uses), so the new UI and the
-// stable app detect silence identically. No silence-engine change.
+// stable app detect silence identically. The screen edits a local draft and only
+// commits settings when the creator presses Apply.
 
 import { useStore, type SeamFadeSettings } from '../../store'
-import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
+import type { VadSilenceSettings } from '@shared/vadsilence'
 import {
   SILENCE_PRESETS,
   detectPreset as detectSilencePreset,
-  presetValues,
   type SilencePresetId,
   type SilencePresetOrCustom
 } from '../../silencePresets'
@@ -24,12 +24,9 @@ export interface SilenceModel {
   detected: Preset
   /** the canonical preset definitions (id/label/blurb/values) for rendering. */
   presets: typeof SILENCE_PRESETS
-  applyPreset: (p: SilencePresetId) => void
-  setField: (k: keyof VadSilenceSettings, v: number | boolean) => void
   /** Seam blend ("overlap") at cuts — global render setting, separate from presets. */
   seamFade: SeamFadeSettings
-  setSeamFade: (patch: Partial<SeamFadeSettings>) => void
-  reset: () => void
+  commit: (settings: VadSilenceSettings, fade: SeamFadeSettings) => void
   close: () => void
 }
 
@@ -46,13 +43,10 @@ export function useSilence(): SilenceModel {
     detected: detectSilencePreset(s),
     presets: SILENCE_PRESETS,
     seamFade,
-    setSeamFade,
-    // presetValues() is a full VadSilenceSettings bundle (all 7 fields), so a
-    // preset lands on exactly the tested values — not a partial that leaves
-    // stale fields behind (the old bug that made "Balanced" under-cut).
-    applyPreset: (p) => setS(presetValues(p)),
-    setField: (k, v) => setS({ [k]: v } as Partial<VadSilenceSettings>),
-    reset: () => setS({ ...DEFAULT_VAD_SILENCE_SETTINGS }), // Balanced
+    commit: (settings, fade) => {
+      setS(settings)
+      setSeamFade(fade)
+    },
     close: () => setShow(false)
   }
 }

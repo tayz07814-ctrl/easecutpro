@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { css } from '../css'
 import { useSilence } from '../data/useSilence'
-import type { VadSilenceSettings } from '@shared/vadsilence'
+import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
+import { detectPreset, presetValues } from '../../silencePresets'
 
 // Silence Settings — ONE panel. Small preset chips on top; the everyday sliders
 // beneath, with the fiddly/risky knobs (speech sensitivity + tighten) tucked under
@@ -61,10 +62,18 @@ const GROUP = 'display:flex;flex-direction:column;gap:18px;margin-top:16px'
 export default function SilenceSettingsModal(): JSX.Element | null {
   const sil = useSilence()
   const [advanced, setAdvanced] = useState(false)
+  const [draft, setDraft] = useState<VadSilenceSettings>(sil.s)
+  const [draftFade, setDraftFade] = useState(sil.seamFade)
+  useEffect(() => {
+    if (sil.show) {
+      setDraft({ ...sil.s })
+      setDraftFade({ ...sil.seamFade })
+    }
+  }, [sil.show])
   if (!sil.show) return null
 
-  const set = (k: keyof VadSilenceSettings, v: number | boolean): void => sil.setField(k, v)
-  const active = sil.detected // matches a preset id, or 'custom' the moment sliders deviate
+  const set = (k: keyof VadSilenceSettings, v: number | boolean): void => setDraft((s) => ({ ...s, [k]: v }))
+  const active = detectPreset(draft)
   const activePreset = sil.presets.find((p) => p.id === active)
 
   return (
@@ -81,7 +90,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         {/* Preset chips — small; picking one loads its values into the controls below. */}
         <div style={css('display:flex;gap:6px;margin-top:16px;flex-wrap:wrap')}>
           {sil.presets.map((p) => (
-            <button key={p.id} onClick={() => sil.applyPreset(p.id)} style={css(active === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
+            <button key={p.id} onClick={() => setDraft(presetValues(p.id))} style={css(active === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
           ))}
           <span style={css(active === 'custom' ? CHIP_ON + ';cursor:default' : CHIP + ';cursor:default;opacity:.55')}>Custom</span>
         </div>
@@ -91,9 +100,9 @@ export default function SilenceSettingsModal(): JSX.Element | null {
 
         {/* The two everyday controls + breaths. */}
         <div style={css(GROUP)}>
-          <Slider label="Cut pauses longer than" value={sil.s.minGapS} min={0.05} max={2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0.05s · tight" hi="2s · relaxed" onChange={(v) => set('minGapS', v)} />
-          <Slider label="Pause kept at each cut" value={sil.s.padAfterS} min={0} max={0.4} step={0.01} fmt={(v) => (v <= 0 ? 'none' : `${v.toFixed(2)} s`)} lo="none · gapless" hi="0.4s · roomy" onChange={(v) => set('padAfterS', v)} />
-          <Toggle on={sil.s.removeBreaths} onToggle={() => set('removeBreaths', !sil.s.removeBreaths)} title="Remove breaths" desc="Also cuts breath sounds between words. Turn off if speech feels clipped." />
+          <Slider label="Cut pauses longer than" value={draft.minGapS} min={0.05} max={2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0.05s · tight" hi="2s · relaxed" onChange={(v) => set('minGapS', v)} />
+          <Slider label="Pause kept at each cut" value={draft.targetPauseS} min={0} max={0.8} step={0.01} fmt={(v) => (v <= 0 ? 'none' : `${v.toFixed(2)} s`)} lo="none · gapless" hi="0.8s · roomy" onChange={(v) => set('targetPauseS', v)} />
+          <Toggle on={draft.removeBreaths} onToggle={() => set('removeBreaths', !draft.removeBreaths)} title="Remove breaths" desc="Also cuts breath sounds between words. Turn off if speech feels clipped." />
         </div>
 
         {/* Advanced — the fiddly/risky knobs, hidden by default to reduce clutter. */}
@@ -103,25 +112,25 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         </button>
         {advanced && (
           <div style={css(GROUP + ';margin-top:14px')}>
-            <Slider label="Tighten cuts" value={sil.s.edgeTrimS} min={0} max={0.2} step={0.01} fmt={(v) => (v <= 0 ? 'off' : `${Math.round(v * 1000)} ms`)} lo="off" hi="0.2s · tightest" onChange={(v) => set('edgeTrimS', v)} />
-            <Slider label="Silence sensitivity" value={sil.s.speechThreshold} min={0.5} max={0.9} step={0.01} fmt={(v) => strictnessLabel(v)} lo="gentle · keeps soft speech" hi="strict · may clip soft speech" onChange={(v) => set('speechThreshold', v)} />
+            <Slider label="Tighten cuts" value={draft.edgeTrimS} min={0} max={0.2} step={0.01} fmt={(v) => (v <= 0 ? 'off' : `${Math.round(v * 1000)} ms`)} lo="off" hi="0.2s · tightest" onChange={(v) => set('edgeTrimS', v)} />
+            <Slider label="Silence sensitivity" value={draft.speechThreshold} min={0.5} max={0.9} step={0.01} fmt={(v) => strictnessLabel(v)} lo="gentle · keeps soft speech" hi="strict · may clip soft speech" onChange={(v) => set('speechThreshold', v)} />
           </div>
         )}
 
         {/* Blend audio at cuts ("overlap") — a render setting (export + preview). */}
         <div style={css('margin-top:18px;border-top:1px solid rgba(255,255,255,.07);padding-top:16px;display:flex;flex-direction:column;gap:14px')}>
-          <Toggle on={sil.seamFade.enabled} onToggle={() => sil.setSeamFade({ enabled: !sil.seamFade.enabled })}
+          <Toggle on={draftFade.enabled} onToggle={() => setDraftFade((s) => ({ ...s, enabled: !s.enabled }))}
             title="Blend audio at cuts" desc="Crossfades each join so cuts don't click. Marked ◢ on the timeline." />
-          {sil.seamFade.enabled && (
-            <Slider label="Overlap amount" value={sil.seamFade.ms} min={0} max={60} step={1} fmt={(v) => `${Math.round(v)} ms`} lo="0 · hard cut" hi="60 ms · smoother" onChange={(v) => sil.setSeamFade({ ms: v })} />
+          {draftFade.enabled && (
+            <Slider label="Overlap amount" value={draftFade.ms} min={0} max={60} step={1} fmt={(v) => `${Math.round(v)} ms`} lo="0 · hard cut" hi="60 ms · smoother" onChange={(v) => setDraftFade((s) => ({ ...s, ms: v }))} />
           )}
         </div>
 
         <div style={css('display:flex;align-items:center;margin-top:20px')}>
-          <span onClick={sil.reset} style={css(FOOT_RESET)}>Reset to default</span>
+          <span onClick={() => setDraft({ ...DEFAULT_VAD_SILENCE_SETTINGS })} style={css(FOOT_RESET)}>Reset to default</span>
           <div style={css('flex:1')} />
           <span onClick={sil.close} style={css(FOOT_CANCEL)}>Cancel</span>
-          <button onClick={sil.close} style={css(FOOT_APPLY)}>Apply</button>
+          <button onClick={() => { sil.commit(draft, draftFade); sil.close() }} style={css(FOOT_APPLY)}>Apply</button>
         </div>
       </div>
     </div>

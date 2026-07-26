@@ -169,5 +169,13 @@ p8.silences = [
 const k10 = computeKeepRanges(p8)
 check('montage: wordless b-roll clip B [5,10] survives (not dropped as residue)', k10.some((k) => k.start >= 4.9 && k.end <= 10.1 && k.end - k.start > 3))
 
+console.log('9) protected VAD shorten removes only the middle of a pause')
+const p9 = createEmptyProject('t10')
+p9.media = { path: 'x', duration: 10, width: 1920, height: 1080, fps: 30, hasAudio: true, hasVideo: true }
+p9.silences = [{ id: 'natural-pause', start: 4, end: 5, action: 'shorten', shortenTo: 0.2, protect: true }]
+const k11 = computeKeepRanges(p9)
+check('protected shorten keeps 100ms ambience on each side', near(k11[0].end, 4.1, 0.001) && near(k11[1].start, 4.9, 0.001))
+check('protected shorten removes 800ms, not the full one-second pause', near(k11[1].start - k11[0].end, 0.8, 0.001))
+
 console.log(ok ? '\nSMOOTHSEAMS OK' : '\nSMOOTHSEAMS FAILED')
 process.exit(ok ? 0 : 1)

@@ -12,6 +12,8 @@ export interface VadSilenceSettings {
   speechThreshold: number
   /** minimum silence gap to remove, seconds. */
   minGapS: number
+  /** natural pause duration retained after shortening an interior gap, seconds. */
+  targetPauseS: number
   /** silence kept BEFORE a word's onset (lead-in guard), seconds. */
   padBeforeS: number
   /** silence kept AFTER a word's tail (trailing guard), seconds. */
@@ -27,11 +29,12 @@ export interface VadSilenceSettings {
 /** Launch defaults (= the Balanced preset). Breath/quiet-filler removal is OFF
  *  until the user opts in (it's the most aggressive control). Retuned after
  *  real-run overcutting: a lower VAD threshold (0.75) stops soft-spoken words
- *  scoring as silence, minGapS 0.3 leaves natural micro-pauses alone, and the
+ *  scoring as silence, minGapS 0.4 leaves natural micro-pauses alone, and the
  *  pads keep a touch more air around speech. */
 export const DEFAULT_VAD_SILENCE_SETTINGS: VadSilenceSettings = {
   speechThreshold: 0.75,
-  minGapS: 0.3,
+  minGapS: 0.4,
+  targetPauseS: 0.28,
   padBeforeS: 0.1,
   padAfterS: 0.12,
   edgeTrimS: 0,
@@ -47,12 +50,47 @@ export function normalizeVadSilence(v: Partial<VadSilenceSettings> | null | unde
   return {
     speechThreshold: Math.max(0.3, Math.min(0.95, num(v.speechThreshold, d.speechThreshold))),
     minGapS: Math.max(0.03, Math.min(2, num(v.minGapS, d.minGapS))),
+    targetPauseS: Math.max(0, Math.min(0.8, num(v.targetPauseS, d.targetPauseS))),
     padBeforeS: Math.max(0, Math.min(0.4, num(v.padBeforeS, d.padBeforeS))),
     padAfterS: Math.max(0, Math.min(0.4, num(v.padAfterS, d.padAfterS))),
     edgeTrimS: Math.max(0, Math.min(0.2, num(v.edgeTrimS, d.edgeTrimS))),
     removeBreaths: typeof v.removeBreaths === 'boolean' ? v.removeBreaths : d.removeBreaths,
     breathDb: Math.max(-60, Math.min(-15, num(v.breathDb, d.breathDb)))
   }
+}
+
+export interface PauseContextWord {
+  start: number
+  end: number
+  text?: string
+}
+
+/** Editorial policy for an already word-safe VAD pause. Detection and pacing are
+ * deliberately separate: the detector says where quiet audio is; this function
+ * decides how much natural rhythm to retain. `shortenTo` applies only to the
+ * cuttable interior, so word guards are subtracted from the desired total pause. */
+export function decideVadPause(
+  region: { start: number; end: number },
+  keptWords: PauseContextWord[],
+  settings: VadSilenceSettings,
+  guardBeforeS: number,
+  guardAfterS: number
+): { action: 'remove' | 'shorten'; shortenTo?: number } {
+  const words = [...keptWords].sort((a, b) => a.start - b.start)
+  const previous = [...words].reverse().find((w) => w.end <= region.start + guardAfterS + 0.001)
+  const next = words.find((w) => w.start >= region.end - guardBeforeS - 0.001)
+
+  // Leading/trailing dead air is trim, not conversational pacing.
+  if (!previous || !next || settings.targetPauseS <= 0.001) return { action: 'remove' }
+
+  let target = settings.targetPauseS
+  const punctuation = previous.text?.trim().slice(-1) ?? ''
+  if (/[.!?]/.test(punctuation)) target = Math.max(target, 0.42)
+  else if (/[,;:]/.test(punctuation)) target = Math.max(target, 0.32)
+
+  const interiorKeep = Math.max(0, target - guardBeforeS - guardAfterS)
+  if (interiorKeep <= 0.001) return { action: 'remove' }
+  return { action: 'shorten', shortenTo: Math.min(interiorKeep, region.end - region.start) }
 }
 
 /** Map the user-facing profile to the low-level VAD detector options. */

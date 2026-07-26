@@ -113,7 +113,7 @@ export async function cutCutProCloud(
   if (runVad && vad.length) {
     const cut = new Set(edits.deleteWordIds)
     const keptWords = transcript.words.filter((w) => !w.deleted && !cut.has(w.id))
-    silenceAdds = clampSilenceRegions(vad, keptWords, 'procutvad', audio?.durationS ?? 0, 0.03, 0.03, false, 0.05, vadSettings.edgeTrimS)
+    silenceAdds = clampSilenceRegions(vad, keptWords, 'procutvad', audio?.durationS ?? 0, vadSettings.padBeforeS, vadSettings.padAfterS, false, vadSettings.minGapS, vadSettings.edgeTrimS, vadSettings.targetPauseS)
   }
 
   op(100, 'Cut Lord finished')

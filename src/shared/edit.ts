@@ -173,7 +173,16 @@ export function computeKeepRanges(
   // already safe (guarded off the transcript words), so it is applied VERBATIM
   // at the very end (after snap/absorb/bridge), never here. Normal silence
   // (FastCut/ProCut) is unaffected: it has no protect flag and flows as before.
-  const protectedSilences = project.silences.filter((s) => s.protect && s.action === 'remove' && s.end - s.start > 0.02)
+  // Protected VAD decisions already have word-safe boundaries. A shortened pause
+  // removes the middle and preserves equal ambience beside both neighboring words.
+  const protectedSilences = project.silences.flatMap((s) => {
+    if (!s.protect || s.action === 'keep' || s.end - s.start <= 0.02) return []
+    if (s.action === 'remove') return [{ start: s.start, end: s.end }]
+    const keep = Math.max(0, Math.min(s.shortenTo ?? 0, s.end - s.start))
+    const half = keep / 2
+    const cut = { start: s.start + half, end: s.end - half }
+    return cut.end - cut.start > 0.02 ? [cut] : []
+  })
   for (const s of project.silences) {
     if (s.protect) continue
     if (s.action === 'remove') {

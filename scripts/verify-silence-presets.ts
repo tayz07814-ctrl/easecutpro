@@ -5,7 +5,7 @@
 // flag-gating (new UI off = legacy UI) and the store write path are additionally
 // covered by the build-both-flags step and the untouched legacy component file.
 
-import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
+import { DEFAULT_VAD_SILENCE_SETTINGS, decideVadPause, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
 import { SILENCE_PRESETS, detectPreset, presetValues } from '../src/renderer/src/silencePresets'
 
 let ok = true
@@ -14,15 +14,15 @@ const check = (name: string, cond: boolean): void => {
   if (!cond) ok = false
 }
 const eq = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
-const VAD_KEYS = ['speechThreshold', 'minGapS', 'padBeforeS', 'padAfterS', 'edgeTrimS', 'removeBreaths', 'breathDb'].sort()
+const VAD_KEYS = ['speechThreshold', 'minGapS', 'targetPauseS', 'padBeforeS', 'padAfterS', 'edgeTrimS', 'removeBreaths', 'breathDb'].sort()
 
 console.log('1) preset values populate correctly (valid, in-range, self-detecting)')
 for (const p of SILENCE_PRESETS) {
   check(`${p.id}: values survive normalize unchanged (in range)`, eq(normalizeVadSilence(p.values), p.values))
   check(`${p.id}: detectPreset round-trips to itself`, detectPreset(p.values) === p.id)
-  check(`${p.id}: carries ONLY the 7 real VAD fields (no FastCut/ProCut/extra keys)`, eq(Object.keys(p.values).sort(), VAD_KEYS))
+  check(`${p.id}: carries ONLY the 8 real VAD fields (no FastCut/ProCut/extra keys)`, eq(Object.keys(p.values).sort(), VAD_KEYS))
 }
-check('there are exactly Conservative / Balanced / Aggressive', eq(SILENCE_PRESETS.map((p) => p.id), ['conservative', 'balanced', 'aggressive']))
+check('there are exactly Conservative / Balanced / Gapless profiles', eq(SILENCE_PRESETS.map((p) => p.id), ['conservative', 'balanced', 'aggressive']))
 
 console.log('2) Balanced == app default, so Reset lands on a named preset')
 check('Balanced equals DEFAULT_VAD_SILENCE_SETTINGS', eq(presetValues('balanced'), DEFAULT_VAD_SILENCE_SETTINGS))
@@ -60,6 +60,14 @@ console.log('7) presetValues returns a fresh copy (no shared mutation into the p
 const c1 = presetValues('aggressive')
 c1.minGapS = 999
 check('mutating a returned copy does not affect the source preset', presetValues('aggressive').minGapS !== 999)
+
+console.log('8) contextual pacing shortens pauses instead of deleting their rhythm')
+const words = [{ start: 0, end: 1, text: 'Hello.' }, { start: 2, end: 2.5, text: 'Next' }]
+const sentence = decideVadPause({ start: 1.1, end: 1.9 }, words, bal, bal.padBeforeS, bal.padAfterS)
+check('sentence pause becomes shorten', sentence.action === 'shorten')
+check('sentence punctuation retains approximately 420ms total', Math.abs((sentence.shortenTo ?? 0) + bal.padBeforeS + bal.padAfterS - 0.42) < 1e-6)
+check('gapless profile still removes the whole cuttable pause', decideVadPause({ start: 1.1, end: 1.9 }, words, presetValues('aggressive'), 0, 0).action === 'remove')
+check('leading dead air remains a trim', decideVadPause({ start: 0, end: 0.8 }, words, bal, bal.padBeforeS, bal.padAfterS).action === 'remove')
 
 console.log(ok ? '\nSILENCE-PRESETS OK' : '\nSILENCE-PRESETS FAILED')
 process.exit(ok ? 0 : 1)

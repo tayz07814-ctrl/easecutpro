@@ -35,6 +35,7 @@ export const SILENCE_PRESETS: SilencePreset[] = [
     values: normalizeVadSilence({
       speechThreshold: 0.65,
       minGapS: 0.6,
+      targetPauseS: 0.4,
       padBeforeS: 0.15,
       padAfterS: 0.2,
       edgeTrimS: 0,
@@ -50,7 +51,7 @@ export const SILENCE_PRESETS: SilencePreset[] = [
   },
   {
     id: 'aggressive',
-    label: 'Aggressive',
+    label: 'Gapless',
     blurb: 'Gapless jump cuts — the next word starts the instant the last one ends.',
     // Gapless: pads 0 = the cut lands exactly on the word boundary (no residual
     // air); minGap at the floor = even 50ms pauses collapse. edgeTrimS 0.05
@@ -61,6 +62,7 @@ export const SILENCE_PRESETS: SilencePreset[] = [
     values: normalizeVadSilence({
       speechThreshold: 0.75,
       minGapS: 0.05,
+      targetPauseS: 0,
       padBeforeS: 0,
       padAfterS: 0,
       edgeTrimS: 0.05,
@@ -75,6 +77,7 @@ function sameSettings(a: VadSilenceSettings, b: VadSilenceSettings): boolean {
   return (
     Math.abs(a.speechThreshold - b.speechThreshold) < EPS &&
     Math.abs(a.minGapS - b.minGapS) < EPS &&
+    Math.abs(a.targetPauseS - b.targetPauseS) < EPS &&
     Math.abs(a.padBeforeS - b.padBeforeS) < EPS &&
     Math.abs(a.padAfterS - b.padAfterS) < EPS &&
     Math.abs(a.edgeTrimS - b.edgeTrimS) < EPS &&

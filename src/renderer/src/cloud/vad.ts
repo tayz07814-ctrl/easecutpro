@@ -25,7 +25,7 @@
 
 import { NonRealTimeVAD } from '@ricky0123/vad-web'
 import type { SilenceRegion, SilenceDetectOptions } from '@shared/types'
-import { vadSilenceToOpts, type VadSilenceSettings } from '@shared/vadsilence'
+import { DEFAULT_VAD_SILENCE_SETTINGS, decideVadPause, vadSilenceToOpts, type PauseContextWord, type VadSilenceSettings } from '@shared/vadsilence'
 import { decodeAudioFloat32 } from './audio'
 
 /** Where the VAD's static assets are served from (Vite public dir → site root). */
@@ -213,7 +213,7 @@ export async function detectSilenceCloud(mediaId: string, opts: SilenceDetectOpt
  *  removed by word cuts (their midpoints outside every cut span). */
 export function clampSilenceRegions(
   raw: { start: number; end: number }[],
-  keptWords: { start: number; end: number }[],
+  keptWords: PauseContextWord[],
   idPrefix = 'vadsil',
   durationS = 0,
   // Silence kept next to a word when a cut edge would reach into it. Tied to the
@@ -241,7 +241,8 @@ export function clampSilenceRegions(
   // into one big region, which — where STT under-covers that soft speech — carved
   // into multi-second cuts of real words. Post-carve it only extends cuts that are
   // already real >= minGap pauses, so it can never cascade like that again.
-  edgeGrowS = 0
+  edgeGrowS = 0,
+  targetPauseS?: number
 ): SilenceRegion[] {
   // TRUE interval subtraction: carve every guarded word span out of every region.
   // The old two-condition edge-nudge only handled PARTIAL overlaps — a region that
@@ -317,7 +318,12 @@ export function clampSilenceRegions(
     })
   }
 
-  return pieces.map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
+  return pieces.map((r, i) => {
+    const decision = targetPauseS == null
+      ? { action: 'remove' as const }
+      : decideVadPause(r, keptWords, { ...DEFAULT_VAD_SILENCE_SETTINGS, targetPauseS }, guardBeforeS, guardAfterS)
+    return { id: `${idPrefix}-${i}`, start: r.start, end: r.end, ...decision, protect: true }
+  })
 }
 
 export async function vadSilenceRegions(
@@ -325,7 +331,7 @@ export async function vadSilenceRegions(
   sampleRate: number,
   durationS: number,
   settings: VadSilenceSettings,
-  keptWords: { start: number; end: number }[],
+  keptWords: PauseContextWord[],
   idPrefix = 'vadsil'
 ): Promise<SilenceRegion[]> {
   // edgeTrim is NOT applied in the raw VAD pass — it would grow+merge sub-minGap
@@ -406,5 +412,5 @@ export async function vadSilenceRegions(
   // Word-guard tied to the padding sliders (0 → crisp gapless cut), trim the
   // leading/trailing dead air of the whole clip, and require every carved piece to
   // still be a pause the creator asked to cut (>= their minGap).
-  return clampSilenceRegions(bridged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, settings.minGapS, settings.edgeTrimS)
+  return clampSilenceRegions(bridged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, settings.minGapS, settings.edgeTrimS, settings.targetPauseS)
 }
