@@ -6,12 +6,10 @@
 // preserved UltraCut retake prompt. Model selection and fallback experiments do
 // not live in this engine.
 //
-// SILENCE now uses the UNIFIED configurable VAD pass shared with ProCut
-// (vad.ts vadSilenceRegions, driven by the store's VadSilenceSettings): raw
-// Silero speech detection + asymmetric guard padding + edge trim + breath
-// removal, then clamped off the kept words. This REPLACES the transcript-gap
-// hybrid + vadHardCut toggle in the cloud build. The desktop path
-// (src/main/retakeaware, runRetakeAwareCut) still uses the hybrid, untouched.
+// SILENCE uses the branch-only post-EDL Retake cutter. After Gemma returns the
+// word-cut EDL, a fresh VAD pass maps non-speech gaps against only the surviving
+// words. The planner rejects every candidate touching a word and removes only
+// the middle required to reach the selected Natural/Balanced/Snappy target.
 //
 // The result shape (RetakeAwareResult) and the store's review-first contract are
 // identical, so the transcript/highlight/Execute UX is unchanged. Debug JSON is
@@ -36,7 +34,8 @@ import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/v
 import { getSupabase, invokeEdge } from './supabase'
 import { extractSttAudio } from './audio'
 import { transcribeVerbatimCloud } from './stt'
-import { detectSilenceFloat32, vadSilenceRegions } from './vad'
+import { detectSilenceFloat32 } from './vad'
+import { detectRetakeSilenceCuts } from './retakeSilenceCutter'
 
 /** Judge EDL (inclusive word-index cuts) -> Retake β time-based CutSpans. The
  *  silence engine + spansToWordIds both work in time, so this is the only bridge
@@ -149,10 +148,9 @@ export async function retakeAwareCutCloud(
     warnings.push("Retake Beta couldn't finish — please try again.")
   }
 
-  // 5. SILENCE — the UNIFIED configurable VAD pass (shared with ProCut). ASR-
-  //    artifact repair still runs (stretched-word clamp + orphan record-clicks)
-  //    so the word-clamp inside vadSilenceRegions protects real words; then it
-  //    cuts silence per the user's VadSilenceSettings.
+  // 5. SILENCE — a fresh branch-only VAD pass AFTER the judge EDL. Artifact
+  //    repair runs first, then the new planner sees only surviving words and
+  //    rejects any VAD candidate that overlaps one of them.
   op(90, 'Cleaning silence…')
   const artifacts = detectArtifacts(vt.words, baseCutSpans, vadSil)
   const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
@@ -165,7 +163,7 @@ export async function retakeAwareCutCloud(
   })
   let silenceRegions: SilenceRegion[] = []
   try {
-    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
+    silenceRegions = await detectRetakeSilenceCuts(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords)
   } catch (e) {
     warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
   }

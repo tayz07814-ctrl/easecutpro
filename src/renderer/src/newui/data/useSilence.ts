@@ -40,7 +40,7 @@ export function useSilence(): SilenceModel {
   return {
     show,
     s,
-    detected: detectSilencePreset(s),
+    detected: detectSilencePreset(s, seamFade),
     presets: SILENCE_PRESETS,
     seamFade,
     commit: (settings, fade) => {

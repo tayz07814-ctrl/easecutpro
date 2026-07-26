@@ -5,7 +5,7 @@ import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/v
 // (cloud build). Edits the store's vadSilenceSettings; both engines run the same
 // raw-VAD silence pass with these values.
 interface Row {
-  key: keyof Omit<VadSilenceSettings, 'removeBreaths'>
+  key: 'speechThreshold' | 'minGapS' | 'targetPauseS' | 'padBeforeS' | 'padAfterS' | 'edgeTrimS' | 'breathDb'
   label: string
   min: number
   max: number
@@ -14,8 +14,9 @@ interface Row {
   hint?: string
 }
 const ROWS: Row[] = [
-  { key: 'speechThreshold', label: 'Speech threshold', min: 0.5, max: 0.95, step: 0.05, unit: '', hint: 'higher = cut more (0–1)' },
+  { key: 'speechThreshold', label: 'Speech threshold', min: 0, max: 1, step: 0.01, unit: '', hint: 'higher = cut more (0–1)' },
   { key: 'minGapS', label: 'Minimum gap to cut', min: 0.05, max: 1.0, step: 0.05, unit: 's' },
+  { key: 'targetPauseS', label: 'Final retained pause', min: 0, max: 0.8, step: 0.01, unit: 's' },
   { key: 'padBeforeS', label: 'Padding before word', min: 0, max: 0.3, step: 0.01, unit: 's' },
   { key: 'padAfterS', label: 'Padding after word', min: 0, max: 0.3, step: 0.01, unit: 's' },
   { key: 'edgeTrimS', label: 'Trim cut edges', min: 0, max: 0.2, step: 0.01, unit: 's' },

@@ -597,7 +597,7 @@ export interface SeamFadeSettings {
   enabled: boolean
   ms: number
 }
-export const DEFAULT_SEAM_FADE: SeamFadeSettings = { enabled: true, ms: 25 }
+export const DEFAULT_SEAM_FADE: SeamFadeSettings = { enabled: true, ms: 20 }
 /** Clamp a possibly-partial persisted value back onto the defaults (0–60ms). */
 export function normalizeSeamFade(v: Partial<SeamFadeSettings> | null | undefined): SeamFadeSettings {
   const d = DEFAULT_SEAM_FADE
@@ -770,14 +770,13 @@ interface AppState {
   /** Retake β silence-detection settings (Retake β ONLY — never FastCut/ProCut). */
   retakeBetaSilenceSettings: RetakeBetaSilenceSettings
   setRetakeBetaSilenceSettings: (patch: Partial<RetakeBetaSilenceSettings>) => void
-  /** Unified cloud VAD silence-cutting profile — shared by ProCut AND Retake β
-   *  (cloud build). One 🔇 Silence Settings modal edits this for both engines. */
+  /** Cloud VAD profile. Retake 0.07 applies it through the dedicated post-EDL
+   *  planner; ProCut continues through its existing VAD adapter. */
   vadSilenceSettings: VadSilenceSettings
   setVadSilenceSettings: (patch: Partial<VadSilenceSettings>) => void
   /** Seam blend ("overlap") at every cut: a short incoming-only fade that de-clicks
-   *  the splice. Global render setting (export + preview), NOT a detection param, so
-   *  it lives outside vadSilenceSettings and is unaffected by silence presets.
-   *  enabled=false → hard cuts; ms is the fade length (0–60ms). */
+   *  the splice. Stored separately for rendering, but Natural/Balanced/Snappy
+   *  apply their matching 15/20/25ms value. Custom supports 0–60ms. */
   seamFade: SeamFadeSettings
   setSeamFade: (patch: Partial<SeamFadeSettings>) => void
   /** Smart Silence Cutter (redesigned UI only). ON (default): Retake β silence

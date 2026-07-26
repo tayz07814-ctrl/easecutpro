@@ -1,13 +1,13 @@
-// Unified VAD silence-cutting settings — shared by cloud ProCut AND Retake β.
-//
-// One tunable profile drives a single raw-VAD silence pass (Silero speech
-// detection + asymmetric guard padding + edge trim + breath/quiet-filler
-// removal). This REPLACES Retake β's transcript-gap hybrid and ProCut's
-// Opus-decided pause cuts in the cloud build: both engines now cut silence the
-// same way, and the one 🔇 Silence Settings modal edits this profile.
+// Cloud VAD silence settings. On Retake 0.07 these drive the dedicated post-EDL
+// planner; ProCut keeps its existing VAD adapter. The UI stores one normalized
+// profile and the Retake presets also apply their matching audio crossfade.
 import type { SilenceDetectOptions } from './types'
 
+export type SilenceCutScope = 'sentences' | 'sentences_and_long_words' | 'all_word_gaps'
+
 export interface VadSilenceSettings {
+  /** Which transcript-safe gaps may be shortened after the Retake EDL. */
+  scope: SilenceCutScope
   /** VAD positive-speech probability threshold 0..1 (higher = cut more). */
   speechThreshold: number
   /** minimum silence gap to remove, seconds. */
@@ -26,16 +26,14 @@ export interface VadSilenceSettings {
   breathDb: number
 }
 
-/** Launch defaults (= the Balanced preset). Breath/quiet-filler removal is OFF
- *  until the user opts in (it's the most aggressive control). Retuned after
- *  real-run overcutting: a lower VAD threshold (0.75) stops soft-spoken words
- *  scoring as silence, minGapS 0.4 leaves natural micro-pauses alone, and the
- *  pads keep a touch more air around speech. */
+/** Launch defaults (= Balanced): long transcript-safe gaps, 300ms retained,
+ *  120ms after the previous word + 180ms before the next. Breath removal is off. */
 export const DEFAULT_VAD_SILENCE_SETTINGS: VadSilenceSettings = {
-  speechThreshold: 0.75,
-  minGapS: 0.4,
-  targetPauseS: 0.28,
-  padBeforeS: 0.1,
+  scope: 'sentences_and_long_words',
+  speechThreshold: 0.72,
+  minGapS: 0.5,
+  targetPauseS: 0.3,
+  padBeforeS: 0.18,
   padAfterS: 0.12,
   edgeTrimS: 0,
   removeBreaths: false,
@@ -48,7 +46,10 @@ export function normalizeVadSilence(v: Partial<VadSilenceSettings> | null | unde
   if (!v) return { ...d }
   const num = (x: unknown, f: number): number => (typeof x === 'number' && Number.isFinite(x) ? x : f)
   return {
-    speechThreshold: Math.max(0.3, Math.min(0.95, num(v.speechThreshold, d.speechThreshold))),
+    scope: v.scope === 'sentences' || v.scope === 'sentences_and_long_words' || v.scope === 'all_word_gaps'
+      ? v.scope
+      : d.scope,
+    speechThreshold: Math.max(0, Math.min(1, num(v.speechThreshold, d.speechThreshold))),
     minGapS: Math.max(0.03, Math.min(2, num(v.minGapS, d.minGapS))),
     targetPauseS: Math.max(0, Math.min(0.8, num(v.targetPauseS, d.targetPauseS))),
     padBeforeS: Math.max(0, Math.min(0.4, num(v.padBeforeS, d.padBeforeS))),

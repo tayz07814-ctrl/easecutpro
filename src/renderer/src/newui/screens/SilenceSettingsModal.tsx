@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { css } from '../css'
 import { useSilence } from '../data/useSilence'
-import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
-import { detectPreset, presetValues } from '../../silencePresets'
+import type { SilenceCutScope, VadSilenceSettings } from '@shared/vadsilence'
+import { detectPreset, presetProfile } from '../../silencePresets'
 
 // Silence Settings — ONE panel. Small preset chips on top; the everyday sliders
 // beneath, with the fiddly/risky knobs (speech sensitivity + tighten) tucked under
@@ -72,8 +72,8 @@ export default function SilenceSettingsModal(): JSX.Element | null {
   }, [sil.show])
   if (!sil.show) return null
 
-  const set = (k: keyof VadSilenceSettings, v: number | boolean): void => setDraft((s) => ({ ...s, [k]: v }))
-  const active = detectPreset(draft)
+  const set = (k: keyof VadSilenceSettings, v: number | boolean | SilenceCutScope): void => setDraft((s) => ({ ...s, [k]: v }))
+  const active = detectPreset(draft, draftFade)
   const activePreset = sil.presets.find((p) => p.id === active)
 
   return (
@@ -90,7 +90,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         {/* Preset chips — small; picking one loads its values into the controls below. */}
         <div style={css('display:flex;gap:6px;margin-top:16px;flex-wrap:wrap')}>
           {sil.presets.map((p) => (
-            <button key={p.id} onClick={() => setDraft(presetValues(p.id))} style={css(active === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
+            <button key={p.id} onClick={() => { const profile = presetProfile(p.id); setDraft(profile.values); setDraftFade(profile.seamFade) }} style={css(active === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
           ))}
           <span style={css(active === 'custom' ? CHIP_ON + ';cursor:default' : CHIP + ';cursor:default;opacity:.55')}>Custom</span>
         </div>
@@ -100,6 +100,14 @@ export default function SilenceSettingsModal(): JSX.Element | null {
 
         {/* The two everyday controls + breaths. */}
         <div style={css(GROUP)}>
+          <label style={css('display:flex;flex-direction:column;gap:7px;font-size:12.5px;color:#E9EAEE;font-weight:550')}>
+            Gaps eligible for shortening
+            <select value={draft.scope} onChange={(e) => set('scope', e.target.value as SilenceCutScope)} style={css('background:#282B33;color:#E9EAEE;border:1px solid #3A3E48;border-radius:8px;padding:8px;font-family:inherit')}>
+              <option value="sentences">Sentence boundaries only</option>
+              <option value="sentences_and_long_words">Sentences + long word gaps</option>
+              <option value="all_word_gaps">All transcript-safe word gaps</option>
+            </select>
+          </label>
           <Slider label="Cut pauses longer than" value={draft.minGapS} min={0.05} max={2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0.05s · tight" hi="2s · relaxed" onChange={(v) => set('minGapS', v)} />
           <Slider label="Pause kept at each cut" value={draft.targetPauseS} min={0} max={0.8} step={0.01} fmt={(v) => (v <= 0 ? 'none' : `${v.toFixed(2)} s`)} lo="none · gapless" hi="0.8s · roomy" onChange={(v) => set('targetPauseS', v)} />
           <Toggle on={draft.removeBreaths} onToggle={() => set('removeBreaths', !draft.removeBreaths)} title="Remove breaths" desc="Also cuts breath sounds between words. Turn off if speech feels clipped." />
@@ -112,8 +120,9 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         </button>
         {advanced && (
           <div style={css(GROUP + ';margin-top:14px')}>
-            <Slider label="Tighten cuts" value={draft.edgeTrimS} min={0} max={0.2} step={0.01} fmt={(v) => (v <= 0 ? 'off' : `${Math.round(v * 1000)} ms`)} lo="off" hi="0.2s · tightest" onChange={(v) => set('edgeTrimS', v)} />
-            <Slider label="Silence sensitivity" value={draft.speechThreshold} min={0.5} max={0.9} step={0.01} fmt={(v) => strictnessLabel(v)} lo="gentle · keeps soft speech" hi="strict · may clip soft speech" onChange={(v) => set('speechThreshold', v)} />
+            <Slider label="Keep after previous word" value={draft.padAfterS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="none" hi="0.5s" onChange={(v) => set('padAfterS', v)} />
+            <Slider label="Keep before next word" value={draft.padBeforeS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="none" hi="0.5s" onChange={(v) => set('padBeforeS', v)} />
+            <Slider label="VAD speech threshold" value={draft.speechThreshold} min={0} max={1} step={0.01} fmt={(v) => strictnessLabel(v)} lo="0 · most protective" hi="1 · most aggressive" onChange={(v) => set('speechThreshold', v)} />
           </div>
         )}
 
@@ -127,7 +136,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         </div>
 
         <div style={css('display:flex;align-items:center;margin-top:20px')}>
-          <span onClick={() => setDraft({ ...DEFAULT_VAD_SILENCE_SETTINGS })} style={css(FOOT_RESET)}>Reset to default</span>
+          <span onClick={() => { const profile = presetProfile('balanced'); setDraft(profile.values); setDraftFade(profile.seamFade) }} style={css(FOOT_RESET)}>Reset to default</span>
           <div style={css('flex:1')} />
           <span onClick={sil.close} style={css(FOOT_CANCEL)}>Cancel</span>
           <button onClick={() => { sil.commit(draft, draftFade); sil.close() }} style={css(FOOT_APPLY)}>Apply</button>

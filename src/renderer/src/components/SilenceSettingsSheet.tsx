@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../store'
-import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
-import { SILENCE_PRESETS, detectPreset, presetValues, type SilencePresetId } from '../silencePresets'
+import type { SilenceCutScope, VadSilenceSettings } from '@shared/vadsilence'
+import { SILENCE_PRESETS, detectPreset, presetProfile, type SilencePresetId } from '../silencePresets'
 
 /**
  * Silence Settings — redesigned Retake β silence UI (VITE_NEW_EASECUT_UI only).
@@ -16,7 +16,7 @@ import { SILENCE_PRESETS, detectPreset, presetValues, type SilencePresetId } fro
 
 // Numeric controls, each bound to one real VadSilenceSettings field.
 interface Row {
-  key: 'speechThreshold' | 'minGapS' | 'padBeforeS' | 'padAfterS' | 'edgeTrimS'
+  key: 'speechThreshold' | 'minGapS' | 'targetPauseS' | 'padBeforeS' | 'padAfterS'
   label: string
   desc: string
   min: number
@@ -26,31 +26,39 @@ interface Row {
 }
 const ROWS: Row[] = [
   { key: 'minGapS', label: 'Minimum pause to detect', desc: 'Only pauses longer than this are trimmed.', min: 0.05, max: 1.5, step: 0.05, fmt: (v) => `${v.toFixed(2)}s` },
-  { key: 'padBeforeS', label: 'Padding before speech', desc: 'Audio kept just before each word.', min: 0, max: 0.3, step: 0.01, fmt: (v) => `${v.toFixed(2)}s` },
-  { key: 'padAfterS', label: 'Padding after speech', desc: 'Audio kept just after each word.', min: 0, max: 0.3, step: 0.01, fmt: (v) => `${v.toFixed(2)}s` },
-  { key: 'edgeTrimS', label: 'Tighten cut edges', desc: 'Trim a touch extra at every cut for snappier pacing.', min: 0, max: 0.2, step: 0.01, fmt: (v) => `${v.toFixed(2)}s` },
-  { key: 'speechThreshold', label: 'Silence sensitivity', desc: 'Higher catches quieter pauses as silence.', min: 0.5, max: 0.95, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` }
+  { key: 'targetPauseS', label: 'Final retained pause', desc: 'The total breathing room left after shortening.', min: 0, max: 0.8, step: 0.01, fmt: (v) => `${v.toFixed(2)}s` },
+  { key: 'padAfterS', label: 'Keep after previous word', desc: 'Protected tail after the preceding word.', min: 0, max: 0.4, step: 0.01, fmt: (v) => `${v.toFixed(2)}s` },
+  { key: 'padBeforeS', label: 'Keep before next word', desc: 'Protected lead-in before the next word.', min: 0, max: 0.4, step: 0.01, fmt: (v) => `${v.toFixed(2)}s` },
+  { key: 'speechThreshold', label: 'VAD speech threshold', desc: 'Higher treats quiet speech more aggressively.', min: 0, max: 1, step: 0.01, fmt: (v) => v.toFixed(2) }
 ]
 
 export default function SilenceSettingsSheet(): JSX.Element {
   const applied = useStore((s) => s.vadSilenceSettings)
   const setApplied = useStore((s) => s.setVadSilenceSettings)
+  const appliedFade = useStore((s) => s.seamFade)
+  const setAppliedFade = useStore((s) => s.setSeamFade)
   const close = useStore((s) => s.setShowSilenceSettings)
 
   // Buffered draft — seeded from the currently-applied settings. Cancel/scrim
   // simply close without committing; only Apply writes to the store.
   const [draft, setDraft] = useState<VadSilenceSettings>(() => ({ ...applied }))
-  const active = detectPreset(draft)
+  const [draftFade, setDraftFade] = useState(() => ({ ...appliedFade }))
+  const active = detectPreset(draft, draftFade)
 
   const set = (patch: Partial<VadSilenceSettings>): void => setDraft((d) => ({ ...d, ...patch }))
-  const pickPreset = (id: SilencePresetId): void => setDraft(presetValues(id))
+  const pickPreset = (id: SilencePresetId): void => {
+    const profile = presetProfile(id)
+    setDraft(profile.values)
+    setDraftFade(profile.seamFade)
+  }
   const cancel = (): void => close(false)
   const apply = (): void => {
     setApplied(draft) // existing setter → normalizes + persists
+    setAppliedFade(draftFade)
     close(false)
   }
 
-  const explain = `Pauses longer than ${draft.minGapS.toFixed(2)}s are removed, keeping about ${draft.padAfterS.toFixed(2)}s of breathing room${draft.removeBreaths ? ', and soft breaths are trimmed' : ''}.`
+  const explain = `Pauses longer than ${draft.minGapS.toFixed(2)}s are shortened to ${Math.max(draft.targetPauseS, draft.padAfterS + draft.padBeforeS).toFixed(2)}s with a ${draftFade.ms}ms crossfade.`
 
   return (
     <div className="ss-scrim" onClick={cancel}>
@@ -87,6 +95,14 @@ export default function SilenceSettingsSheet(): JSX.Element {
 
         {/* real controls */}
         <div className="ss-controls">
+          <label className="ss-ctl">
+            <span className="ss-ctl-label">Gaps eligible for shortening</span>
+            <select value={draft.scope} onChange={(e) => set({ scope: e.target.value as SilenceCutScope })}>
+              <option value="sentences">Sentence boundaries only</option>
+              <option value="sentences_and_long_words">Sentences + long word gaps</option>
+              <option value="all_word_gaps">All transcript-safe word gaps</option>
+            </select>
+          </label>
           {ROWS.map((r) => {
             const val = draft[r.key]
             return (
@@ -136,11 +152,16 @@ export default function SilenceSettingsSheet(): JSX.Element {
               </div>
             </div>
           )}
+
+          <div className="ss-ctl">
+            <div className="ss-ctl-top"><span className="ss-ctl-label">Audio crossfade</span><span className="ss-ctl-val">{draftFade.ms}ms</span></div>
+            <input type="range" min={0} max={60} step={1} value={draftFade.ms} onChange={(e) => setDraftFade({ enabled: Number(e.target.value) > 0, ms: Number(e.target.value) })} />
+          </div>
         </div>
 
         {/* footer */}
         <div className="ss-foot">
-          <button className="ss-reset" onClick={() => setDraft({ ...DEFAULT_VAD_SILENCE_SETTINGS })}>Reset to defaults</button>
+          <button className="ss-reset" onClick={() => pickPreset('balanced')}>Reset to defaults</button>
           <span className="ss-spacer" />
           <button onClick={cancel}>Cancel</button>
           <button className="primary" onClick={apply}>Apply settings</button>
