@@ -27,6 +27,11 @@ export const DEFAULT_RETAKE_FINAL_BOSS_SETTINGS: RetakeFinalBossSettings = {
   audioOverlapMs: 20
 }
 
+/** A carved gap must be this long before padding is applied. Keeping this in
+ * the Final Boss contract makes an oversized raw VAD region obey the same
+ * minimum as an ordinary VAD gap after it is split around transcript words. */
+export const RETAKE_FINAL_BOSS_MIN_SILENCE_S = 0.25
+
 export function normalizeRetakeFinalBossSettings(
   value: Partial<RetakeFinalBossSettings> | null | undefined
 ): RetakeFinalBossSettings {
@@ -119,9 +124,14 @@ export interface FinalBossSpeechWord {
   end: number
 }
 
-/** Convert raw Final Boss VAD gaps to exact protected cuts. If AssemblyAI says
- * a surviving word occupies any part of a candidate, the whole candidate is
- * rejected. Edge trim only consumes configured padding; it cannot enter speech. */
+/** Convert raw Final Boss VAD gaps to exact protected cuts.
+ *
+ * Silero can merge steady background noise and quiet speech into one oversized
+ * region (at threshold 1 it can legitimately return the whole clip). Rejecting
+ * that whole candidate because it touched one AssemblyAI word made the most
+ * aggressive threshold produce no cuts. Instead, subtract every surviving word
+ * span and keep the word-free pieces. Padding is applied only after carving, so
+ * no cut can enter a surviving word. */
 export function planFinalBossSilenceCuts(
   rawGaps: { start: number; end: number }[],
   survivingWords: FinalBossSpeechWord[],
@@ -132,29 +142,49 @@ export function planFinalBossSilenceCuts(
   const output: SilenceRegion[] = []
   const epsilon = 0.002
 
+  const carveWords = (start: number, end: number): { start: number; end: number }[] => {
+    const pieces: { start: number; end: number }[] = []
+    let cursor = start
+    for (const word of words) {
+      if (word.end <= cursor + epsilon) continue
+      if (word.start >= end - epsilon) break
+      if (word.start > cursor + epsilon) pieces.push({ start: cursor, end: Math.min(end, word.start) })
+      cursor = Math.max(cursor, Math.min(end, word.end))
+      if (cursor >= end - epsilon) break
+    }
+    if (cursor < end - epsilon) pieces.push({ start: cursor, end })
+    return pieces
+  }
+
   for (const [index, source] of rawGaps.entries()) {
     const start = Math.max(0, Math.min(durationS, source.start))
     const end = Math.max(0, Math.min(durationS, source.end))
     if (end - start < 0.04) continue
-    if (words.some((word) => word.start < end - epsilon && word.end > start + epsilon)) continue
 
-    const hasPrevious = words.some((word) => word.end <= start + epsilon)
-    const hasNext = words.some((word) => word.start >= end - epsilon)
-    if (!hasPrevious && !hasNext) continue
+    for (const [pieceIndex, piece] of carveWords(start, end).entries()) {
+      // Do not turn a whole-clip VAD miss into dozens of rhythm-destroying
+      // micro-splices between normally adjacent words.
+      if (piece.end - piece.start < RETAKE_FINAL_BOSS_MIN_SILENCE_S) continue
 
-    const keepAfter = hasPrevious ? Math.max(0, settings.padAfterS - settings.trimEdgesS) : 0
-    const keepBefore = hasNext ? Math.max(0, settings.padBeforeS - settings.trimEdgesS) : 0
-    const cutStart = start + keepAfter
-    const cutEnd = end - keepBefore
-    if (cutEnd - cutStart < 0.04) continue
+      const hasPrevious = words.some((word) => word.end <= piece.start + epsilon)
+      const hasNext = words.some((word) => word.start >= piece.end - epsilon)
+      // With no transcript context there is no safe speech boundary to cut to.
+      if (!hasPrevious && !hasNext) continue
 
-    output.push({
-      id: `finalboss-sil-${index}`,
-      start: cutStart,
-      end: cutEnd,
-      action: 'remove',
-      protect: true
-    })
+      const keepAfter = hasPrevious ? Math.max(0, settings.padAfterS - settings.trimEdgesS) : 0
+      const keepBefore = hasNext ? Math.max(0, settings.padBeforeS - settings.trimEdgesS) : 0
+      const cutStart = piece.start + keepAfter
+      const cutEnd = piece.end - keepBefore
+      if (cutEnd - cutStart < 0.04) continue
+
+      output.push({
+        id: `finalboss-sil-${index}-${pieceIndex}`,
+        start: cutStart,
+        end: cutEnd,
+        action: 'remove',
+        protect: true
+      })
+    }
   }
   return output
 }

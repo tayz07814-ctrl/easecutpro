@@ -129,7 +129,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         </div>
 
         <div style={css('font-size:11px;color:#7E8393;line-height:1.5;margin-top:18px;padding:10px 12px;background:#191B20;border-radius:8px')}>
-          Final Boss never uses transcript-predicted silence. Any VAD candidate touching a surviving AssemblyAI word is discarded.
+          Final Boss never uses transcript-predicted silence. Oversized VAD regions are split around surviving AssemblyAI words, so background noise can be removed without cutting through speech.
         </div>
 
         <div style={css('display:flex;align-items:center;margin-top:20px')}>

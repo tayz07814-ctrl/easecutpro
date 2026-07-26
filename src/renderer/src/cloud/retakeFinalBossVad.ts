@@ -4,12 +4,11 @@
 import type { SilenceRegion } from '@shared/types'
 import {
   planFinalBossSilenceCuts,
+  RETAKE_FINAL_BOSS_MIN_SILENCE_S,
   type FinalBossSpeechWord,
   type RetakeFinalBossSettings
 } from '@shared/retakefinalboss'
 import { detectSilenceFloat32 } from './vad'
-
-const FIXED_MIN_SILENCE_S = 0.25
 
 export async function detectRetakeFinalBossSilences(
   float32: Float32Array,
@@ -22,7 +21,7 @@ export async function detectRetakeFinalBossSilences(
     mode: 'vad',
     noiseDb: -40,
     vadThreshold: settings.speechThreshold,
-    minDuration: FIXED_MIN_SILENCE_S,
+    minDuration: RETAKE_FINAL_BOSS_MIN_SILENCE_S,
     speechPadMs: 0,
     padBeforeMs: 0,
     padAfterMs: 0,
