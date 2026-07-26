@@ -2,10 +2,10 @@
 //
 // WORD CUTS are LLM-first: the FULL index-anchored transcript (shared/cutcutpro
 // buildAiPayload) goes to the SINGLE-PASS ultracut judge (the `ultracut-judge`
-// edge fn). Production runs xai/grok-4.5-latest on OpenRouter
-// (OpenRouter key) with the creator's single-pass retake
+// edge fn). Production runs Gemma 4 31B on Cerebras Cloud's first-party API
+// (api.cerebras.ai, CEREBRAS_API_KEY) with the creator's single-pass retake
 // prompt (no first/second-pass framing) and it returns the cut EDL. If the
-// Grok call fails the edge fn falls back to deepseek-v4-pro via OpenRouter, so
+// Cerebras call fails the edge fn falls back to deepseek-v4-pro, so
 // a transient outage never yields zero cuts. (procut-judge / Opus is still
 // deployed but the cloud retake no longer uses it.)
 //
@@ -97,7 +97,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (Grok-4.5 + sharp judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (Cerebras Gemma-4-31B + sharp judge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -123,8 +123,8 @@ export async function retakeAwareCutCloud(
   }
 
   // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
-  //    (ultracut-judge edge fn, OpenRouter). Production runs xai/grok-4.5-latest
-  //    on the 'sharp' word-list retake prompt + reasoning:low; it scans everything
+  //    (ultracut-judge edge fn). Production runs Cerebras gemma-4-31b
+  //    on the 'sharp' word-list retake prompt; it scans everything
   //    and returns the cut EDL.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
@@ -138,8 +138,11 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      // OpenRouter slug for Gemma-4-31b model.
-      model: 'google/gemma-4-31b-it',
+      // Un-prefixed id → the edge fn routes this to Cerebras Cloud's first-party
+      // API (api.cerebras.ai, CEREBRAS_API_KEY) for Gemma 4 31B at wafer-scale
+      // speed, not OpenRouter. gemma-4-31b is not a reasoning model, so the
+      // edge fn drops the reasoning intent for this route.
+      model: 'gemma-4-31b',
       promptVariant: 'sharp',
       reasoning: 'low'
     } satisfies ProcutJudgeReq)
