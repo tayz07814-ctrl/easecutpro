@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { playClock } from '../clock'
 import { kenBurnsTransform } from '../kenBurns'
@@ -258,20 +258,25 @@ function OverlayBox({
   // Smooth Ken Burns zoom across the clip — GPU-composited (translateZ + scale3d,
   // full float), driven off the shared 60fps play clock for BOTH images and
   // videos so it keeps ramping even over a magnet-off gap on the base lane.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el: HTMLElement | null = isImage ? imgRef.current : ref.current
     if (!el) return
     const at = (prog: number): string => kenBurnsTransform({ zoomStart: zs, zoomEnd: ze, progress: prog })
+    const apply = (time: number): void => {
+      el.style.transform = at(len > 0 ? (time - view.start) / len : 0)
+    }
+    // Apply synchronously before the clip's first paint. Waiting for the first
+    // rAF showed one identity frame, which read as a hitch at overlay start.
+    apply(playing ? playClock.t : playhead)
     if (playing) {
       let raf = 0
       const loop = (): void => {
-        el.style.transform = at(len > 0 ? (playClock.t - view.start) / len : 0)
+        apply(playClock.t)
         raf = requestAnimationFrame(loop)
       }
       raf = requestAnimationFrame(loop)
       return () => cancelAnimationFrame(raf)
     }
-    el.style.transform = at(len > 0 ? (playhead - view.start) / len : 0)
     return undefined
   }, [playing, playhead, view.start, view.sourceIn, len, zs, ze, isImage])
 

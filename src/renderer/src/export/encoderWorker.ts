@@ -4,7 +4,7 @@
 // INDEX (n / fps), never from the wall clock, so device hitches can only make
 // the export take longer — they can never appear inside the file as freezes,
 // drops or stretched duration (the failure mode of realtime captureStream/
-// MediaRecorder exports). Compositing (contain-fit + eased Ken Burns on the
+// MediaRecorder exports). Compositing (contain-fit + linear Ken Burns on the
 // main lane, overlay boxes + baked text sprites above it — geometry from
 // export/overlays.ts, the preview's math) happens here on an OffscreenCanvas
 // so the page never stutters; VideoEncoder / AudioEncoder are hardware-backed

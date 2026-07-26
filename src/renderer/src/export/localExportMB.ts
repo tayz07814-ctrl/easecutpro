@@ -15,7 +15,7 @@
 // never the wall clock), so a slow device only makes the export take longer; it
 // can't change the file's duration or frame count.
 //
-// Compositing mirrors the encoder worker (base contain-fit + eased Ken Burns,
+// Compositing mirrors the encoder worker (base contain-fit + linear Ken Burns,
 // overlay boxes with crop + Ken Burns, baked text on top, z-ordering). This path
 // is used ONLY when probeEncodeCaps().audio === false; every other browser keeps
 // the untouched mp4-muxer exporter. Uses a plain per-frame seek (no play-harvest)
