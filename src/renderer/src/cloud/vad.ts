@@ -85,18 +85,28 @@ function mergeIntervals(list: { start: number; end: number }[]): { start: number
   return out
 }
 
-/** Run the Silero VAD over decoded samples and translate the speech map to the
- *  app's silence regions (semantics documented in the header). `durationS` is
- *  the media duration the trailing region should extend to. */
-export async function detectSilenceFloat32(
+/** Which browser VAD engine produces the raw speech segments. 'silero' is the
+ *  default (bundled, always available); 'tenvad' opts into the sherpa-onnx WASM
+ *  ten-vad detector (needs the sherpa assets under public/vad/sherpa/, see
+ *  tenvad.ts). Flag-gated (localStorage ec:vadEngine) so it can be A/B'd per
+ *  browser with no redeploy — everything downstream is engine-agnostic. */
+export type VadEngine = 'silero' | 'tenvad'
+export function vadEngine(): VadEngine {
+  try {
+    const v = (globalThis.localStorage?.getItem('ec:vadEngine') ?? '').toLowerCase()
+    if (v === 'tenvad' || v === 'ten' || v === 'ten-vad') return 'tenvad'
+  } catch {
+    /* no localStorage (worker / SSR) → default engine */
+  }
+  return 'silero'
+}
+
+/** Silero speech segments (seconds) via @ricky0123/vad-web's NonRealTimeVAD. */
+async function sileroSpeechSegments(
   float32: Float32Array,
   sampleRate: number,
-  opts: SilenceDetectOptions,
-  durationS: number
-): Promise<SilenceRegion[]> {
-  // NOTE: 'fast' mode (ffmpeg dB threshold) has no browser twin — the retake
-  // engine only ever asks for 'vad', which this IS. Run the VAD regardless.
-  const thr = opts?.vadThreshold ?? 0.5
+  thr: number
+): Promise<{ start: number; end: number }[]> {
   const vad = await NonRealTimeVAD.new({
     modelURL: VAD_ASSET_BASE + 'silero_vad_legacy.onnx',
     modelFetcher: cachedModelFetcher,
@@ -106,16 +116,37 @@ export async function detectSilenceFloat32(
     positiveSpeechThreshold: thr,
     negativeSpeechThreshold: Math.max(0.01, thr - 0.15),
     redemptionMs: REDEMPTION_MS,
-    preSpeechPadMs: 0, // padding is applied below, on BOTH sides (-vp semantics)
+    preSpeechPadMs: 0, // padding is applied on BOTH sides downstream (-vp semantics)
     minSpeechMs: MIN_SPEECH_MS,
     submitUserSpeechOnPause: false
   })
-
-  // 1. raw SPEECH segments (vad-web reports ms)
   const speech: { start: number; end: number }[] = []
   for await (const seg of vad.run(float32, sampleRate)) {
     speech.push({ start: seg.start / 1000, end: seg.end / 1000 })
   }
+  return speech
+}
+
+/** Run the selected VAD engine over decoded samples and translate the speech map
+ *  to the app's silence regions (semantics documented in the header). `durationS`
+ *  is the media duration the trailing region should extend to. */
+export async function detectSilenceFloat32(
+  float32: Float32Array,
+  sampleRate: number,
+  opts: SilenceDetectOptions,
+  durationS: number
+): Promise<SilenceRegion[]> {
+  // NOTE: 'fast' mode (ffmpeg dB threshold) has no browser twin — the retake
+  // engine only ever asks for 'vad', which this IS. Run the VAD regardless.
+  const thr = opts?.vadThreshold ?? 0.5
+
+  // 1. raw SPEECH segments (seconds) from the selected engine. ten-vad is
+  //    dynamic-imported so its WASM only loads when the flag opts in — the default
+  //    Silero path is byte-for-byte the old behaviour.
+  const speech: { start: number; end: number }[] =
+    vadEngine() === 'tenvad'
+      ? await (await import('./tenvad')).tenVadSpeechSegments(float32, sampleRate, thr)
+      : await sileroSpeechSegments(float32, sampleRate, thr)
 
   // 2. undo the redemption-frame overshoot (a segment that runs to the end of
   //    the audio was closed by EOF, not redemption — leave that one alone),
