@@ -13,6 +13,7 @@ import { documentToProject } from '../src/shared/timeline/bridge'
 import { computeKeepRanges, virtualKeepsToClipSegments } from '../src/shared/edit'
 import { createTimeline, createTrack, createClip, addTrackToDoc, addClipToDoc } from '../src/shared/timeline/model'
 import { FPS_30 } from '../src/shared/timeline/time'
+import { readFileSync } from 'node:fs'
 import { baseTransformFilter, atempoChain } from '../src/main/ffmpeg'
 import { kenBurnsEase, kenBurnsScale } from '../src/renderer/src/kenBurns'
 import type { Project } from '../src/shared/types'
@@ -105,6 +106,10 @@ check(
 )
 check('shared browser zoom advances on the first progress step', Math.abs(kenBurnsEase(0.01) - 0.01) < 1e-12)
 check('shared browser zoom has constant per-frame velocity', Math.abs(kenBurnsScale({ zoomStart: 1, zoomEnd: 2, progress: 0.25 }) - 1.25) < 1e-12)
+const localExportSource = readFileSync(new URL('../src/renderer/src/export/localExport.ts', import.meta.url), 'utf8')
+const docPreviewSource = readFileSync(new URL('../src/renderer/src/components/DocPreview.tsx', import.meta.url), 'utf8')
+check('on-device animated export is rendered at 60fps', /export const FPS = 60/.test(localExportSource))
+check('preview zoom uses a monotonic display-time clock', /motionTRef/.test(docPreviewSource) && /motionT \+ dt/.test(docPreviewSource))
 // the crop offset is ANALYTIC (same trunc'd width expression), never in_w-based:
 // crop's in_w binds at init on variable-size streams (left-anchor bug).
 check(

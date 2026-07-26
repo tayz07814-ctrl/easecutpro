@@ -35,7 +35,9 @@ import type { OverlayClipSpec, OverlayRect } from './overlays'
 import type { Project } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 
-export const FPS = 30
+// Animated scale/pan at 30fps visibly stair-steps on long, subtle pushes.
+// 60fps matches the preview compositor and keeps every zoom displacement small.
+export const FPS = 60
 const AUDIO_RATE = 48000
 
 /** Friendly, rotating export status lines (the % is shown separately in the UI). */

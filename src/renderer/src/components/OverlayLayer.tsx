@@ -270,8 +270,16 @@ function OverlayBox({
     apply(playing ? playClock.t : playhead)
     if (playing) {
       let raf = 0
-      const loop = (): void => {
-        apply(playClock.t)
+      let visualTime = clamp(playClock.t, view.start, view.start + len)
+      let lastWall = performance.now()
+      const loop = (now: number): void => {
+        const dt = Math.min(0.1, Math.max(0, (now - lastWall) / 1000))
+        lastWall = now
+        // A real seek is allowed to jump. Normal media-time quantization is not:
+        // it can no longer turn a slow overlay pan into visible stair-steps.
+        if (Math.abs(playClock.t - visualTime) > 0.35) visualTime = clamp(playClock.t, view.start, view.start + len)
+        else visualTime = clamp(visualTime + dt, view.start, view.start + len)
+        apply(visualTime)
         raf = requestAnimationFrame(loop)
       }
       raf = requestAnimationFrame(loop)
