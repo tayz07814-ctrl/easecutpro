@@ -254,17 +254,29 @@ export function clampSilenceRegions(
   // NOTE: an earlier revision tried trimming STT word-end slop here ("tail trim")
   // — reverted: STT/repaired word times are not reliable enough to cut against,
   // and the trim clipped real speech. Words are protected at their FULL spans.
-  const guarded = [...keptWords]
-    .map((w) => ({ start: w.start - guardBeforeS, end: w.end + guardAfterS }))
-    .sort((x, y) => x.start - y.start)
+  const wordsSorted = [...keptWords].sort((x, y) => x.start - y.start)
   const subtractWords = (a: number, b: number): { start: number; end: number }[] => {
     const out: { start: number; end: number }[] = []
     let cursor = a
-    for (const w of guarded) {
-      if (w.end <= cursor) continue
-      if (w.start >= b) break
-      if (w.start > cursor) out.push({ start: cursor, end: w.start })
-      cursor = Math.max(cursor, w.end)
+    for (const w of wordsSorted) {
+      const gs = w.start - guardBeforeS
+      let ge = w.end + guardAfterS
+      // TRAILING-DRIFT GUARD. A word whose ONSET is at/before this region's acoustic
+      // start belongs to the PRECEDING speech: the VAD already ended speech at `a`
+      // (= tight speech end + padAfter; the redemption frame is subtracted out in the
+      // raw pass), so `a` is the reliable boundary. That word's STT END-time is not —
+      // and when it drifts LATE (a linear STT clock error, so the lag grows toward the
+      // end of a long video) its guarded tail reaches past `a` and holds the cut open,
+      // leaving a growing trail of dead air at the clip's end (the "1–1.5 s silent gap,
+      // worse toward the end, in every engine" report — every VAD shares this carve).
+      // Cap such a word's protected tail at `a` so a drifting word-end can never veto
+      // the VAD's cut. A word that onsets INSIDE the region (gs/ge fully past `a`) is
+      // one the VAD under-detected → protect it in full (ge unchanged) as before.
+      if (w.start <= a) ge = Math.min(ge, a)
+      if (ge <= cursor) continue
+      if (gs >= b) break
+      if (gs > cursor) out.push({ start: cursor, end: gs })
+      cursor = Math.max(cursor, ge)
     }
     if (cursor < b) out.push({ start: cursor, end: b })
     return out
