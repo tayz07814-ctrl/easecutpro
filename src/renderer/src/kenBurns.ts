@@ -63,6 +63,40 @@ export interface KenBurnsParams {
   ease?: Easing
 }
 
+export interface MotionWindowItem {
+  start: number
+  len: number
+}
+
+/**
+ * Build one animation clock across adjacent timeline pieces that carry the same
+ * transform. Silence/retake edits split a source clip into many kept pieces;
+ * restarting 0→1 on every piece makes the zoom snap backwards at every cut.
+ */
+export function continuousMotionWindows<T extends MotionWindowItem>(
+  items: readonly T[],
+  groupKey: (item: T) => string
+): Array<{ start: number; len: number }> {
+  const out = items.map((item) => ({ start: item.start, len: item.len }))
+  let i = 0
+  while (i < items.length) {
+    let j = i + 1
+    const key = groupKey(items[i])
+    while (
+      j < items.length &&
+      groupKey(items[j]) === key &&
+      Math.abs(items[j].start - (items[j - 1].start + items[j - 1].len)) < 0.05
+    ) {
+      j++
+    }
+    const start = items[i].start
+    const end = items[j - 1].start + items[j - 1].len
+    for (let k = i; k < j; k++) out[k] = { start, len: Math.max(0.02, end - start) }
+    i = j
+  }
+  return out
+}
+
 /** Interpolated Ken Burns scale at `progress` — a raw float, never rounded. */
 export function kenBurnsScale(p: KenBurnsParams): number {
   const ease = p.ease ?? kenBurnsEase

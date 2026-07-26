@@ -137,7 +137,7 @@ export async function exportOnDeviceMB(
     const s = Math.min(W / vw, H / vh)
     const dw = vw * s
     const dh = vh * s
-    const prog = seg.len > 0 ? Math.min(1, Math.max(0, (t - seg.start) / seg.len)) : 0
+    const prog = seg.motionLen > 0 ? Math.min(1, Math.max(0, (t - seg.motionStart) / seg.motionLen)) : 0
     return {
       dx: (W - dw) / 2,
       dy: (H - dh) / 2,

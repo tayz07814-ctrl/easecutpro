@@ -22,7 +22,7 @@ import { framesToSeconds } from '@shared/timeline/time'
 import { resolveMedia } from '../media/resolver'
 import { isWebMediaId, getFile, mp4AudioStartOffset } from '../webmedia'
 import { IS_WEB } from '../platform'
-import { kenBurnsEase } from '../kenBurns'
+import { continuousMotionWindows, kenBurnsEase } from '../kenBurns'
 import {
   planOverlays,
   planTexts,
@@ -65,6 +65,8 @@ export interface Seg {
   ze: number
   ox: number
   oy: number
+  motionStart: number
+  motionLen: number
 }
 
 export interface AudioClipSched {
@@ -192,8 +194,18 @@ export function planFromDoc(doc: TimelineDocument, project: Project): { segs: Se
       zs: num(c.metadata?.ovZoomStart, 1),
       ze: num(c.metadata?.ovZoomEnd, 1),
       ox: num(c.metadata?.ovX, 0),
-      oy: num(c.metadata?.ovY, 0)
+      oy: num(c.metadata?.ovY, 0),
+      motionStart: 0,
+      motionLen: 0
     })
+  }
+  const windows = continuousMotionWindows(
+    segs,
+    (s) => `${s.src}|${s.size}|${s.zs}|${s.ze}|${s.ox}|${s.oy}`
+  )
+  for (let i = 0; i < segs.length; i++) {
+    segs[i].motionStart = windows[i].start
+    segs[i].motionLen = windows[i].len
   }
   const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0
 
@@ -715,7 +727,7 @@ export async function exportOnDevice(
     const s = Math.min(W / vw, H / vh)
     const dw = vw * s
     const dh = vh * s
-    const prog = seg.len > 0 ? Math.min(1, Math.max(0, (t - seg.start) / seg.len)) : 0
+    const prog = seg.motionLen > 0 ? Math.min(1, Math.max(0, (t - seg.motionStart) / seg.motionLen)) : 0
     return {
       dx: (W - dw) / 2,
       dy: (H - dh) / 2,
