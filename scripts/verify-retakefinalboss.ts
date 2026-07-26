@@ -33,28 +33,18 @@ check('overlapping/adjacent word cuts merge', validateFinalBossWordCuts('{"word_
 check('runaway whole-transcript deletion is rejected', validateFinalBossWordCuts('{"word_cuts":[{"from":0,"to":19}]}', 20) === null)
 
 console.log('3) dedicated settings normalization')
-const normalized = normalizeRetakeFinalBossSettings({ speechThreshold: 2, padBeforeS: -1, padAfterS: 0.2, trimEdgesS: 5, audioOverlapMs: 100 })
-check('speech threshold clamps to 0..1', normalized.speechThreshold === 1)
+const normalized = normalizeRetakeFinalBossSettings({ padBeforeS: -1, padAfterS: 0.2, trimEdgesS: 5, audioOverlapMs: 100 })
 check('paddings, trim, and overlap use Final Boss bounds', normalized.padBeforeS === 0 && normalized.padAfterS === 0.2 && normalized.trimEdgesS === 0.2 && normalized.audioOverlapMs === 60)
-check('defaults expose only the five Final Boss controls', Object.keys(DEFAULT_RETAKE_FINAL_BOSS_SETTINGS).sort().join(',') === ['audioOverlapMs', 'padAfterS', 'padBeforeS', 'speechThreshold', 'trimEdgesS'].sort().join(','))
+check('defaults expose only cut geometry controls', Object.keys(DEFAULT_RETAKE_FINAL_BOSS_SETTINGS).sort().join(',') === ['audioOverlapMs', 'padAfterS', 'padBeforeS', 'trimEdgesS'].sort().join(','))
 
 console.log('4) fresh Final Boss silence planner')
 const settings = { ...DEFAULT_RETAKE_FINAL_BOSS_SETTINGS, padAfterS: 0.12, padBeforeS: 0.18, trimEdgesS: 0.02 }
-const speech = [{ word: 'Done.', start: 0, end: 0.5 }, { word: 'Next', start: 2, end: 2.5 }]
-const planned = planFinalBossSilenceCuts([{ start: 0.5, end: 2 }], speech, settings, 3)
+const planned = planFinalBossSilenceCuts([{ start: 0.5, end: 2 }], settings, 3)
 check('one protected cut is produced', planned.length === 1 && planned[0].protect === true && planned[0].action === 'remove')
 check('padding and edge trim produce exact independent geometry', Math.abs(planned[0].start - 0.6) < 1e-9 && Math.abs(planned[0].end - 1.84) < 1e-9)
-const oversized = planFinalBossSilenceCuts([{ start: 0, end: 3 }], speech, settings, 3)
-check('whole-clip VAD miss is carved while short edge rhythm stays', oversized.length === 1)
-check('carved cuts never enter surviving words', oversized.every((cut) => speech.every((word) => cut.end <= word.start || cut.start >= word.end)))
-check('candidate fully inside a surviving word is rejected', planFinalBossSilenceCuts([{ start: 0.1, end: 0.4 }], speech, settings, 3).length === 0)
-check('candidate with no transcript context is rejected', planFinalBossSilenceCuts([{ start: 0, end: 3 }], [], settings, 3).length === 0)
-const rhythm = [{ word: 'I', start: 0, end: 0.2 }, { word: 'think', start: 0.7, end: 1 }]
-check('short mid-sentence rhythm is preserved', planFinalBossSilenceCuts([{ start: 0.2, end: 0.7 }], rhythm, settings, 1).length === 0)
-const sentencePause = [{ word: 'Done.', start: 0, end: 0.2 }, { word: 'Next', start: 0.7, end: 1 }]
-check('short silence at a sentence boundary is tightened', planFinalBossSilenceCuts([{ start: 0.2, end: 0.7 }], sentencePause, settings, 1).length === 1)
-const longPause = [{ word: 'I', start: 0, end: 0.2 }, { word: 'think', start: 1.2, end: 1.5 }]
-check('long background-noise gap is tightened without punctuation', planFinalBossSilenceCuts([{ start: 0.2, end: 1.2 }], longPause, settings, 1.5).length === 1)
+const oversized = planFinalBossSilenceCuts([{ start: 0, end: 3 }], settings, 3)
+check('raw FSMN gap is accepted without transcript carving', oversized.length === 1)
+check('planner source contains no transcript or sentence rules', !/survivingWords|sentenceBoundary|carveWords/.test(readFileSync(new URL('../src/shared/retakefinalboss.ts', import.meta.url), 'utf8')))
 
 console.log('5) edge prompt contains no silence-boundary instructions')
 const edge = readFileSync(new URL('../supabase/functions/retakefinalboss/index.ts', import.meta.url), 'utf8')
@@ -77,6 +67,7 @@ check('engine never imports the old Retake engine or timestamp-map payload', !/r
 check('Final Boss VAD never imports an old silence planner or settings profile', !/retakeSilenceCutter|retakesilence|vadsilence|vadSilenceRegions|clampSilenceRegions/.test(vad))
 check('Final Boss uses FunASR FSMN-VAD, not Silero', /detectFsmnSilences/.test(vad) && !/detectSilenceFloat32|vad-web|silero/i.test(vad))
 check('FSMN runtime supplies fbank, LFR, CMVN and recurrent caches', /fbankLfrCmvn/.test(fsmn) && /LFR_M = 5/.test(fsmn) && /parseCmvn/.test(fsmn) && /in_cache/.test(fsmn))
+check('FSMN runtime uses the published default decision threshold', /OFFICIAL_SPEECH_THRESHOLD = 0\.8/.test(fsmn) && !/speechThreshold/.test(fsmn))
 
 console.log(okay ? '\nRETAKE FINAL BOSS OK' : '\nRETAKE FINAL BOSS FAILED')
 process.exit(okay ? 0 : 1)

@@ -98,15 +98,13 @@ export async function retakeFinalBossCloud(
 
   // This is the only silence stage in Final Boss, and it always runs last.
   op(88, 'Running Final Boss silence detection…')
-  const survivingWords = verbatim.words.filter((_, index) => !deleteIndices.has(index))
   let silenceRegions: SilenceRegion[] = []
   try {
     silenceRegions = await detectRetakeFinalBossSilences(
       audio.float32,
       audio.sampleRate,
       audio.durationS,
-      settings,
-      survivingWords
+      settings
     )
   } catch {
     warnings.push('Final Boss silence detection could not finish; word cuts are still available.')

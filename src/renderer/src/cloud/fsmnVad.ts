@@ -21,6 +21,14 @@ const CACHE_LAYERS = 4
 const CACHE_PROJ = 128
 const CACHE_ORDER = 19
 const MAX_CHUNK_FRAMES = 6000
+// Published defaults from the model's vad.yaml. These are intentionally fixed:
+// Final Boss does not tune or reinterpret the VAD.
+const OFFICIAL_SPEECH_THRESHOLD = 0.8 // p(speech) >= p(noise) + 0.6
+const OFFICIAL_WINDOW_FRAMES = 20 // 200 ms
+const OFFICIAL_TRANSITION_FRAMES = 15 // 150 ms
+const OFFICIAL_START_LOOKBACK_FRAMES = 20 // 200 ms
+const OFFICIAL_END_SILENCE_FRAMES = 65 // (800 - 150) ms
+const OFFICIAL_END_LOOKAHEAD_FRAMES = 10 // 100 ms
 
 let runtimePromise: Promise<{ session: ort.InferenceSession; means: Float32Array; scales: Float32Array }> | null = null
 let melBank: Float32Array[] | null = null
@@ -184,35 +192,66 @@ function fbankLfrCmvn(samples: Float32Array, means: Float32Array, scales: Float3
 
 function speechToSilence(
   speechProbability: Float32Array,
-  threshold: number,
-  durationS: number,
-  minimumSilenceS: number
+  durationS: number
 ): { start: number; end: number }[] {
-  // FunASR's reference endpoint smoother: a 200 ms window with 150 ms needed
-  // for either transition, plus conservative 200/100 ms speech extension.
-  const window = 20
-  const transition = 15
-  const ring = new Uint8Array(window)
+  // FunASR's default offline E2E endpoint state machine. Values above are
+  // copied from vad.yaml; there are no application-level heuristics here.
+  let ring = new Uint8Array(OFFICIAL_WINDOW_FRAMES)
   const speech: { start: number; end: number }[] = []
   let sum = 0
   let position = 0
-  let speaking = false
+  let windowSpeaking = false
+  let segmentActive = false
   let speechStart = 0
+  let continuousSilence = 0
+
+  const resetEndpoint = (): void => {
+    ring = new Uint8Array(OFFICIAL_WINDOW_FRAMES)
+    sum = 0
+    position = 0
+    windowSpeaking = false
+    continuousSilence = 0
+  }
+
   for (let i = 0; i < speechProbability.length; i++) {
-    const current = speechProbability[i] >= threshold ? 1 : 0
+    const current = speechProbability[i] >= OFFICIAL_SPEECH_THRESHOLD ? 1 : 0
     sum -= ring[position]
     sum += current
     ring[position] = current
-    position = (position + 1) % window
-    if (!speaking && sum >= transition) {
-      speaking = true
-      speechStart = Math.max(0, (i - window - 20) * 0.01)
-    } else if (speaking && sum <= transition) {
-      speaking = false
-      speech.push({ start: speechStart, end: Math.min(durationS, (i + 10) * 0.01) })
+    position = (position + 1) % OFFICIAL_WINDOW_FRAMES
+
+    const wasWindowSpeaking = windowSpeaking
+    if (!windowSpeaking && sum >= OFFICIAL_TRANSITION_FRAMES) windowSpeaking = true
+    else if (windowSpeaking && sum <= OFFICIAL_TRANSITION_FRAMES) windowSpeaking = false
+
+    if (!segmentActive) {
+      if (!wasWindowSpeaking && windowSpeaking) {
+        segmentActive = true
+        speechStart = Math.max(0, (i - OFFICIAL_WINDOW_FRAMES - OFFICIAL_START_LOOKBACK_FRAMES) * 0.01)
+      }
+      continue
+    }
+
+    if (windowSpeaking) {
+      continuousSilence = 0
+      continue
+    }
+    if (wasWindowSpeaking) {
+      continuousSilence = 0 // transition frame is voice in the reference runtime
+      continue
+    }
+    continuousSilence++
+    if (continuousSilence >= OFFICIAL_END_SILENCE_FRAMES) {
+      const endFrame = i - (OFFICIAL_END_SILENCE_FRAMES - OFFICIAL_END_LOOKAHEAD_FRAMES - 1)
+      speech.push({ start: speechStart, end: Math.min(durationS, (endFrame + 1) * 0.01) })
+      segmentActive = false
+      resetEndpoint()
     }
   }
-  if (speaking) speech.push({ start: speechStart, end: durationS })
+  if (segmentActive) speech.push({
+    start: speechStart,
+    end: Math.min(durationS, speechProbability.length * 0.01)
+  })
 
   const merged: { start: number; end: number }[] = []
   for (const segment of speech) {
@@ -223,19 +262,17 @@ function speechToSilence(
   const silence: { start: number; end: number }[] = []
   let cursor = 0
   for (const segment of merged) {
-    if (segment.start - cursor >= minimumSilenceS) silence.push({ start: cursor, end: segment.start })
+    if (segment.start > cursor + 0.001) silence.push({ start: cursor, end: segment.start })
     cursor = Math.max(cursor, segment.end)
   }
-  if (durationS - cursor >= minimumSilenceS) silence.push({ start: cursor, end: durationS })
+  if (durationS > cursor + 0.001) silence.push({ start: cursor, end: durationS })
   return silence
 }
 
 export async function detectFsmnSilences(
   input: Float32Array,
   sourceRate: number,
-  durationS: number,
-  speechThreshold: number,
-  minimumSilenceS: number
+  durationS: number
 ): Promise<{ start: number; end: number }[]> {
   const samples = resampleMono(input, sourceRate)
   const { session, means, scales } = await runtime()
@@ -257,10 +294,5 @@ export async function detectFsmnSilences(
     for (let i = 0; i < frames; i++) speechProbability[offset + i] = 1 - logits[i * 248]
     caches = Array.from({ length: CACHE_LAYERS }, (_, i) => result[`out_cache${i}`])
   }
-  return speechToSilence(
-    speechProbability,
-    Math.max(0, Math.min(1, speechThreshold)),
-    durationS,
-    minimumSilenceS
-  )
+  return speechToSilence(speechProbability, durationS)
 }

@@ -58,24 +58,12 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         <div style={css('display:flex;align-items:flex-start;justify-content:space-between')}>
           <div>
             <div style={css('font-size:16px;font-weight:650')}>Retake Final Boss · Silence</div>
-            <div style={css('font-size:12.5px;color:#9BA0AC;margin-top:5px;line-height:1.5')}>FunASR FSMN-VAD runs after Gemma. These settings belong only to this engine.</div>
+            <div style={css('font-size:12.5px;color:#9BA0AC;margin-top:5px;line-height:1.5')}>FunASR FSMN-VAD runs with its published defaults. These controls only shape the cut seam after detection.</div>
           </div>
           <div onClick={model.close} style={css('color:#9BA0AC;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
         </div>
 
         <div style={css('display:flex;flex-direction:column;gap:20px;margin-top:20px')}>
-          <Slider
-            label="Speech threshold"
-            description="Higher values classify quiet audio as silence more aggressively."
-            value={draft.speechThreshold}
-            min={0}
-            max={1}
-            step={0.01}
-            format={(value) => value.toFixed(2)}
-            low="0 · protects quiet speech"
-            high="1 · aggressive"
-            onChange={(value) => set('speechThreshold', value)}
-          />
           <Slider
             label="Padding after speech"
             description="Audio kept immediately after the previous word."

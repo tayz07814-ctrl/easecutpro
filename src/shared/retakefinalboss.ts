@@ -7,8 +7,6 @@
 import type { SilenceRegion } from './types'
 
 export interface RetakeFinalBossSettings {
-  /** Silero positive-speech probability threshold, normalized to 0..1. */
-  speechThreshold: number
   /** Audio protected before the next spoken word. */
   padBeforeS: number
   /** Audio protected after the previous spoken word. */
@@ -20,17 +18,11 @@ export interface RetakeFinalBossSettings {
 }
 
 export const DEFAULT_RETAKE_FINAL_BOSS_SETTINGS: RetakeFinalBossSettings = {
-  speechThreshold: 0.72,
   padBeforeS: 0.18,
   padAfterS: 0.12,
   trimEdgesS: 0.02,
   audioOverlapMs: 20
 }
-
-/** A carved gap must be this long before padding is applied. Keeping this in
- * the Final Boss contract makes an oversized raw VAD region obey the same
- * minimum as an ordinary VAD gap after it is split around transcript words. */
-export const RETAKE_FINAL_BOSS_MIN_SILENCE_S = 0.25
 
 export function normalizeRetakeFinalBossSettings(
   value: Partial<RetakeFinalBossSettings> | null | undefined
@@ -39,7 +31,6 @@ export function normalizeRetakeFinalBossSettings(
   const number = (v: unknown, fallback: number): number =>
     typeof v === 'number' && Number.isFinite(v) ? v : fallback
   return {
-    speechThreshold: Math.max(0, Math.min(1, number(value?.speechThreshold, d.speechThreshold))),
     padBeforeS: Math.max(0, Math.min(0.5, number(value?.padBeforeS, d.padBeforeS))),
     padAfterS: Math.max(0, Math.min(0.5, number(value?.padAfterS, d.padAfterS))),
     trimEdgesS: Math.max(0, Math.min(0.2, number(value?.trimEdgesS, d.trimEdgesS))),
@@ -119,94 +110,31 @@ export function validateFinalBossWordCuts(raw: string, wordCount: number): Final
   }
 }
 
-export interface FinalBossSpeechWord {
-  /** Verbatim AssemblyAI token. Used locally only to recognize punctuation at
-   * a sentence boundary; it is never added to Gemma's timing payload. */
-  word?: string
-  start: number
-  end: number
-}
-
-/** Mid-sentence hesitation shorter than this is speaking rhythm, not dead air.
- * Longer gaps are safe to shorten even when punctuation is missing (ASR does
- * not always punctuate an abandoned sentence or production direction). */
-export const RETAKE_FINAL_BOSS_LONG_GAP_S = 0.75
-/** A clearly punctuated sentence boundary may be tightened sooner. */
-export const RETAKE_FINAL_BOSS_SENTENCE_GAP_S = 0.35
-
 /** Convert raw Final Boss VAD gaps to exact protected cuts.
  *
- * Silero can merge steady background noise and quiet speech into one oversized
- * region (at threshold 1 it can legitimately return the whole clip). Rejecting
- * that whole candidate because it touched one AssemblyAI word made the most
- * aggressive threshold produce no cuts. Instead, subtract every surviving word
- * span and inspect the word-free pieces. A piece is accepted only when it is a
- * real long gap, or a shorter gap after sentence punctuation. This prevents a
- * threshold of 1 from turning ordinary between-word rhythm into hundreds of
- * micro-splices. Padding is applied only after carving, so no cut can enter a
- * surviving word. */
+ * FSMN-VAD owns speech/non-speech classification and endpoint decisions. No
+ * transcript, sentence, duration, confidence, or background-noise rules are
+ * added here. This only applies the requested cut-edge padding. */
 export function planFinalBossSilenceCuts(
   rawGaps: { start: number; end: number }[],
-  survivingWords: FinalBossSpeechWord[],
   settings: RetakeFinalBossSettings,
   durationS: number
 ): SilenceRegion[] {
-  const words = [...survivingWords].sort((a, b) => a.start - b.start)
   const output: SilenceRegion[] = []
-  const epsilon = 0.002
-
-  const carveWords = (start: number, end: number): { start: number; end: number }[] => {
-    const pieces: { start: number; end: number }[] = []
-    let cursor = start
-    for (const word of words) {
-      if (word.end <= cursor + epsilon) continue
-      if (word.start >= end - epsilon) break
-      if (word.start > cursor + epsilon) pieces.push({ start: cursor, end: Math.min(end, word.start) })
-      cursor = Math.max(cursor, Math.min(end, word.end))
-      if (cursor >= end - epsilon) break
-    }
-    if (cursor < end - epsilon) pieces.push({ start: cursor, end })
-    return pieces
-  }
 
   for (const [index, source] of rawGaps.entries()) {
     const start = Math.max(0, Math.min(durationS, source.start))
     const end = Math.max(0, Math.min(durationS, source.end))
-    if (end - start < 0.04) continue
-
-    for (const [pieceIndex, piece] of carveWords(start, end).entries()) {
-      // Do not turn a whole-clip VAD miss into dozens of rhythm-destroying
-      // micro-splices between normally adjacent words.
-      if (piece.end - piece.start < RETAKE_FINAL_BOSS_MIN_SILENCE_S) continue
-
-      const previous = [...words].reverse().find((word) => word.end <= piece.start + epsilon)
-      const next = words.find((word) => word.start >= piece.end - epsilon)
-      const hasPrevious = !!previous
-      const hasNext = !!next
-      // With no transcript context there is no safe speech boundary to cut to.
-      if (!hasPrevious && !hasNext) continue
-
-      const gapS = piece.end - piece.start
-      const sentenceBoundary = !!previous?.word && /[.!?…][\"'’”)]*$/.test(previous.word.trim())
-      const minimumSafeGap = sentenceBoundary && hasNext
-        ? RETAKE_FINAL_BOSS_SENTENCE_GAP_S
-        : RETAKE_FINAL_BOSS_LONG_GAP_S
-      if (gapS < minimumSafeGap) continue
-
-      const keepAfter = hasPrevious ? Math.max(0, settings.padAfterS - settings.trimEdgesS) : 0
-      const keepBefore = hasNext ? Math.max(0, settings.padBeforeS - settings.trimEdgesS) : 0
-      const cutStart = piece.start + keepAfter
-      const cutEnd = piece.end - keepBefore
-      if (cutEnd - cutStart < 0.04) continue
-
-      output.push({
-        id: `finalboss-sil-${index}-${pieceIndex}`,
-        start: cutStart,
-        end: cutEnd,
-        action: 'remove',
-        protect: true
-      })
-    }
+    const cutStart = start + Math.max(0, settings.padAfterS - settings.trimEdgesS)
+    const cutEnd = end - Math.max(0, settings.padBeforeS - settings.trimEdgesS)
+    if (cutEnd - cutStart < 0.04) continue
+    output.push({
+      id: `finalboss-sil-${index}`,
+      start: cutStart,
+      end: cutEnd,
+      action: 'remove',
+      protect: true
+    })
   }
   return output
 }
