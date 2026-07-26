@@ -702,7 +702,7 @@ export async function exportOnDevice(
     }
     return best
   }
-  // contain-fit + eased Ken Burns (same math as the preview + PC export);
+  // contain-fit + immediate linear Ken Burns (same math as preview + PC export);
   // vw/vh = the source's natural size (video element or decoded image bitmap).
   const fitFor = (
     seg: Seg,
@@ -805,7 +805,7 @@ export async function exportOnDevice(
             frame: new VideoFrame(o.v, { timestamp: 0 }),
             z: sp.z,
             rect: o.rect,
-            // eased Ken Burns for this frame (preview twin: OverlayBox zoomFromProg)
+            // linear Ken Burns for this frame (preview twin: OverlayBox)
             scale: sp.zs + (sp.ze - sp.zs) * kenBurnsEase((t - sp.start) / sp.rampLen)
           })
         } catch {
