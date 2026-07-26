@@ -248,6 +248,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // written FROM it (throttled) while playing; adopted INTO it when it changes
   // externally (scrub) or while paused.
   const tRef = useRef(playhead)
+  // Spatial motion gets its own monotonic display clock. HTMLVideoElement
+  // currentTime can update in coarse/uneven steps even while frames are playing;
+  // feeding those steps straight into scale+pan makes a slow zoom visibly jump.
+  const motionTRef = useRef(playhead)
   const lastWroteRef = useRef(playhead)
   const lastStoreWriteAt = useRef(0)
 
@@ -255,6 +259,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   useEffect(() => {
     if (Math.abs(playhead - lastWroteRef.current) > 0.0005) {
       tRef.current = playhead // adopt: the user moved the playhead
+      motionTRef.current = playhead
     }
   }, [playhead])
 
@@ -307,6 +312,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   useEffect(() => {
     let raf = 0
     let lastWall = performance.now()
+    let motionSegKey = ''
     const loop = (): void => {
       const now = performance.now()
       const dt = Math.min(0.1, (now - lastWall) / 1000)
@@ -317,6 +323,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
 
       if (!ss.length) {
         playClock.t = tRef.current
+        motionTRef.current = tRef.current
         raf = requestAnimationFrame(loop)
         return
       }
@@ -431,6 +438,23 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       // ---- visibility + per-clip properties, every frame (cheap, idempotent) ----
       const di = displayIdxAt(t)
       const shown = di >= 0 ? ss[di] : undefined
+      let motionT = motionTRef.current
+      if (!shown) {
+        motionT = t
+        motionSegKey = ''
+      } else {
+        const key = `${shown.src}|${shown.sourceStart}|${shown.start}|${shown.len}`
+        if (!isPlaying || key !== motionSegKey) {
+          // Paused/scrubbed or entering a new clip: exact timeline position.
+          motionT = clamp(t, shown.start, shown.start + shown.len)
+        } else {
+          // Playing inside one clip: advance by display time, never by stepped
+          // media timestamps. Clamp only at the real clip boundary.
+          motionT = clamp(motionT + dt, shown.start, shown.start + shown.len)
+        }
+        motionSegKey = key
+      }
+      motionTRef.current = motionT
       // Creator-configured seam blend ("overlap"): 0 = hard cuts. Read live so the
       // preview reflects the Silence Settings toggle/slider immediately.
       const sf = useStore.getState().seamFade
@@ -443,7 +467,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           // Anti-click: dip the volume toward 0 across each real cut seam.
           v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
           v.playbackRate = clamp(shown.speed, 0.25, 4)
-          const prog = shown.len > 0 ? clamp((t - shown.start) / shown.len, 0, 1) : 0
+          const prog = shown.len > 0 ? clamp((motionT - shown.start) / shown.len, 0, 1) : 0
           v.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
           // ALWAYS a GPU-composited 3D transform (even at scale 1) so the layer
           // never promotes/demotes mid-zoom — the source of the subtle-zoom hitch.

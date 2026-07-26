@@ -583,7 +583,9 @@ async function concatSegmentsToFile(
 ): Promise<string> {
   const W = even(target.w || 1920)
   const H = even(target.h || 1080)
-  const FPS = 30
+  // Preserve smooth spatial motion in desktop exports too. At 30fps a slow
+  // 100→130% push moves several output pixels per frame and reads as jitter.
+  const FPS = 60
   const inArgs: string[] = []
   const seg: string[] = []
   const order: string[] = []
