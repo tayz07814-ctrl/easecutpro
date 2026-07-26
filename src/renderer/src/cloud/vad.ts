@@ -279,6 +279,26 @@ export function clampSilenceRegions(
     // (floor 0.02 keeps the zero-pause profile honest at its minGap of 0.05).
     .filter((r) => r.end - r.start > clampMin)
 
+  // EDGE-SNAP TO WORDS. The interior clamp deliberately keeps STT times OUT of cut
+  // edges (mid-clip they're unreliable and would clip real speech). But at the very
+  // START and END there is no speech beyond the first/last word, so anchoring the
+  // leading + trailing cut to the word boundary is safe — and it makes the clip open
+  // and END exactly on the speech instead of leaving the last word's pad, or the
+  // trailing breath/room-tone the VAD kept as "speech", as a tail of dead air. Tiny
+  // LEAD/TAIL keep the first onset / last release from being clipped.
+  if (trimEdges && keptWords.length && durationS > 0) {
+    const ws = [...keptWords].sort((a, b) => a.start - b.start)
+    const firstStart = ws[0].start
+    const lastEnd = ws[ws.length - 1].end
+    const LEAD = 0.05
+    const TAIL = 0.06
+    pieces = pieces.filter((r) => r.end > firstStart && r.start < lastEnd) // drop outer-zone pieces
+    const head = Math.max(0, firstStart - LEAD)
+    if (head > clampMin) pieces.unshift({ start: 0, end: head })
+    const tail = Math.min(durationS, lastEnd + TAIL)
+    if (durationS - tail > clampMin) pieces.push({ start: tail, end: durationS })
+  }
+
   // "Trim cut edges": grow each surviving pause up to edgeGrowS on each side. This
   // MAY reach INTO the adjacent word at the cut edge — trimming a word's soft
   // onset/tail is exactly what tightens a jump cut. It stays safe because:
