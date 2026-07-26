@@ -462,7 +462,7 @@ function newProject(): Project {
 export interface Job {
   active: boolean
   kind?: ProgressEvent['kind']
-  operation?: 'retake-final-boss'
+  operation?: 'retake-final-boss' | 'silence-only'
   percent: number
   message?: string
 }
@@ -817,6 +817,9 @@ interface AppState {
   /** Retake-Aware Cut Beta: separate experimental engine (verbatim provider +
    *  whole-take retake removal + filler triage). Review-only, like the others. */
   runRetakeCutBeta: () => Promise<void>
+  /** 0.07 cloud: run only the default FunASR FSMN-VAD pass. This never invokes
+   *  transcription or the retake judge; its silence cuts are staged for review. */
+  runRetakeSilenceOnly: () => Promise<void>
   /** apply everything the user reviewed: delete selected words + cut enabled staged
    *  silences. Async because the VAD-off switch defers the silence pass to here. */
   executeCuts: () => Promise<void>
@@ -2316,6 +2319,90 @@ export const useStore = create<AppState>((set, get) => ({
           }
         })
       }
+    }
+  },
+
+  runRetakeSilenceOnly: async () => {
+    // This is deliberately NOT guarded by requireServer: the 0.07 silence-only
+    // path is entirely on-device and must never spend an STT/LLM request.
+    if (!IS_CLOUD) {
+      set({ job: { active: false, percent: 0, message: 'Silence Only is available in the 0.07 cloud preview.' } })
+      return
+    }
+    const stored = get().project
+    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+    const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
+    if (!hasBase) {
+      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
+      return
+    }
+
+    set({
+      job: {
+        active: true,
+        kind: 'silence',
+        operation: 'silence-only',
+        percent: 1,
+        message: 'Preparing audio for Silence Only…'
+      }
+    })
+    try {
+      let path: string
+      if (isMultiBase(p0)) {
+        const combined = await window.api.combineClips(p0.baseSequence!, true)
+        path = combined.path
+      } else {
+        path = p0.media!.path
+      }
+
+      const settings = get().retakeFinalBossSettings
+      // The same seam controls apply whether FSMN is run alone or after Gemma.
+      get().setSeamFade({ enabled: settings.audioOverlapMs > 0, ms: settings.audioOverlapMs })
+      const { runRetakeFinalBossSilenceOnlyCloud } = await import('./cloud/retakeFinalBossSilenceOnly')
+      const silenceRegions = await runRetakeFinalBossSilenceOnlyCloud(
+        path,
+        (percent, message) => set((s) => ({ job: { ...s.job, active: true, percent, message } })),
+        settings
+      )
+
+      const cur = get().project
+      // Keep the folded document base in exactly the same combined-time domain
+      // as the detected regions, so Execute maps them onto the Main lane.
+      const docBase = !cur.media && !!p0.baseSequence?.length
+      const nextProject: typeof cur = docBase
+        ? { ...cur, media: undefined, baseSequence: p0.baseSequence }
+        : cur
+      set({
+        project: nextProject,
+        // Silence Only replaces any pending model suggestions; Execute below can
+        // therefore apply only these FSMN gaps and nothing from an earlier run.
+        selectedWordIds: new Set<string>(),
+        stagedSilences: silenceRegions,
+        stagedSilenceSel: new Set(silenceRegions.map((r) => r.id)),
+        retakeSilenceStaged: true,
+        job: {
+          active: false,
+          kind: 'silence',
+          operation: 'silence-only',
+          percent: 100,
+          message: silenceRegions.length
+            ? `Silence Only: ${silenceRegions.length} gap(s) ready — review, then Execute cuts`
+            : 'Silence Only finished — no removable gaps found'
+        }
+      })
+    } catch (e) {
+      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Silence Only failed', e)
+      set({
+        job: {
+          active: false,
+          kind: 'silence',
+          operation: 'silence-only',
+          percent: 0,
+          message: IS_CLOUD
+            ? `Silence Only couldn’t finish. (Error ${errorCode(e)})`
+            : `Silence Only failed: ${safeErrMessage(e)}`
+        }
+      })
     }
   },
 

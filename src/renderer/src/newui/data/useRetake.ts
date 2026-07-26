@@ -22,8 +22,10 @@ export interface RetakeModel {
   wordCount: number
   pauseCount: number
   executable: number
+  hasTranscript: boolean
   // review
   segments: { id: string; words: { id: string; text: string; start: number; end: number }[] }[]
+  silenceItems: { id: string; start: number; end: number; duration: number; selected: boolean }[]
   chipAfter: Map<string, { durS: number; stagedId?: string; applied?: boolean }>
   isSelected: (id: string) => boolean
   /** committed (already-executed) cut — word.deleted in the transcript. */
@@ -31,8 +33,12 @@ export interface RetakeModel {
   isChipSel: (stagedId?: string) => boolean
   /** count of committed (executed) word cuts still in effect. */
   deletedCount: number
+  /** cuts applied by the latest Execute (words + silences). */
+  appliedCount: number
   // actions
   find: () => void
+  findSilence: () => void
+  retry: () => void
   execute: () => void
   restore: () => void
   clear: () => void
@@ -55,6 +61,7 @@ export function useRetake(): RetakeModel {
   // On the cloud 0.07 branch this action resolves to Retake Final Boss:
   // AssemblyAI-only verbatim words -> fixed Gemma judge -> fresh Final Boss VAD.
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
+  const runRetakeSilenceOnly = useStore((s) => s.runRetakeSilenceOnly)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
   const clearSelection = useStore((s) => s.clearSelection)
@@ -70,17 +77,17 @@ export function useRetake(): RetakeModel {
   // "executed" and "error" aren't distinct store flags, so the panel tracks the
   // last terminal transition locally (reset when a new analysis starts).
   const [executed, setExecuted] = useState(false)
+  const [lastExecutedCount, setLastExecutedCount] = useState(0)
 
   const failed = !job.active && job.percent === 0 && !!job.message && /fail|couldn|could not|didn/i.test(job.message)
   // A successful Final Boss pass is still a real result when the judge and VAD
   // both return zero cuts. Previously that case fell back to `idle`, which hid
   // the freshly-written AssemblyAI transcript and made the run look broken.
-  const completedFinalBoss =
-    !!transcript &&
+  const completedReviewRun =
     !job.active &&
     job.percent === 100 &&
-    job.operation === 'retake-final-boss'
-  const hasResults = !!transcript && (selected.size > 0 || staged.length > 0 || completedFinalBoss)
+    (job.operation === 'retake-final-boss' || job.operation === 'silence-only')
+  const hasResults = selected.size > 0 || staged.length > 0 || completedReviewRun
   // A project opened with RETAKE cuts ALREADY committed (batch-processed, or
   // reopened after a prior Execute) carries them on transcript.words[].deleted —
   // NOT in the staged sets. Surface them in the executed review so the panel
@@ -94,7 +101,7 @@ export function useRetake(): RetakeModel {
   // "Analyzing…" bar while other files in the batch are still processing.
   if (job.active && !batchRunning) state = 'analyzing'
   else if (executed) state = 'executed'
-  else if (failed && !transcript) state = 'error'
+  else if (failed) state = 'error'
   else if (hasResults) state = 'results'
   else if (hasCommittedCuts) state = 'executed'
   else state = 'idle'
@@ -125,6 +132,16 @@ export function useRetake(): RetakeModel {
 
   const chips = transcript ? buildSilenceChips(transcript.words, staged, projSilences) : []
   const chipAfter = new Map(chips.map((c) => [c.afterWordId, c]))
+  const silenceItems = staged.map((region) => ({
+    id: region.id,
+    start: region.start,
+    end: region.end,
+    duration: Math.max(0, region.end - region.start),
+    selected: stagedSel.has(region.id)
+  }))
+  const appliedCount = executed
+    ? lastExecutedCount
+    : deletedIds.size + projSilences.filter((region) => region.action !== 'keep').length
 
   return {
     state,
@@ -136,14 +153,28 @@ export function useRetake(): RetakeModel {
     wordCount: words,
     pauseCount: pauses,
     executable: words + pauses,
+    hasTranscript: !!transcript && transcript.words.length > 0,
     deletedCount: deletedIds.size,
+    appliedCount,
     segments: transcript?.segments ?? [],
+    silenceItems,
     chipAfter,
     isSelected: (id) => selected.has(id),
     isDeleted: (id) => deletedIds.has(id),
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
-    find: () => { setExecuted(false); void runRetakeCutBeta() },
-    execute: () => { setExecuted(true); void executeCuts() },
+    find: () => { setExecuted(false); setLastExecutedCount(0); void runRetakeCutBeta() },
+    findSilence: () => { setExecuted(false); setLastExecutedCount(0); void runRetakeSilenceOnly() },
+    retry: () => {
+      setExecuted(false)
+      setLastExecutedCount(0)
+      if (job.operation === 'silence-only') void runRetakeSilenceOnly()
+      else void runRetakeCutBeta()
+    },
+    execute: () => {
+      setLastExecutedCount(words + pauses)
+      setExecuted(true)
+      void executeCuts()
+    },
     restore: () => restoreSelected(),
     clear: () => clearSelection(),
     selectWord,

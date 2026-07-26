@@ -69,5 +69,16 @@ check('Final Boss uses FunASR FSMN-VAD, not Silero', /detectFsmnSilences/.test(v
 check('FSMN runtime supplies fbank, LFR, CMVN and recurrent caches', /fbankLfrCmvn/.test(fsmn) && /LFR_M = 5/.test(fsmn) && /parseCmvn/.test(fsmn) && /in_cache/.test(fsmn))
 check('FSMN runtime uses the published default decision threshold', /OFFICIAL_SPEECH_THRESHOLD = 0\.8/.test(fsmn) && !/speechThreshold/.test(fsmn))
 
+console.log('8) Silence Only is a local FSMN-only action')
+const silenceOnly = readFileSync(new URL('../src/renderer/src/cloud/retakeFinalBossSilenceOnly.ts', import.meta.url), 'utf8')
+const silenceOnlyImports = [...silenceOnly.matchAll(/^import .*$/gm)].map((match) => match[0]).join('\n')
+const store = readFileSync(new URL('../src/renderer/src/store.ts', import.meta.url), 'utf8')
+const silenceOnlyAction = store.match(/runRetakeSilenceOnly: async \(\) => \{([\s\S]*?)\n  \},\n\n  _parakeetTranscribe/)?.[1] ?? ''
+check('standalone action source was located', silenceOnlyAction.length > 1000)
+check('standalone module calls audio decode and Final Boss FSMN VAD', /decodeAudioFloat32/.test(silenceOnly) && /detectRetakeFinalBossSilences/.test(silenceOnly))
+check('standalone module imports no STT, judge, provider, or Retake engine', !/stt|assembly|gemma|judge|retakeFinalBossEngine|invokeEdge/i.test(silenceOnlyImports))
+check('standalone store action never calls the full Retake pipeline', !/retakeAwareCut|runRetakeCutBeta|transcribe|invokeEdge/i.test(silenceOnlyAction))
+check('standalone results clear pending word cuts and stage FSMN gaps for Execute', /selectedWordIds: new Set<string>\(\)/.test(silenceOnlyAction) && /retakeSilenceStaged: true/.test(silenceOnlyAction))
+
 console.log(okay ? '\nRETAKE FINAL BOSS OK' : '\nRETAKE FINAL BOSS FAILED')
 process.exit(okay ? 0 : 1)

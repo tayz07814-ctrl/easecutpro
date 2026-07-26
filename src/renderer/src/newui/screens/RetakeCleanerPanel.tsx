@@ -22,6 +22,17 @@ function Header(): JSX.Element {
   )
 }
 
+function SettingsButton({ onClick }: { onClick: () => void }): JSX.Element {
+  return (
+    <button onClick={onClick} title="Silence Settings" aria-label="Silence Settings" style={css('flex:none;width:36px;height:36px;background:none;border:1px solid rgba(255,255,255,.14);border-radius:9px;color:#C6C9D2;display:grid;place-items:center;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none')}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </button>
+  )
+}
+
 // Words respond to two gestures:
 //  • single-click → cut / restore. `stage` (results) toggles the staged
 //    selection; `applied` (executed) toggles the committed cut live (the
@@ -34,7 +45,7 @@ function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage
   const onWord = mode === 'applied' ? r.toggleWord : (id: string) => r.selectWord(id, true)
   const pendingCut = useRef<number | null>(null)
   return (
-    <div style={css('flex:1;min-height:0;overflow:auto;margin:10px -18px 0;padding:2px 18px 18px;font-size:13.5px;line-height:2.1;color:#C6C9D2;-webkit-mask-image:linear-gradient(#000 82%,transparent)')}>
+    <div style={css('flex:1;min-height:0;overflow:auto;margin:6px -18px 0;padding:2px 18px 18px;font-size:13.5px;line-height:2;color:#C6C9D2;-webkit-mask-image:linear-gradient(#000 86%,transparent)')}>
       {r.segments.map((seg) => (
         <span key={seg.id}>
           {seg.words.map((w) => {
@@ -80,6 +91,32 @@ function Transcript({ r, mode }: { r: ReturnType<typeof useRetake>; mode: 'stage
   )
 }
 
+function formatClock(seconds: number): string {
+  const safe = Math.max(0, seconds)
+  const minutes = Math.floor(safe / 60)
+  const secs = Math.floor(safe % 60)
+  const tenths = Math.floor((safe % 1) * 10)
+  return `${minutes}:${String(secs).padStart(2, '0')}.${tenths}`
+}
+
+function SilenceReview({ r }: { r: ReturnType<typeof useRetake> }): JSX.Element {
+  if (!r.silenceItems.length) {
+    return <div style={css('font-size:12px;color:#777D89;margin-top:12px;line-height:1.5')}>No transcript was created because Silence Only runs locally without transcription.</div>
+  }
+  return (
+    <div style={css('flex:1;min-height:0;overflow:auto;margin:7px -18px 0;padding:0 18px 18px;display:flex;flex-direction:column;gap:6px')}>
+      {r.silenceItems.map((item, index) => (
+        <button key={item.id} onClick={() => r.toggleChip(item.id)} style={css(`display:flex;align-items:center;gap:10px;width:100%;border:1px solid ${item.selected ? 'rgba(217,164,74,.3)' : 'rgba(255,255,255,.07)'};background:${item.selected ? 'rgba(217,164,74,.1)' : 'rgba(255,255,255,.025)'};border-radius:8px;padding:8px 10px;color:#C6C9D2;font-family:inherit;cursor:pointer;text-align:left`)}>
+          <span style={css(`width:15px;height:15px;border-radius:4px;display:grid;place-items:center;flex:none;background:${item.selected ? '#D9A44A' : 'transparent'};border:1px solid ${item.selected ? '#D9A44A' : 'rgba(255,255,255,.22)'};color:#17181D;font-size:10px;font-weight:800`)}>{item.selected ? '✓' : ''}</span>
+          <span style={css('font-size:12px;font-weight:550')}>Silence {index + 1}</span>
+          <span style={css("font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#8F95A1")}>{formatClock(item.start)}–{formatClock(item.end)}</span>
+          <span style={css("margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#D9A44A")}>{item.duration.toFixed(1)}s</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export default function RetakeCleanerPanel(): JSX.Element {
   const r = useRetake()
   // Glide the bar between real progress milestones (and creep during the opaque
@@ -97,10 +134,12 @@ export default function RetakeCleanerPanel(): JSX.Element {
     return shell(
       <>
         <div style={css('font-size:12.5px;line-height:1.5;color:#9BA0AC;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
-        <button onClick={r.find} style={css('width:100%;margin-top:16px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>Find Retakes &amp; Silence</button>
-        <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 0;cursor:pointer')}>Silence Settings</button>
-        <button disabled style={css('width:100%;margin-top:14px;background:#22242b;border:none;color:#565C68;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:not-allowed')}>Execute cuts</button>
-        <div style={css('font-size:11px;color:#686E7B;margin-top:12px;line-height:1.5')}>Beta — review proposed cuts before executing. Nothing is removed without you.</div>
+        <div style={css('display:flex;gap:7px;margin-top:13px')}>
+          <button onClick={r.find} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:10px 12px;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.32);white-space:nowrap')}>Retakes + Silence</button>
+          <button onClick={r.findSilence} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.14);color:#D7D9E0;font-family:inherit;font-size:12px;font-weight:550;border-radius:9px;padding:9px 12px;cursor:pointer;white-space:nowrap')}>Silence Only</button>
+          <SettingsButton onClick={r.openSilenceSettings} />
+        </div>
+        <div style={css('font-size:10.5px;color:#686E7B;margin-top:9px;line-height:1.45')}>Review first — nothing is removed until Execute cuts.</div>
       </>
     )
   }
@@ -126,23 +165,19 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <div style={css('display:flex;align-items:center;gap:10px;margin-top:14px;flex:none')}>
           <span style={css('display:flex;align-items:center;gap:7px;flex:none;background:rgba(46,156,106,.12);border:1px solid rgba(46,156,106,.3);border-radius:999px;padding:6px 12px 6px 8px;font-size:12px;font-weight:600;color:#E9EAEE;white-space:nowrap')}>
             <span style={css('width:16px;height:16px;flex:none;border-radius:50%;background:#2E9C6A;display:grid;place-items:center;color:#fff;font-size:9px')}>✓</span>
-            {r.deletedCount} cut{r.deletedCount === 1 ? '' : 's'} applied
+            {r.appliedCount} cut{r.appliedCount === 1 ? '' : 's'} applied
           </span>
           <div style={css('flex:1')} />
-          <button onClick={r.find} style={css('flex:none;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 16px;cursor:pointer;white-space:nowrap')}>Run again</button>
-          <button onClick={r.openSilenceSettings} title="Silence Settings" aria-label="Silence Settings" style={css('flex:none;width:36px;height:36px;background:none;border:1px solid rgba(255,255,255,.14);border-radius:9px;color:#C6C9D2;display:grid;place-items:center;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none')}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
+          <button onClick={r.find} style={css('flex:none;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12px;font-weight:600;border-radius:9px;padding:9px 12px;cursor:pointer;white-space:nowrap')}>Retakes</button>
+          <button onClick={r.findSilence} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.14);color:#D7D9E0;font-family:inherit;font-size:11.5px;font-weight:550;border-radius:9px;padding:8px 10px;cursor:pointer;white-space:nowrap')}>Silence only</button>
+          <SettingsButton onClick={r.openSilenceSettings} />
         </div>
         <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
           <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review cuts</div>
           <div style={css('flex:1')} />
           <div style={css('font-size:11px;color:#686E7B')}>click to cut · double-click to play</div>
         </div>
-        <Transcript r={r} mode="applied" />
+        {r.hasTranscript ? <Transcript r={r} mode="applied" /> : <div style={css('font-size:12px;color:#777D89;margin-top:12px')}>Silence cuts are applied on the timeline.</div>}
       </>
     )
   }
@@ -157,7 +192,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
             <div style={css('font-size:12px;color:#9BA0AC;margin-top:4px;line-height:1.5')}>{r.job.message || 'Your project and edits are untouched.'}</div>
           </div>
         </div>
-        <button onClick={r.find} style={css('width:100%;margin-top:14px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer')}>Try again</button>
+        <button onClick={r.retry} style={css('width:100%;margin-top:14px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer')}>Try again</button>
       </>
     )
   }
@@ -165,36 +200,32 @@ export default function RetakeCleanerPanel(): JSX.Element {
   // results / reviewing
   return shell(
     <>
-      <div style={css('font-size:12.5px;line-height:1.5;color:#9BA0AC;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
       {r.executable === 0 && (
-        <div style={css('margin-top:14px;background:rgba(110,106,232,.08);border:1px solid rgba(110,106,232,.24);border-radius:12px;padding:13px 14px')}>
-          <div style={css('font-size:12.5px;font-weight:600;color:#E9EAEE')}>Analysis complete — no automatic cuts found</div>
-          <div style={css('font-size:11.5px;line-height:1.5;color:#9BA0AC;margin-top:4px')}>The AssemblyAI transcript is shown below. You can click words to stage them manually, change Silence Settings, or run the analysis again.</div>
+        <div style={css('margin-top:9px;background:rgba(110,106,232,.08);border:1px solid rgba(110,106,232,.2);border-radius:8px;padding:7px 9px;font-size:11.5px;color:#B7BAC4')}>
+          {r.hasTranscript ? 'No automatic cuts found. You can still select transcript words manually.' : 'Silence Only finished — no removable gaps were found.'}
         </div>
       )}
-      <div style={css('margin-top:16px;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px')}>
-        <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:12px 16px')}>
-          <div><div style={css('font-size:17px;font-weight:650')}>{r.retakes}</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>retakes found</div></div>
-          <div><div style={css('font-size:17px;font-weight:650;color:#D9868B')}>{r.words}</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>words to remove</div></div>
-          <div><div style={css('font-size:17px;font-weight:650;color:#D9A44A')}>{r.pauses}</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>pauses shortened</div></div>
-          <div><div style={css('font-size:17px;font-weight:650;color:#46A57C')}>~{Math.round(r.timeSavedS)}s</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>time saved</div></div>
-        </div>
+      <div style={css('display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:9px;padding:7px 9px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:8px;font-size:10.5px;color:#8F95A1')}>
+        <span><b style={css('color:#E9EAEE')}>{r.retakes}</b> retakes</span><span>·</span>
+        <span><b style={css('color:#D9868B')}>{r.words}</b> words</span><span>·</span>
+        <span><b style={css('color:#D9A44A')}>{r.pauses}</b> silences</span><span>·</span>
+        <span><b style={css('color:#46A57C')}>~{Math.round(r.timeSavedS)}s</b> saved</span>
       </div>
-      <div style={css('display:flex;gap:8px;margin-top:12px')}>
+      <div style={css('display:flex;gap:7px;margin-top:8px')}>
         {r.executable > 0 ? (
-          <button onClick={r.execute} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.3)')}>Execute {r.executable} cuts</button>
+          <button onClick={r.execute} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12px;font-weight:600;border-radius:9px;padding:9px 10px;cursor:pointer;box-shadow:0 5px 16px rgba(110,106,232,.25)')}>Execute {r.executable} cuts</button>
         ) : (
-          <button onClick={r.find} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.3)')}>Run again</button>
+          <button onClick={r.find} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12px;font-weight:600;border-radius:9px;padding:9px 10px;cursor:pointer;box-shadow:0 5px 16px rgba(110,106,232,.25)')}>Run Retakes</button>
         )}
-        <button onClick={r.openSilenceSettings} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 14px;cursor:pointer')}>Silence Settings</button>
+        <button onClick={r.findSilence} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.14);color:#D7D9E0;font-family:inherit;font-size:11.5px;font-weight:550;border-radius:9px;padding:8px 10px;cursor:pointer;white-space:nowrap')}>Silence only</button>
+        <SettingsButton onClick={r.openSilenceSettings} />
       </div>
-      <div style={css(`display:flex;align-items:center;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid ${HAIR}`)}>
-        <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review transcript</div>
+      <div style={css(`display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid ${HAIR}`)}>
+        <div style={css('font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>{r.hasTranscript ? 'Review transcript' : 'Review silences'}</div>
         <div style={css('flex:1')} />
-        <span onClick={r.restore} style={css('font-size:11.5px;color:#9BA0AC;padding:4px 8px;border-radius:7px;cursor:pointer')}>Restore</span>
-        <span onClick={r.clear} style={css('font-size:11.5px;color:#9BA0AC;padding:4px 8px;border-radius:7px;cursor:pointer')}>Clear</span>
+        {r.hasTranscript && <><span onClick={r.restore} style={css('font-size:11px;color:#9BA0AC;padding:3px 6px;border-radius:7px;cursor:pointer')}>Restore</span><span onClick={r.clear} style={css('font-size:11px;color:#9BA0AC;padding:3px 6px;border-radius:7px;cursor:pointer')}>Clear</span></>}
       </div>
-      <Transcript r={r} mode="stage" />
+      {r.hasTranscript ? <Transcript r={r} mode="stage" /> : <SilenceReview r={r} />}
     </>
   )
 }
