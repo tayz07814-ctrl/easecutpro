@@ -166,6 +166,12 @@ export default function RetakeCleanerPanel(): JSX.Element {
   return shell(
     <>
       <div style={css('font-size:12.5px;line-height:1.5;color:#9BA0AC;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
+      {r.executable === 0 && (
+        <div style={css('margin-top:14px;background:rgba(110,106,232,.08);border:1px solid rgba(110,106,232,.24);border-radius:12px;padding:13px 14px')}>
+          <div style={css('font-size:12.5px;font-weight:600;color:#E9EAEE')}>Analysis complete — no automatic cuts found</div>
+          <div style={css('font-size:11.5px;line-height:1.5;color:#9BA0AC;margin-top:4px')}>The AssemblyAI transcript is shown below. You can click words to stage them manually, change Silence Settings, or run the analysis again.</div>
+        </div>
+      )}
       <div style={css('margin-top:16px;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px')}>
         <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:12px 16px')}>
           <div><div style={css('font-size:17px;font-weight:650')}>{r.retakes}</div><div style={css('font-size:11px;color:#9BA0AC;margin-top:2px')}>retakes found</div></div>
@@ -175,7 +181,11 @@ export default function RetakeCleanerPanel(): JSX.Element {
         </div>
       </div>
       <div style={css('display:flex;gap:8px;margin-top:12px')}>
-        <button onClick={r.execute} disabled={!r.executable} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.3)')}>Execute {r.executable} cuts</button>
+        {r.executable > 0 ? (
+          <button onClick={r.execute} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.3)')}>Execute {r.executable} cuts</button>
+        ) : (
+          <button onClick={r.find} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.3)')}>Run again</button>
+        )}
         <button onClick={r.openSilenceSettings} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 14px;cursor:pointer')}>Silence Settings</button>
       </div>
       <div style={css(`display:flex;align-items:center;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid ${HAIR}`)}>

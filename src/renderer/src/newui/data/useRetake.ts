@@ -72,7 +72,15 @@ export function useRetake(): RetakeModel {
   const [executed, setExecuted] = useState(false)
 
   const failed = !job.active && job.percent === 0 && !!job.message && /fail|couldn|could not|didn/i.test(job.message)
-  const hasResults = !!transcript && (selected.size > 0 || staged.length > 0)
+  // A successful Final Boss pass is still a real result when the judge and VAD
+  // both return zero cuts. Previously that case fell back to `idle`, which hid
+  // the freshly-written AssemblyAI transcript and made the run look broken.
+  const completedFinalBoss =
+    !!transcript &&
+    !job.active &&
+    job.percent === 100 &&
+    job.operation === 'retake-final-boss'
+  const hasResults = !!transcript && (selected.size > 0 || staged.length > 0 || completedFinalBoss)
   // A project opened with RETAKE cuts ALREADY committed (batch-processed, or
   // reopened after a prior Execute) carries them on transcript.words[].deleted —
   // NOT in the staged sets. Surface them in the executed review so the panel

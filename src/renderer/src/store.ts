@@ -462,6 +462,7 @@ function newProject(): Project {
 export interface Job {
   active: boolean
   kind?: ProgressEvent['kind']
+  operation?: 'retake-final-boss'
   percent: number
   message?: string
 }
@@ -2285,13 +2286,14 @@ export const useStore = create<AppState>((set, get) => ({
       set({
         job: {
           active: false,
+          operation: 'retake-final-boss',
           percent: 100,
           message:
             `${res.summary} — ${flagIds.length} word(s) highlighted` +
             (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
             `, review then Execute cuts` +
             (!IS_CLOUD && res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
-            (!IS_CLOUD && res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '') +
+            (res.warnings.length ? ` · ${res.warnings[0]}` : '') +
             (!IS_CLOUD && reviewBroken ? ' · ⚠ REVIEW-STATE ERROR — see console/debug' : '')
         }
       })

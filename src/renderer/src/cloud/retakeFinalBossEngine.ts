@@ -70,7 +70,10 @@ export async function retakeFinalBossCloud(
     else {
       const validated = validateFinalBossWordCuts(response.raw, verbatim.words.length)
       if (validated == null) warnings.push('Retake Final Boss returned an invalid cut list, so no word cuts were staged.')
-      else wordCuts = validated
+      else {
+        wordCuts = validated
+        if (validated.length === 0) warnings.push('No automatic word cuts were suggested; the complete transcript is still available for review.')
+      }
     }
   } catch {
     warnings.push('Retake Final Boss could not finish judging this transcript.')
@@ -105,8 +108,8 @@ export async function retakeFinalBossCloud(
       settings,
       survivingWords
     )
-  } catch (error) {
-    warnings.push(`Final Boss silence detection failed (${(error as Error).message}); word cuts are still available.`)
+  } catch {
+    warnings.push('Final Boss silence detection could not finish; word cuts are still available.')
   }
 
   const debugPath = await saveFinalBossDebug({
