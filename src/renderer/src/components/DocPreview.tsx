@@ -30,7 +30,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { playClock, primePlayback } from '../clock'
-import { kenBurnsOrigin, ZoomAnimator, cropToKenBurns } from '../kenBurns'
+import { kenBurnsOrigin, kenBurnsTransform, cropToKenBurns } from '../kenBurns'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -312,8 +312,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // the live index.
   const slotsRef = useRef(new Map<string, (HTMLVideoElement | null)[]>())
   const liveSlotRef = useRef(new Map<string, number>())
-  const baseZoomRef = useRef<ZoomAnimator>()
-  if (!baseZoomRef.current) baseZoomRef.current = new ZoomAnimator()
   // Per-ELEMENT seek-in-flight (two elements can share a src, so a src key would
   // collide); a WeakMap drops entries automatically when React unmounts an element.
   const pendingRef = useRef(new WeakMap<HTMLVideoElement, Pending>())
@@ -605,7 +603,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       // preview reflects the Silence Settings toggle/slider immediately.
       const sf = useStore.getState().seamFade
       const seamFadeS = sf.enabled ? sf.ms / 1000 : 0
-      let droveZoom = false
       for (const [src, pair] of slotsRef.current) {
         const li = liveSlotRef.current.get(src) ?? 0
         for (let slot = 0; slot < pair.length; slot++) {
@@ -626,38 +623,30 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             // Anti-click: dip the volume toward 0 across each real cut seam.
             v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
             v.playbackRate = clamp(shown.speed, 0.25, 4)
-            // Ken Burns handed to the compositor (Web Animations API) — renders at
-            // the display refresh rate off its own smooth clock, so it never steps
-            // at the video fps or stutters under main-thread load on a fast
-            // ease-out. Retargets automatically when the shown clip changes; paused
-            // (isPlaying false) writes the exact frame so scrubbing lands precisely.
-            baseZoomRef.current?.drive(v, {
-              origin: kenBurnsOrigin(shown.ovX, shown.ovY),
+            // Ken Burns applied directly as a GPU-composited transform (translateZ +
+            // scale3d, full float) off the main-thread rAF — the SAME smooth math the
+            // overlays + exporters use (kenBurnsTransform), no WAAPI/ZoomAnimator, so
+            // it never snaps or steps at the video fps. Written every frame (and when
+            // paused, at the exact playhead) so scrubbing lands precisely.
+            v.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
+            v.style.transform = kenBurnsTransform({
               size: shown.ovScale ?? 1,
               zoomStart: shown.ovZoomStart,
               zoomEnd: shown.ovZoomEnd,
-              startSec: shown.start,
-              lenSec: shown.len,
-              playing: isPlaying,
-              clockSec: t,
-              playheadSec: t
+              progress: shown.len > 0 ? (t - shown.start) / shown.len : 0
             })
-            droveZoom = true
           } else if (!isShown && !v.paused && isPlaying && shown?.src !== src) {
             v.pause() // never let a hidden element keep playing audio
           }
         }
       }
-      // No base clip on screen (gap / bad source) → drop any held zoom transform.
-      if (!droveZoom) baseZoomRef.current?.stop()
+      // No base clip on screen (gap / bad source): hidden elements keep their last
+      // transform but are visibility:hidden, and any re-shown element is re-
+      // transformed above BEFORE it becomes visible — so there is nothing to reset.
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
-    const animator = baseZoomRef.current
-    return () => {
-      cancelAnimationFrame(raf)
-      animator?.stop()
-    }
+    return () => cancelAnimationFrame(raf)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

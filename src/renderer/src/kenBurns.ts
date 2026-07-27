@@ -25,10 +25,11 @@ export type Easing = (t: number) => number
 
 const clamp01 = (t: number): number => (t < 0 ? 0 : t > 1 ? 1 : t)
 
-// Easing library — each maps 0..1 → 0..1. Ken Burns defaults to `linear`:
-// CONSTANT velocity, no acceleration — the zoom glides at a uniform speed from
-// the first frame to the last, like a motorized camera slider. (The other
-// curves stay available for callers that pass an explicit `ease`.)
+// Easing library — each maps 0..1 → 0..1. The applied-clip zoom deliberately
+// defaults to LINEAR: every output frame advances by the same amount, motion is
+// visible immediately on frame one, and there is no slow cubic "dead zone" at
+// either end. GPU composition supplies the visual smoothness; easing must not
+// hide the first part of the creator's clip.
 export const Easings = {
   linear: (t: number): number => clamp01(t),
   easeInQuad: (t: number): number => ((t = clamp01(t)), t * t),
@@ -47,8 +48,7 @@ export const Easings = {
 
 export type EasingName = keyof typeof Easings
 
-/** Default Ken Burns easing. Change here to restyle every zoom, preview + export.
- *  `linear` → constant velocity, zero acceleration: a perfectly uniform glide. */
+/** Shared applied-clip zoom timing for every browser preview/export path. */
 export const kenBurnsEase: Easing = Easings.linear
 
 export interface KenBurnsParams {
@@ -59,8 +59,42 @@ export interface KenBurnsParams {
   zoomEnd?: number
   /** elapsed / duration, 0..1. */
   progress: number
-  /** easing (default easeInOutCubic). */
+  /** easing (default linear, for immediate motion). */
   ease?: Easing
+}
+
+export interface MotionWindowItem {
+  start: number
+  len: number
+}
+
+/**
+ * Build one animation clock across adjacent timeline pieces that carry the same
+ * transform. Silence/retake edits split a source clip into many kept pieces;
+ * restarting 0→1 on every piece makes the zoom snap backwards at every cut.
+ */
+export function continuousMotionWindows<T extends MotionWindowItem>(
+  items: readonly T[],
+  groupKey: (item: T) => string
+): Array<{ start: number; len: number }> {
+  const out = items.map((item) => ({ start: item.start, len: item.len }))
+  let i = 0
+  while (i < items.length) {
+    let j = i + 1
+    const key = groupKey(items[i])
+    while (
+      j < items.length &&
+      groupKey(items[j]) === key &&
+      Math.abs(items[j].start - (items[j - 1].start + items[j - 1].len)) < 0.05
+    ) {
+      j++
+    }
+    const start = items[i].start
+    const end = items[j - 1].start + items[j - 1].len
+    for (let k = i; k < j; k++) out[k] = { start, len: Math.max(0.02, end - start) }
+    i = j
+  }
+  return out
 }
 
 /** Interpolated Ken Burns scale at `progress` — a raw float, never rounded. */
@@ -88,16 +122,10 @@ export function kenBurnsOrigin(ovX = 0, ovY = 0): string {
   return `${50 + ovX * 100}% ${50 + ovY * 100}%`
 }
 
-/** Fold a clip's inset crop {left,right,top,bottom} (fractions removed from each
- *  edge) into an EQUIVALENT Ken Burns cover-zoom + focal pan, so the kept region
- *  fills the frame. The base video's transform is a uniform scale-about-origin, and
- *  a crop-to-cover is the same shape, so we reuse that exact machinery in BOTH the
- *  live preview and every exporter — no new base-video renderer.
- *  Exact when the clip has no other zoom (the common "just cropped" case); combines
- *  multiplicatively (scale) + additively (focal) with one if present. Returns
- *  { scale, ovX, ovY } to multiply/add onto the clip's own ovScale/ovX/ovY.
- *  Note: assumes the source fills the frame (source aspect ≈ output aspect); a
- *  letterboxed source is approximate. */
+/** Fold a rectangular CROP (fractions removed per edge) into the SAME zoom+pan
+ *  machinery: a cover-scale so the kept region fills the frame, plus a focal point
+ *  (ovX/ovY) that re-centres it. Lets crop render + export through kenBurns with no
+ *  separate path. Aspect handling for a letterboxed source is approximate. */
 export function cropToKenBurns(crop?: { left: number; right: number; top: number; bottom: number } | null): {
   scale: number
   ovX: number
@@ -114,115 +142,4 @@ export function cropToKenBurns(crop?: { left: number; right: number; top: number
   const ovX = (0.5 - S * cx) / (1 - S) - 0.5
   const ovY = (0.5 - S * cy) / (1 - S) - 0.5
   return { scale: S, ovX, ovY }
-}
-
-// ---------------------------------------------------------------------------
-// Compositor-driven playback (Web Animations API)
-// ---------------------------------------------------------------------------
-//
-// Writing `el.style.transform` every rAF frame interpolates the zoom on the
-// MAIN thread from `playClock.t` — which is the base video's currentTime, so it
-// advances at the video's frame cadence, not the display's refresh rate.
-// Resampling that steppy clock each frame (on a thread the editor keeps busy)
-// is what makes a FAST ease-out zoom look choppy; the old ease-in's near-frozen
-// start simply hid it.
-//
-// Instead we hand the whole ramp to the browser as a Web Animation: it runs on
-// the COMPOSITOR at the display refresh rate off its own smooth clock, immune
-// to video-frame stepping and main-thread jank. We only nudge it back into sync
-// on a real discontinuity (play start, loop, seek). Paused/scrubbing still
-// writes the exact static frame, so a dragged playhead lands precisely.
-
-/** Only correct on a genuine discontinuity — play-start, loop, or seek, which
- *  jump the clock by hundreds of ms to seconds. Normal per-frame advance is
- *  ≤~33ms and gradual video/wall-clock drift stays well under this, so the
- *  compositor free-runs at constant velocity and NEVER snaps mid-glide (a snap
- *  would read as a periodic hitch — the opposite of what we want). */
-const DRIFT_RESYNC_MS = 250
-
-export interface ZoomDrive {
-  /** transform-origin (focal point) — see kenBurnsOrigin. */
-  origin: string
-  size?: number
-  zoomStart?: number
-  zoomEnd?: number
-  /** clip start + length in seconds (same time-base as clockSec/playheadSec). */
-  startSec: number
-  lenSec: number
-  playing: boolean
-  /** edited time while playing (playClock.t) — used only to detect drift. */
-  clockSec: number
-  /** exact edited time for a paused / scrubbed frame. */
-  playheadSec: number
-  ease?: Easing
-}
-
-/** Fine-grained keyframes tracing the EXACT Ken Burns scale curve (any easing),
- *  linearly interpolated by the compositor between samples — so the on-screen
- *  motion matches the exporters' polynomial to sub-pixel accuracy while still
- *  rendering at the display refresh rate. */
-function zoomKeyframes(p: ZoomDrive, steps = 60): Keyframe[] {
-  const out: Keyframe[] = []
-  for (let i = 0; i <= steps; i++) {
-    const progress = i / steps
-    out.push({
-      transform: kenBurnsTransform({ size: p.size, zoomStart: p.zoomStart, zoomEnd: p.zoomEnd, progress, ease: p.ease }),
-      offset: progress
-    })
-  }
-  return out
-}
-
-/**
- * Drives one element's Ken Burns zoom on the compositor. Keep ONE per element
- * (in a ref) and call `drive` every rAF frame while playing and once per paused
- * frame. It rebuilds the underlying Web Animation only when the zoom params or
- * the target element change; ordinary frames just let the compositor run and,
- * at most, correct a large drift. Falls back to a per-frame static write where
- * the Web Animations API is unavailable.
- */
-export class ZoomAnimator {
-  private anim: Animation | null = null
-  private el: HTMLElement | null = null
-  private key = ''
-
-  drive(el: HTMLElement, p: ZoomDrive): void {
-    if (el !== this.el) {
-      this.stop()
-      this.el = el
-    }
-    el.style.transformOrigin = p.origin
-
-    const writeStatic = (): void => {
-      const progress = p.lenSec > 0 ? clamp01((p.playheadSec - p.startSec) / p.lenSec) : 0
-      el.style.transform = kenBurnsTransform({ size: p.size, zoomStart: p.zoomStart, zoomEnd: p.zoomEnd, progress, ease: p.ease })
-    }
-
-    // Paused/scrub, or no WAA support → exact static frame, no animation.
-    if (!p.playing || typeof el.animate !== 'function') {
-      if (this.anim) { this.anim.cancel(); this.anim = null; this.key = '' }
-      writeStatic()
-      return
-    }
-
-    const lenMs = Math.max(1, p.lenSec * 1000)
-    const key = `${p.size ?? 1}|${p.zoomStart ?? 1}|${p.zoomEnd ?? 1}|${lenMs}`
-    if (!this.anim || this.key !== key) {
-      this.anim?.cancel()
-      this.anim = el.animate(zoomKeyframes(p), { duration: lenMs, easing: 'linear', fill: 'both' })
-      this.key = key
-    }
-    const a = this.anim
-    const want = p.lenSec > 0 ? clamp01((p.clockSec - p.startSec) / p.lenSec) * lenMs : 0
-    const cur = typeof a.currentTime === 'number' ? a.currentTime : Number(a.currentTime ?? 0)
-    if (Math.abs(cur - want) > DRIFT_RESYNC_MS) a.currentTime = want
-    if (a.playState !== 'running') a.play()
-  }
-
-  /** Cancel the animation and clear the inline transform on the current element. */
-  stop(): void {
-    if (this.anim) { this.anim.cancel(); this.anim = null }
-    if (this.el) this.el.style.transform = ''
-    this.key = ''
-  }
 }
