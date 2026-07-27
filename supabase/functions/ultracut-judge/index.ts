@@ -11,13 +11,12 @@
 //    still parses on the client.
 //  • TIME BUDGET: the primary is aborted at PRIMARY_BUDGET_MS (< 400s), leaving
 //    room for the fast fallback, so a run always returns before the worker limit.
-//  • FIRST-PARTY ROUTING: an un-prefixed model id routes to a first-party API
-//    instead of OpenRouter — `gemma-4-31b` / `gpt-oss-120b` / `zai-glm-4.7` go to
-//    Cerebras (api.cerebras.ai, CEREBRAS_API_KEY), `deepseek-*` go to DeepSeek
-//    (api.deepseek.com, DEEPSEEK_API_KEY). Anything with a `vendor/model` slug
-//    goes to OpenRouter. Fallback is always deepseek-v4-pro.
-//  • TOKENS: max_tokens 20000 on the DeepSeek path / max_completion_tokens 20000
-//    on Cerebras, so the EDL is never clipped by the chain-of-thought.
+//  • ROUTING: a `vendor/model` slug goes to OpenRouter — production cloud retake
+//    runs `google/gemma-4-31b-it` (Gemma 4 31B) there with the OpenRouter key. An
+//    un-prefixed `deepseek-*` id goes to DeepSeek's first-party API
+//    (api.deepseek.com, DEEPSEEK_API_KEY). Fallback is always deepseek-v4-pro.
+//  • TOKENS: max_tokens 20000 on both paths, so the EDL is never clipped by the
+//    chain-of-thought.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
@@ -38,30 +37,19 @@ function preflight(req: Request): Response | null {
 }
 
 const BASE_URL = Deno.env.get('ULTRACUT_BASE_URL') ?? 'https://openrouter.ai/api/v1'
-const MODEL = Deno.env.get('ULTRACUT_MODEL') ?? 'gemma-4-31b'
+const MODEL = Deno.env.get('ULTRACUT_MODEL') ?? 'google/gemma-4-31b-it'
 
 const DEEPSEEK_BASE_URL = Deno.env.get('DEEPSEEK_BASE_URL') ?? 'https://api.deepseek.com'
 const DEEPSEEK_DIRECT = new Set(['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat'])
 
-// Cerebras Cloud — OpenAI-compatible, so it reuses the same /chat/completions
-// call shape. Only difference: `max_completion_tokens` instead of `max_tokens`,
-// and no OpenRouter `reasoning` / `provider` blocks.
-const CEREBRAS_BASE_URL = Deno.env.get('CEREBRAS_BASE_URL') ?? 'https://api.cerebras.ai/v1'
-const CEREBRAS_DIRECT = new Set(['gemma-4-31b', 'gpt-oss-120b', 'zai-glm-4.7'])
-
-type Provider = 'cerebras' | 'deepseek' | 'openrouter'
+type Provider = 'deepseek' | 'openrouter'
 
 function routeOf(model: string): Provider {
-  if (CEREBRAS_DIRECT.has(model)) return 'cerebras'
   if (DEEPSEEK_DIRECT.has(model)) return 'deepseek'
   return 'openrouter'
 }
 
 const MODEL_WHITELIST = new Set([
-  // Cerebras first-party (un-prefixed ids)
-  'gemma-4-31b',
-  'gpt-oss-120b',
-  'zai-glm-4.7',
   // OpenRouter slugs
   'google/gemma-4-31b-it',
   'google/gemini-3.6-flash',
@@ -128,17 +116,6 @@ async function getApiKey(): Promise<string> {
     /* vault not configured */
   }
   return ''
-}
-
-// The Cerebras secret name isn't fixed by convention here, so accept the three
-// obvious spellings rather than silently 0-key the route.
-function cerebrasKey(): string {
-  return (
-    Deno.env.get('CEREBRAS_API_KEY') ??
-    Deno.env.get('CEREBRAS_KEY') ??
-    Deno.env.get('CEREBRAS_CLOUD_API_KEY') ??
-    ''
-  )
 }
 
 function extractEdl(raw: string): string {
@@ -604,7 +581,7 @@ async function logDebug(fields: Record<string, unknown>): Promise<void> {
 }
 
 async function callModel(
-  keys: { openrouter: string; deepseek: string; cerebras: string },
+  keys: { openrouter: string; deepseek: string },
   model: string,
   payload: string,
   system: string,
@@ -612,7 +589,7 @@ async function callModel(
   signal?: AbortSignal
 ): Promise<{ ok: boolean; status: number; cleaned: string }> {
   const provider = routeOf(model)
-  const base = provider === 'cerebras' ? CEREBRAS_BASE_URL : provider === 'deepseek' ? DEEPSEEK_BASE_URL : BASE_URL
+  const base = provider === 'deepseek' ? DEEPSEEK_BASE_URL : BASE_URL
   const apiKey = keys[provider]
 
   if (!apiKey) return { ok: false, status: 0, cleaned: '' }
@@ -626,12 +603,7 @@ async function callModel(
     ]
   }
 
-  if (provider === 'cerebras') {
-    // Cerebras is OpenAI-compatible but uses max_completion_tokens, and rejects
-    // OpenRouter's `reasoning` / `provider` blocks. gemma-4-31b is not a
-    // reasoning model, so the reasoning intent is deliberately dropped here.
-    body.max_completion_tokens = 20000
-  } else if (provider === 'deepseek') {
+  if (provider === 'deepseek') {
     const eff = deepseekEffort(reasoningIntent)
     if (eff) body.reasoning_effort = eff
     body.max_tokens = 20000
@@ -704,7 +676,7 @@ const PRIMARY_BUDGET_MS = 340000
 const FALLBACK_MODEL = 'deepseek-v4-pro'
 
 async function finalize(
-  keys: { openrouter: string; deepseek: string; cerebras: string },
+  keys: { openrouter: string; deepseek: string },
   model: string,
   payload: string,
   system: string,
@@ -753,10 +725,9 @@ Deno.serve(async (req) => {
 
     const keys = {
       openrouter: await getApiKey(),
-      deepseek: Deno.env.get('DEEPSEEK_API_KEY') ?? '',
-      cerebras: cerebrasKey()
+      deepseek: Deno.env.get('DEEPSEEK_API_KEY') ?? ''
     }
-    if (!keys.openrouter && !keys.deepseek && !keys.cerebras) return json({ raw: null, judge: 'none' })
+    if (!keys.openrouter && !keys.deepseek) return json({ raw: null, judge: 'none' })
 
     // Stream a space every 20s so Supabase's 150s IDLE timeout never 504s a long
     // medium run (Pro worker window is 400s). Keep-alive bytes are JSON whitespace,
