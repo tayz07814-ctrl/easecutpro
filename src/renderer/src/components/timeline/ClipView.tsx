@@ -49,6 +49,13 @@ export function ClipView({
   const wf = showWave ? media?.getWaveform(clip) ?? null : null
   const frames = isVideo || isImage ? media?.getFrames(clip) ?? null : null
 
+  // Zoom badge: the peak Ken Burns zoom applied to this clip (Auto Zoom or manual)
+  // — ovScale × the larger of the start/end ramp. Shown in the clip's title bar.
+  const m = clip.metadata
+  const mn = (k: string): number => (typeof m?.[k] === 'number' ? (m[k] as number) : 1)
+  const zPeak = mn('ovScale') * Math.max(mn('ovZoomStart'), mn('ovZoomEnd'))
+  const zoomPct = isVideo && zPeak > 1.005 ? Math.round(zPeak * 100) : 0
+
   return (
     <div
       className={`ec-tl-clip kind-${clip.kind} ${selected ? 'sel' : ''}`}
@@ -61,12 +68,15 @@ export function ClipView({
       )}
       {isText ? (
         <div className="ec-tl-clip-text">
-          <span>{clip.name || 'Text'}</span>
+          <span>{clip.text?.text?.trim() || clip.name || 'Text'}</span>
         </div>
       ) : (
         <>
           <div className="ec-tl-clip-title">
-            <span>{clip.name || clip.kind}</span>
+            <span>
+              {clip.name || clip.kind}
+              {zoomPct ? ` · zoom ${zoomPct}%` : ''}
+            </span>
           </div>
           {(isVideo || isImage) && (
             <div
