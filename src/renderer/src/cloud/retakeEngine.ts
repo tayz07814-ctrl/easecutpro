@@ -96,7 +96,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (Llama-4-Maverick + sharp judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (Gemma-4-31B + sharp judge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -122,11 +122,11 @@ export async function retakeAwareCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript: Llama 4
-  //    Maverick (ultracut-judge edge fn, OpenRouter) on the 'sharp' word-list prompt.
-  //    Maverick is a non-reasoning model, so reasoning is 'off' (matches the A/B
-  //    config it was validated on: fast, no reasoning trace). 0.01 ONLY — production
-  //    (main) keeps DeepSeek-V4-flash + reasoning:medium, untouched.
+  // 4. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript: Gemma 4
+  //    31B via OpenRouter (ultracut-judge edge fn, google/gemma-4-31b-it) on the
+  //    'sharp' word-list prompt. Gemma is a non-reasoning model, so reasoning is
+  //    'off' (fast, no reasoning trace). 0.01 ONLY — production (main) keeps its
+  //    own judge, untouched.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -139,7 +139,7 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'meta-llama/llama-4-maverick',
+      model: 'google/gemma-4-31b-it',
       promptVariant: 'sharp',
       reasoning: 'off'
     } satisfies ProcutJudgeReq)
