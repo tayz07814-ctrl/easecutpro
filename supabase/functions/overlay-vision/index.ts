@@ -112,9 +112,17 @@ Deno.serve(async (req) => {
     if (!image) return json({ description: '' })
 
     // Gemma sees the image first; Claude backs it up if OpenRouter is unavailable.
+    let via: 'gemma-openrouter' | 'claude-anthropic' | 'none' = 'gemma-openrouter'
     let description = await gemmaDescribe(image, mediaType)
-    if (!description) description = await claudeDescribe(image, mediaType)
-    return json({ description })
+    if (!description) {
+      via = 'claude-anthropic'
+      description = await claudeDescribe(image, mediaType)
+    }
+    if (!description) via = 'none'
+    // Attribution: shows in the edge-function logs so a run's actual vision
+    // provider (Gemma via OpenRouter vs the Claude fallback) is verifiable.
+    console.log(`[overlay-vision] via=${via} len=${description.length}`)
+    return json({ description, via })
   } catch (e) {
     return json({ error: (e as Error).message }, 500)
   }
