@@ -91,25 +91,38 @@ interface Seg {
   speed: number
 }
 
-// Anti-click seam fade for the LIVE preview — matches the export: a SINGLE, very
-// subtle fade-in (~25ms) only at the START of the clip that follows a real cut, and
-// NEVER a fade-out on the outgoing tail. Fading both sides audibly eats the words on
-// either edge of the cut; a short incoming ramp is enough to soften the splice/seek
-// click. Seamless same-source joins (splits) are left untouched. Returns 0..1 gain.
-const SEAM_FADE_S = 0.025
+// Anti-click seam MICRO-CROSSFADE for the LIVE preview. A cut splices two non-
+// contiguous source points, so the waveform jumps → an audible click/pop at the
+// seam (worse because the buddy swap mutes the outgoing element instantly). Ramp
+// the outgoing tail DOWN over the last ~18ms before the cut AND the incoming UP
+// over ~25ms after it — an equal-power-ish fade centred on the seam. BOTH ramps
+// sit on KEPT content (never the removed span), so no cut audio is replayed and
+// only a sub-frame sliver of the word edges is touched — inaudible, unlike the
+// click it removes. Seamless same-source joins (splits) are untouched. 0..1 gain.
+const SEAM_FADE_S = 0.025 // incoming fade-in (post-cut)
+const SEAM_FADE_OUT_S = 0.018 // outgoing fade-out (pre-cut tail) — shorter so it barely grazes the last word
 function seamContiguous(a: Seg, b: Seg): boolean {
   return a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003
 }
 function seamGain(t: number, di: number, ss: Seg[], fade = SEAM_FADE_S): number {
   const seg = ss[di]
   if (!seg) return 1
+  let g = 1
+  const ramp = (x: number, span: number): number => Math.max(0, Math.sin((Math.max(0, x) / span) * (Math.PI / 2)))
+  // Fade IN at the start of a post-cut segment.
   const prev = ss[di - 1]
-  // Fade IN only, at the start of a post-cut segment. No outgoing-tail fade.
   if (prev && !seamContiguous(prev, seg)) {
-    const d = t - seg.start // seconds since this segment's (cut) start
-    if (d < fade) return Math.max(0, Math.sin((Math.max(0, d) / fade) * (Math.PI / 2)))
+    const d = t - seg.start // since this segment's (cut) start
+    if (d < fade) g = Math.min(g, ramp(d, fade))
   }
-  return 1
+  // Fade OUT the tail just before a real cut (kept content, so no words are lost —
+  // only the click is). Skipped for a seamless same-source join.
+  const next = ss[di + 1]
+  if (next && !seamContiguous(seg, next)) {
+    const dEnd = seg.start + seg.len - t // until this segment's (cut) end
+    if (dEnd < SEAM_FADE_OUT_S) g = Math.min(g, ramp(dEnd, SEAM_FADE_OUT_S))
+  }
+  return g
 }
 
 /** Main-lane clips -> playable segments, sorted by timeline position. Pure. */
