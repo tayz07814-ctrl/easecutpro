@@ -62,12 +62,6 @@ function clamp(v: number, lo: number, hi: number): number {
 // once, just before the seam). Do NOT raise this to chase seam flicker — that
 // needs a smarter, device-profiled approach, not a bigger lead.
 const PREWARM_LEAD_S = 0.6
-// Start the decode-ahead buddy actually PLAYING (muted, hidden) this many seconds
-// before a same-source cut, warmed to (in-point − PREROLL) so at the seam it is
-// already IN MOTION at the in-point. Swapping to a moving decoder has no resume
-// frame → kills the ~1-frame "hold" a paused→play swap left. Safe now that audio
-// is decoupled (a playing muted video makes no sound); buddy is desktop-only.
-const PREROLL_S = 0.1
 function containRect(w: number, h: number, aspect: number): { left: number; top: number; width: number; height: number } {
   if (w <= 0 || h <= 0) return { left: 0, top: 0, width: 0, height: 0 }
   if (w / h > aspect) {
@@ -330,9 +324,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // or suspended context falls back to element audio, so sound is never lost.
   const audioEngineRef = useRef<SeamlessAudio | null>(null)
   if (!audioEngineRef.current) audioEngineRef.current = new SeamlessAudio()
-  // Sources whose decode-ahead buddy is currently PRE-ROLLING (playing, hidden)
-  // toward the upcoming seam — see PREROLL_S.
-  const preRollRef = useRef(new Set<string>())
 
   // Element pool: each source gets one or — for a CUT source that has a same-source
   // seam — TWO <video> slots: a live one and a "buddy" kept decoded ONE seam ahead
@@ -557,21 +548,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                   const jump = up.sourceStart - active.sourceEnd
                   const micro = jump >= 0 && jump <= 0.12
                   const wv = warmVideo(active.src)
-                  if (!micro && wv) {
-                    const rolling = preRollRef.current.has(active.src)
-                    const warmTo = Math.max(0, up.sourceStart - PREROLL_S)
-                    // Warm the buddy to PREROLL *before* the in-point (paused) so pre-roll
-                    // can carry it to the exact in-point already in motion.
-                    if (!rolling && settled(wv) && Math.abs(wv.currentTime - warmTo) > 0.06) {
-                      seek(wv, warmTo)
-                    }
-                    // Within PREROLL of the seam: start it PLAYING (muted, still hidden) so
-                    // the swap lands on a moving decoder — no paused→play hold.
-                    if (!rolling && settled(wv) && t >= active.start + active.len - PREROLL_S) {
-                      wv.muted = true
-                      void wv.play().catch(() => undefined)
-                      preRollRef.current.add(active.src)
-                    }
+                  if (!micro && wv && settled(wv) && Math.abs(wv.currentTime - up.sourceStart) > 0.06) {
+                    seek(wv, up.sourceStart)
                   }
                 }
               }
@@ -601,21 +579,12 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                       // buddy isn't ready (clip too short to warm in time), fall back to
                       // cold-seeking the live element, exactly the old single-decoder path.
                       const wv = warmVideo(active.src)
-                      // Ready only once the buddy has PRE-ROLLED into motion at ~the
-                      // in-point. Swapping to a still-paused / mis-positioned buddy is what
-                      // left the 1-frame hold; if pre-roll didn't happen in time, cold-seek.
-                      const buddyReady =
-                        preRollRef.current.has(active.src) &&
-                        !!wv &&
-                        settled(wv) &&
-                        Math.abs(wv.currentTime - next.sourceStart) < 0.12
+                      const buddyReady = !!wv && settled(wv) && Math.abs(wv.currentTime - next.sourceStart) < 0.15
                       if (buddyReady && wv) {
                         const cur = liveSlotRef.current.get(active.src) ?? 0
-                        liveSlotRef.current.set(active.src, cur ^ 1) // flip live ↔ buddy (moving)
+                        liveSlotRef.current.set(active.src, cur ^ 1) // flip live ↔ buddy
                         if (wv.paused) wv.play().catch(() => undefined)
-                        preRollRef.current.delete(active.src) // it is the LIVE element now
                       } else {
-                        preRollRef.current.delete(active.src) // stale pre-roll → drop it
                         seek(v, next.sourceStart)
                       }
                     } else {
@@ -696,17 +665,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           const v = pair[slot]
           if (!v) continue
           if (slot !== li) {
-            // Buddy/standby: hidden + muted. Normally paused on its pre-warmed frame;
-            // but while PRE-ROLLING it stays PLAYING (hidden) so the upcoming swap lands
-            // on a moving decoder (no resume hold). Never emits audio/picture either way.
+            // Buddy/standby: hidden + muted + paused, holding its pre-warmed frame so
+            // the next same-source seam is an instant swap. Never emits audio/picture.
             v.style.visibility = 'hidden'
             if (!v.muted) v.muted = true
-            if (preRollRef.current.has(src) && isPlaying) {
-              if (v.paused) void v.play().catch(() => undefined)
-            } else {
-              if (!v.paused) v.pause()
-              preRollRef.current.delete(src) // reset stale pre-roll (paused / role changed)
-            }
+            if (!v.paused) v.pause()
             continue
           }
           const isShown = !!shown && shown.src === src && !badRef.current.has(src)
