@@ -4,6 +4,7 @@ import { css } from '../css'
 import { useStore } from '../../store'
 import type { LibraryItem } from '@shared/types'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
+import AutoZoomPanel from './AutoZoomPanel'
 import EditPanel from './EditPanel'
 import OverlayPanel from '../../components/OverlayPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
@@ -492,7 +493,7 @@ function ComingSoon({ title, note, Icon }: { title: string; note: string; Icon: 
 // Overlays/Audio) are wired for active-state + selection but their panels await
 // design (and the "Audio" ↔ silence/ost mapping decision), so they show an
 // honest placeholder rather than mounting off-design legacy panels.
-const AI_TABS = ['AI Cut', 'Edit', 'Text', 'Overlays', 'Audio'] as const
+const AI_TABS = ['AI Cut', 'Auto Zoom', 'Edit', 'Text', 'Overlays', 'Audio'] as const
 
 function AiPanel({ width }: { width: number }): JSX.Element {
   const [tab, setTab] = useState<(typeof AI_TABS)[number]>('AI Cut')
@@ -509,17 +510,19 @@ function AiPanel({ width }: { width: number }): JSX.Element {
   }, [selId])
   return (
     <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#191B20;overflow:hidden`)}>
-      <div style={css(`display:flex;padding:0 8px;border-bottom:1px solid ${HAIR};flex:none`)}>
+      <div style={css(`display:flex;padding:0 6px;border-bottom:1px solid ${HAIR};flex:none;overflow-x:auto`)}>
         {AI_TABS.map((t) =>
           t === tab ? (
-            <div key={t} style={css('padding:13px 12px 11px;font-size:12.5px;font-weight:600;color:#E9EAEE;border-bottom:2px solid #6E6AE8;margin-bottom:-1px')}>{t}</div>
+            <div key={t} style={css('flex:none;white-space:nowrap;padding:13px 10px 11px;font-size:12.5px;font-weight:600;color:#E9EAEE;border-bottom:2px solid #6E6AE8;margin-bottom:-1px')}>{t}</div>
           ) : (
-            <div key={t} onClick={() => setTab(t)} style={css('padding:13px 12px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>{t}</div>
+            <div key={t} onClick={() => setTab(t)} style={css('flex:none;white-space:nowrap;padding:13px 10px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>{t}</div>
           )
         )}
       </div>
       {tab === 'AI Cut' ? (
         <RetakeCleanerPanel />
+      ) : tab === 'Auto Zoom' ? (
+        <AutoZoomPanel />
       ) : tab === 'Edit' ? (
         <EditPanel />
       ) : tab === 'Overlays' ? (
