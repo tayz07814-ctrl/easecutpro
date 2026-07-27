@@ -342,15 +342,15 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // and keep the playhead advancing on the wall clock instead of freezing on a stall.
   const ctTrackRef = useRef<{ src: string; ct: number; wall: number }>({ src: '', ct: -1, wall: 0 })
 
-  // DESKTOP: composite the base picture into a <canvas> instead of revealing/hiding
-  // the <video> elements. drawImage samples the LIVE decoder's CURRENT frame every
-  // rAF, so there is no element "reveal" — the compositor stale-frame flash at a cut
-  // seam (and the paused-buddy 1-frame hold) are impossible by construction, and the
-  // buddy can be PRE-ROLLED (already playing) for a hold-free swap. The zoom is the
-  // SAME kenBurns CSS transform, applied to the canvas (identical box) so it is
-  // pixel-equivalent to the element path. Mobile keeps the single-decoder element
-  // path (iOS video→canvas is finicky and it has no buddy anyway).
-  const useCanvas = !isMobile
+  // Canvas base compositor: DISABLED. In theory drawImage-ing the live decoder into
+  // a <canvas> every rAF removes the seam reveal-flash by construction — but on a
+  // real desktop browser the base <video>s are HARDWARE-decoded and hidden, and
+  // drawImage() from a hidden hardware-decoded video returns BLACK (the frame is a
+  // GPU texture the 2D context can't read back). That turned the whole preview black
+  // with intermittent flashes. Headless Chromium uses SOFTWARE decode so it never
+  // reproduced this. Left wired behind the flag for a future WebCodecs/rVFC redo;
+  // the element-visibility path below is the shipping path.
+  const useCanvas = false
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the
