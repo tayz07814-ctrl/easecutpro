@@ -17,7 +17,7 @@ const CARD_BG = '#191A20'
 const HAIR = 'rgba(255,255,255,.08)'
 
 interface OptionDef {
-  key: keyof WizardOpts | 'autoZoom'
+  key: keyof WizardOpts
   icon: string
   title: string
   sub: string
@@ -26,7 +26,7 @@ interface OptionDef {
 const OPTIONS: OptionDef[] = [
   { key: 'cutSilenceBadTakes', icon: '✂️', title: 'Cut silences & bad takes', sub: 'Remove dead air and flubbed takes automatically' },
   { key: 'captions', icon: '💬', title: 'Auto captions', sub: 'Generate styled captions from the transcript' },
-  { key: 'autoZoom', icon: '🔍', title: 'Auto zoom', sub: 'Add dynamic zooms to keep it lively', soon: true }
+  { key: 'autoZoom', icon: '🔍', title: 'Auto zoom', sub: 'AI punch-in zooms on your key moments' }
 ]
 
 function OptionCard({
@@ -83,7 +83,7 @@ export default function NewProjectWizard({ onClose }: { onClose: () => void }): 
   const jobPct = useStore((s) => s.job.percent)
 
   const [files, setFiles] = useState<PickedFile[]>([])
-  const [opts, setOpts] = useState<WizardOpts>({ cutSilenceBadTakes: true, captions: false })
+  const [opts, setOpts] = useState<WizardOpts>({ cutSilenceBadTakes: true, captions: false, autoZoom: false })
   const [busy, setBusy] = useState(false)
 
   const processing = busy || !!wizardJob
@@ -117,7 +117,7 @@ export default function NewProjectWizard({ onClose }: { onClose: () => void }): 
     }
   }
 
-  const anyOpt = opts.cutSilenceBadTakes || opts.captions
+  const anyOpt = opts.cutSilenceBadTakes || opts.captions || opts.autoZoom
   const ctaLabel = anyOpt ? 'Enhance & open editor' : 'Create project'
 
   return (
@@ -213,12 +213,7 @@ export default function NewProjectWizard({ onClose }: { onClose: () => void }): 
                 Enhance on import
               </div>
               {OPTIONS.map((def) => (
-                <OptionCard
-                  key={def.key}
-                  def={def}
-                  on={def.key === 'autoZoom' ? false : opts[def.key as keyof WizardOpts]}
-                  onToggle={() => def.key !== 'autoZoom' && toggle(def.key as keyof WizardOpts)}
-                />
+                <OptionCard key={def.key} def={def} on={opts[def.key]} onToggle={() => toggle(def.key)} />
               ))}
             </div>
 

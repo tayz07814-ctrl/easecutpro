@@ -247,6 +247,19 @@ export default function RetakeCleanerPanel(): JSX.Element {
             </svg>
           </button>
         </div>
+        {/* Auto Zoom — Gemma picks the key cut clips and punches in on them. */}
+        <button
+          onClick={r.autoZoom}
+          disabled={r.autoZooming}
+          style={css(
+            'width:100%;margin-top:12px;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:11px 0;flex:none;',
+            r.autoZooming
+              ? 'background:#3A3550;cursor:default'
+              : 'background:linear-gradient(90deg,#6E6AE8,#8E8BF0);cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.32)'
+          )}
+        >
+          {r.autoZooming ? 'Adding zooms…' : '🔍 Auto Zoom the key moments'}
+        </button>
         {smartRow}
         <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
           <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9BA0AC')}>Review cuts</div>

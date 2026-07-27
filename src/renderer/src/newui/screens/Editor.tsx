@@ -516,6 +516,7 @@ export default function Editor(): JSX.Element {
   const showExportModal = useStore((s) => s.showExportModal)
   const showSettings = useStore((s) => s.showSettings)
   const pendingCaptions = useStore((s) => s.pendingCaptions)
+  const pendingAutoZoom = useStore((s) => s.pendingAutoZoom)
 
   // Captions requested in the New Project wizard run HERE, once the timeline
   // engine has mounted the document (captions write doc text clips, which need
@@ -543,6 +544,32 @@ export default function Editor(): JSX.Element {
     handle = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(handle)
   }, [pendingCaptions])
+
+  // Auto Zoom requested in the New Project wizard runs HERE too, once the timeline
+  // engine has mounted the (already-cut) document and a transcript exists — Auto
+  // Zoom reads the main-lane clips + transcript and writes per-clip zoom metadata.
+  useEffect(() => {
+    if (!pendingAutoZoom) return
+    let handle = 0
+    let tries = 0
+    const tick = (): void => {
+      const doc = getSharedEngine()?.document
+      const ready = !!doc && doc.tracks.some((t) => t.isMain && t.clips.length > 0)
+      const hasTranscript = (useStore.getState().project.transcript?.words?.length ?? 0) > 0
+      if (ready && hasTranscript) {
+        void useStore.getState().runAutoZoom()
+        useStore.getState().clearPendingAutoZoom()
+        return
+      }
+      if (tries++ > 300) {
+        useStore.getState().clearPendingAutoZoom()
+        return
+      }
+      handle = requestAnimationFrame(tick)
+    }
+    handle = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(handle)
+  }, [pendingAutoZoom])
 
   // Transport keyboard shortcuts (CapCut-style). GLOBAL so Space works the moment
   // the editor loads — no need to click the play button first (clicking only worked

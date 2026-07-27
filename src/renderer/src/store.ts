@@ -522,6 +522,8 @@ export interface WizardOpts {
   cutSilenceBadTakes: boolean
   /** Generate styled caption clips from the transcript (runs after the editor opens). */
   captions: boolean
+  /** Add AI punch-in zooms to the important clips (runs after the editor opens). */
+  autoZoom: boolean
 }
 
 /** New Project wizard progress. `base`/`span` map the current engine's own 0-100
@@ -896,6 +898,14 @@ interface AppState {
   pendingCaptions: boolean
   /** Editor calls this after generating the post-import captions (or to cancel). */
   clearPendingCaptions: () => void
+  /** Auto Zoom was requested at import — the editor runs it once the engine mounts. */
+  pendingAutoZoom: boolean
+  /** Editor calls this after the post-import Auto Zoom pass (or to cancel). */
+  clearPendingAutoZoom: () => void
+  /** true while an Auto Zoom pass is running (drives the AI Cut button spinner). */
+  autoZoomBusy: boolean
+  /** Auto Zoom: ask Gemma which of the current cut clips to punch-in and apply it. */
+  runAutoZoom: () => Promise<void>
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -948,6 +958,8 @@ export const useStore = create<AppState>((set, get) => ({
   batchJobs: [],
   wizardJob: null,
   pendingCaptions: false,
+  pendingAutoZoom: false,
+  autoZoomBusy: false,
   view: IS_WEB ? 'loading' : 'home',
   user: null,
   editingClipId: null,
@@ -3860,6 +3872,30 @@ export const useStore = create<AppState>((set, get) => ({
 
   clearPendingCaptions: () => set({ pendingCaptions: false }),
 
+  clearPendingAutoZoom: () => set({ pendingAutoZoom: false }),
+
+  runAutoZoom: async () => {
+    if (get().autoZoomBusy) return
+    if (!getSharedEngine()?.document) {
+      set({ job: { active: false, percent: 0, message: 'Open a project timeline first, then Auto Zoom.' } })
+      return
+    }
+    // Kept words in SOURCE time (deleted / empty filtered out) — same set captions use.
+    const words = (get().project.transcript?.words ?? [])
+      .filter((w) => !w.deleted && w.text.trim())
+      .map((w) => ({ start: w.start, end: w.end, text: w.text }))
+    // Keep job.active FALSE so the AI Cut panel stays in its executed review while
+    // this runs (the button's own spinner shows progress via autoZoomBusy).
+    set({ autoZoomBusy: true })
+    try {
+      const { planAndApplyZooms } = await import('./cloud/autoZoom')
+      const r = await planAndApplyZooms(words)
+      set({ autoZoomBusy: false, job: { active: false, percent: 100, message: r.message } })
+    } catch (e) {
+      set({ autoZoomBusy: false, job: { active: false, percent: 0, message: `Auto Zoom failed: ${(e as Error).message}` } })
+    }
+  },
+
   startImportWizard: async (files, opts) => {
     if (!files.length) return
     set({ wizardJob: { active: true, label: 'Preparing…', base: 0, span: 0 } })
@@ -3918,8 +3954,9 @@ export const useStore = create<AppState>((set, get) => ({
 
     const openInEditor = async (proj: Project): Promise<void> => {
       const rec = await createProject(name, proj)
-      // Captions need the mounted timeline engine → the editor runs them on open.
-      set({ pendingCaptions: opts.captions, wizardJob: null })
+      // Captions + Auto Zoom need the mounted timeline engine → the editor runs
+      // them on open (see the pending* consumers in Editor.tsx).
+      set({ pendingCaptions: opts.captions, pendingAutoZoom: opts.autoZoom, wizardJob: null })
       get().openProjectRecord({ id: rec.id, name, project: proj })
       try {
         const fp = await serializeProject(get().project)
@@ -3930,7 +3967,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     // 3) Nothing to run before opening → straight to the editor.
-    if (!opts.cutSilenceBadTakes && !opts.captions) {
+    if (!opts.cutSilenceBadTakes && !opts.captions && !opts.autoZoom) {
       await openInEditor(project)
       return
     }
@@ -3946,8 +3983,9 @@ export const useStore = create<AppState>((set, get) => ({
         await get().runRetakeCutBeta()
         set({ wizardJob: { active: true, label: 'Applying cuts…', base: 75, span: 10 } })
         await get().executeCuts()
-      } else if (opts.captions) {
-        // Captions still need a transcript even when no cuts were requested.
+      } else if (opts.captions || opts.autoZoom) {
+        // Captions / Auto Zoom still need a transcript even when no cuts were
+        // requested (Auto Zoom uses it to find + split the key moments).
         set({ wizardJob: { active: true, label: 'Transcribing…', base: 0, span: 85 } })
         await get().transcribe()
       }

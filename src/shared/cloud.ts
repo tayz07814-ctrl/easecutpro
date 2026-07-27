@@ -130,3 +130,21 @@ export interface PremiumCutReq {
   /** stt-audio bucket object path of the uploaded 16 kHz mono WAV. */
   path: string
 }
+
+// ---- auto-zoom-judge edge function (Auto Zoom: Gemma picks which clips get a
+// punch-in zoom) ----
+// The browser sends the ordered kept/cut CLIP segments (index + transcript text +
+// duration) and Gemma (OpenRouter) returns which segments deserve a zoom and how
+// strong. `raw` is Gemma's JSON string ({ zooms:[{ i, level, style }] }), parsed
+// client-side; raw:null on any failure so Auto Zoom degrades to a deterministic
+// pass instead of erroring.
+export interface AutoZoomJudgeReq {
+  /** compact JSON of ordered segments: [{ i, t, d }] (index, text, durSec). */
+  segments: string
+  /** optional per-request model (whitelisted server-side); omitted → Gemma default. */
+  model?: string
+}
+export interface AutoZoomJudgeRes {
+  raw: string | null
+  judge: string
+}

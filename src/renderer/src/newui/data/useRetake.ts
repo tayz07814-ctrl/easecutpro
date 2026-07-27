@@ -54,6 +54,10 @@ export interface RetakeModel {
   seekWord: (sourceStartS: number) => void
   openSilenceSettings: () => void
   setSmartSilence: (v: boolean) => void
+  /** Auto Zoom — ask Gemma which cut clips to punch-in, then apply the zooms. */
+  autoZoom: () => void
+  /** true while an Auto Zoom pass is running. */
+  autoZooming: boolean
 }
 
 export function useRetake(): RetakeModel {
@@ -76,6 +80,8 @@ export function useRetake(): RetakeModel {
   const runUltracut = useStore((s) => s.runUltracut)
   // Premium Cut — Gemini 3.5 Flash multimodal engine, wired to its own button.
   const runPremiumCut = useStore((s) => s.runPremiumCut)
+  const runAutoZoom = useStore((s) => s.runAutoZoom)
+  const autoZoomBusy = useStore((s) => s.autoZoomBusy)
   const executeCuts = useStore((s) => s.executeCuts)
   const restoreSelected = useStore((s) => s.restoreSelected)
   const deleteSelected = useStore((s) => s.deleteSelected)
@@ -179,6 +185,8 @@ export function useRetake(): RetakeModel {
       setPlaying(true)
     },
     openSilenceSettings: () => setShowSilenceSettings(true),
-    setSmartSilence
+    setSmartSilence,
+    autoZoom: () => void runAutoZoom(),
+    autoZooming: autoZoomBusy
   }
 }
