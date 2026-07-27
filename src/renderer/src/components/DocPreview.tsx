@@ -31,6 +31,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { playClock, primePlayback } from '../clock'
 import { kenBurnsOrigin, kenBurnsTransform, cropToKenBurns } from '../kenBurns'
+import { SeamlessAudio } from '../previewAudio'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -317,6 +318,13 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const playingRef = useRef(playing)
   playingRef.current = playing
 
+  // Seamless decoupled AUDIO (0.01): play the EDITED main-lane audio as one gapless
+  // Web Audio stream so cut seams have no click / decoder-gap. Videos become
+  // picture-only (muted) ONLY while the engine is truly running — a decode failure
+  // or suspended context falls back to element audio, so sound is never lost.
+  const audioEngineRef = useRef<SeamlessAudio | null>(null)
+  if (!audioEngineRef.current) audioEngineRef.current = new SeamlessAudio()
+
   // Element pool: each source gets one or — for a CUT source that has a same-source
   // seam — TWO <video> slots: a live one and a "buddy" kept decoded ONE seam ahead
   // so crossing a same-source cut is a hot SWAP, not a cold seek (which froze the
@@ -345,8 +353,34 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   useEffect(() => {
     if (Math.abs(playhead - lastWroteRef.current) > 0.0005) {
       tRef.current = playhead // adopt: the user moved the playhead
+      audioEngineRef.current?.seek(playhead) // re-anchor the decoupled audio to the scrub
     }
   }, [playhead])
+
+  // Feed the audio engine the current edited segments (decodes each new source
+  // once); keyed on a content signature so it only re-runs on a real edit.
+  const audioSig = segs
+    .map((s) => `${s.src}:${s.sourceStart}:${s.sourceEnd}:${s.start}:${s.len}:${s.gain}:${s.speed}:${s.muted ? 1 : 0}`)
+    .join('|')
+  useEffect(() => {
+    audioEngineRef.current?.setSegments(segs)
+    // segs is rebuilt every render; audioSig captures its content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioSig])
+
+  // Start/stop the decoupled audio with playback. On play it schedules the whole
+  // edited timeline from the live playhead (gapless); on pause it stops. If sources
+  // aren't decoded / the context won't start, active() stays false and the <video>
+  // elements keep their own audio — sound is never lost.
+  useEffect(() => {
+    const eng = audioEngineRef.current
+    if (!eng) return
+    if (playing) eng.play(tRef.current)
+    else eng.pause()
+  }, [playing])
+
+  // Tear down the AudioContext on unmount.
+  useEffect(() => () => audioEngineRef.current?.dispose(), [])
 
   function segAtTime(t: number): number {
     return segsRef.current.findIndex((s) => t >= s.start && t < s.start + s.len)
@@ -609,6 +643,15 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       tRef.current = t
       playClock.t = t
 
+      // Keep the decoupled audio locked to the video clock. The AudioContext resume
+      // is async (first play) and clocks can drift over long runs, so if the audio
+      // position diverges from the timeline by > ~0.25s, re-anchor it. The threshold
+      // keeps this a rare correction, not a per-frame reschedule (which would blip).
+      {
+        const eng = audioEngineRef.current
+        if (isPlaying && eng && eng.active() && Math.abs(eng.expected() - t) > 0.25) eng.seek(t)
+      }
+
       // ---- visibility + per-clip properties, every frame (cheap, idempotent) ----
       const di = displayIdxAt(t)
       const shown = di >= 0 ? ss[di] : undefined
@@ -632,7 +675,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           const isShown = !!shown && shown.src === src && !badRef.current.has(src)
           v.style.visibility = isShown ? 'visible' : 'hidden'
           if (isShown && shown) {
-            v.muted = shown.muted === true
+            // Decoupled audio engine owns the sound while it's truly running →
+            // this element is picture-only. Otherwise it carries its own audio,
+            // seam-faded as before (the fallback path).
+            const audioEngineOwns = !!audioEngineRef.current?.active()
+            v.muted = shown.muted === true || audioEngineOwns
             // Anti-click: dip the volume toward 0 across each real cut seam.
             v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
             v.playbackRate = clamp(shown.speed, 0.25, 4)
