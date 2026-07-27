@@ -140,7 +140,7 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'gemma-4-31b',
+      model: 'google/gemma-4-31b-it',
       promptVariant: 'sharp',
       reasoning: 'off'
     } satisfies ProcutJudgeReq)
