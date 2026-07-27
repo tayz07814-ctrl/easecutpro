@@ -140,8 +140,7 @@ export async function retakeAwareCutCloud(
       proposal: { word_cuts: [], pause_cuts: [] },
       // OpenRouter slug for Gemma-4-31b model.
       model: 'google/gemma-4-31b-it',
-      promptVariant: 'sharp',
-      reasoning: 'low'
+      reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
