@@ -342,6 +342,23 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // and keep the playhead advancing on the wall clock instead of freezing on a stall.
   const ctTrackRef = useRef<{ src: string; ct: number; wall: number }>({ src: '', ct: -1, wall: 0 })
 
+  // DESKTOP: composite the base picture into a <canvas> instead of revealing/hiding
+  // the <video> elements. drawImage samples the LIVE decoder's CURRENT frame every
+  // rAF, so there is no element "reveal" — the compositor stale-frame flash at a cut
+  // seam (and the paused-buddy 1-frame hold) are impossible by construction, and the
+  // buddy can be PRE-ROLLED (already playing) for a hold-free swap. The zoom is the
+  // SAME kenBurns CSS transform, applied to the canvas (identical box) so it is
+  // pixel-equivalent to the element path. Mobile keeps the single-decoder element
+  // path (iOS video→canvas is finicky and it has no buddy anyway).
+  const useCanvas = !isMobile
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
+  // Edge-detects play→pause so we can ADOPT the picture's real position into the
+  // playhead on pause (the decoder is allowed to drift up to ~0.34s from the clock
+  // while playing; snapping it to the clock on pause jumped the frame — a visible
+  // "flicker on pause"). Adopting keeps the picture perfectly still when pausing.
+  const wasPlayingRef = useRef(playing)
+
   // Local continuous time `t` — what the viewer shows. Store playhead is
   // written FROM it (throttled) while playing; adopted INTO it when it changes
   // externally (scrub) or while paused.
@@ -476,6 +493,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             if (v.style.visibility !== 'hidden') v.style.visibility = 'hidden'
           }
         }
+        const cv = canvasRef.current // native surface shows — keep the canvas out of the way
+        if (cv && cv.style.visibility !== 'hidden') cv.style.visibility = 'hidden'
         raf = requestAnimationFrame(loop)
         return
       }
@@ -486,6 +505,30 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         playClock.t = tRef.current
         raf = requestAnimationFrame(loop)
         return
+      }
+
+      // ADOPT-ON-PAUSE: on the play→pause edge, snap the PLAYHEAD to where the
+      // picture actually is (not the picture to the playhead). While playing, the
+      // decoder is allowed to drift up to ~0.34s from the clock; the old paused
+      // branch then seeked the element back to the clock — a visible frame jump
+      // ("flicker when pausing"). Adopting the element's real position keeps the
+      // frame perfectly still through a pause.
+      const wasPlaying = wasPlayingRef.current
+      wasPlayingRef.current = isPlaying
+      if (wasPlaying && !isPlaying) {
+        const di0 = displayIdxAt(tRef.current)
+        if (di0 >= 0) {
+          const seg = ss[di0]
+          const v = liveVideo(seg.src)
+          if (v && !badRef.current.has(seg.src) && settled(v)) {
+            const elemT = seg.start + clamp((v.currentTime - seg.sourceStart) / seg.speed, 0, seg.len)
+            if (isFinite(elemT)) {
+              tRef.current = elemT
+              lastWroteRef.current = elemT
+              setPlayhead(elemT)
+            }
+          }
+        }
       }
 
       let t = tRef.current
@@ -551,6 +594,23 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                   if (!micro && wv && settled(wv) && Math.abs(wv.currentTime - up.sourceStart) > 0.06) {
                     seek(wv, up.sourceStart)
                   }
+                  // CANVAS pre-roll: start the buddy MOVING a hair before the seam so
+                  // the swap has it already advancing (kills the 1-frame hold). Only
+                  // safe on the canvas path — the buddy is never DRAWN until it goes
+                  // live, so the ~2 frames of pre-seam (removed) content it plays are
+                  // invisible; on the element path a played-hidden buddy would flash a
+                  // stale frame on reveal, so it stays paused there.
+                  if (
+                    useCanvas &&
+                    !micro &&
+                    wv &&
+                    wv.paused &&
+                    settled(wv) &&
+                    Math.abs(wv.currentTime - up.sourceStart) < 0.2 &&
+                    t >= active.start + active.len - 0.08
+                  ) {
+                    wv.play().catch(() => undefined)
+                  }
                 }
               }
             }
@@ -584,7 +644,15 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                         const cur = liveSlotRef.current.get(active.src) ?? 0
                         liveSlotRef.current.set(active.src, cur ^ 1) // flip live ↔ buddy
                         if (wv.paused) wv.play().catch(() => undefined)
+                        // Canvas path: the OLD live is now the buddy — pause it so it
+                        // stops decoding past its out-point; prewarm re-seeks it to the
+                        // NEXT seam. (Element path keeps its own visibility handling.)
+                        if (useCanvas && !v.paused) v.pause()
                       } else {
+                        // Buddy not ready → cold-seek the live element (old path). Pause
+                        // any buddy we pre-rolled so it can't drift on into removed
+                        // content; prewarm re-seeks it for the next seam.
+                        if (useCanvas && wv && !wv.paused) wv.pause()
                         seek(v, next.sourceStart)
                       }
                     } else {
@@ -652,57 +720,107 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         if (isPlaying && eng && eng.active() && Math.abs(eng.expected() - t) > 0.25) eng.seek(t)
       }
 
-      // ---- visibility + per-clip properties, every frame (cheap, idempotent) ----
+      // ---- DISPLAY + per-clip properties, every frame (cheap, idempotent) ----
       const di = displayIdxAt(t)
       const shown = di >= 0 ? ss[di] : undefined
       // Creator-configured seam blend ("overlap"): 0 = hard cuts. Read live so the
       // preview reflects the Silence Settings toggle/slider immediately.
       const sf = useStore.getState().seamFade
       const seamFadeS = sf.enabled ? sf.ms / 1000 : 0
-      for (const [src, pair] of slotsRef.current) {
-        const li = liveSlotRef.current.get(src) ?? 0
-        for (let slot = 0; slot < pair.length; slot++) {
-          const v = pair[slot]
-          if (!v) continue
-          if (slot !== li) {
-            // Buddy/standby: hidden + muted + paused, holding its pre-warmed frame so
-            // the next same-source seam is an instant swap. Never emits audio/picture.
-            v.style.visibility = 'hidden'
-            if (!v.muted) v.muted = true
-            if (!v.paused) v.pause()
-            continue
+      const kbTransform = (s: Seg): string =>
+        kenBurnsTransform({
+          size: s.ovScale ?? 1,
+          zoomStart: s.ovZoomStart,
+          zoomEnd: s.ovZoomEnd,
+          progress: s.len > 0 ? (t - s.start) / s.len : 0
+        })
+
+      if (useCanvas) {
+        // ── DESKTOP: composite the LIVE decoder's current frame into the <canvas>.
+        // No element is ever shown/hidden, so the compositor stale-frame flash at a
+        // seam is impossible; the pre-rolled buddy makes the swap hold-free too.
+        const cv = canvasRef.current
+        const liveEl = shown && !badRef.current.has(shown.src) ? liveVideo(shown.src) : undefined
+        if (cv) {
+          if (cv.style.visibility === 'hidden') cv.style.visibility = 'visible' // (native hid it)
+          const ctx = cv.getContext('2d')
+          if (ctx) {
+            const cw = cv.width
+            const ch = cv.height
+            if (liveEl && liveEl.readyState >= 2 && liveEl.videoWidth > 0 && liveEl.videoHeight > 0 && shown) {
+              // Reproduce `object-fit: contain` (the element path's CSS): letterbox the
+              // source inside the canvas, then apply the SAME kenBurns transform to the
+              // whole canvas — pixel-equivalent to transforming the <video> element.
+              const cr = containRect(cw, ch, liveEl.videoWidth / liveEl.videoHeight)
+              ctx.fillStyle = '#000'
+              ctx.fillRect(0, 0, cw, ch)
+              try {
+                ctx.drawImage(liveEl, cr.left, cr.top, cr.width, cr.height)
+              } catch {
+                /* frame momentarily not decodable — leave the black fill this tick */
+              }
+              cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
+              cv.style.transform = kbTransform(shown)
+            } else {
+              ctx.fillStyle = '#000' // gap / bad / not-yet-decoded → black
+              ctx.fillRect(0, 0, cw, ch)
+            }
           }
-          const isShown = !!shown && shown.src === src && !badRef.current.has(src)
-          v.style.visibility = isShown ? 'visible' : 'hidden'
-          if (isShown && shown) {
-            // Decoupled audio engine owns the sound while it's truly running →
-            // this element is picture-only. Otherwise it carries its own audio,
-            // seam-faded as before (the fallback path).
-            const audioEngineOwns = !!audioEngineRef.current?.active()
-            v.muted = shown.muted === true || audioEngineOwns
-            // Anti-click: dip the volume toward 0 across each real cut seam.
-            v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
-            v.playbackRate = clamp(shown.speed, 0.25, 4)
-            // Ken Burns applied directly as a GPU-composited transform (translateZ +
-            // scale3d, full float) off the main-thread rAF — the SAME smooth math the
-            // overlays + exporters use (kenBurnsTransform), no WAAPI/ZoomAnimator, so
-            // it never snaps or steps at the video fps. Written every frame (and when
-            // paused, at the exact playhead) so scrubbing lands precisely.
-            v.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
-            v.style.transform = kenBurnsTransform({
-              size: shown.ovScale ?? 1,
-              zoomStart: shown.ovZoomStart,
-              zoomEnd: shown.ovZoomEnd,
-              progress: shown.len > 0 ? (t - shown.start) / shown.len : 0
-            })
-          } else if (!isShown && !v.paused && isPlaying && shown?.src !== src) {
-            v.pause() // never let a hidden element keep playing audio
+        }
+        // The <video>s stay hidden (decode-only). Manage AUDIO + keep OFF-screen
+        // sources idle. The SHOWN source's slots have their play/pause driven by the
+        // playing/paused branches above (live plays, buddy paused / pre-rolled /
+        // swapped) — don't fight that here.
+        const audioEngineOwns = !!audioEngineRef.current?.active()
+        for (const [src, pair] of slotsRef.current) {
+          const li = liveSlotRef.current.get(src) ?? 0
+          for (let slot = 0; slot < pair.length; slot++) {
+            const v = pair[slot]
+            if (!v) continue
+            if (v.style.visibility !== 'hidden') v.style.visibility = 'hidden'
+            if (src !== shown?.src) {
+              if (!v.muted) v.muted = true
+              if (isPlaying && !v.paused) v.pause() // an off-screen source: stop its decoder
+              continue
+            }
+            const isLive = slot === li
+            v.muted = audioEngineOwns || !isLive || shown?.muted === true
+            if (isLive && shown) {
+              v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
+              v.playbackRate = clamp(shown.speed, 0.25, 4)
+            }
+          }
+        }
+      } else {
+        // ── MOBILE / no-canvas: the original element-visibility path (single decoder,
+        // no buddy). Same-source seams cold-seek the one element (a brief stall) — the
+        // canvas path above is desktop-only (iOS video→canvas is finicky).
+        for (const [src, pair] of slotsRef.current) {
+          const li = liveSlotRef.current.get(src) ?? 0
+          for (let slot = 0; slot < pair.length; slot++) {
+            const v = pair[slot]
+            if (!v) continue
+            if (slot !== li) {
+              v.style.visibility = 'hidden'
+              if (!v.muted) v.muted = true
+              if (!v.paused) v.pause()
+              continue
+            }
+            const isShown = !!shown && shown.src === src && !badRef.current.has(src)
+            v.style.visibility = isShown ? 'visible' : 'hidden'
+            if (isShown && shown) {
+              const audioEngineOwns = !!audioEngineRef.current?.active()
+              v.muted = shown.muted === true || audioEngineOwns
+              v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
+              v.playbackRate = clamp(shown.speed, 0.25, 4)
+              v.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
+              v.style.transform = kbTransform(shown)
+            } else if (!isShown && !v.paused && isPlaying && shown?.src !== src) {
+              v.pause() // never let a hidden element keep playing audio
+            }
           }
         }
       }
-      // No base clip on screen (gap / bad source): hidden elements keep their last
-      // transform but are visibility:hidden, and any re-shown element is re-
-      // transformed above BEFORE it becomes visible — so there is nothing to reset.
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
@@ -766,6 +884,17 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                   ref={(el) => setSlot(src, slot, el)}
                 />
               ))
+            )}
+            {useCanvas && frame.width > 0 && frame.height > 0 && (
+              // Desktop base-picture compositor. Sits ABOVE the (hidden, decode-only)
+              // <video>s and BELOW the overlays by DOM order. Backing store is frame×dpr
+              // for crispness; the reconciler drawImages the live decoder here each rAF.
+              <canvas
+                ref={canvasRef}
+                width={Math.round(frame.width * dpr)}
+                height={Math.round(frame.height * dpr)}
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', willChange: 'transform', backfaceVisibility: 'hidden' }}
+              />
             )}
             {frame.width > 0 && <OverlayLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}
             {frame.width > 0 && <TextLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}
