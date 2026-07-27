@@ -111,6 +111,11 @@ export function useRetake(): RetakeModel {
   else if (failed && !transcript) state = 'error'
   else if (deletedIds.size > 0) state = 'executed'
   else if (hasResults) state = 'results'
+  // ALWAYS SHOW TRANSCRIPT: once a transcript exists (a run finished — even with 0
+  // retakes, or a judge rate-limit where STT still succeeded), show it in the review
+  // instead of falling back to the idle "Find Retakes & Silence" screen. A fresh
+  // project with no transcript still shows idle.
+  else if (transcript && transcript.words.some((w) => w.text.trim())) state = 'executed'
   else state = 'idle'
 
   const words = selected.size

@@ -123,10 +123,11 @@ export async function retakeAwareCutCloud(
   }
 
   // 4. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript: Gemma 4
-  //    31B via OpenRouter (ultracut-judge edge fn, google/gemma-4-31b-it) on the
-  //    'sharp' word-list prompt. Gemma is a non-reasoning model, so reasoning is
-  //    'off' (fast, no reasoning trace). 0.01 ONLY — production (main) keeps its
-  //    own judge, untouched.
+  //    31B on CEREBRAS (ultracut-judge edge fn, un-prefixed 'gemma-4-31b' → the
+  //    Cerebras first-party route) on the 'sharp' word-list prompt. Cerebras is
+  //    used instead of OpenRouter's google/gemma-4-31b-it because the OpenRouter
+  //    free provider was rate-limiting (HTTP 429) ~1-in-9 runs, failing the judge.
+  //    Gemma is non-reasoning, so reasoning is 'off'. 0.01 ONLY.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -139,7 +140,7 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'google/gemma-4-31b-it',
+      model: 'gemma-4-31b',
       promptVariant: 'sharp',
       reasoning: 'off'
     } satisfies ProcutJudgeReq)
