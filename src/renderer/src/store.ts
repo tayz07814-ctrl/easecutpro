@@ -24,7 +24,7 @@ import type {
   OverlayEvent,
   OverlaySuggestion
 } from '@shared/types'
-import type { TimelineDocument } from '@shared/timeline/types'
+import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { documentToProject, projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips, labelSuggestionsToDocTextClips } from '@shared/timeline/bridge'
 import * as TimelineCommands from '@shared/timeline/commands'
 import type { Command } from '@shared/timeline/commands'
@@ -197,6 +197,21 @@ function removeGeneratedDocOverlays(label: string, match: (ruleId: string) => bo
     }
   }
   if (cmds.length) engine.batch(label, cmds)
+}
+
+/** Apply each overlay rule's SIZE (sizePct, 40–160) to its placed b-roll clips by
+ *  scaling ovScale — so "Size" in the Overlays/Auto B-roll panel changes how big the
+ *  image renders. Default (undefined / 100) leaves the position preset's scale. */
+function withOverlaySizes(clips: DocClip[], rules: OverlayRule[]): DocClip[] {
+  const pctById = new Map(rules.map((r) => [r.overlayId, r.sizePct]))
+  return clips.map((c) => {
+    const rid = typeof c.metadata?.overlayRuleId === 'string' ? c.metadata.overlayRuleId : undefined
+    const pct = rid ? pctById.get(rid) : undefined
+    if (!pct || pct === 100) return c
+    const factor = Math.max(40, Math.min(160, pct)) / 100
+    const base = typeof c.metadata?.ovScale === 'number' ? c.metadata.ovScale : 1
+    return { ...c, metadata: { ...c.metadata, ovScale: base * factor } }
+  })
 }
 
 /** Human-facing clip name. Prefer the original filename from the OS file picker;
@@ -2758,7 +2773,8 @@ export const useStore = create<AppState>((set, get) => ({
         // write persists to project.timeline via TimelinePanel; preview + export
         // read the same doc lanes, so what's placed is what renders.
         const doc = engine.document
-        const { clips, skipped } = overlayEventsToDocClips(doc, get().project, events, assets)
+        const { clips: rawClips, skipped } = overlayEventsToDocClips(doc, get().project, events, assets)
+        const clips = withOverlaySizes(rawClips, rules)
         const cmds: Command[] = []
         for (const tr of doc.tracks) {
           for (const c of tr.clips) {
@@ -3007,8 +3023,9 @@ export const useStore = create<AppState>((set, get) => ({
       // Card overlays become image clips; auto-labels become text clips on the text lane.
       const doc = engine.document
       const img = overlayEventsToDocClips(doc, get().project, events, assets)
+      const imgClips = withOverlaySizes(img.clips, get().project.overlayRules ?? [])
       const txt = labelSuggestionsToDocTextClips(doc, get().project, labelInputs)
-      const allClips = [...img.clips, ...txt.clips]
+      const allClips = [...imgClips, ...txt.clips]
       if (allClips.length) engine.batch('Accept suggestions', allClips.map((c) => TimelineCommands.addClip(c)))
       placed = allClips.length
       const skipped = [...img.skipped, ...txt.skipped]

@@ -14,6 +14,14 @@ const OCCURRENCES: { value: OverlayOccurrence; label: string }[] = [
   { value: 'first', label: 'first mention only' },
   { value: 'last', label: 'last mention only' }
 ]
+// On-screen size presets (percent of the position preset's default scale).
+const SIZES: { value: number; label: string }[] = [
+  { value: 60, label: 'Small' },
+  { value: 80, label: 'Medium' },
+  { value: 100, label: 'Default' },
+  { value: 130, label: 'Large' },
+  { value: 160, label: 'XL' }
+]
 
 function mmss(sec: number): string {
   const s = Math.max(0, Math.round(sec))
@@ -61,10 +69,11 @@ export default function OverlayPanel(): JSX.Element {
 
   return (
     <div className="overlay-panel">
+      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>🎬 Auto B-roll</div>
       <p className="muted small">
-        Import overlay images in the Media Library and add them here. A well-named overlay
-        (Bloating, CTA, Hairfall…) is enough — the AI matches its name to the transcript; add
-        an instruction only to say it differently. Placed on overlay track 1 — drag or delete after.
+        Import b-roll images in the Media Library and add them here. Press <b>Auto B-roll</b> and
+        Gemma looks at each image and the video and places it where it fits — set the size and
+        position it should use. Placed on overlay track 1 — drag or delete after.
       </p>
 
       {images.length > 0 && (
@@ -132,6 +141,17 @@ export default function OverlayPanel(): JSX.Element {
                 </select>
               </label>
               <label>
+                Size
+                <select
+                  value={r.sizePct ?? 100}
+                  onChange={(e) => updateOverlayRule(a.id, { sizePct: Number(e.target.value) })}
+                >
+                  {SIZES.map((s) => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Duration
                 <input
                   type="number"
@@ -163,18 +183,18 @@ export default function OverlayPanel(): JSX.Element {
           <button
             className="primary"
             disabled={job.active || !hasTranscript}
-            title={hasTranscript ? 'Match your rules to the transcript and place the overlays' : 'Needs a transcript — the AI reads it to find when you say things'}
-            onClick={() => { setRanOp(true); void generateOverlays() }}
+            title={hasTranscript ? 'Gemma looks at your images and the video and proposes where each b-roll goes — review & accept' : 'Needs a transcript — run Find Retakes & Silence or Transcribe first'}
+            onClick={() => { setRanOp(true); void suggestOverlays() }}
           >
-            ✨ Generate
+            🎬 Auto B-roll
           </button>
           <button
             className="ov-suggest-btn"
             disabled={job.active || !hasTranscript}
-            title={hasTranscript ? 'Let the AI read the whole video and propose what overlay goes where' : 'Needs a transcript first'}
-            onClick={() => { setRanOp(true); void suggestOverlays() }}
+            title={hasTranscript ? 'Match each overlay by its name/instruction to the transcript and place them directly' : 'Needs a transcript first'}
+            onClick={() => { setRanOp(true); void generateOverlays() }}
           >
-            🪄 Suggest
+            ✨ By name
           </button>
           <button disabled={job.active} onClick={() => clearGeneratedOverlays()}>
             Clear placed
