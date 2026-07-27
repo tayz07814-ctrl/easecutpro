@@ -198,12 +198,8 @@ export default function RetakeCleanerPanel(): JSX.Element {
     return shell(
       <>
         <div style={css('font-size:12.5px;line-height:1.5;color:#9BA0AC;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
-        <div style={css('display:flex;gap:7px;margin-top:16px')}>
-          <button onClick={r.find} style={css('flex:1;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:11px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>Retake Beta</button>
-          <button onClick={r.findUltracut} style={css('flex:1;background:#E8843A;border:none;color:#fff;font-family:inherit;font-size:11px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 20px rgba(232,132,58,.32)')}>Ultracut Beta</button>
-          <button onClick={r.findPremium} style={css('flex:1;background:#2E9C6A;border:none;color:#fff;font-family:inherit;font-size:11px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 20px rgba(46,156,106,.32)')}>Premium Cut</button>
-        </div>
-        <div style={css('font-size:10.5px;color:#686E7B;margin-top:7px;line-height:1.5;text-align:center')}>Retake Beta = Opus · Ultracut = DeepSeek · Premium = Gemini 3.5 Flash (listens)</div>
+        {/* Single Retake Beta engine (retakeEngine.ts → ultracut-judge edge fn). */}
+        <button onClick={r.find} style={css('width:100%;margin-top:16px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;border-radius:12px;padding:14px 0;cursor:pointer;box-shadow:0 6px 20px rgba(110,106,232,.35)')}>Find Retakes &amp; Silence</button>
         <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:10px;background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 0;cursor:pointer')}>Silence Settings</button>
         <div style={css('display:flex;align-items:center;gap:9px;margin-top:14px')}>
           <Toggle on={r.smartSilence} onClick={() => r.setSmartSilence(!r.smartSilence)} />
