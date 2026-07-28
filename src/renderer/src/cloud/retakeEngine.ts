@@ -25,7 +25,6 @@ import {
   buildTimestampMap,
   buildAiPayload,
   validateEdl,
-  refineEdl,
   type Edl,
   type TimestampMap
 } from '@shared/cutcutpro'
@@ -154,7 +153,12 @@ export async function retakeAwareCutCloud(
       if (!v.ok) {
         warnings.push('Retake β couldn’t read the result — no takes were cut.')
       } else {
-        baseCutSpans = edlToRetakeCutSpans(refineEdl(v.edl, map).edl, map)
+        // Apply ONLY the LLM's word_cuts — no deterministic refineEdl passes
+        // (backward dedupe extension + incomplete-fragment sweep). Those were
+        // over-cutting (e.g. swallowing a valid opening flagged as an
+        // "incomplete sentence"). validateEdl still clamps/guards the LLM's own
+        // cuts; we just don't add anything the model didn't ask for.
+        baseCutSpans = edlToRetakeCutSpans(v.edl, map)
       }
     }
   } catch {
@@ -168,7 +172,10 @@ export async function retakeAwareCutCloud(
   op(90, 'Cleaning silence…')
   const artifacts = detectArtifacts(vt.words, baseCutSpans, vadSil)
   const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
-  const cutSpans = [...baseCutSpans, ...artifacts.orphanCutSpans].sort((a, b) => a.start - b.start)
+  // Only the LLM's cuts drive the retake removals — drop the artifact
+  // orphan-cut cleanup too (repairedWords still fixes ASR word timings for the
+  // transcript; it just no longer adds cuts the model didn't propose).
+  const cutSpans = [...baseCutSpans].sort((a, b) => a.start - b.start)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
   const keptWords = artifacts.repairedWords.filter((w) => {
@@ -302,7 +309,12 @@ export async function ultracutCutCloud(
       if (!v.ok) {
         warnings.push('Ultracut couldn’t read the model’s result — no takes were cut.')
       } else {
-        baseCutSpans = edlToRetakeCutSpans(refineEdl(v.edl, map).edl, map)
+        // Apply ONLY the LLM's word_cuts — no deterministic refineEdl passes
+        // (backward dedupe extension + incomplete-fragment sweep). Those were
+        // over-cutting (e.g. swallowing a valid opening flagged as an
+        // "incomplete sentence"). validateEdl still clamps/guards the LLM's own
+        // cuts; we just don't add anything the model didn't ask for.
+        baseCutSpans = edlToRetakeCutSpans(v.edl, map)
       }
     }
   } catch {
@@ -313,7 +325,10 @@ export async function ultracutCutCloud(
   op(90, 'Cleaning silence…')
   const artifacts = detectArtifacts(vt.words, baseCutSpans, vadSil)
   const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
-  const cutSpans = [...baseCutSpans, ...artifacts.orphanCutSpans].sort((a, b) => a.start - b.start)
+  // Only the LLM's cuts drive the retake removals — drop the artifact
+  // orphan-cut cleanup too (repairedWords still fixes ASR word timings for the
+  // transcript; it just no longer adds cuts the model didn't propose).
+  const cutSpans = [...baseCutSpans].sort((a, b) => a.start - b.start)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
   const keptWords = artifacts.repairedWords.filter((w) => {
