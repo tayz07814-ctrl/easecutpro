@@ -174,7 +174,7 @@
 .ec-editor .preview,
 .ec-editor .video-wrap,
 .ec-editor .stage {
-  background: #08080a;
+  background: radial-gradient(ellipse at 50% 40%, #101014 0%, #08080a 70%);
 }
 
 /* Preview transport: if the preview column is ever narrow, let the controls wrap

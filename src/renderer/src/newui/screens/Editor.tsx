@@ -40,11 +40,12 @@ const HAIR = 'rgba(255,255,255,.06)'
 // clamped to BOTH an absolute cap and a viewport-aware cap that always reserves
 // MIN_PREVIEW for the centre preview — so widening a panel can never crush the
 // preview or clip its transport controls.
-const MIN_LEFT = 200
-const MAX_LEFT = 480
-const MIN_RIGHT = 300
-const MAX_RIGHT = 560
-const MIN_PREVIEW = 420 // keeps the preview + its full transport row intact when panels widen
+const RAIL = 66 // fixed vertical tool rail beside the (resizable) drawer
+const MIN_LEFT = 220 // drawer (design: 258)
+const MAX_LEFT = 380
+const MIN_RIGHT = 320 // right panel (design: 372)
+const MAX_RIGHT = 460
+const MIN_PREVIEW = 340 // design stage min-width; keeps preview + transport intact
 const HANDLE = 6 // .ec-divv thickness
 // Timeline height = this fraction of the editor height, clamped — enough for the
 // default lanes, never a tall empty void; extra tracks scroll inside the panel.
@@ -253,40 +254,45 @@ function MediaClip({ item, isBase, grid, onRemove, onAdd }: { item: LibraryItem;
   )
 }
 
-// ---- Left dock: CapCut-style tabbed panel. Media is selected on launch; each
-// tab swaps the body to its own "add content" tools. The right AiPanel keeps
-// AI Cut, so the left is the asset/tools dock and the right is the AI workspace.
-type LeftTab = 'media' | 'audio' | 'text' | 'transitions' | 'captions' | 'stickers'
-const LEFT_TABS: { key: LeftTab; label: string; Icon: () => JSX.Element }[] = [
+// ---- Left tool rail (66px) + content drawer. The redesign splits the asset dock
+// into a vertical tool rail and a drawer whose body depends on the selected tool.
+// (The design's "Transcript" tool maps to the right panel's Script cleaner in this
+// app — transcript-based cutting already lives there — so it isn't a rail item.)
+type LeftTool = 'media' | 'audio' | 'text' | 'captions' | 'effects' | 'stickers'
+const LEFT_TOOLS: { key: LeftTool; label: string; Icon: () => JSX.Element }[] = [
   { key: 'media', label: 'Media', Icon: IcTabMedia },
   { key: 'audio', label: 'Audio', Icon: IcTabAudio },
   { key: 'text', label: 'Text', Icon: IcTabText },
-  { key: 'transitions', label: 'Transitions', Icon: IcTabTransition },
   { key: 'captions', label: 'Captions', Icon: IcTabCaption },
+  { key: 'effects', label: 'Effects', Icon: IcTabTransition },
   { key: 'stickers', label: 'Stickers', Icon: IcTabSticker }
 ]
 
-function LeftDock({ width }: { width: number }): JSX.Element {
-  const [tab, setTab] = useState<LeftTab>('media')
+function ToolRail({ tool, setTool }: { tool: LeftTool; setTool: (t: LeftTool) => void }): JSX.Element {
   return (
-    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#0c0c10;overflow:hidden`)}>
-      <div style={css('display:flex;gap:2px;padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.06);flex:none;overflow-x:auto')}>
-        {LEFT_TABS.map(({ key, label, Icon }) => {
-          const on = key === tab
-          return (
-            <button key={key} onClick={() => setTab(key)} title={label} style={css(`flex:none;width:52px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;border:none;border-radius:8px;cursor:pointer;font-family:inherit;appearance:none;-webkit-appearance:none;background:${on ? 'rgba(124,107,255,.16)' : 'transparent'};color:${on ? '#a99bff' : '#8b8ba0'}`)}>
-              <Icon />
-              <span style={css('font-size:9.5px;font-weight:500')}>{label}</span>
-            </button>
-          )
-        })}
-      </div>
-      {tab === 'media' && <MediaTab />}
-      {tab === 'audio' && <AudioTab />}
-      {tab === 'text' && <TextTab />}
-      {tab === 'transitions' && <ComingSoon title="Transitions" note="Crossfades and clip transitions are coming soon." Icon={IcTabTransition} />}
-      {tab === 'captions' && <CaptionsTab />}
-      {tab === 'stickers' && <StickersTab />}
+    <div style={css(`width:66px;flex:none;border-right:1px solid ${HAIR};background:#0c0c10;display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 0`)}>
+      {LEFT_TOOLS.map(({ key, label, Icon }) => {
+        const on = key === tool
+        return (
+          <button key={key} onClick={() => setTool(key)} title={label} style={css(`flex:none;width:54px;display:flex;flex-direction:column;align-items:center;gap:5px;padding:9px 0;border:none;border-radius:9px;cursor:pointer;font-family:inherit;appearance:none;-webkit-appearance:none;background:${on ? 'rgba(124,107,255,.15)' : 'transparent'};color:${on ? '#c4baff' : '#8b8ba0'}`)}>
+            <Icon />
+            <span style={css('font-size:10px;font-weight:500')}>{label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function Drawer({ tool, width }: { tool: LeftTool; width: number }): JSX.Element {
+  return (
+    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#0a0a0d;overflow:hidden`)}>
+      {tool === 'media' && <MediaTab />}
+      {tool === 'audio' && <AudioTab />}
+      {tool === 'text' && <TextTab />}
+      {tool === 'captions' && <CaptionsTab />}
+      {tool === 'effects' && <ComingSoon title="Effects" note="Crossfades, clip transitions and video effects are coming soon." Icon={IcTabTransition} />}
+      {tool === 'stickers' && <StickersTab />}
     </div>
   )
 }
@@ -439,50 +445,65 @@ function ComingSoon({ title, note, Icon }: { title: string; note: string; Icon: 
   )
 }
 
-// Only the AI Cut tab has approved design content. The others (Edit/Text/
-// Overlays/Audio) are wired for active-state + selection but their panels await
-// design (and the "Audio" ↔ silence/ost mapping decision), so they show an
-// honest placeholder rather than mounting off-design legacy panels.
-const AI_TABS = ['AI Cut', 'Auto Zoom', 'Edit', 'Text', 'Overlays', 'Audio'] as const
+// Right panel — the redesign's two top-level tabs. "AI tools" holds an inner
+// sub-nav over the three AI workflows (Script cleaner = retake/AI-cut, Auto zoom,
+// Auto b-roll = overlays); "Edit" is the clip/text/overlay inspector. Each panel
+// is the same wired component as before — only the container/nav changed.
+const PANEL_TABS = ['AI tools', 'Edit'] as const
+type AiSub = 'script' | 'zoom' | 'overlay'
+const AI_SUB: { id: AiSub; label: string }[] = [
+  { id: 'script', label: 'Script cleaner' },
+  { id: 'zoom', label: 'Auto zoom' },
+  { id: 'overlay', label: 'Auto b-roll' }
+]
 
-function AiPanel({ width }: { width: number }): JSX.Element {
-  const [tab, setTab] = useState<(typeof AI_TABS)[number]>('AI Cut')
-  // Jump to the Edit tab when the user selects a clip / text / overlay, so its
-  // settings appear right away (inspector behaviour). Only fires on a *new*
-  // selection — clicking transcript words (not an engine selection) never yanks
-  // you out of AI Cut.
+function RightPanel({ width }: { width: number }): JSX.Element {
+  const [tab, setTab] = useState<0 | 1>(0) // 0 = AI tools, 1 = Edit
+  const [ai, setAi] = useState<AiSub>('script')
+  // Jump to Edit when a clip / text / overlay is selected (inspector behaviour).
+  // Only fires on a *new* engine selection — clicking transcript words never
+  // yanks you out of the AI tools.
   const snap = useSharedEngineSnapshot()
   const selId = snap?.interaction.selection[0] ?? null
   const prevSel = useRef<string | null>(selId)
   useEffect(() => {
-    if (selId && selId !== prevSel.current) setTab('Edit')
+    if (selId && selId !== prevSel.current) setTab(1)
     prevSel.current = selId
   }, [selId])
   return (
     <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#0c0c10;overflow:hidden`)}>
-      <div style={css(`display:flex;padding:0 6px;border-bottom:1px solid ${HAIR};flex:none;overflow-x:auto`)}>
-        {AI_TABS.map((t) =>
-          t === tab ? (
-            <div key={t} style={css('flex:none;white-space:nowrap;padding:13px 10px 11px;font-size:12.5px;font-weight:600;color:#ededf2;border-bottom:2px solid #7c6bff;margin-bottom:-1px')}>{t}</div>
-          ) : (
-            <div key={t} onClick={() => setTab(t)} style={css('flex:none;white-space:nowrap;padding:13px 10px 11px;font-size:12.5px;color:#9a9aae;cursor:pointer')}>{t}</div>
-          )
-        )}
+      <div style={css(`display:flex;gap:6px;padding:12px 14px;border-bottom:1px solid ${HAIR};flex:none`)}>
+        {PANEL_TABS.map((label, i) => (
+          <div key={label} onClick={() => setTab(i as 0 | 1)} style={css('flex:1;text-align:center;font-size:12.5px;padding:8px 11px;border-radius:8px;cursor:pointer;white-space:nowrap', tab === i ? 'background:rgba(124,107,255,.16);color:#c4baff;font-weight:600' : 'color:#8b8ba0')}>{label}</div>
+        ))}
       </div>
-      {tab === 'AI Cut' ? (
-        <RetakeCleanerPanel />
-      ) : tab === 'Auto Zoom' ? (
-        <AutoZoomPanel />
-      ) : tab === 'Edit' ? (
-        <EditPanel />
-      ) : tab === 'Overlays' ? (
-        <div style={css('flex:1;min-height:0;overflow:auto;padding:12px')}>
-          <OverlayPanel />
+      {tab === 0 ? (
+        <div style={css('flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden')}>
+          <div style={css('flex:none;padding:10px 12px 8px;display:flex;flex-direction:column;gap:1px')}>
+            {AI_SUB.map((a) => {
+              const on = ai === a.id
+              return (
+                <div key={a.id} onClick={() => setAi(a.id)} style={css('display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;cursor:pointer;transition:background .15s', on ? 'background:rgba(124,107,255,.12)' : '')}>
+                  <span style={css(`width:6px;height:6px;border-radius:50%;flex:none;background:${on ? '#a99bff' : '#4a4a5c'}`)} />
+                  <span style={css(`flex:1;font-size:12px;letter-spacing:-.01em;color:${on ? '#ededf2' : '#9a9aae'};${on ? 'font-weight:600' : ''}`)}>{a.label}</span>
+                </div>
+              )
+            })}
+          </div>
+          <div style={css(`flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-top:1px solid ${HAIR}`)}>
+            {ai === 'script' ? (
+              <RetakeCleanerPanel />
+            ) : ai === 'zoom' ? (
+              <AutoZoomPanel />
+            ) : (
+              <div style={css('flex:1;min-height:0;overflow:auto;padding:12px')}>
+                <OverlayPanel />
+              </div>
+            )}
+          </div>
         </div>
       ) : (
-        <div style={css('flex:1;display:grid;place-items:center;padding:24px;text-align:center')}>
-          <div style={css('font-size:12.5px;color:#6e6e85;line-height:1.6')}>{tab} tools are coming to the new editor.</div>
-        </div>
+        <EditPanel />
       )}
     </div>
   )
@@ -606,9 +627,10 @@ export default function Editor(): JSX.Element {
 
   // The LEFT/RIGHT panels resize (persisted). The timeline is NOT draggable — it's
   // a fixed, viewport-proportional container with its own internal scroll.
-  const [leftW, setLeftW] = useState(() => num('ec.nu.leftW', 264))
-  const [rightW, setRightW] = useState(() => num('ec.nu.rightW', 360))
+  const [leftW, setLeftW] = useState(() => num('ec.nu.leftW', 258))
+  const [rightW, setRightW] = useState(() => num('ec.nu.rightW', 372))
   const [timelineH, setTimelineH] = useState(TL_MIN)
+  const [tool, setTool] = useState<LeftTool>('media')
   useEffect(() => { try { localStorage.setItem('ec.nu.leftW', String(leftW)) } catch { /* ignore */ } }, [leftW])
   useEffect(() => { try { localStorage.setItem('ec.nu.rightW', String(rightW)) } catch { /* ignore */ } }, [rightW])
 
@@ -621,11 +643,11 @@ export default function Editor(): JSX.Element {
   // centre preview drops below MIN_PREVIEW (the OTHER panel is fixed during a drag).
   const maxLeftPx = (rightPx: number): number => {
     const midW = middleRef.current?.clientWidth ?? window.innerWidth
-    return Math.max(MIN_LEFT, Math.min(MAX_LEFT, midW - 2 * HANDLE - rightPx - MIN_PREVIEW))
+    return Math.max(MIN_LEFT, Math.min(MAX_LEFT, midW - RAIL - 2 * HANDLE - rightPx - MIN_PREVIEW))
   }
   const maxRightPx = (leftPx: number): number => {
     const midW = middleRef.current?.clientWidth ?? window.innerWidth
-    return Math.max(MIN_RIGHT, Math.min(MAX_RIGHT, midW - 2 * HANDLE - leftPx - MIN_PREVIEW))
+    return Math.max(MIN_RIGHT, Math.min(MAX_RIGHT, midW - RAIL - 2 * HANDLE - leftPx - MIN_PREVIEW))
   }
 
   // Re-clamp on mount + window resize: keep the preview >= MIN_PREVIEW (shrinking
@@ -638,7 +660,7 @@ export default function Editor(): JSX.Element {
     const midW = mid.clientWidth
     let L = clampN(leftW, MIN_LEFT, MAX_LEFT)
     let R = clampN(rightW, MIN_RIGHT, MAX_RIGHT)
-    let over = L + R + 2 * HANDLE + MIN_PREVIEW - midW
+    let over = L + R + RAIL + 2 * HANDLE + MIN_PREVIEW - midW
     if (over > 0) { const c = Math.min(over, R - MIN_RIGHT); R -= c; over -= c }
     if (over > 0) { const c = Math.min(over, L - MIN_LEFT); L -= c; over -= c }
     if (L !== leftW) setLeftW(L)
@@ -687,7 +709,8 @@ export default function Editor(): JSX.Element {
     <div ref={rootRef} style={css('width:100%;height:100%;background:#08080a;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-editor">
       <TopBar />
       <div ref={middleRef} style={css('display:flex;flex:1;min-height:0;min-width:0')}>
-        <LeftDock width={leftW} />
+        <ToolRail tool={tool} setTool={setTool} />
+        <Drawer tool={tool} width={leftW} />
         <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'left')} title="Drag to resize" />
         {/* Live editor core — the production preview. `.ec-legacy` restores the
             app's border-box model (the .ec-newui content-box reset would leak in
@@ -697,7 +720,7 @@ export default function Editor(): JSX.Element {
           <VideoPreview />
         </div>
         <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'right')} title="Drag to resize" />
-        <AiPanel width={rightW} />
+        <RightPanel width={rightW} />
       </div>
       {/* Live editor core — the production timeline. A FIXED-height container with
           its OWN internal scroll (Timeline's .ec-tl-scroll); intentionally NOT
