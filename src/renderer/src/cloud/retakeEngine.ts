@@ -142,7 +142,7 @@ export async function retakeAwareCutCloud(
       proposal: { word_cuts: [], pause_cuts: [] },
       model: 'google/gemma-4-31b-it',
       promptVariant: 'sharp',
-      reasoning: 'off'
+      reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
