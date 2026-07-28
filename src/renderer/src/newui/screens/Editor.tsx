@@ -14,6 +14,7 @@ import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
 import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../../components/timeline/TimelinePanel'
+import ReviewTimeline from './ReviewTimeline'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { addDocTexts, countCaptionTexts } from '../../docTextClips'
 import { resolveMedia } from '../../media/resolver'
@@ -62,12 +63,6 @@ const CLIP9x16 =
 // the tiny square buttons — the +/−/list/grid characters never optically centre
 // (the fullwidth ＋ especially sits off to one side). They inherit `currentColor`.
 const icoStyle = { display: 'block' } as const
-const IcMinus = (): JSX.Element => (
-  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={icoStyle}><path d="M2.5 6h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
-)
-const IcPlus = (): JSX.Element => (
-  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={icoStyle}><path d="M6 2.5v7M2.5 6h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
-)
 const IcList = (): JSX.Element => (
   <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style={icoStyle}><path d="M2 3.5h9M2 6.5h9M2 9.5h9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
 )
@@ -516,32 +511,6 @@ function RightPanel({ width }: { width: number }): JSX.Element {
   )
 }
 
-// Visible timeline zoom. The production timeline only zooms via Ctrl+wheel — no
-// on-screen control, and nothing at all on touch. This floating −/＋ drives the
-// SAME shared TimelineEngine the wheel does (single source of truth), and
-// re-renders via useSharedEngineSnapshot so it stays in sync with wheel zoom.
-const ZOOM_MIN = 4
-const ZOOM_MAX = 2000
-function TimelineZoom(): JSX.Element | null {
-  useSharedEngineSnapshot()
-  const eng = getSharedEngine()
-  if (!eng) return null
-  const zoom = eng.sessionState.zoom
-  const atMin = zoom <= ZOOM_MIN + 0.01
-  const atMax = zoom >= ZOOM_MAX - 0.01
-  const step = (factor: number) => (): void => {
-    const e = getSharedEngine()
-    if (e) e.setZoom(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, e.sessionState.zoom * factor)))
-  }
-  const btn = (dis: boolean): string =>
-    `width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#101015;color:${dis ? '#4a4a5c' : '#c9c9da'};font-size:16px;line-height:1;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;cursor:${dis ? 'default' : 'pointer'};font-family:inherit`
-  return (
-    <div style={css('position:absolute;bottom:10px;right:14px;z-index:20;display:flex;align-items:center;gap:5px;background:rgba(16,16,21,.85);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:4px 5px')}>
-      <button title="Zoom out" onClick={step(1 / 1.4)} disabled={atMin} style={css(btn(atMin))}><IcMinus /></button>
-      <button title="Zoom in" onClick={step(1.4)} disabled={atMax} style={css(btn(atMax))}><IcPlus /></button>
-    </div>
-  )
-}
 
 export default function Editor(): JSX.Element {
   const showExportModal = useStore((s) => s.showExportModal)
@@ -730,14 +699,18 @@ export default function Editor(): JSX.Element {
         <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'right')} title="Drag to resize" />
         <RightPanel width={rightW} />
       </div>
-      {/* Live editor core — the production timeline. A FIXED-height container with
-          its OWN internal scroll (Timeline's .ec-tl-scroll); intentionally NOT
-          user-resizable, so it can never grow into a tall empty void. It still
-          publishes the timeline engine the preview + export read, so drag/trim/
-          split and word/silence cuts stay consistent (the live app's behaviour). */}
+      {/* Timeline. The production TimelinePanel is kept mounted UNDERNEATH because
+          it OWNS the shared timeline engine (setSharedEngine on mount) that the
+          preview, cuts and export all read — unmounting it would null the engine
+          and break everything. The redesign's ReviewTimeline is layered opaque on
+          top as the VISIBLE timeline (its own new-UI component; the shared
+          TimelinePanel is untouched). TimelinePanel's keyboard editing (split S /
+          delete / frame-step) still works since it stays mounted. */}
       <div className="ec-legacy timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative;overflow:hidden;border-top:1px solid ${HAIR}`)}>
         <TimelinePanel />
-        <TimelineZoom />
+        <div style={css('position:absolute;inset:0;z-index:3;background:#08080a')}>
+          <ReviewTimeline />
+        </div>
       </div>
       <SilenceSettingsModal />
       {/* Legacy modals assume the app's global border-box — portal them out of
