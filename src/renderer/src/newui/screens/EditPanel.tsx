@@ -15,6 +15,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { css } from '../css'
+import { useStore } from '../../store'
 import { useSharedEngineSnapshot, getSharedEngine } from '../../timelineEngine'
 import * as C from '@shared/timeline/commands'
 import type { Clip as DocClip, Track, TextContent } from '@shared/timeline/types'
@@ -135,7 +136,11 @@ function ClipControls({ clip, isMain }: { clip: DocClip; isMain: boolean }): JSX
           <PairRow label={isMain ? 'Pan' : 'Position'} ax={Math.round(mnum(m.ovX, 0) * 100)} ay={Math.round(mnum(m.ovY, 0) * 100)}
             min={isMain ? -50 : -30} max={isMain ? 50 : 130} unit="%" onX={(v) => place({ ovX: v / 100 })} onY={(v) => place({ ovY: v / 100 })} />
 
-          <Section title="Crop" open={cropOpen} onToggleOpen={() => setCropOpen((o) => !o)}>
+          <button onClick={() => useStore.getState().setShowCropModal(true)} style={css('width:100%;margin-top:14px;display:flex;align-items:center;justify-content:center;gap:8px;background:rgba(124,107,255,.14);border:1px solid rgba(124,107,255,.3);color:#a99bff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 0;cursor:pointer')}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M5 1v10h10M1 5h10v10" /></svg>Crop &amp; reframe
+          </button>
+
+          <Section title="Crop (fine)" open={cropOpen} onToggleOpen={() => setCropOpen((o) => !o)}>
             {([['left', 'Left'], ['right', 'Right'], ['top', 'Top'], ['bottom', 'Bottom']] as const).map(([k, l]) => (
               <Row key={k} label={l} value={Math.round(clip.crop[k] * 100)} min={0} max={90} unit="%" onChange={(v) => crop({ [k]: clampN(v / 100, 0, 0.9) })} />
             ))}

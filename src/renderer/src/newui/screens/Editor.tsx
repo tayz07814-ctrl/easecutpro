@@ -3,9 +3,11 @@ import { createPortal } from 'react-dom'
 import { css } from '../css'
 import { useStore } from '../../store'
 import type { LibraryItem } from '@shared/types'
-import RetakeCleanerPanel from './RetakeCleanerPanel'
 import AutoZoomPanel from './AutoZoomPanel'
 import EditPanel from './EditPanel'
+import CropModal from './CropModal'
+import TranscriptDrawer from './TranscriptDrawer'
+import SpeechCleanerPanel from './SpeechCleanerPanel'
 import OverlayPanel from '../../components/OverlayPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import ExportModal from '../../components/ExportModal'
@@ -100,6 +102,7 @@ const IcTabText = (): JSX.Element => <TabSvg><path d="M5 6h14M12 6v13" /></TabSv
 const IcTabTransition = (): JSX.Element => <TabSvg><path d="M4 8h10m0 0-3-3m3 3-3 3M20 16H10m0 0 3-3m-3 3 3 3" /></TabSvg>
 const IcTabCaption = (): JSX.Element => <TabSvg><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="M8.5 11.2a2 2 0 1 0 0 2.6M15.5 11.2a2 2 0 1 0 0 2.6" /></TabSvg>
 const IcTabSticker = (): JSX.Element => <TabSvg><path d="M12 3l2.4 5 5.6.6-4.2 3.9 1.2 5.5L12 20.6 6.9 18l1.3-5.5L4 8.6 9.6 8z" /></TabSvg>
+const IcTabTranscript = (): JSX.Element => <TabSvg><rect x="4" y="3" width="16" height="18" rx="2.5" /><path d="M8 8h8M8 12h8M8 16h5" /></TabSvg>
 
 // saveState → the design's status dot + label (green Saved / amber Saving / red failed).
 const SAVE_UI: Record<string, { c: string; t: string }> = {
@@ -258,8 +261,9 @@ function MediaClip({ item, isBase, grid, onRemove, onAdd }: { item: LibraryItem;
 // into a vertical tool rail and a drawer whose body depends on the selected tool.
 // (The design's "Transcript" tool maps to the right panel's Script cleaner in this
 // app — transcript-based cutting already lives there — so it isn't a rail item.)
-type LeftTool = 'media' | 'audio' | 'text' | 'captions' | 'effects' | 'stickers'
+type LeftTool = 'transcript' | 'media' | 'audio' | 'text' | 'captions' | 'effects' | 'stickers'
 const LEFT_TOOLS: { key: LeftTool; label: string; Icon: () => JSX.Element }[] = [
+  { key: 'transcript', label: 'Transcript', Icon: IcTabTranscript },
   { key: 'media', label: 'Media', Icon: IcTabMedia },
   { key: 'audio', label: 'Audio', Icon: IcTabAudio },
   { key: 'text', label: 'Text', Icon: IcTabText },
@@ -452,7 +456,7 @@ function ComingSoon({ title, note, Icon }: { title: string; note: string; Icon: 
 const PANEL_TABS = ['AI tools', 'Edit'] as const
 type AiSub = 'script' | 'zoom' | 'overlay'
 const AI_SUB: { id: AiSub; label: string }[] = [
-  { id: 'script', label: 'Script cleaner' },
+  { id: 'script', label: 'Speech cleaner' },
   { id: 'zoom', label: 'Auto zoom' },
   { id: 'overlay', label: 'Auto b-roll' }
 ]
@@ -460,6 +464,7 @@ const AI_SUB: { id: AiSub; label: string }[] = [
 function RightPanel({ width }: { width: number }): JSX.Element {
   const [tab, setTab] = useState<0 | 1>(0) // 0 = AI tools, 1 = Edit
   const [ai, setAi] = useState<AiSub>('script')
+  const cutCount = useStore((s) => s.selectedWordIds.size) // live "Speech cleaner" badge
   // Jump to Edit when a clip / text / overlay is selected (inspector behaviour).
   // Only fires on a *new* engine selection — clicking transcript words never
   // yanks you out of the AI tools.
@@ -482,17 +487,19 @@ function RightPanel({ width }: { width: number }): JSX.Element {
           <div style={css('flex:none;padding:10px 12px 8px;display:flex;flex-direction:column;gap:1px')}>
             {AI_SUB.map((a) => {
               const on = ai === a.id
+              const badge = a.id === 'script' && cutCount > 0 ? String(cutCount) : ''
               return (
                 <div key={a.id} onClick={() => setAi(a.id)} style={css('display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;cursor:pointer;transition:background .15s', on ? 'background:rgba(124,107,255,.12)' : '')}>
                   <span style={css(`width:6px;height:6px;border-radius:50%;flex:none;background:${on ? '#a99bff' : '#4a4a5c'}`)} />
                   <span style={css(`flex:1;font-size:12px;letter-spacing:-.01em;color:${on ? '#ededf2' : '#9a9aae'};${on ? 'font-weight:600' : ''}`)}>{a.label}</span>
+                  {badge && <span style={css(`font-family:'Geist Mono',monospace;font-size:10px;color:${on ? '#a99bff' : '#5c5c70'}`)}>{badge}</span>}
                 </div>
               )
             })}
           </div>
           <div style={css(`flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-top:1px solid ${HAIR}`)}>
             {ai === 'script' ? (
-              <RetakeCleanerPanel />
+              <SpeechCleanerPanel />
             ) : ai === 'zoom' ? (
               <AutoZoomPanel />
             ) : (
@@ -539,6 +546,7 @@ function TimelineZoom(): JSX.Element | null {
 export default function Editor(): JSX.Element {
   const showExportModal = useStore((s) => s.showExportModal)
   const showSettings = useStore((s) => s.showSettings)
+  const showCropModal = useStore((s) => s.showCropModal)
   const pendingCaptions = useStore((s) => s.pendingCaptions)
   const pendingAutoZoom = useStore((s) => s.pendingAutoZoom)
 
@@ -630,7 +638,7 @@ export default function Editor(): JSX.Element {
   const [leftW, setLeftW] = useState(() => num('ec.nu.leftW', 258))
   const [rightW, setRightW] = useState(() => num('ec.nu.rightW', 372))
   const [timelineH, setTimelineH] = useState(TL_MIN)
-  const [tool, setTool] = useState<LeftTool>('media')
+  const [tool, setTool] = useState<LeftTool>('transcript')
   useEffect(() => { try { localStorage.setItem('ec.nu.leftW', String(leftW)) } catch { /* ignore */ } }, [leftW])
   useEffect(() => { try { localStorage.setItem('ec.nu.rightW', String(rightW)) } catch { /* ignore */ } }, [rightW])
 
@@ -710,7 +718,7 @@ export default function Editor(): JSX.Element {
       <TopBar />
       <div ref={middleRef} style={css('display:flex;flex:1;min-height:0;min-width:0')}>
         <ToolRail tool={tool} setTool={setTool} />
-        <Drawer tool={tool} width={leftW} />
+        {tool === 'transcript' ? <TranscriptDrawer width={leftW} /> : <Drawer tool={tool} width={leftW} />}
         <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'left')} title="Drag to resize" />
         {/* Live editor core — the production preview. `.ec-legacy` restores the
             app's border-box model (the .ec-newui content-box reset would leak in
@@ -736,6 +744,7 @@ export default function Editor(): JSX.Element {
           the .ec-newui (content-box) subtree so they render correctly. */}
       {showExportModal && createPortal(<ExportModal />, document.body)}
       {showSettings && createPortal(<SettingsModal />, document.body)}
+      {showCropModal && createPortal(<CropModal />, document.body)}
     </div>
   )
 }

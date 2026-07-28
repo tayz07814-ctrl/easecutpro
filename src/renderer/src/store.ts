@@ -609,6 +609,7 @@ interface AppState {
   /** selected local whisper model name ('' = Auto / best available). */
   whisperModel: string
   showSettings: boolean
+  showCropModal: boolean
   showExportModal: boolean
   /** Batch Video Cleaner jobs shown on the home screen (newest first). */
   batchJobs: BatchJob[]
@@ -874,6 +875,7 @@ interface AppState {
   setKeybind: (action: 'split' | 'del' | 'undelete' | 'playPause', key: string) => void
   setFillerWords: (list: string[]) => void
   setShowSettings: (b: boolean) => void
+  setShowCropModal: (b: boolean) => void
 
   // history
   undo: () => void
@@ -969,6 +971,7 @@ export const useStore = create<AppState>((set, get) => ({
   keybinds: loadKeybinds(),
   fillerWords: loadFillers(),
   showSettings: false,
+  showCropModal: false,
   showExportModal: false,
   batchJobs: [],
   wizardJob: null,
@@ -3638,6 +3641,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setShowSettings: (b) => set({ showSettings: b }),
+  setShowCropModal: (b) => set({ showCropModal: b }),
 
   undo: () => {
     flushHistory()
