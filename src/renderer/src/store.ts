@@ -60,7 +60,7 @@ import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSetti
 import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
-import { createProject, saveProject, serializeProject } from './projectsApi'
+import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideoCloud } from './cloud/batchCleanCloud'
 import { getFile } from './webmedia'
@@ -3882,7 +3882,12 @@ export const useStore = create<AppState>((set, get) => ({
           get().vadSilenceSettings,
           (step) => update(c.id, { step })
         )
-        const finalProject = await serializeProject(project)
+        // Persist like the editor's autosave: serializeProjectLite keeps the
+        // browser-local webmedia ids (blobs live in IndexedDB, reopenable on this
+        // device) and NEVER calls the PC-server upload (/api/upload-init), which
+        // 405s on the static cloud host. The full serializeProject uploads media
+        // to that server — it's what made the batch fail even after Cut Lord ran.
+        const finalProject = serializeProjectLite(project)
         await saveProject(c.id, { project: finalProject, thumb })
         update(c.id, { status: 'done', step: 'Cleaned' })
       } catch (e) {
