@@ -13,8 +13,10 @@ import SilenceSettingsModal from './SilenceSettingsModal'
 import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
 import VideoPreview from '../../components/VideoPreview'
-import TimelinePanel from '../../components/timeline/TimelinePanel'
-import ReviewTimeline from './ReviewTimeline'
+// New-UI fork of the production timeline (newui/timeline/*). Same working code as
+// components/timeline/*, but a separate copy we can redesign freely — main's
+// timeline is untouched. It owns the shared engine on mount, just like the original.
+import TimelinePanel from '../timeline/TimelinePanel'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { addDocTexts, countCaptionTexts } from '../../docTextClips'
 import { resolveMedia } from '../../media/resolver'
@@ -706,11 +708,8 @@ export default function Editor(): JSX.Element {
           top as the VISIBLE timeline (its own new-UI component; the shared
           TimelinePanel is untouched). TimelinePanel's keyboard editing (split S /
           delete / frame-step) still works since it stays mounted. */}
-      <div className="ec-legacy timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative;overflow:hidden;border-top:1px solid ${HAIR}`)}>
+      <div className="ec-legacy ec-nu-tl timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative;overflow:hidden;border-top:1px solid ${HAIR}`)}>
         <TimelinePanel />
-        <div style={css('position:absolute;inset:0;z-index:3;background:#08080a')}>
-          <ReviewTimeline />
-        </div>
       </div>
       <SilenceSettingsModal />
       {/* Legacy modals assume the app's global border-box — portal them out of
