@@ -349,7 +349,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // collide); a WeakMap drops entries automatically when React unmounts an element.
   const pendingRef = useRef(new WeakMap<HTMLVideoElement, Pending>())
   const badRef = useRef(new Set<string>()) // sources that fired 'error'
-  const imgCacheRef = useRef(new Map<string, HTMLImageElement>()) // still-image main-lane sources
+  const imgRef = useRef<HTMLImageElement | null>(null) // overlay <img> for a still-image main clip
   // Tracks the ACTIVE element's currentTime + the wall time it last CHANGED, so the
   // reconciler can tell a LIVE decoder (new frames arriving) from a stalled/seeking one
   // and keep the playhead advancing on the wall clock instead of freezing on a stall.
@@ -423,19 +423,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     if (!ss.length) return -1
     const last = ss[ss.length - 1]
     return t >= last.start + last.len - 1e-4 ? ss.length - 1 : -1
-  }
-
-  /** Lazily-decoded <img> for a still-image main-lane source — drawn to the canvas
-   *  in place of a <video> (which renders nothing for an image). */
-  function liveImage(src: string, url: string): HTMLImageElement {
-    let img = imgCacheRef.current.get(src)
-    if (!img) {
-      img = new Image()
-      img.decoding = 'async'
-      img.src = url
-      imgCacheRef.current.set(src, img)
-    }
-    return img
   }
 
   /** The LIVE <video> currently showing/decoding `src` (falls back to the other slot). */
@@ -519,8 +506,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             if (v.style.visibility !== 'hidden') v.style.visibility = 'hidden'
           }
         }
-        const cv = canvasRef.current // native surface shows — keep the canvas out of the way
+        const cv = canvasRef.current // native surface shows — keep the canvas + image overlay out of the way
         if (cv && cv.style.visibility !== 'hidden') cv.style.visibility = 'hidden'
+        const im0 = imgRef.current
+        if (im0 && im0.style.visibility !== 'hidden') im0.style.visibility = 'hidden'
         raf = requestAnimationFrame(loop)
         return
       }
@@ -773,23 +762,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           if (ctx) {
             const cw = cv.width
             const ch = cv.height
-            if (shown?.isImage) {
-              // Still image on the main lane: draw the <img> (contain + Ken Burns),
-              // never a <video>. Black until the image decodes.
-              const img = liveImage(shown.src, shown.url)
-              ctx.fillStyle = '#000'
-              ctx.fillRect(0, 0, cw, ch)
-              if (img.complete && img.naturalWidth > 0) {
-                const cr = containRect(cw, ch, img.naturalWidth / img.naturalHeight)
-                try {
-                  ctx.drawImage(img, cr.left, cr.top, cr.width, cr.height)
-                } catch {
-                  /* not decodable this tick — keep the black fill */
-                }
-                cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
-                cv.style.transform = kbTransform(shown)
-              }
-            } else if (liveEl && liveEl.readyState >= 2 && liveEl.videoWidth > 0 && liveEl.videoHeight > 0 && shown) {
+            if (liveEl && liveEl.readyState >= 2 && liveEl.videoWidth > 0 && liveEl.videoHeight > 0 && shown) {
               // Reproduce `object-fit: contain` (the element path's CSS): letterbox the
               // source inside the canvas, then apply the SAME kenBurns transform to the
               // whole canvas — pixel-equivalent to transforming the <video> element.
@@ -862,6 +835,21 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             }
           }
         }
+        // Still-image main-lane segment: no <video> exists for its source, so drive
+        // the <img> overlay instead — show it (contain + Ken Burns) over the image's
+        // span, hide it otherwise. Every video slot above is hidden while it shows.
+        const im = imgRef.current
+        if (im && shown?.isImage) {
+          if (im.getAttribute('data-src') !== shown.src) {
+            im.setAttribute('data-src', shown.src)
+            im.src = shown.url
+          }
+          im.style.visibility = 'visible'
+          im.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
+          im.style.transform = kbTransform(shown)
+        } else if (im && im.style.visibility !== 'hidden') {
+          im.style.visibility = 'hidden'
+        }
       }
       raf = requestAnimationFrame(loop)
     }
@@ -927,6 +915,14 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                 />
               ))
             )}
+            {/* Still-image main-lane clips have no <video>; this overlay shows the
+                image (contain + Ken Burns) during its span — the reconciler toggles
+                its visibility/src/transform. Sits above the videos, below overlays. */}
+            <img
+              ref={imgRef}
+              alt=""
+              style={{ visibility: 'hidden', position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', willChange: 'transform', backfaceVisibility: 'hidden' }}
+            />
             {useCanvas && frame.width > 0 && frame.height > 0 && (
               // Desktop base-picture compositor. Sits ABOVE the (hidden, decode-only)
               // <video>s and BELOW the overlays by DOM order. Backing store is frame×dpr
