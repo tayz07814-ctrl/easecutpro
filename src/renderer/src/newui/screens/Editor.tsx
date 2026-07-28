@@ -19,6 +19,7 @@ import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../timeline/TimelinePanel'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { addDocTexts, countCaptionTexts } from '../../docTextClips'
+import { loadStoredFonts } from '../../customFonts'
 import { resolveMedia } from '../../media/resolver'
 import { primePlayback } from '../../clock'
 import { framesToSeconds } from '@shared/timeline/time'
@@ -520,6 +521,13 @@ export default function Editor(): JSX.Element {
   const showCropModal = useStore((s) => s.showCropModal)
   const pendingCaptions = useStore((s) => s.pendingCaptions)
   const pendingAutoZoom = useStore((s) => s.pendingAutoZoom)
+
+  // Register the creator's custom fonts (local cache first, then their Supabase
+  // account) so imported faces are live in the preview + export and in the Font
+  // picker across devices.
+  useEffect(() => {
+    void loadStoredFonts()
+  }, [])
 
   // Captions requested in the New Project wizard run HERE, once the timeline
   // engine has mounted the document (captions write doc text clips, which need

@@ -12,13 +12,15 @@
 // Not yet in the model (would need renderer + export work): text rotate /
 // opacity / glow / shadow / curve, and "save as preset".
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { css } from '../css'
 import { useStore } from '../../store'
 import { useSharedEngineSnapshot, getSharedEngine } from '../../timelineEngine'
 import * as C from '@shared/timeline/commands'
 import type { Clip as DocClip, Track, TextContent } from '@shared/timeline/types'
+import { FONT_OPTIONS } from '@shared/types'
+import { addCustomFont, getCustomFontFamilies, removeCustomFont, onCustomFontsChange } from '../../customFonts'
 
 const clampN = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
 const mnum = (v: unknown, d: number): number => (typeof v === 'number' ? v : d)
@@ -166,6 +168,80 @@ function ClipControls({ clip, isMain }: { clip: DocClip; isMain: boolean }): JSX
   )
 }
 
+// Font family picker: the built-in faces plus the user's own imported fonts (each
+// row previewed in its own typeface), with an Import button that uploads the font
+// to the creator's account (customFonts → Supabase) and assigns it to this clip.
+function FontPicker({ value, onChange }: { value: string; onChange: (family: string) => void }): JSX.Element {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [, force] = useState(0)
+  useEffect(() => onCustomFontsChange(() => force((n) => n + 1)), [])
+  const custom = getCustomFontFamilies()
+  const families = Array.from(new Set([...FONT_OPTIONS, ...custom, value].filter(Boolean))) as string[]
+
+  return (
+    <>
+      <div style={css(LABEL)}>Font</div>
+      <div style={css('display:flex;flex-direction:column;gap:4px;max-height:172px;overflow-y:auto;padding-right:2px')}>
+        {families.map((f) => {
+          const on = f === value
+          const isCustom = custom.includes(f)
+          return (
+            <div
+              key={f}
+              onClick={() => onChange(f)}
+              style={css(
+                `display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;cursor:pointer;border:1px solid ${on ? '#7c6bff' : 'rgba(255,255,255,.08)'};background:${on ? 'rgba(124,107,255,.16)' : '#101015'}`
+              )}
+            >
+              <span
+                style={{
+                  ...css('flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'),
+                  fontFamily: `"${f}", sans-serif`,
+                  color: on ? '#c4baff' : '#ededf2'
+                }}
+              >
+                {f}
+              </span>
+              {isCustom && (
+                <span
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    removeCustomFont(f)
+                    if (value === f) onChange('Arial')
+                  }}
+                  title="Remove this font from your account"
+                  style={css('flex:none;color:#6e6e85;font-size:12px;padding:0 3px;cursor:pointer')}
+                >
+                  ✕
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <button
+        onClick={() => fileRef.current?.click()}
+        style={css(
+          'width:100%;margin-top:8px;display:flex;align-items:center;justify-content:center;gap:6px;background:rgba(124,107,255,.14);border:1px solid rgba(124,107,255,.3);color:#a99bff;font-family:inherit;font-size:12px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer'
+        )}
+      >
+        ＋ Import font
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".ttf,.otf,.woff,.woff2,font/*"
+        style={{ display: 'none' }}
+        onChange={async (e) => {
+          const f = e.target.files?.[0]
+          e.target.value = ''
+          if (f) onChange(await addCustomFont(f))
+        }}
+      />
+    </>
+  )
+}
+
 // ---- text / caption (document text clip) ----
 function DocTextControls({ clip }: { clip: DocClip }): JSX.Element {
   const t = clip.text as TextContent
@@ -183,6 +259,8 @@ function DocTextControls({ clip }: { clip: DocClip }): JSX.Element {
 
       <div style={css(LABEL)}>Content</div>
       <textarea value={t.text} onChange={(e) => setC({ text: e.target.value })} rows={2} style={css('width:100%;box-sizing:border-box;resize:none;background:#101015;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;color:#ededf2;font-size:12.5px;font-family:inherit;outline:none;margin-top:4px')} />
+
+      <FontPicker value={t.fontFamily} onChange={(f) => setC({ fontFamily: f })} />
 
       <div style={css('display:flex;gap:8px;margin-top:12px')}>
         <Chip label="Bold" on={t.bold} onClick={() => setC({ bold: !t.bold })} />
