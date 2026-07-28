@@ -3,6 +3,8 @@
 import { ClipView } from './ClipView'
 import { TRACK_COLOR, laneHeight } from './geometry'
 import { useStore } from '../../store'
+import { getSharedEngine } from '../../timelineEngine'
+import { docSourceToEdited, docEditedToSource } from '../../docTime'
 import type { Track, Clip } from '@shared/timeline/types'
 import type { Timebase } from '@shared/timeline/time'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
@@ -41,14 +43,17 @@ export function TrackLane({
 }): JSX.Element {
   const color = TRACK_COLOR[track.kind]
   const seamFade = useStore((s) => s.seamFade)
-  // Staged retake cuts → red adjustable regions on the MAIN video lane. The cuts
-  // are contiguous runs of struck transcript words (SOURCE seconds = edited
-  // seconds for the un-cut base), so left/width in px = seconds * zoom. Wired to
-  // the SAME selection the Transcript drawer + Speech-cleaner cards drive; they
+  // Staged retake cuts → red adjustable regions on the MAIN video lane. Cuts are
+  // contiguous runs of struck transcript words in SOURCE seconds; the lane draws
+  // clips in EDITED time, so every red band (and the drag) is mapped through
+  // docSourceToEdited / docEditedToSource — that's what keeps them locked onto the
+  // clips after the base is split (clip 1 / 1 b / 1 b b) instead of drifting. Wired
+  // to the SAME selection the Transcript drawer + Speech-cleaner cards drive; they
   // vanish on Execute (the words become committed cuts and the selection clears).
   const selectedWordIds = useStore((s) => s.selectedWordIds)
   const twords = useStore((s) => s.project.transcript?.words)
   const selectWord = useStore((s) => s.selectWord)
+  const doc = getSharedEngine()?.document
 
   interface Cut { id: string; s: number; e: number; ids: string[] }
   const cuts: Cut[] = []
@@ -77,7 +82,8 @@ export function TrackLane({
     if (!lane) return
     const rect = lane.getBoundingClientRect()
     const move = (ev: PointerEvent): void => {
-      const t = Math.max(0, (ev.clientX - rect.left) / zoom)
+      // pointer px → EDITED seconds → SOURCE seconds (words live in source time)
+      const t = docEditedToSource(doc, Math.max(0, (ev.clientX - rect.left) / zoom))
       if (side === 'l') setCutRange(c, Math.min(t, c.e - 0.15), c.e)
       else setCutRange(c, c.s, Math.max(t, c.s + 0.15))
     }
@@ -120,19 +126,25 @@ export function TrackLane({
           onClipContextMenu={onClipContextMenu}
         />
       ))}
-      {cuts.map((c) => (
-        <div
-          key={c.id}
-          className="ec-tl-cut"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => keepCut(c)}
-          title="Staged cut — click to keep it, drag an edge to adjust"
-          style={{ left: c.s * zoom, width: Math.max(3, (c.e - c.s) * zoom) }}
-        >
-          <div className="ec-tl-cut-edge l" onPointerDown={(e) => dragCutEdge(e, c, 'l')} />
-          <div className="ec-tl-cut-edge r" onPointerDown={(e) => dragCutEdge(e, c, 'r')} />
-        </div>
-      ))}
+      {cuts.map((c) => {
+        // SOURCE seconds → EDITED seconds so the band sits on the real clip.
+        const es = docSourceToEdited(doc, c.s)
+        const ee = docSourceToEdited(doc, c.e)
+        if (ee <= es) return null
+        return (
+          <div
+            key={c.id}
+            className="ec-tl-cut"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => keepCut(c)}
+            title="Staged cut — click to keep it, drag an edge to adjust"
+            style={{ left: es * zoom, width: Math.max(3, (ee - es) * zoom) }}
+          >
+            <div className="ec-tl-cut-edge l" onPointerDown={(e) => dragCutEdge(e, c, 'l')} />
+            <div className="ec-tl-cut-edge r" onPointerDown={(e) => dragCutEdge(e, c, 'r')} />
+          </div>
+        )
+      })}
     </div>
   )
 }
