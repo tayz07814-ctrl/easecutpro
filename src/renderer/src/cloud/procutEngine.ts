@@ -64,7 +64,11 @@ export async function cutCutProCloud(
     try {
       op(52, 'Cut Lord is mapping pauses (1/4)…')
       if (!audio) audio = await extractSttAudio(mediaId)
-      const regions = await detectSilenceFloat32(audio.float32, audio.sampleRate, vadSilenceToOpts(vadSettings), audio.durationS)
+      // edgeTrim is applied post-carve (word-clamped) in clampSilenceRegions, not
+      // in the raw pass — see the note in vad.ts (it otherwise merges sub-minGap
+      // breath dips into multi-second cuts before word protection can drop them).
+      const rawOpts = { ...vadSilenceToOpts(vadSettings), edgeTrimMs: 0 }
+      const regions = await detectSilenceFloat32(audio.float32, audio.sampleRate, rawOpts, audio.durationS)
       vad = regions.map((r) => ({ start: r.start, end: r.end }))
     } catch (e) {
       warnings.push(`VAD unavailable (${(e as Error).message}) — pauses from word gaps only.`)
@@ -109,7 +113,7 @@ export async function cutCutProCloud(
   if (runVad && vad.length) {
     const cut = new Set(edits.deleteWordIds)
     const keptWords = transcript.words.filter((w) => !w.deleted && !cut.has(w.id))
-    silenceAdds = clampSilenceRegions(vad, keptWords, 'procutvad', audio?.durationS ?? 0)
+    silenceAdds = clampSilenceRegions(vad, keptWords, 'procutvad', audio?.durationS ?? 0, 0.03, 0.03, false, 0.05, vadSettings.edgeTrimS)
   }
 
   op(100, 'Cut Lord finished')
