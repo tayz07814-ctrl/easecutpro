@@ -55,6 +55,18 @@
   text-rendering: optimizeLegibility;
 }
 
+/* Status-dot pulse (batch "Cleaning", Queue pill, live badges) — from the
+   redesign's global stylesheet. Named to avoid colliding with app keyframes. */
+@keyframes ecPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* Match the design's box model exactly, scoped to the new UI only. The design
    canvas has NO author box-sizing reset, so it renders on pure UA defaults:
    content-box for normal elements, border-box for form controls. We reproduce
