@@ -24,6 +24,11 @@ function cloudCsp(supabaseUrl: string | undefined): Plugin {
     `connect-src 'self' blob: data: ${https} ${wss}`,
     "img-src 'self' data: blob:",
     "media-src 'self' blob: data:",
+    // Custom fonts register as FontFaces from data:/blob: URLs (uploaded files +
+    // the localStorage cache + Supabase downloads). Without this they fall back to
+    // default-src 'self' and the browser blocks them ("A network error occurred"),
+    // so imported fonts silently render as the fallback sans-serif.
+    "font-src 'self' data: blob:",
     "style-src 'self' 'unsafe-inline'",
     // wasm-unsafe-eval: onnxruntime-web (Silero VAD) compiles wasm at runtime
     "script-src 'self' 'wasm-unsafe-eval'",

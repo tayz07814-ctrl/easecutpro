@@ -97,8 +97,11 @@ async function register(family: string, src: string): Promise<void> {
     await ff.load()
     document.fonts.add(ff)
     registered.add(family)
-  } catch {
-    /* a bad/corrupt font just won't render — no red error */
+  } catch (e) {
+    // Surface the reason instead of silently falling back to sans-serif — a CSP
+    // font-src block (the "renders as Arial" bug) reports "A network error
+    // occurred" here, and a genuinely corrupt file reports a parse error.
+    console.warn('[fonts] could not register', family, e)
   }
 }
 
