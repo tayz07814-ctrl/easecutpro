@@ -148,11 +148,11 @@ export function buildAiPayload(map: TimestampMap): string {
     const p = pauseAfter.get(w.i)
     if (p) lines.push(`-- ${p.id}: pause ${p.dur_ms}ms${p.vad ? ' (VAD-confirmed silence)' : ''}`)
   }
-  const inc = map.incomplete_sentences.map((s) => `word ${s.end_word}: "…${s.text}"`).join('\n')
-  return (
-    `WORDS (index|text, one per line; pauses marked between):\n${lines.join('\n')}\n\n` +
-    (inc ? `INCOMPLETE SENTENCES (left hanging before a pause):\n${inc}\n` : '')
-  )
+  // Only the WORDS list (with inline pause markers) is sent to the model. The
+  // INCOMPLETE-SENTENCES hint block is intentionally NOT included in the payload —
+  // the deterministic incomplete-fragment sweep in refineEdl still uses
+  // map.incomplete_sentences locally, so cutting behaviour there is unchanged.
+  return `WORDS (index|text, one per line; pauses marked between):\n${lines.join('\n')}\n`
 }
 
 /** Parse + clamp an AI EDL reply. Never throws; ok=false means unusable. */
