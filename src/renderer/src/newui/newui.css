@@ -213,3 +213,100 @@
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
   overflow: hidden;
 }
+
+/* ============================================================================
+   New-UI timeline (the forked production timeline, newui/timeline/*). Every
+   rule is scoped under .ec-nu-tl — the class on the new editor's timeline host —
+   so ONLY this copy is restyled; main's timeline (never under .ec-nu-tl) is
+   untouched. The .ec-tl-* classes read these theme vars with hardcoded
+   fallbacks, so remapping the vars flips most surfaces to the redesign palette;
+   the block below patches the few hardcoded old-palette colours.
+   ========================================================================== */
+.ec-nu-tl {
+  --bg: #08080a;
+  --bg2: #0c0c10;
+  --bg3: #101015;
+  --border: rgba(255, 255, 255, 0.07);
+  --border2: rgba(255, 255, 255, 0.1);
+  --accent: #7c6bff;
+  --grad-soft: rgba(124, 107, 255, 0.16);
+  --text: #ededf2;
+  --muted: #8b8ba0;
+  --red: #ff6b6b;
+  --panel: #101015;
+}
+.ec-nu-tl .ec-tl {
+  font-family: 'Geist', system-ui, sans-serif;
+}
+.ec-nu-tl .ec-tl-pct {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  color: #9a9aae;
+}
+.ec-nu-tl .ec-tl-tbtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.ec-nu-tl .ec-tl-grp {
+  background: #101015;
+  border-color: rgba(255, 255, 255, 0.07);
+}
+.ec-nu-tl .ec-tl-seg {
+  color: #9a9aae;
+}
+.ec-nu-tl .ec-tl-seg.on {
+  background: rgba(124, 107, 255, 0.16);
+  color: #c4baff;
+}
+.ec-nu-tl .ec-tl-kind {
+  background: #191920;
+  color: #9a9aae;
+}
+.ec-nu-tl .ec-tl-main-badge {
+  color: #a99bff;
+  background: rgba(124, 107, 255, 0.16);
+  border-color: rgba(124, 107, 255, 0.5);
+}
+.ec-nu-tl .ec-ic.lock.on {
+  color: #a99bff;
+  background: rgba(124, 107, 255, 0.14);
+}
+.ec-nu-tl .ec-ic.mute.on {
+  color: #ff9b9b;
+}
+.ec-nu-tl .ec-ic.hide.on {
+  color: #c9c9da;
+}
+.ec-nu-tl .ec-tl-clip.sel {
+  box-shadow: inset 0 0 0 2px #fff, 0 0 0 1px #7c6bff, 0 3px 12px rgba(0, 0, 0, 0.55);
+}
+.ec-nu-tl .ec-tl-scroll::-webkit-scrollbar-thumb {
+  background: #26262e;
+  border-color: #08080a;
+}
+
+/* Retake pending-cut markers on the video clips (added by the fork's ClipView).
+   A red diagonal-striped band = a staged cut; drag either edge to adjust, click
+   the body to keep. Sits above the filmstrip, below the trim handles. */
+.ec-nu-tl .ec-tl-cut {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(45deg, rgba(255, 107, 107, 0.42) 0 6px, rgba(255, 107, 107, 0.22) 6px 12px);
+  box-shadow: inset 0 0 0 1px #ff6b6b;
+  z-index: 4;
+  cursor: pointer;
+}
+.ec-nu-tl .ec-tl-cut-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 5;
+}
+.ec-nu-tl .ec-tl-cut-edge.l {
+  left: -3px;
+}
+.ec-nu-tl .ec-tl-cut-edge.r {
+  right: -3px;
+}

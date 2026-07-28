@@ -41,6 +41,50 @@ export function TrackLane({
 }): JSX.Element {
   const color = TRACK_COLOR[track.kind]
   const seamFade = useStore((s) => s.seamFade)
+  // Staged retake cuts → red adjustable regions on the MAIN video lane. The cuts
+  // are contiguous runs of struck transcript words (SOURCE seconds = edited
+  // seconds for the un-cut base), so left/width in px = seconds * zoom. Wired to
+  // the SAME selection the Transcript drawer + Speech-cleaner cards drive; they
+  // vanish on Execute (the words become committed cuts and the selection clears).
+  const selectedWordIds = useStore((s) => s.selectedWordIds)
+  const twords = useStore((s) => s.project.transcript?.words)
+  const selectWord = useStore((s) => s.selectWord)
+
+  interface Cut { id: string; s: number; e: number; ids: string[] }
+  const cuts: Cut[] = []
+  if (track.isMain && twords && selectedWordIds.size) {
+    let run: Cut | null = null
+    const flush = (): void => { if (run) { cuts.push(run); run = null } }
+    for (const w of twords) {
+      if (selectedWordIds.has(w.id)) {
+        if (!run) run = { id: 'cut:' + w.id, s: w.start, e: w.end, ids: [w.id] }
+        else { run.e = w.end; run.ids.push(w.id) }
+      } else flush()
+    }
+    flush()
+  }
+  const keepCut = (c: Cut): void => c.ids.forEach((id) => { if (selectedWordIds.has(id)) selectWord(id, true) })
+  const setCutRange = (c: Cut, s: number, e: number): void => {
+    if (!twords) return
+    const target = new Set(twords.filter((w) => w.end > s + 0.01 && w.start < e - 0.01).map((w) => w.id))
+    const cur = new Set(c.ids)
+    for (const id of cur) if (!target.has(id) && selectedWordIds.has(id)) selectWord(id, true)
+    for (const id of target) if (!cur.has(id) && !selectedWordIds.has(id)) selectWord(id, true)
+  }
+  const dragCutEdge = (ev0: ReactPointerEvent, c: Cut, side: 'l' | 'r'): void => {
+    ev0.preventDefault(); ev0.stopPropagation()
+    const lane = (ev0.currentTarget as HTMLElement).closest('.ec-tl-lane') as HTMLElement | null
+    if (!lane) return
+    const rect = lane.getBoundingClientRect()
+    const move = (ev: PointerEvent): void => {
+      const t = Math.max(0, (ev.clientX - rect.left) / zoom)
+      if (side === 'l') setCutRange(c, Math.min(t, c.e - 0.15), c.e)
+      else setCutRange(c, c.s, Math.max(t, c.s + 0.15))
+    }
+    const up = (): void => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
   // Cut seams on the MAIN lane: a clip that starts right where the previous one
   // ends on the timeline but does NOT continue the same source (a real cut) gets
@@ -75,6 +119,19 @@ export function TrackLane({
           onHandlePointerDown={onHandlePointerDown}
           onClipContextMenu={onClipContextMenu}
         />
+      ))}
+      {cuts.map((c) => (
+        <div
+          key={c.id}
+          className="ec-tl-cut"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => keepCut(c)}
+          title="Staged cut — click to keep it, drag an edge to adjust"
+          style={{ left: c.s * zoom, width: Math.max(3, (c.e - c.s) * zoom) }}
+        >
+          <div className="ec-tl-cut-edge l" onPointerDown={(e) => dragCutEdge(e, c, 'l')} />
+          <div className="ec-tl-cut-edge r" onPointerDown={(e) => dragCutEdge(e, c, 'r')} />
+        </div>
       ))}
     </div>
   )
