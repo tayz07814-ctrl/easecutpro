@@ -62,7 +62,7 @@ import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject } from './projectsApi'
 import { hydrateProjectMedia } from './webapi'
-import { cleanVideo } from './batchClean'
+import { cleanVideoCloud } from './cloud/batchCleanCloud'
 import { getFile } from './webmedia'
 
 function uid(): string {
@@ -3873,11 +3873,13 @@ export const useStore = create<AppState>((set, get) => ({
     for (const c of created) {
       update(c.id, { status: 'processing', step: 'Starting…' })
       try {
-        const { project, thumb } = await cleanVideo(
+        // Cloud batch: the same browser-side Cut Lord the editor's Retake uses
+        // (transcribe → LLM retake → VAD silence via /edge), NOT window.api's
+        // /api/* endpoints — those 405 in the Vercel deploy (static-only host).
+        const { project, thumb } = await cleanVideoCloud(
           c.item.path,
           c.item.name,
-          get().fillerWords,
-          get().silenceOpts,
+          get().vadSilenceSettings,
           (step) => update(c.id, { step })
         )
         const finalProject = await serializeProject(project)
