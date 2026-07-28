@@ -237,48 +237,143 @@
 }
 .ec-nu-tl .ec-tl {
   font-family: 'Geist', system-ui, sans-serif;
+  background: #0a0a0d;
 }
-.ec-nu-tl .ec-tl-pct {
+
+/* --- toolbar: one flat run of text buttons + a mono readout (design mock) --- */
+.ec-nu-tl .ec-tl-toolbar {
+  height: 40px;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 0 14px;
+  overflow-x: auto;
+  background: #0a0a0d;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.ec-nu-tl .ec-tl-toolbar::-webkit-scrollbar { height: 0; }
+.ec-nu-tl .ec-tl2 {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font: inherit;
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #9a9aae;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ec-nu-tl .ec-tl2:hover:not(:disabled) { background: rgba(255, 255, 255, 0.05); }
+.ec-nu-tl .ec-tl2.on {
+  background: rgba(124, 107, 255, 0.16);
+  color: #a99bff;
+  font-weight: 500;
+}
+.ec-nu-tl .ec-tl2.danger { color: #ff9b9b; }
+.ec-nu-tl .ec-tl2:disabled { color: #4e4e60; cursor: not-allowed; }
+.ec-nu-tl .ec-tl-kbd {
   font-family: 'Geist Mono', ui-monospace, monospace;
-  color: #9a9aae;
+  font-size: 9.5px;
+  opacity: 0.6;
+  margin-left: 5px;
 }
-.ec-nu-tl .ec-tl-tbtn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.14);
+.ec-nu-tl .ec-tl-sep {
+  width: 1px;
+  height: 18px;
+  flex: none;
+  background: rgba(255, 255, 255, 0.09);
+  margin: 0 4px;
 }
-.ec-nu-tl .ec-tl-grp {
-  background: #101015;
-  border-color: rgba(255, 255, 255, 0.07);
+.ec-nu-tl .ec-tl-ph {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  color: #6e6e85;
+  flex: none;
+  white-space: nowrap;
 }
-.ec-nu-tl .ec-tl-seg {
-  color: #9a9aae;
-}
-.ec-nu-tl .ec-tl-seg.on {
-  background: rgba(124, 107, 255, 0.16);
-  color: #c4baff;
-}
-.ec-nu-tl .ec-tl-kind {
-  background: #191920;
-  color: #9a9aae;
-}
-.ec-nu-tl .ec-tl-main-badge {
-  color: #a99bff;
-  background: rgba(124, 107, 255, 0.16);
-  border-color: rgba(124, 107, 255, 0.5);
-}
-.ec-nu-tl .ec-ic.lock.on {
-  color: #a99bff;
-  background: rgba(124, 107, 255, 0.14);
-}
-.ec-nu-tl .ec-ic.mute.on {
+.ec-nu-tl .ec-tl-pending {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 10.5px;
   color: #ff9b9b;
+  flex: none;
+  white-space: nowrap;
 }
-.ec-nu-tl .ec-ic.hide.on {
-  color: #c9c9da;
+
+/* --- sticky ruler + lane-label column --- */
+.ec-nu-tl .ec-tl-rulerRow { background: #0a0a0d; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.ec-nu-tl .ec-tl-corner { width: 72px; background: #0a0a0d; border-right: 1px solid rgba(255, 255, 255, 0.05); padding: 0 10px; }
+.ec-nu-tl .ec-tl-tc { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; font-weight: 400; letter-spacing: 0; color: #6e6e85; }
+.ec-nu-tl .ec-tl-tick-label { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 9px; color: #55556a; }
+.ec-nu-tl .ec-tl-tick.major { border-left-color: rgba(255, 255, 255, 0.09); }
+.ec-nu-tl .ec-tl-tick.minor { border-left-color: rgba(255, 255, 255, 0.05); }
+
+.ec-nu-tl .ec-tl-header {
+  width: 72px;
+  gap: 0;
+  padding: 0 10px;
+  background: #0a0a0d;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
 }
-.ec-nu-tl .ec-tl-clip.sel {
-  box-shadow: inset 0 0 0 2px #fff, 0 0 0 1px #7c6bff, 0 3px 12px rgba(0, 0, 0, 0.55);
+.ec-nu-tl .ec-tl-hlabel {
+  font-size: 10.5px;
+  color: #6e6e85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+/* --- lanes: quiet fills, green tint on the audio lane --- */
+.ec-nu-tl .ec-tl-lane { background: rgba(255, 255, 255, 0.03); }
+.ec-nu-tl .ec-tl-lane.kind-audio { background: rgba(126, 214, 166, 0.07); box-shadow: inset 0 0 0 1px rgba(126, 214, 166, 0.16); }
+
+/* --- clips: 1.5px kind-coloured border, mono top-left label, striped fill --- */
+.ec-nu-tl .ec-tl-clip {
+  top: 3px;
+  bottom: 3px;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.1);
+}
+.ec-nu-tl .ec-tl-clip.kind-audio { box-shadow: inset 0 0 0 1.5px rgba(126, 214, 166, 0.45); }
+.ec-nu-tl .ec-tl-clip.kind-text,
+.ec-nu-tl .ec-tl-clip.kind-title { box-shadow: inset 0 0 0 1.5px rgba(124, 107, 255, 0.6); }
+.ec-nu-tl .ec-tl-clip.sel { box-shadow: inset 0 0 0 1.5px #7c6bff, 0 3px 12px rgba(0, 0, 0, 0.5); }
+.ec-nu-tl .ec-tl-clip-film {
+  top: 0;
+  background-image: repeating-linear-gradient(135deg, #1b1b22 0 8px, #141419 8px 16px);
+}
+.ec-nu-tl .ec-tl-clip-film.has-frames { background-image: none; }
+.ec-nu-tl .ec-tl-clip-title {
+  height: auto;
+  padding: 5px 7px 0;
+  background: transparent;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  font-weight: 400;
+  color: #8b8ba0;
+  text-shadow: none;
+}
+.ec-nu-tl .ec-tl-clip.sel .ec-tl-clip-title { color: #c4baff; }
+.ec-nu-tl .ec-tl-clip-text {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  font-weight: 400;
+  color: #c4baff;
+  text-shadow: none;
+}
+
+/* --- playhead: thin white line with a square head (red now means "cut") --- */
+.ec-nu-tl .ec-tl-playhead { width: 1.5px; margin-left: -0.75px; background: #ededf2; }
+.ec-nu-tl .ec-tl-playhead-head {
+  clip-path: none;
+  width: 11px;
+  height: 11px;
+  left: -5px;
+  border-radius: 2px;
+  background: #ededf2;
+}
+
 .ec-nu-tl .ec-tl-scroll::-webkit-scrollbar-thumb {
   background: #26262e;
   border-color: #08080a;

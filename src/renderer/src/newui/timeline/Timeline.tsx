@@ -384,7 +384,9 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
           }
         },
         { label: track.locked ? 'Unlock' : 'Lock', onClick: () => engine.dispatch(C.setTrackFlags(trackId, { locked: !track.locked })) },
-        { label: track.hidden ? 'Show' : 'Hide', onClick: () => engine.dispatch(C.setTrackFlags(trackId, { hidden: !track.hidden })) },
+        track.kind === 'audio'
+          ? { label: track.muted ? 'Unmute' : 'Mute', onClick: () => engine.dispatch(C.setTrackFlags(trackId, { muted: !track.muted })) }
+          : { label: track.hidden ? 'Show' : 'Hide', onClick: () => engine.dispatch(C.setTrackFlags(trackId, { hidden: !track.hidden })) },
         { separator: true },
         { label: 'Add video track', onClick: () => engine.dispatch(C.addTrack('video')) },
         { label: 'Delete track', danger: true, disabled: track.isMain, onClick: () => engine.dispatch(C.removeTrack(trackId)) }

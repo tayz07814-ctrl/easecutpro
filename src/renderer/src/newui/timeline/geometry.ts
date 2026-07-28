@@ -4,7 +4,7 @@
 import { framesToSeconds, secondsToFrames, type Timebase } from '@shared/timeline/time'
 import type { TrackKind } from '@shared/timeline/types'
 
-export const HEADER_W = 176
+export const HEADER_W = 72
 export const RULER_H = 30
 /** Height of an EMPTY overlay/text/subtitle lane. They collapse until content
  *  is dropped in, so the main track keeps the vertical room (waveform +
@@ -48,13 +48,14 @@ export function labelSeconds(sec: number): string {
   return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
 }
 
-/** CapCut-ish per-track tint. */
+/** 0.01 redesign per-track base fill (dark striped video, green audio, purple
+ *  text) — the .ec-nu-tl CSS layers borders, stripes and mono labels on top. */
 export const TRACK_COLOR: Record<TrackKind, string> = {
-  video: '#2f8f9d',
-  audio: '#3f9d5a',
-  text: '#b5533f',
-  overlay: '#c8802f',
-  subtitle: '#5b8cff',
-  effect: '#b06cff',
-  adjustment: '#6b7280'
+  video: '#141419',
+  audio: '#17271d',
+  text: '#2e2850',
+  overlay: '#141419',
+  subtitle: '#2e2850',
+  effect: '#241f3a',
+  adjustment: '#1a1a20'
 }
