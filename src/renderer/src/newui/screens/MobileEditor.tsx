@@ -33,8 +33,8 @@ type SheetKind = 'cut' | 'media' | 'text' | 'music' | 'captions' | null
 
 function Sheet({ onClose, children, header }: { onClose: () => void; children: ReactNode; header?: ReactNode }): JSX.Element {
   return (
-    <div onClick={onClose} style={css('position:fixed;inset:0;background:rgba(10,11,14,.6);z-index:1000;display:flex;flex-direction:column;justify-content:flex-end')}>
-      <div onClick={(e) => e.stopPropagation()} style={css('background:#141418;border-top:1px solid rgba(255,255,255,.09);border-radius:18px 18px 0 0;box-shadow:0 -14px 44px rgba(0,0,0,.55);display:flex;flex-direction:column;height:82vh;max-height:92vh')}>
+    <div onClick={onClose} style={css('position:fixed;inset:0;background:rgba(8,8,10,.6);z-index:1000;display:flex;flex-direction:column;justify-content:flex-end')}>
+      <div onClick={(e) => e.stopPropagation()} style={css('background:#0a0a0d;border-top:1px solid rgba(255,255,255,.09);border-radius:18px 18px 0 0;box-shadow:0 -14px 44px rgba(0,0,0,.55);display:flex;flex-direction:column;height:82vh;max-height:92vh')}>
         <div style={css('flex:none;display:grid;place-items:center;padding:8px 0 2px')}><div style={css('width:38px;height:4px;border-radius:2px;background:rgba(255,255,255,.18)')} /></div>
         {header}
         <div style={css('flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden')}>{children}</div>
@@ -60,29 +60,29 @@ function MediaSheet({ onClose }: { onClose: () => void }): JSX.Element {
       header={
         <div style={css('flex:none;display:flex;align-items:center;justify-content:space-between;padding:6px 16px 12px')}>
           <div style={css('font-size:15px;font-weight:650')}>Media</div>
-          <button onClick={addToLibrary} style={css('background:rgba(110,106,232,.16);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 14px;cursor:pointer')}>＋ Import</button>
+          <button onClick={addToLibrary} style={css('background:rgba(124,107,255,.16);border:1px solid rgba(124,107,255,.3);color:#a99bff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 14px;cursor:pointer')}>＋ Import</button>
         </div>
       }
     >
       {canSequence && (
         <div style={css('flex:none;padding:0 14px 10px')}>
-          <button onClick={() => { addAllToTimeline(); onClose() }} style={css('width:100%;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;font-family:inherit;font-size:13px;font-weight:550;border-radius:10px;padding:11px 0;cursor:pointer')}>▦ Add all to timeline</button>
+          <button onClick={() => { addAllToTimeline(); onClose() }} style={css('width:100%;background:none;border:1px solid rgba(255,255,255,.12);color:#c9c9da;font-family:inherit;font-size:13px;font-weight:550;border-radius:10px;padding:11px 0;cursor:pointer')}>▦ Add all to timeline</button>
         </div>
       )}
       <div style={css('flex:1;min-height:0;overflow:auto;padding:0 14px 20px;display:flex;flex-direction:column;gap:8px')}>
-        {library.length === 0 && <div style={css('color:#686E7B;font-size:13px;text-align:center;padding:32px 0')}>No clips yet — tap ＋ Import to add videos.</div>}
+        {library.length === 0 && <div style={css('color:#6e6e85;font-size:13px;text-align:center;padding:32px 0')}>No clips yet — tap ＋ Import to add videos.</div>}
         {library.map((it) => {
           const isBase = !!basePath && it.path === basePath
           return (
-            <div key={it.id} onClick={() => { setBaseFromLibrary(it.id); onClose() }} style={css(`display:flex;gap:11px;align-items:center;padding:10px;border-radius:12px;background:#1E2026;border:1px solid ${isBase ? 'rgba(110,106,232,.55)' : 'rgba(255,255,255,.07)'};cursor:pointer`)}>
-              <div style={css('width:44px;height:56px;flex:none;border-radius:7px;overflow:hidden;background:#23252b;display:grid;place-items:center')}>
-                {it.thumb ? <img src={it.thumb} alt="" style={css('width:100%;height:100%;object-fit:cover')} /> : <span style={css("font-family:'IBM Plex Mono',monospace;font-size:9px;color:#686E7B")}>9:16</span>}
+            <div key={it.id} onClick={() => { setBaseFromLibrary(it.id); onClose() }} style={css(`display:flex;gap:11px;align-items:center;padding:10px;border-radius:12px;background:#101015;border:1px solid ${isBase ? 'rgba(124,107,255,.55)' : 'rgba(255,255,255,.07)'};cursor:pointer`)}>
+              <div style={css('width:44px;height:56px;flex:none;border-radius:7px;overflow:hidden;background:#141419;display:grid;place-items:center')}>
+                {it.thumb ? <img src={it.thumb} alt="" style={css('width:100%;height:100%;object-fit:cover')} /> : <span style={css("font-family:'Geist Mono',monospace;font-size:9px;color:#6e6e85")}>9:16</span>}
               </div>
               <div style={css('flex:1;min-width:0')}>
                 <div style={css('font-size:13px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{it.name}</div>
-                <div style={css("font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#686E7B;margin-top:3px")}>{fmt(it)}</div>
+                <div style={css("font-family:'Geist Mono',monospace;font-size:10.5px;color:#6e6e85;margin-top:3px")}>{fmt(it)}</div>
               </div>
-              {isBase && <span style={css('font-size:10px;font-weight:600;color:#B7B5F4;background:rgba(110,106,232,.18);border-radius:5px;padding:2px 7px;flex:none')}>Base</span>}
+              {isBase && <span style={css('font-size:10px;font-weight:600;color:#a99bff;background:rgba(124,107,255,.18);border-radius:5px;padding:2px 7px;flex:none')}>Base</span>}
             </div>
           )
         })}
@@ -105,22 +105,22 @@ function MusicSheet({ onClose }: { onClose: () => void }): JSX.Element {
       header={
         <div style={css('flex:none;display:flex;align-items:center;justify-content:space-between;padding:6px 16px 12px')}>
           <div style={css('font-size:15px;font-weight:650')}>Audio</div>
-          <button onClick={addToLibrary} style={css('background:rgba(110,106,232,.16);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 14px;cursor:pointer')}>＋ Import audio</button>
+          <button onClick={addToLibrary} style={css('background:rgba(124,107,255,.16);border:1px solid rgba(124,107,255,.3);color:#a99bff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 14px;cursor:pointer')}>＋ Import audio</button>
         </div>
       }
     >
       <div style={css('flex:1;min-height:0;overflow:auto;padding:0 14px 20px;display:flex;flex-direction:column;gap:8px')}>
         {audio.length === 0 && (
-          <div style={css('color:#686E7B;font-size:13px;text-align:center;padding:32px 16px;line-height:1.6')}>No audio yet — tap ＋ Import audio to add music or a voiceover. It drops onto an audio track.</div>
+          <div style={css('color:#6e6e85;font-size:13px;text-align:center;padding:32px 16px;line-height:1.6')}>No audio yet — tap ＋ Import audio to add music or a voiceover. It drops onto an audio track.</div>
         )}
         {audio.map((it) => (
-          <div key={it.id} onClick={() => { addMediaToTimeline(it); onClose() }} style={css('display:flex;gap:11px;align-items:center;padding:10px;border-radius:12px;background:#1E2026;border:1px solid rgba(255,255,255,.07);cursor:pointer')}>
-            <div style={css('width:44px;height:44px;flex:none;border-radius:9px;background:#23252b;display:grid;place-items:center;color:#8890A0')}><Icon name="music" size={20} /></div>
+          <div key={it.id} onClick={() => { addMediaToTimeline(it); onClose() }} style={css('display:flex;gap:11px;align-items:center;padding:10px;border-radius:12px;background:#101015;border:1px solid rgba(255,255,255,.07);cursor:pointer')}>
+            <div style={css('width:44px;height:44px;flex:none;border-radius:9px;background:#141419;display:grid;place-items:center;color:#8b8ba0')}><Icon name="music" size={20} /></div>
             <div style={css('flex:1;min-width:0')}>
               <div style={css('font-size:13px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{it.name}</div>
-              <div style={css("font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#686E7B;margin-top:3px")}>{fmt(it)}</div>
+              <div style={css("font-family:'Geist Mono',monospace;font-size:10.5px;color:#6e6e85;margin-top:3px")}>{fmt(it)}</div>
             </div>
-            <span style={css('font-size:16px;color:#B7B5F4;flex:none')}>＋</span>
+            <span style={css('font-size:16px;color:#a99bff;flex:none')}>＋</span>
           </div>
         ))}
       </div>
@@ -142,34 +142,34 @@ function CaptionsSheet({ onClose }: { onClose: () => void }): JSX.Element {
   return (
     <Sheet onClose={onClose} header={<div style={css('flex:none;padding:6px 16px 12px;font-size:15px;font-weight:650')}>Captions</div>}>
       <div style={css('flex:1;min-height:0;overflow:auto;padding:2px 16px 20px')}>
-        <div style={css('font-size:11.5px;font-weight:650;color:#8f8f96;letter-spacing:.3px;text-transform:uppercase;margin-bottom:9px')}>Style</div>
+        <div style={css('font-size:11.5px;font-weight:650;color:#8b8ba0;letter-spacing:.3px;text-transform:uppercase;margin-bottom:9px')}>Style</div>
         <div style={css('display:flex;gap:10px;margin-bottom:16px')}>
           {CAPTION_STYLES.map((s) => {
             const on = style === s.id
             return (
               <button key={s.id} onClick={() => setStyle(s.id)}
-                style={css(`flex:1;text-align:left;border-radius:13px;padding:12px 13px;cursor:pointer;background:${on ? 'rgba(124,92,255,.14)' : '#17171b'};border:1px solid ${on ? 'rgba(124,92,255,.55)' : 'rgba(255,255,255,.07)'}`)}>
+                style={css(`flex:1;text-align:left;border-radius:13px;padding:12px 13px;cursor:pointer;background:${on ? 'rgba(124,107,255,.14)' : '#08080a'};border:1px solid ${on ? 'rgba(124,107,255,.55)' : 'rgba(255,255,255,.07)'}`)}>
                 {/* mini preview of the look */}
-                <div style={css(`height:34px;border-radius:8px;display:grid;place-items:center;margin-bottom:9px;background:${s.id === 'boxed' ? '#000' : 'linear-gradient(135deg,#2a2a33,#1b1b22)'}`)}>
+                <div style={css(`height:34px;border-radius:8px;display:grid;place-items:center;margin-bottom:9px;background:${s.id === 'boxed' ? '#000' : 'linear-gradient(135deg,#22222b,#101015)'}`)}>
                   <span style={css(`font-size:14px;font-weight:800;color:#fff;${s.id === 'clean' ? '-webkit-text-stroke:1px #000;text-shadow:0 1px 2px rgba(0,0,0,.9)' : s.id === 'boxed' ? 'background:#000;padding:1px 7px;border-radius:3px' : ''}`)}>Aa</span>
                 </div>
-                <div style={css(`font-size:13px;font-weight:650;color:${on ? '#c9b8ff' : '#e7e7ea'}`)}>{s.label}</div>
-                <div style={css('font-size:11px;color:#8f8f96;margin-top:2px')}>{s.hint}</div>
+                <div style={css(`font-size:13px;font-weight:650;color:${on ? '#c4baff' : '#ededf2'}`)}>{s.label}</div>
+                <div style={css('font-size:11px;color:#8b8ba0;margin-top:2px')}>{s.hint}</div>
               </button>
             )
           })}
         </div>
-        <button onClick={() => void generateCaptions(style)} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(100deg,#7c5cff,#a468ff);border:none;color:#fff;font-family:inherit;font-size:14px;font-weight:700;border-radius:12px;padding:14px 0;box-shadow:0 6px 18px rgba(140,92,255,.32);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>
+        <button onClick={() => void generateCaptions(style)} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(100deg,#7c6bff,#8e7fff);border:none;color:#fff;font-family:inherit;font-size:14px;font-weight:700;border-radius:12px;padding:14px 0;box-shadow:0 6px 18px rgba(124,107,255,.32);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>
           <Icon name="captions" size={19} /> {jobActive ? 'Working…' : capCount > 0 ? 'Regenerate captions' : 'Generate captions'}
         </button>
-        {jobActive && jobMsg && <div style={css('margin-top:12px;font-size:12.5px;color:#b9b9c0;text-align:center')}>{jobMsg}</div>}
+        {jobActive && jobMsg && <div style={css('margin-top:12px;font-size:12.5px;color:#b9b9cc;text-align:center')}>{jobMsg}</div>}
         {capCount > 0 && !jobActive && (
-          <div style={css('margin-top:14px;display:flex;align-items:center;gap:10px;background:#17171b;border-radius:12px;padding:12px 14px')}>
-            <div style={css('flex:1;font-size:13px;color:#7ed957')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>
-            <button onClick={clearCaptions} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.14);color:#cfcfd4;font-family:inherit;font-size:13px;border-radius:9px;padding:8px 14px;cursor:pointer')}>Clear</button>
+          <div style={css('margin-top:14px;display:flex;align-items:center;gap:10px;background:#08080a;border-radius:12px;padding:12px 14px')}>
+            <div style={css('flex:1;font-size:13px;color:#7ed6a6')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>
+            <button onClick={clearCaptions} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.14);color:#c9c9da;font-family:inherit;font-size:13px;border-radius:9px;padding:8px 14px;cursor:pointer')}>Clear</button>
           </div>
         )}
-        <div style={css('margin-top:16px;font-size:12.5px;color:#8f8f96;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle clips on a text track. Tap a line on the timeline to restyle it.' : 'Adds subtitle clips from your speech. If you’ve run Cut Lord it reuses that transcript — otherwise it transcribes first, then captions.'}</div>
+        <div style={css('margin-top:16px;font-size:12.5px;color:#8b8ba0;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle clips on a text track. Tap a line on the timeline to restyle it.' : 'Adds subtitle clips from your speech. If you’ve run Cut Lord it reuses that transcript — otherwise it transcribes first, then captions.'}</div>
       </div>
     </Sheet>
   )
@@ -177,7 +177,7 @@ function CaptionsSheet({ onClose }: { onClose: () => void }): JSX.Element {
 
 function IcBtn({ label, onClick, disabled, active }: { label: ReactNode; onClick: () => void; disabled?: boolean; active?: boolean }): JSX.Element {
   return (
-    <button onClick={onClick} disabled={disabled} style={css(`width:34px;height:34px;border-radius:9px;border:1px solid ${active ? 'rgba(110,106,232,.4)' : 'transparent'};background:${active ? 'rgba(110,106,232,.16)' : 'transparent'};color:${disabled ? '#4A4F5B' : active ? '#B7B5F4' : '#C6C9D2'};font-size:16px;display:grid;place-items:center;cursor:${disabled ? 'default' : 'pointer'};font-family:inherit`)}>{label}</button>
+    <button onClick={onClick} disabled={disabled} style={css(`width:34px;height:34px;border-radius:9px;border:1px solid ${active ? 'rgba(124,107,255,.4)' : 'transparent'};background:${active ? 'rgba(124,107,255,.16)' : 'transparent'};color:${disabled ? '#4a4a5c' : active ? '#a99bff' : '#c9c9da'};font-size:16px;display:grid;place-items:center;cursor:${disabled ? 'default' : 'pointer'};font-family:inherit`)}>{label}</button>
   )
 }
 
@@ -265,14 +265,14 @@ export default function MobileEditor(): JSX.Element {
   }
 
   return (
-    <div style={css('width:100%;height:100%;background:#0b0b0d;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-m-editor">
+    <div style={css('width:100%;height:100%;background:#08080a;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-m-editor">
       {/* Top bar — back · 9:16 marker · settings + gradient Export (design) */}
       <div style={css(`flex:none;display:flex;align-items:center;height:52px;padding:0 12px;border-bottom:1px solid ${HAIR};position:relative`)} title={name}>
-        <div onClick={goHome} style={css('width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:10px;color:#e7e7ea;cursor:pointer')}><Icon name="back" size={22} /></div>
+        <div onClick={goHome} style={css('width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:10px;color:#ededf2;cursor:pointer')}><Icon name="back" size={22} /></div>
         <div style={css('position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;justify-content:center;width:16px;height:25px;border:1.6px solid #fff;border-radius:5px;font-size:6.5px;font-weight:700;letter-spacing:.2px;color:#fff')}>9:16</div>
         <div style={css('margin-left:auto;display:flex;align-items:center;gap:10px')}>
-          <div onClick={() => setShowSettings(true)} style={css('width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:9px;color:#bdbdc4;cursor:pointer')}><Icon name="more" size={20} /></div>
-          <button onClick={() => setShowExportModal(true)} style={css('background:linear-gradient(100deg,#7c5cff,#a468ff);border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:700;border-radius:10px;padding:8px 18px;cursor:pointer;box-shadow:0 2px 12px rgba(140,92,255,.35)')}>Export</button>
+          <div onClick={() => setShowSettings(true)} style={css('width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:9px;color:#b9b9cc;cursor:pointer')}><Icon name="more" size={20} /></div>
+          <button onClick={() => setShowExportModal(true)} style={css('background:linear-gradient(100deg,#7c6bff,#8e7fff);border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:700;border-radius:10px;padding:8px 18px;cursor:pointer;box-shadow:0 2px 12px rgba(124,107,255,.35)')}>Export</button>
         </div>
       </div>
 
@@ -291,7 +291,7 @@ export default function MobileEditor(): JSX.Element {
         <IcBtn label={<Icon name="undo" size={21} />} onClick={() => canUndo && undo()} disabled={!canUndo} />
         <IcBtn label={<Icon name="redo" size={21} />} onClick={() => canRedo && redo()} disabled={!canRedo} />
         <div style={css('flex:1')} />
-        <button onClick={() => { if (!hasBase) return; const next = !playing; if (next) primePlayback(); setPlaying(next) }} disabled={!hasBase} style={css(`width:44px;height:44px;border-radius:50%;background:${hasBase ? 'rgba(255,255,255,.08)' : 'transparent'};border:none;display:grid;place-items:center;color:${hasBase ? '#fff' : '#4A4F5B'};cursor:${hasBase ? 'pointer' : 'default'}`)}>
+        <button onClick={() => { if (!hasBase) return; const next = !playing; if (next) primePlayback(); setPlaying(next) }} disabled={!hasBase} style={css(`width:44px;height:44px;border-radius:50%;background:${hasBase ? 'rgba(255,255,255,.08)' : 'transparent'};border:none;display:grid;place-items:center;color:${hasBase ? '#fff' : '#4a4a5c'};cursor:${hasBase ? 'pointer' : 'default'}`)}>
           <Icon name={playing ? 'pause' : 'play'} size={30} fill />
         </button>
         <div style={css('flex:1')} />
@@ -305,7 +305,7 @@ export default function MobileEditor(): JSX.Element {
       </div>
 
       {/* Bottom dock — Import + Cut Lord (contextual tools when a clip is selected) */}
-      <div className="ec-legacy ec-m-dock" style={css(`flex:none;border-top:1px solid ${HAIR};background:#0b0b0d`)}>
+      <div className="ec-legacy ec-m-dock" style={css(`flex:none;border-top:1px solid ${HAIR};background:#08080a`)}>
         <MobileTools
           onImport={() => setSheet('media')}
           onCutlord={() => setSheet('cut')}

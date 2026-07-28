@@ -53,7 +53,7 @@ const TL_MIN = 240
 const TL_MAX = 360
 
 const CLIP9x16 =
-  "width:42px;height:74px;flex:none;border-radius:7px;background:repeating-linear-gradient(45deg,#23252b 0,#23252b 8px,#1e2026 8px,#1e2026 16px);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:8px;color:#686E7B"
+  "width:42px;height:74px;flex:none;border-radius:7px;background:repeating-linear-gradient(45deg,#141419 0,#141419 8px,#101015 8px,#101015 16px);display:grid;place-items:center;font-family:'Geist Mono',monospace;font-size:8px;color:#6e6e85"
 
 // Small control glyphs drawn as SVG (not Unicode text) so they sit dead-centre in
 // the tiny square buttons — the +/−/list/grid characters never optically centre
@@ -102,10 +102,10 @@ const IcTabSticker = (): JSX.Element => <TabSvg><path d="M12 3l2.4 5 5.6.6-4.2 3
 
 // saveState → the design's status dot + label (green Saved / amber Saving / red failed).
 const SAVE_UI: Record<string, { c: string; t: string }> = {
-  idle: { c: '#46A57C', t: 'Saved' },
-  saved: { c: '#46A57C', t: 'Saved' },
-  saving: { c: '#D9A44A', t: 'Saving…' },
-  error: { c: '#D9686E', t: 'Save failed' }
+  idle: { c: '#7ed6a6', t: 'Saved' },
+  saved: { c: '#7ed6a6', t: 'Saved' },
+  saving: { c: '#e6b26a', t: 'Saving…' },
+  error: { c: '#ff9b9b', t: 'Save failed' }
 }
 
 // Persisted panel sizes for the drag handles below. Namespaced ec.nu.* so they
@@ -138,7 +138,7 @@ function TopBar(): JSX.Element {
 
   return (
     <div style={css(`display:flex;align-items:center;gap:12px;height:52px;padding:0 16px;border-bottom:1px solid ${HAIR};flex:none`)}>
-      <div onClick={goHome} style={css('display:flex;align-items:center;gap:7px;font-size:13px;color:#9BA0AC;padding:6px 10px;border-radius:8px;cursor:pointer')}>
+      <div onClick={goHome} style={css('display:flex;align-items:center;gap:7px;font-size:13px;color:#9a9aae;padding:6px 10px;border-radius:8px;cursor:pointer')}>
         <span style={css('font-size:14px')}>‹</span> Projects
       </div>
       <div style={css('width:1px;height:20px;background:rgba(255,255,255,.08)')} />
@@ -158,19 +158,19 @@ function TopBar(): JSX.Element {
         >
           {name}
         </div>
-        <div style={css('display:flex;align-items:center;gap:5px;font-size:11.5px;color:#686E7B')}>
+        <div style={css('display:flex;align-items:center;gap:5px;font-size:11.5px;color:#6e6e85')}>
           <div style={css(`width:6px;height:6px;border-radius:50%;background:${sv.c}`)} />{sv.t}
         </div>
       </div>
       <div style={css('flex:1')} />
       <div style={css('display:flex;align-items:center;gap:4px')}>
-        <div onClick={() => canUndo && undo()} style={css(`width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:14px;color:${canUndo ? '#9BA0AC' : '#4A4F5B'};cursor:${canUndo ? 'pointer' : 'default'}`)}>↶</div>
-        <div onClick={() => canRedo && redo()} style={css(`width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:14px;color:${canRedo ? '#9BA0AC' : '#4A4F5B'};cursor:${canRedo ? 'pointer' : 'default'}`)}>↷</div>
+        <div onClick={() => canUndo && undo()} style={css(`width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:14px;color:${canUndo ? '#9a9aae' : '#4a4a5c'};cursor:${canUndo ? 'pointer' : 'default'}`)}>↶</div>
+        <div onClick={() => canRedo && redo()} style={css(`width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:14px;color:${canRedo ? '#9a9aae' : '#4a4a5c'};cursor:${canRedo ? 'pointer' : 'default'}`)}>↷</div>
       </div>
       <div style={css('width:1px;height:20px;background:rgba(255,255,255,.08)')} />
-      <button onClick={importMedia} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:7px 13px;cursor:pointer')}>Import</button>
-      <div onClick={() => setShowSettings(true)} style={css('width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#9BA0AC;font-size:15px;cursor:pointer')}>···</div>
-      <button onClick={() => setShowExportModal(true)} style={css('background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 16px;cursor:pointer')}>Export</button>
+      <button onClick={importMedia} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:7px 13px;cursor:pointer')}>Import</button>
+      <div onClick={() => setShowSettings(true)} style={css('width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#9a9aae;font-size:15px;cursor:pointer')}>···</div>
+      <button onClick={() => setShowExportModal(true)} style={css('background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 16px;cursor:pointer')}>Export</button>
     </div>
   )
 }
@@ -203,7 +203,7 @@ function MediaThumb({ item, radius = 0 }: { item: LibraryItem; radius?: number }
         style={css(`width:100%;height:100%;object-fit:cover${rad}`)}
       />
     )
-  return <span style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>9:16</span>
+  return <span style={css("font-family:'Geist Mono',monospace;font-size:10px;color:#6e6e85")}>9:16</span>
 }
 
 // A library clip. CLICK appends it to the timeline (main/base lane) and DRAG drops
@@ -219,36 +219,36 @@ function MediaClip({ item, isBase, grid, onRemove, onAdd }: { item: LibraryItem;
 
   if (grid) {
     return (
-      <div draggable onDragStart={onDragStart} onClick={onClick} title={`${item.name} — click to add, or drag onto the timeline`} style={css(`background:#1E2026;border:1px solid ${isBase ? 'rgba(110,106,232,.55)' : 'rgba(255,255,255,.07)'};border-radius:11px;overflow:hidden;cursor:grab;${isBase ? 'box-shadow:0 0 0 3px rgba(110,106,232,.12);' : ''}`)}>
-        <div style={css('position:relative;aspect-ratio:9/16;max-height:150px;background:#15161a;display:grid;place-items:center')}>
+      <div draggable onDragStart={onDragStart} onClick={onClick} title={`${item.name} — click to add, or drag onto the timeline`} style={css(`background:#101015;border:1px solid ${isBase ? 'rgba(124,107,255,.55)' : 'rgba(255,255,255,.07)'};border-radius:11px;overflow:hidden;cursor:grab;${isBase ? 'box-shadow:0 0 0 3px rgba(124,107,255,.12);' : ''}`)}>
+        <div style={css('position:relative;aspect-ratio:9/16;max-height:150px;background:#0c0c10;display:grid;place-items:center')}>
           <MediaThumb item={item} />
-          <span style={css("position:absolute;right:5px;bottom:5px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#E9EAEE;background:rgba(13,14,17,.72);border-radius:5px;padding:2px 5px")}>{fmtDur(item.duration)}</span>
-          {isBase && <span style={css('position:absolute;left:5px;top:5px;font-size:9px;font-weight:600;color:#fff;background:rgba(110,106,232,.9);border-radius:5px;padding:2px 6px')}>Base</span>}
+          <span style={css("position:absolute;right:5px;bottom:5px;font-family:'Geist Mono',monospace;font-size:9px;color:#ededf2;background:rgba(8,8,10,.72);border-radius:5px;padding:2px 5px")}>{fmtDur(item.duration)}</span>
+          {isBase && <span style={css('position:absolute;left:5px;top:5px;font-size:9px;font-weight:600;color:#fff;background:rgba(124,107,255,.9);border-radius:5px;padding:2px 6px')}>Base</span>}
         </div>
         <div style={css('display:flex;align-items:center;gap:2px;padding:6px 6px 7px')}>
           <div style={css('flex:1;min-width:0;font-size:11px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')} title={item.name}>{item.name}</div>
-          <div onClick={(e) => { e.stopPropagation(); onRemove() }} style={css('color:#9BA0AC;font-size:13px;line-height:1;padding:0 3px;cursor:pointer')}>···</div>
+          <div onClick={(e) => { e.stopPropagation(); onRemove() }} style={css('color:#9a9aae;font-size:13px;line-height:1;padding:0 3px;cursor:pointer')}>···</div>
         </div>
       </div>
     )
   }
 
   const shell = isBase
-    ? 'background:#1E2026;border:1px solid rgba(110,106,232,.55);border-radius:12px;padding:10px;display:flex;gap:10px;box-shadow:0 0 0 3px rgba(110,106,232,.12);position:relative;cursor:grab'
-    : 'background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:10px;display:flex;gap:10px;cursor:grab'
+    ? 'background:#101015;border:1px solid rgba(124,107,255,.55);border-radius:12px;padding:10px;display:flex;gap:10px;box-shadow:0 0 0 3px rgba(124,107,255,.12);position:relative;cursor:grab'
+    : 'background:#101015;border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:10px;display:flex;gap:10px;cursor:grab'
   return (
     <div draggable onDragStart={onDragStart} onClick={onClick} title={`${item.name} — click to add, or drag onto the timeline`} style={css(shell)}>
       <div style={css(CLIP9x16)}><MediaThumb item={item} radius={7} /></div>
       <div style={css('flex:1;min-width:0;display:flex;flex-direction:column;gap:4px')}>
         <div style={css('font-size:12.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')} title={item.name}>{item.name}</div>
-        <div style={css("font-family:'IBM Plex Mono',monospace;font-size:10px;color:#686E7B")}>{meta}</div>
+        <div style={css("font-family:'Geist Mono',monospace;font-size:10px;color:#6e6e85")}>{meta}</div>
         {isBase && (
           <div style={css('display:flex;gap:6px;margin-top:2px')}>
-            <span style={css('font-size:10px;font-weight:600;color:#B7B5F4;background:rgba(110,106,232,.18);border-radius:5px;padding:2px 7px')}>Base clip</span>
+            <span style={css('font-size:10px;font-weight:600;color:#a99bff;background:rgba(124,107,255,.18);border-radius:5px;padding:2px 7px')}>Base clip</span>
           </div>
         )}
       </div>
-      <div onClick={(e) => { e.stopPropagation(); onRemove() }} style={css('color:#9BA0AC;font-size:14px;line-height:1;height:22px;padding:2px 5px;border-radius:6px;cursor:pointer')}>···</div>
+      <div onClick={(e) => { e.stopPropagation(); onRemove() }} style={css('color:#9a9aae;font-size:14px;line-height:1;height:22px;padding:2px 5px;border-radius:6px;cursor:pointer')}>···</div>
     </div>
   )
 }
@@ -269,12 +269,12 @@ const LEFT_TABS: { key: LeftTab; label: string; Icon: () => JSX.Element }[] = [
 function LeftDock({ width }: { width: number }): JSX.Element {
   const [tab, setTab] = useState<LeftTab>('media')
   return (
-    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#191B20;overflow:hidden`)}>
+    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#0c0c10;overflow:hidden`)}>
       <div style={css('display:flex;gap:2px;padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.06);flex:none;overflow-x:auto')}>
         {LEFT_TABS.map(({ key, label, Icon }) => {
           const on = key === tab
           return (
-            <button key={key} onClick={() => setTab(key)} title={label} style={css(`flex:none;width:52px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;border:none;border-radius:8px;cursor:pointer;font-family:inherit;appearance:none;-webkit-appearance:none;background:${on ? 'rgba(110,106,232,.16)' : 'transparent'};color:${on ? '#B7B5F4' : '#8890A0'}`)}>
+            <button key={key} onClick={() => setTab(key)} title={label} style={css(`flex:none;width:52px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;border:none;border-radius:8px;cursor:pointer;font-family:inherit;appearance:none;-webkit-appearance:none;background:${on ? 'rgba(124,107,255,.16)' : 'transparent'};color:${on ? '#a99bff' : '#8b8ba0'}`)}>
               <Icon />
               <span style={css('font-size:9.5px;font-weight:500')}>{label}</span>
             </button>
@@ -306,27 +306,27 @@ function MediaTab(): JSX.Element {
     <>
       <div style={css('padding:12px 16px 0;display:flex;flex-direction:column;gap:8px')}>
         <div style={css('display:flex;gap:8px')}>
-          <button onClick={addToLibrary} style={css('flex:1;background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer')}>＋ Import media</button>
+          <button onClick={addToLibrary} style={css('flex:1;background:rgba(124,107,255,.14);border:1px solid rgba(124,107,255,.3);color:#a99bff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 0;cursor:pointer')}>＋ Import media</button>
           {canSequence && (
-            <button onClick={addAllToTimeline} title="Add all to timeline — every video/image as one sequence, in order" aria-label="Add all to timeline" style={css('flex:none;width:38px;display:grid;place-items:center;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;border-radius:9px;padding:0;cursor:pointer;appearance:none;-webkit-appearance:none')}><IcAddAll /></button>
+            <button onClick={addAllToTimeline} title="Add all to timeline — every video/image as one sequence, in order" aria-label="Add all to timeline" style={css('flex:none;width:38px;display:grid;place-items:center;background:none;border:1px solid rgba(255,255,255,.12);color:#c9c9da;border-radius:9px;padding:0;cursor:pointer;appearance:none;-webkit-appearance:none')}><IcAddAll /></button>
           )}
         </div>
         <div style={css('display:flex;gap:8px;align-items:stretch')}>
-          <div style={css('flex:1;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:#1E2026;border:1px solid rgba(255,255,255,.06);border-radius:8px')}>
-            <div style={css('width:10px;height:10px;border:1.5px solid #686E7B;border-radius:50%;position:relative')}>
-              <div style={css('position:absolute;width:4px;height:1.5px;background:#686E7B;bottom:-2px;right:-2px;transform:rotate(45deg)')} />
+          <div style={css('flex:1;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:#101015;border:1px solid rgba(255,255,255,.06);border-radius:8px')}>
+            <div style={css('width:10px;height:10px;border:1.5px solid #6e6e85;border-radius:50%;position:relative')}>
+              <div style={css('position:absolute;width:4px;height:1.5px;background:#6e6e85;bottom:-2px;right:-2px;transform:rotate(45deg)')} />
             </div>
-            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter media" style={css('font-size:12px;color:#E9EAEE;flex:1;min-width:0;background:none;border:none;outline:none;font-family:inherit;padding:0;margin:0')} />
+            <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter media" style={css('font-size:12px;color:#ededf2;flex:1;min-width:0;background:none;border:none;outline:none;font-family:inherit;padding:0;margin:0')} />
           </div>
-          <div style={css('display:flex;gap:2px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:7px;padding:2px;flex:none')}>
-            <button onClick={() => setView('list')} title="List view" style={css(`width:24px;border:none;border-radius:5px;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;background:${view === 'list' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'list' ? '#B7B5F4' : '#9BA0AC'}`)}><IcList /></button>
-            <button onClick={() => setView('grid')} title="Grid view" style={css(`width:24px;border:none;border-radius:5px;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;background:${view === 'grid' ? 'rgba(110,106,232,.25)' : 'transparent'};color:${view === 'grid' ? '#B7B5F4' : '#9BA0AC'}`)}><IcGrid /></button>
+          <div style={css('display:flex;gap:2px;background:#101015;border:1px solid rgba(255,255,255,.07);border-radius:7px;padding:2px;flex:none')}>
+            <button onClick={() => setView('list')} title="List view" style={css(`width:24px;border:none;border-radius:5px;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;background:${view === 'list' ? 'rgba(124,107,255,.25)' : 'transparent'};color:${view === 'list' ? '#a99bff' : '#9a9aae'}`)}><IcList /></button>
+            <button onClick={() => setView('grid')} title="Grid view" style={css(`width:24px;border:none;border-radius:5px;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;background:${view === 'grid' ? 'rgba(124,107,255,.25)' : 'transparent'};color:${view === 'grid' ? '#a99bff' : '#9a9aae'}`)}><IcGrid /></button>
           </div>
         </div>
       </div>
       <div style={css('flex:1;min-height:0;padding:10px 12px 12px;overflow-y:auto')}>
         {items.length === 0 ? (
-          <div style={css('color:#686E7B;font-size:12px;text-align:center;padding:24px 8px')}>{library.length === 0 ? 'No media yet — tap ＋ Import media to add clips.' : 'No clips match your filter.'}</div>
+          <div style={css('color:#6e6e85;font-size:12px;text-align:center;padding:24px 8px')}>{library.length === 0 ? 'No media yet — tap ＋ Import media to add clips.' : 'No clips match your filter.'}</div>
         ) : view === 'grid' ? (
           <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:8px')}>
             {items.map((it) => (<MediaClip key={it.id} item={it} grid isBase={!!basePath && it.path === basePath} onRemove={() => removeFromLibrary(it.id)} />))}
@@ -337,7 +337,7 @@ function MediaTab(): JSX.Element {
           </div>
         )}
       </div>
-      <div style={css('flex:none;padding:12px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Drag a clip onto the timeline, or click to add it.</div>
+      <div style={css('flex:none;padding:12px 16px;font-size:11px;line-height:1.5;color:#6e6e85;border-top:1px solid rgba(255,255,255,.05)')}>Drag a clip onto the timeline, or click to add it.</div>
     </>
   )
 }
@@ -351,18 +351,18 @@ function AudioTab(): JSX.Element {
   return (
     <>
       <div style={css('padding:12px 16px 0')}>
-        <button onClick={addToLibrary} style={css('width:100%;background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 0;cursor:pointer')}>＋ Import audio</button>
+        <button onClick={addToLibrary} style={css('width:100%;background:rgba(124,107,255,.14);border:1px solid rgba(124,107,255,.3);color:#a99bff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 0;cursor:pointer')}>＋ Import audio</button>
       </div>
       <div style={css('flex:1;min-height:0;padding:10px 12px 12px;overflow-y:auto')}>
         {audio.length === 0 ? (
-          <div style={css('color:#686E7B;font-size:12px;text-align:center;padding:24px 8px;line-height:1.6')}>No audio yet. Import a music or voiceover file — it drops onto an audio track.</div>
+          <div style={css('color:#6e6e85;font-size:12px;text-align:center;padding:24px 8px;line-height:1.6')}>No audio yet. Import a music or voiceover file — it drops onto an audio track.</div>
         ) : (
           <div style={css('display:flex;flex-direction:column;gap:8px')}>
             {audio.map((it) => (<MediaClip key={it.id} item={it} isBase={!!basePath && it.path === basePath} onRemove={() => removeFromLibrary(it.id)} />))}
           </div>
         )}
       </div>
-      <div style={css('flex:none;padding:12px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Click an audio clip to add it on an audio track at the playhead.</div>
+      <div style={css('flex:none;padding:12px 16px;font-size:11px;line-height:1.5;color:#6e6e85;border-top:1px solid rgba(255,255,255,.05)')}>Click an audio clip to add it on an audio track at the playhead.</div>
     </>
   )
 }
@@ -374,8 +374,8 @@ function TextTab(): JSX.Element {
   const add = (): void => void addDocTexts([{ text: 'Your text', startS: playhead, endS: playhead + 3 }], true)
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 16px')}>
-      <button onClick={add} style={css('width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 18px rgba(110,106,232,.3)')}>＋ Add text</button>
-      <div style={css('margin-top:16px;color:#686E7B;font-size:12px;line-height:1.6;text-align:center')}>Adds a text layer at the playhead and opens it in the Edit tab. Drag it on the preview to position, or restyle it there.</div>
+      <button onClick={add} style={css('width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;cursor:pointer;box-shadow:0 6px 18px rgba(124,107,255,.3)')}>＋ Add text</button>
+      <div style={css('margin-top:16px;color:#6e6e85;font-size:12px;line-height:1.6;text-align:center')}>Adds a text layer at the playhead and opens it in the Edit tab. Drag it on the preview to position, or restyle it there.</div>
     </div>
   )
 }
@@ -389,18 +389,18 @@ function StickersTab(): JSX.Element {
   return (
     <>
       <div style={css('padding:12px 16px 0')}>
-        <button onClick={addToLibrary} style={css('width:100%;background:rgba(110,106,232,.14);border:1px solid rgba(110,106,232,.3);color:#B7B5F4;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 0;cursor:pointer')}>＋ Import image</button>
+        <button onClick={addToLibrary} style={css('width:100%;background:rgba(124,107,255,.14);border:1px solid rgba(124,107,255,.3);color:#a99bff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 0;cursor:pointer')}>＋ Import image</button>
       </div>
       <div style={css('flex:1;min-height:0;padding:10px 12px 12px;overflow-y:auto')}>
         {images.length === 0 ? (
-          <div style={css('color:#686E7B;font-size:12px;text-align:center;padding:24px 8px;line-height:1.6')}>No stickers yet. Import a PNG, logo or graphic — click it to drop it on an overlay track.</div>
+          <div style={css('color:#6e6e85;font-size:12px;text-align:center;padding:24px 8px;line-height:1.6')}>No stickers yet. Import a PNG, logo or graphic — click it to drop it on an overlay track.</div>
         ) : (
           <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:8px')}>
             {images.map((it) => (<MediaClip key={it.id} item={it} grid isBase={false} onAdd={() => addLibraryToOverlay(it.id)} onRemove={() => removeFromLibrary(it.id)} />))}
           </div>
         )}
       </div>
-      <div style={css('flex:none;padding:12px 16px;font-size:11px;line-height:1.5;color:#686E7B;border-top:1px solid rgba(255,255,255,.05)')}>Click a graphic to add it as an overlay at the playhead.</div>
+      <div style={css('flex:none;padding:12px 16px;font-size:11px;line-height:1.5;color:#6e6e85;border-top:1px solid rgba(255,255,255,.05)')}>Click a graphic to add it as an overlay at the playhead.</div>
     </>
   )
 }
@@ -414,15 +414,15 @@ function CaptionsTab(): JSX.Element {
   const jobActive = useStore((s) => s.job.active)
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 16px')}>
-      <div style={css('font-size:10px;font-weight:700;letter-spacing:.08em;color:#686E7B;text-transform:uppercase;margin-bottom:10px')}>Auto captions</div>
-      <button onClick={() => void generateCaptions()} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;box-shadow:0 6px 18px rgba(110,106,232,.3);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>Generate captions</button>
+      <div style={css('font-size:10px;font-weight:700;letter-spacing:.08em;color:#6e6e85;text-transform:uppercase;margin-bottom:10px')}>Auto captions</div>
+      <button onClick={() => void generateCaptions()} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;box-shadow:0 6px 18px rgba(124,107,255,.3);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>Generate captions</button>
       {capCount > 0 && (
         <div style={css('margin-top:10px;display:flex;align-items:center;gap:8px')}>
-          <div style={css('flex:1;font-size:12px;color:#7FCBA8')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>
-          <button onClick={clearCaptions} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.12);color:#C6C9D2;font-family:inherit;font-size:12px;border-radius:8px;padding:6px 12px;cursor:pointer')}>Clear</button>
+          <div style={css('flex:1;font-size:12px;color:#9fdfbe')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>
+          <button onClick={clearCaptions} style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.12);color:#c9c9da;font-family:inherit;font-size:12px;border-radius:8px;padding:6px 12px;cursor:pointer')}>Clear</button>
         </div>
       )}
-      <div style={css('margin-top:16px;font-size:11.5px;color:#686E7B;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle clips on a text track. Click any line to restyle it in the Edit tab.' : 'Run Find Retakes & Silence (or Transcribe) first to get a transcript, then generate captions.'}</div>
+      <div style={css('margin-top:16px;font-size:11.5px;color:#6e6e85;line-height:1.6')}>{hasTranscript ? 'Turns your transcript into subtitle clips on a text track. Click any line to restyle it in the Edit tab.' : 'Run Find Retakes & Silence (or Transcribe) first to get a transcript, then generate captions.'}</div>
     </div>
   )
 }
@@ -431,9 +431,9 @@ function ComingSoon({ title, note, Icon }: { title: string; note: string; Icon: 
   return (
     <div style={css('flex:1;min-height:0;display:grid;place-items:center;padding:24px;text-align:center')}>
       <div>
-        <div style={css('width:44px;height:44px;border-radius:12px;background:#1E2026;display:grid;place-items:center;margin:0 auto 12px;color:#6b7280')}><Icon /></div>
-        <div style={css('font-size:13px;font-weight:600;color:#C6C9D2')}>{title}</div>
-        <div style={css('font-size:12px;color:#686E7B;line-height:1.6;margin-top:6px;max-width:200px')}>{note}</div>
+        <div style={css('width:44px;height:44px;border-radius:12px;background:#101015;display:grid;place-items:center;margin:0 auto 12px;color:#6e6e85')}><Icon /></div>
+        <div style={css('font-size:13px;font-weight:600;color:#c9c9da')}>{title}</div>
+        <div style={css('font-size:12px;color:#6e6e85;line-height:1.6;margin-top:6px;max-width:200px')}>{note}</div>
       </div>
     </div>
   )
@@ -459,13 +459,13 @@ function AiPanel({ width }: { width: number }): JSX.Element {
     prevSel.current = selId
   }, [selId])
   return (
-    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#191B20;overflow:hidden`)}>
+    <div style={css(`width:${width}px;flex:none;min-width:0;display:flex;flex-direction:column;background:#0c0c10;overflow:hidden`)}>
       <div style={css(`display:flex;padding:0 6px;border-bottom:1px solid ${HAIR};flex:none;overflow-x:auto`)}>
         {AI_TABS.map((t) =>
           t === tab ? (
-            <div key={t} style={css('flex:none;white-space:nowrap;padding:13px 10px 11px;font-size:12.5px;font-weight:600;color:#E9EAEE;border-bottom:2px solid #6E6AE8;margin-bottom:-1px')}>{t}</div>
+            <div key={t} style={css('flex:none;white-space:nowrap;padding:13px 10px 11px;font-size:12.5px;font-weight:600;color:#ededf2;border-bottom:2px solid #7c6bff;margin-bottom:-1px')}>{t}</div>
           ) : (
-            <div key={t} onClick={() => setTab(t)} style={css('flex:none;white-space:nowrap;padding:13px 10px 11px;font-size:12.5px;color:#9BA0AC;cursor:pointer')}>{t}</div>
+            <div key={t} onClick={() => setTab(t)} style={css('flex:none;white-space:nowrap;padding:13px 10px 11px;font-size:12.5px;color:#9a9aae;cursor:pointer')}>{t}</div>
           )
         )}
       </div>
@@ -481,7 +481,7 @@ function AiPanel({ width }: { width: number }): JSX.Element {
         </div>
       ) : (
         <div style={css('flex:1;display:grid;place-items:center;padding:24px;text-align:center')}>
-          <div style={css('font-size:12.5px;color:#686E7B;line-height:1.6')}>{tab} tools are coming to the new editor.</div>
+          <div style={css('font-size:12.5px;color:#6e6e85;line-height:1.6')}>{tab} tools are coming to the new editor.</div>
         </div>
       )}
     </div>
@@ -506,9 +506,9 @@ function TimelineZoom(): JSX.Element | null {
     if (e) e.setZoom(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, e.sessionState.zoom * factor)))
   }
   const btn = (dis: boolean): string =>
-    `width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#1E2026;color:${dis ? '#4A4F5B' : '#C6C9D2'};font-size:16px;line-height:1;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;cursor:${dis ? 'default' : 'pointer'};font-family:inherit`
+    `width:28px;height:28px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:#101015;color:${dis ? '#4a4a5c' : '#c9c9da'};font-size:16px;line-height:1;padding:0;appearance:none;-webkit-appearance:none;display:grid;place-items:center;cursor:${dis ? 'default' : 'pointer'};font-family:inherit`
   return (
-    <div style={css('position:absolute;bottom:10px;right:14px;z-index:20;display:flex;align-items:center;gap:5px;background:rgba(20,21,25,.85);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:4px 5px')}>
+    <div style={css('position:absolute;bottom:10px;right:14px;z-index:20;display:flex;align-items:center;gap:5px;background:rgba(16,16,21,.85);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:4px 5px')}>
       <button title="Zoom out" onClick={step(1 / 1.4)} disabled={atMin} style={css(btn(atMin))}><IcMinus /></button>
       <button title="Zoom in" onClick={step(1.4)} disabled={atMax} style={css(btn(atMax))}><IcPlus /></button>
     </div>
@@ -684,7 +684,7 @@ export default function Editor(): JSX.Element {
   }
 
   return (
-    <div ref={rootRef} style={css('width:100%;height:100%;background:#17181C;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-editor">
+    <div ref={rootRef} style={css('width:100%;height:100%;background:#08080a;display:flex;flex-direction:column;overflow:hidden')} className="ec-newui ec-editor">
       <TopBar />
       <div ref={middleRef} style={css('display:flex;flex:1;min-height:0;min-width:0')}>
         <LeftDock width={leftW} />
@@ -693,7 +693,7 @@ export default function Editor(): JSX.Element {
             app's border-box model (the .ec-newui content-box reset would leak in
             and break the legacy layout). It reads the SAME shared timeline engine
             the timeline below publishes, so playback reflects the real edit. */}
-        <div className="ec-legacy" style={css('flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:#17181C')}>
+        <div className="ec-legacy" style={css('flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:#08080a')}>
           <VideoPreview />
         </div>
         <div className="ec-divv" onPointerDown={(e) => startColDrag(e, 'right')} title="Drag to resize" />

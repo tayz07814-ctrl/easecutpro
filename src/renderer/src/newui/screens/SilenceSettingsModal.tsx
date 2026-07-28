@@ -8,9 +8,9 @@ import type { VadSilenceSettings } from '@shared/vadsilence'
 // matching every preset, and the highlight flips to "Custom" automatically
 // (detectPreset). No separate presets-vs-custom views.
 
-const FOOT_RESET = 'font-size:12.5px;color:#9BA0AC;cursor:pointer;padding:7px 10px;border-radius:8px'
-const FOOT_CANCEL = 'font-size:12.5px;color:#C6C9D2;cursor:pointer;padding:8px 14px;border-radius:9px'
-const FOOT_APPLY = 'background:#6E6AE8;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 18px;cursor:pointer;margin-left:8px'
+const FOOT_RESET = 'font-size:12.5px;color:#9a9aae;cursor:pointer;padding:7px 10px;border-radius:8px'
+const FOOT_CANCEL = 'font-size:12.5px;color:#c9c9da;cursor:pointer;padding:8px 14px;border-radius:9px'
+const FOOT_APPLY = 'background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 18px;cursor:pointer;margin-left:8px'
 
 // Honest framing for the VAD threshold: it is NOT a room-noise dial — raising it
 // makes the detector stricter about what counts as speech, so soft-spoken words
@@ -25,20 +25,20 @@ function Slider({ label, value, min, max, step, fmt, lo, hi, onChange }: {
   const pct = `${Math.max(0, Math.min(1, (value - min) / (max - min))) * 100}%`
   return (
     <div>
-      <div style={css('display:flex;justify-content:space-between;font-size:12.5px')}><span style={css('color:#E9EAEE;font-weight:550')}>{label}</span><span style={css("font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#B7B5F4")}>{fmt(value)}</span></div>
-      <div style={css('height:4px;border-radius:2px;background:#2A2D36;position:relative;margin-top:10px')}>
-        <div style={css(`width:${pct};height:100%;border-radius:2px;background:#6E6AE8`)} />
-        <div style={css(`position:absolute;left:${pct};top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#E9EAEE;box-shadow:0 1px 4px rgba(0,0,0,.4)`)} />
+      <div style={css('display:flex;justify-content:space-between;font-size:12.5px')}><span style={css('color:#ededf2;font-weight:550')}>{label}</span><span style={css("font-family:'Geist Mono',monospace;font-size:11.5px;color:#a99bff")}>{fmt(value)}</span></div>
+      <div style={css('height:4px;border-radius:2px;background:#22222b;position:relative;margin-top:10px')}>
+        <div style={css(`width:${pct};height:100%;border-radius:2px;background:#7c6bff`)} />
+        <div style={css(`position:absolute;left:${pct};top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#ededf2;box-shadow:0 1px 4px rgba(0,0,0,.4)`)} />
         <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))}
           style={css('position:absolute;left:0;right:0;top:-8px;bottom:-8px;width:100%;height:auto;margin:0;opacity:0;cursor:pointer')} />
       </div>
-      <div style={css('display:flex;justify-content:space-between;font-size:10.5px;color:#565C68;margin-top:6px')}><span>{lo}</span><span>{hi}</span></div>
+      <div style={css('display:flex;justify-content:space-between;font-size:10.5px;color:#55556a;margin-top:6px')}><span>{lo}</span><span>{hi}</span></div>
     </div>
   )
 }
 
-const CHIP = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid rgba(255,255,255,.12);color:#9BA0AC;background:transparent;font-family:inherit'
-const CHIP_ON = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid #6E6AE8;color:#B7B5F4;background:rgba(110,106,232,.12);font-weight:600;font-family:inherit'
+const CHIP = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid rgba(255,255,255,.12);color:#9a9aae;background:transparent;font-family:inherit'
+const CHIP_ON = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid #7c6bff;color:#a99bff;background:rgba(124,107,255,.12);font-weight:600;font-family:inherit'
 
 export default function SilenceSettingsModal(): JSX.Element | null {
   const sil = useSilence()
@@ -49,14 +49,14 @@ export default function SilenceSettingsModal(): JSX.Element | null {
   const activePreset = sil.presets.find((p) => p.id === active)
 
   return (
-    <div onClick={sil.close} style={css('position:fixed;inset:0;background:rgba(10,11,14,.55);display:grid;place-items:center;z-index:1000')}>
-      <div onClick={(e) => e.stopPropagation()} style={css('width:440px;max-width:92vw;background:#1E2026;border:1px solid rgba(255,255,255,.1);border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.6);padding:22px;max-height:90vh;overflow-y:auto')}>
+    <div onClick={sil.close} style={css('position:fixed;inset:0;background:rgba(8,8,10,.55);display:grid;place-items:center;z-index:1000')}>
+      <div onClick={(e) => e.stopPropagation()} style={css('width:440px;max-width:92vw;background:#101015;border:1px solid rgba(255,255,255,.1);border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.6);padding:22px;max-height:90vh;overflow-y:auto')}>
         <div style={css('display:flex;align-items:flex-start;justify-content:space-between')}>
           <div>
             <div style={css('font-size:16px;font-weight:650')}>Silence Settings</div>
-            <div style={css('font-size:12.5px;color:#9BA0AC;margin-top:5px;line-height:1.5')}>Controls silence detection only — retake detection is unaffected.</div>
+            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>Controls silence detection only — retake detection is unaffected.</div>
           </div>
-          <div onClick={sil.close} style={css('color:#9BA0AC;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
+          <div onClick={sil.close} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
         </div>
 
         {/* Preset chips — small; picking one loads its values into the sliders below. */}
@@ -66,7 +66,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
           ))}
           <span style={css(active === 'custom' ? CHIP_ON + ';cursor:default' : CHIP + ';cursor:default;opacity:.55')}>Custom</span>
         </div>
-        <div style={css('font-size:11px;color:#7E8393;margin-top:8px;line-height:1.45;min-height:15px')}>
+        <div style={css('font-size:11px;color:#71718a;margin-top:8px;line-height:1.45;min-height:15px')}>
           {activePreset ? activePreset.blurb : 'Your own values — move any slider; pick a chip to go back to a preset.'}
         </div>
 
@@ -76,12 +76,12 @@ export default function SilenceSettingsModal(): JSX.Element | null {
           <Slider label="Pause to keep at each cut" value={sil.s.padAfterS} min={0} max={0.4} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · gapless" hi="0.4s · gentle" onChange={(v) => set('padAfterS', v)} />
           <Slider label="Silence detection strictness" value={sil.s.speechThreshold} min={0.5} max={0.9} step={0.01} fmt={(v) => `${strictnessLabel(v)} · ${Math.round(v * 100)}%`} lo="gentle · keeps soft speech" hi="strict · may clip soft speech" onChange={(v) => set('speechThreshold', v)} />
           <div style={css('display:flex;align-items:flex-start;gap:9px')}>
-            <div onClick={() => set('removeBreaths', !sil.s.removeBreaths)} style={css(sil.s.removeBreaths ? 'width:32px;height:18px;border-radius:9px;background:#6E6AE8;position:relative;flex:none;cursor:pointer;margin-top:1px' : 'width:32px;height:18px;border-radius:9px;background:#3A3E48;position:relative;flex:none;cursor:pointer;margin-top:1px')}>
-              <div style={css(sil.s.removeBreaths ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
+            <div onClick={() => set('removeBreaths', !sil.s.removeBreaths)} style={css(sil.s.removeBreaths ? 'width:32px;height:18px;border-radius:9px;background:#7c6bff;position:relative;flex:none;cursor:pointer;margin-top:1px' : 'width:32px;height:18px;border-radius:9px;background:#2a2a34;position:relative;flex:none;cursor:pointer;margin-top:1px')}>
+              <div style={css(sil.s.removeBreaths ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
             </div>
             <div style={css('flex:1;min-width:0')}>
-              <div style={css('font-size:12px;color:#C6C9D2')}>Remove breaths</div>
-              <div style={css('font-size:10.5px;color:#7E8393;margin-top:2px;line-height:1.4')}>Also cuts audible breaths between words. The most aggressive option — leave off if cuts feel clipped.</div>
+              <div style={css('font-size:12px;color:#c9c9da')}>Remove breaths</div>
+              <div style={css('font-size:10.5px;color:#71718a;margin-top:2px;line-height:1.4')}>Also cuts audible breaths between words. The most aggressive option — leave off if cuts feel clipped.</div>
             </div>
           </div>
         </div>
@@ -89,12 +89,12 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         {/* Seam blend ("overlap") — a global render setting (export + preview). */}
         <div style={css('margin-top:18px;border-top:1px solid rgba(255,255,255,.07);padding-top:16px;display:flex;flex-direction:column;gap:14px')}>
           <div style={css('display:flex;align-items:flex-start;gap:11px')}>
-            <div onClick={() => sil.setSeamFade({ enabled: !sil.seamFade.enabled })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${sil.seamFade.enabled ? '#6E6AE8' : '#3A3E48'}`)}>
-              <div style={css(sil.seamFade.enabled ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9BA0AC')} />
+            <div onClick={() => sil.setSeamFade({ enabled: !sil.seamFade.enabled })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${sil.seamFade.enabled ? '#7c6bff' : '#2a2a34'}`)}>
+              <div style={css(sil.seamFade.enabled ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
             </div>
             <div style={css('flex:1;min-width:0')}>
-              <div style={css('font-size:12.5px;color:#E9EAEE;font-weight:550')}>Blend audio at cuts (overlap)</div>
-              <div style={css('font-size:11px;color:#9BA0AC;margin-top:3px;line-height:1.45')}>Crossfades the join: the outgoing audio tails off under the incoming words. Marked with ◢ on the timeline. Turn off for hard cuts.</div>
+              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Blend audio at cuts (overlap)</div>
+              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Crossfades the join: the outgoing audio tails off under the incoming words. Marked with ◢ on the timeline. Turn off for hard cuts.</div>
             </div>
           </div>
           {sil.seamFade.enabled && (

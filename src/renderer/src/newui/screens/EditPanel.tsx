@@ -22,8 +22,8 @@ import type { Clip as DocClip, Track, TextContent } from '@shared/timeline/types
 const clampN = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
 const mnum = (v: unknown, d: number): number => (typeof v === 'number' ? v : d)
 
-const LABEL = 'font-size:10px;font-weight:700;letter-spacing:.07em;color:#686E7B;text-transform:uppercase;margin:18px 0 4px'
-const FIELD = 'width:56px;background:#1E2026;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:5px 7px;color:#E9EAEE;font-size:12px;font-family:inherit;text-align:right;outline:none'
+const LABEL = 'font-size:10px;font-weight:700;letter-spacing:.07em;color:#6e6e85;text-transform:uppercase;margin:18px 0 4px'
+const FIELD = 'width:56px;background:#101015;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:5px 7px;color:#ededf2;font-size:12px;font-family:inherit;text-align:right;outline:none'
 
 // Slider + numeric box + unit. `value`/`min`/`max` are in DISPLAY units (e.g.
 // percent); onChange returns the display number.
@@ -32,12 +32,12 @@ function Row({ label, value, min, max, step = 1, unit = '', onChange }: {
 }): JSX.Element {
   return (
     <div style={css('display:flex;align-items:center;gap:10px;margin-top:11px')}>
-      <div style={css('width:46px;flex:none;font-size:11.5px;color:#9BA0AC')}>{label}</div>
+      <div style={css('width:46px;flex:none;font-size:11.5px;color:#9a9aae')}>{label}</div>
       <input type="range" min={min} max={max} step={step} value={value}
-        onChange={(e) => onChange(clampN(Number(e.target.value), min, max))} style={css('flex:1;min-width:0;accent-color:#6E6AE8')} />
+        onChange={(e) => onChange(clampN(Number(e.target.value), min, max))} style={css('flex:1;min-width:0;accent-color:#7c6bff')} />
       <input type="number" min={min} max={max} step={step} value={value}
         onChange={(e) => onChange(clampN(Number(e.target.value), min, max))} style={css(FIELD)} />
-      {unit && <span style={css('width:12px;flex:none;font-size:11px;color:#686E7B')}>{unit}</span>}
+      {unit && <span style={css('width:12px;flex:none;font-size:11px;color:#6e6e85')}>{unit}</span>}
     </div>
   )
 }
@@ -48,14 +48,14 @@ function PairRow({ label, ax, ay, min, max, step = 1, unit = '', onX, onY }: {
 }): JSX.Element {
   const box = (v: number, on: (n: number) => void, tag: string): JSX.Element => (
     <div style={css('display:flex;align-items:center;gap:5px')}>
-      <span style={css('font-size:11px;color:#686E7B')}>{tag}</span>
+      <span style={css('font-size:11px;color:#6e6e85')}>{tag}</span>
       <input type="number" min={min} max={max} step={step} value={v} onChange={(e) => on(clampN(Number(e.target.value), min, max))} style={css(FIELD)} />
-      {unit && <span style={css('font-size:11px;color:#686E7B')}>{unit}</span>}
+      {unit && <span style={css('font-size:11px;color:#6e6e85')}>{unit}</span>}
     </div>
   )
   return (
     <div style={css('display:flex;align-items:center;gap:12px;margin-top:11px')}>
-      <div style={css('width:46px;flex:none;font-size:11.5px;color:#9BA0AC')}>{label}</div>
+      <div style={css('width:46px;flex:none;font-size:11.5px;color:#9a9aae')}>{label}</div>
       {box(ax, onX, 'X')}
       {box(ay, onY, 'Y')}
     </div>
@@ -64,14 +64,14 @@ function PairRow({ label, ax, ay, min, max, step = 1, unit = '', onX, onY }: {
 
 function Chip({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }): JSX.Element {
   return (
-    <button onClick={onClick} style={css(`flex:1;text-align:center;border-radius:8px;padding:7px 0;font-family:inherit;font-size:12px;cursor:pointer;border:1px solid ${on ? '#6E6AE8' : 'rgba(255,255,255,.08)'};background:${on ? 'rgba(110,106,232,.16)' : '#1E2026'};color:${on ? '#B7B5F4' : '#C6C9D2'}`)}>{label}</button>
+    <button onClick={onClick} style={css(`flex:1;text-align:center;border-radius:8px;padding:7px 0;font-family:inherit;font-size:12px;cursor:pointer;border:1px solid ${on ? '#7c6bff' : 'rgba(255,255,255,.08)'};background:${on ? 'rgba(124,107,255,.16)' : '#101015'};color:${on ? '#a99bff' : '#c9c9da'}`)}>{label}</button>
   )
 }
 
 function Toggle({ on, onClick }: { on: boolean; onClick: () => void }): JSX.Element {
   return (
-    <div onClick={onClick} style={css(`width:32px;height:18px;border-radius:9px;flex:none;cursor:pointer;position:relative;background:${on ? '#6E6AE8' : '#3A3E48'}`)}>
-      <div style={css(`position:absolute;top:2px;width:14px;height:14px;border-radius:50%;background:${on ? '#fff' : '#9BA0AC'};${on ? 'right:2px' : 'left:2px'}`)} />
+    <div onClick={onClick} style={css(`width:32px;height:18px;border-radius:9px;flex:none;cursor:pointer;position:relative;background:${on ? '#7c6bff' : '#2a2a34'}`)}>
+      <div style={css(`position:absolute;top:2px;width:14px;height:14px;border-radius:50%;background:${on ? '#fff' : '#9a9aae'};${on ? 'right:2px' : 'left:2px'}`)} />
     </div>
   )
 }
@@ -84,8 +84,8 @@ function Section({ title, open, onToggleOpen, enabled, onToggleEnabled, children
     <div style={css('margin-top:14px;border-top:1px solid rgba(255,255,255,.06);padding-top:12px')}>
       <div style={css('display:flex;align-items:center;gap:9px')}>
         {onToggleEnabled && <Toggle on={!!enabled} onClick={onToggleEnabled} />}
-        <div onClick={onToggleOpen} style={css('flex:1;font-size:12.5px;font-weight:600;color:#E9EAEE;cursor:pointer')}>{title}</div>
-        <div onClick={onToggleOpen} style={css('font-size:11px;color:#686E7B;cursor:pointer')}>{open ? '▾' : '▸'}</div>
+        <div onClick={onToggleOpen} style={css('flex:1;font-size:12.5px;font-weight:600;color:#ededf2;cursor:pointer')}>{title}</div>
+        <div onClick={onToggleOpen} style={css('font-size:11px;color:#6e6e85;cursor:pointer')}>{open ? '▾' : '▸'}</div>
       </div>
       {open && <div style={css('margin-top:4px')}>{children}</div>}
     </div>
@@ -95,7 +95,7 @@ function Section({ title, open, onToggleOpen, enabled, onToggleEnabled, children
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }): JSX.Element {
   return (
     <div style={css('display:flex;align-items:center;gap:10px;margin-top:11px')}>
-      <div style={css('flex:1;font-size:11.5px;color:#9BA0AC')}>{label}</div>
+      <div style={css('flex:1;font-size:11.5px;color:#9a9aae')}>{label}</div>
       <input type="color" value={value} onChange={(e) => onChange(e.target.value)} style={css('width:38px;height:26px;border:none;background:none;padding:0;cursor:pointer')} />
     </div>
   )
@@ -104,7 +104,7 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 function EmptyHint(): JSX.Element {
   return (
     <div style={css('flex:1;min-height:0;display:grid;place-items:center;padding:24px;text-align:center')}>
-      <div style={css('font-size:12.5px;color:#686E7B;line-height:1.6;max-width:210px')}>Select a clip, audio, text or overlay on the timeline or preview to edit its settings here.</div>
+      <div style={css('font-size:12.5px;color:#6e6e85;line-height:1.6;max-width:210px')}>Select a clip, audio, text or overlay on the timeline or preview to edit its settings here.</div>
     </div>
   )
 }
@@ -124,8 +124,8 @@ function ClipControls({ clip, isMain }: { clip: DocClip; isMain: boolean }): JSX
 
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:2px 16px 20px')}>
-      <div style={css('font-size:13px;font-weight:650;color:#E9EAEE;margin-top:14px')}>{isAudio ? 'Audio clip' : isMain ? 'Video clip' : 'Overlay'}</div>
-      <div style={css('font-size:11px;color:#686E7B;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap')}>{clip.name}</div>
+      <div style={css('font-size:13px;font-weight:650;color:#ededf2;margin-top:14px')}>{isAudio ? 'Audio clip' : isMain ? 'Video clip' : 'Overlay'}</div>
+      <div style={css('font-size:11px;color:#6e6e85;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap')}>{clip.name}</div>
 
       {!isAudio && (
         <>
@@ -154,8 +154,8 @@ function ClipControls({ clip, isMain }: { clip: DocClip; isMain: boolean }): JSX
       )}
 
       <div style={css('display:flex;gap:8px;margin-top:18px')}>
-        <button onClick={() => getSharedEngine()?.splitAtPlayhead()} style={css('flex:1;background:#1E2026;border:1px solid rgba(255,255,255,.1);color:#C6C9D2;font-family:inherit;font-size:12px;border-radius:9px;padding:8px 0;cursor:pointer')}>Split</button>
-        <button onClick={() => getSharedEngine()?.deleteSelection(isMain)} style={css('flex:1;background:none;border:1px solid rgba(217,104,110,.4);color:#D9868B;font-family:inherit;font-size:12px;border-radius:9px;padding:8px 0;cursor:pointer')}>Delete</button>
+        <button onClick={() => getSharedEngine()?.splitAtPlayhead()} style={css('flex:1;background:#101015;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12px;border-radius:9px;padding:8px 0;cursor:pointer')}>Split</button>
+        <button onClick={() => getSharedEngine()?.deleteSelection(isMain)} style={css('flex:1;background:none;border:1px solid rgba(255,155,155,.4);color:#ff9b9b;font-family:inherit;font-size:12px;border-radius:9px;padding:8px 0;cursor:pointer')}>Delete</button>
       </div>
     </div>
   )
@@ -174,10 +174,10 @@ function DocTextControls({ clip }: { clip: DocClip }): JSX.Element {
 
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:2px 16px 20px')}>
-      <div style={css('font-size:13px;font-weight:650;color:#E9EAEE;margin-top:14px')}>{isCaption ? 'Caption' : 'Text'}</div>
+      <div style={css('font-size:13px;font-weight:650;color:#ededf2;margin-top:14px')}>{isCaption ? 'Caption' : 'Text'}</div>
 
       <div style={css(LABEL)}>Content</div>
-      <textarea value={t.text} onChange={(e) => setC({ text: e.target.value })} rows={2} style={css('width:100%;box-sizing:border-box;resize:none;background:#1E2026;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;color:#E9EAEE;font-size:12.5px;font-family:inherit;outline:none;margin-top:4px')} />
+      <textarea value={t.text} onChange={(e) => setC({ text: e.target.value })} rows={2} style={css('width:100%;box-sizing:border-box;resize:none;background:#101015;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:8px 10px;color:#ededf2;font-size:12.5px;font-family:inherit;outline:none;margin-top:4px')} />
 
       <div style={css('display:flex;gap:8px;margin-top:12px')}>
         <Chip label="Bold" on={t.bold} onClick={() => setC({ bold: !t.bold })} />
@@ -206,7 +206,7 @@ function DocTextControls({ clip }: { clip: DocClip }): JSX.Element {
         <Row label="Padding" value={Math.round(bg.padding * 100)} min={0} max={100} unit="" onChange={(v) => setC({ background: { ...bg, padding: v / 100 } })} />
       </Section>
 
-      <button onClick={() => getSharedEngine()?.deleteSelection(false)} style={css('width:100%;margin-top:18px;background:none;border:1px solid rgba(217,104,110,.4);color:#D9868B;font-family:inherit;font-size:12px;border-radius:9px;padding:8px 0;cursor:pointer')}>Delete text</button>
+      <button onClick={() => getSharedEngine()?.deleteSelection(false)} style={css('width:100%;margin-top:18px;background:none;border:1px solid rgba(255,155,155,.4);color:#ff9b9b;font-family:inherit;font-size:12px;border-radius:9px;padding:8px 0;cursor:pointer')}>Delete text</button>
     </div>
   )
 }

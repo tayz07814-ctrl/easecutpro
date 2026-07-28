@@ -8,49 +8,46 @@
    from each element's inline style (see css.ts); tokens below are the
    documented 1e palette, kept for Stage C migration and reference. */
 
-/* Self-hosted design faces (loaded only when a .ec-newui element renders). */
+/* Self-hosted design faces (loaded only when a .ec-newui element renders).
+   Geist + Geist Mono (variable) are the "Easecut Redesign" typography. */
 @font-face {
-  font-family: 'Instrument Sans';
+  font-family: 'Geist';
   font-style: normal;
-  font-weight: 400 700;
+  font-weight: 100 900;
   font-display: swap;
-  src: url('./fonts/InstrumentSans.woff2') format('woff2');
+  src: url('./fonts/Geist-Variable.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'IBM Plex Mono';
+  font-family: 'Geist Mono';
   font-style: normal;
-  font-weight: 400;
+  font-weight: 100 900;
   font-display: swap;
-  src: url('./fonts/IBMPlexMono-400.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('./fonts/IBMPlexMono-500.woff2') format('woff2');
+  src: url('./fonts/GeistMono-Variable.woff2') format('woff2');
 }
 
 .ec-newui {
-  /* palette (screen 1e) */
-  --ec-bg: #17181c;
-  --ec-panel: #191b20;
-  --ec-surface: #1e2026;
-  --ec-surface-2: #262932;
-  --ec-accent: #6e6ae8;
-  --ec-accent-hover: #7b77ee;
-  --ec-accent-light: #b7b5f4;
-  --ec-accent-link: #8b88f0;
-  --ec-info: #5b9bd9;
-  --ec-success: #46a57c;
-  --ec-warn: #d9a44a;
-  --ec-cut: #d9686e;
-  --ec-cut-light: #d9868b;
-  --ec-text: #e9eaee;
-  --ec-text-2: #9ba0ac;
-  --ec-text-3: #686e7b;
-  --ec-sans: 'Instrument Sans', system-ui, sans-serif;
-  --ec-mono: 'IBM Plex Mono', monospace;
+  /* palette ("Easecut Redesign" — premium dark) */
+  --ec-bg: #08080a;
+  --ec-panel: #0c0c10;
+  --ec-drawer: #0a0a0d;
+  --ec-surface: #101015;
+  --ec-surface-2: #191920;
+  --ec-surface-3: #22222b;
+  --ec-accent: #7c6bff;
+  --ec-accent-hover: #8e7fff;
+  --ec-accent-light: #a99bff;
+  --ec-accent-link: #a99bff;
+  --ec-accent-bright: #c4baff;
+  --ec-info: #6bb8ff;
+  --ec-success: #7ed6a6;
+  --ec-warn: #e6b26a;
+  --ec-cut: #ff9b9b;
+  --ec-cut-light: #ff9b9b;
+  --ec-text: #ededf2;
+  --ec-text-2: #9a9aae;
+  --ec-text-3: #6e6e85;
+  --ec-sans: 'Geist', system-ui, sans-serif;
+  --ec-mono: 'Geist Mono', monospace;
 
   font-family: var(--ec-sans);
   color: var(--ec-text);
@@ -130,7 +127,7 @@
 }
 .ec-newui .ec-divv:hover::after,
 .ec-newui .ec-divv:active::after {
-  background: #6e6ae8;
+  background: #7c6bff;
   width: 2px;
 }
 .ec-newui .ec-divh {
@@ -153,7 +150,7 @@
 }
 .ec-newui .ec-divh:hover::after,
 .ec-newui .ec-divh:active::after {
-  background: #6e6ae8;
+  background: #7c6bff;
   height: 2px;
 }
 
@@ -165,7 +162,7 @@
 .ec-editor .preview,
 .ec-editor .video-wrap,
 .ec-editor .stage {
-  background: #17181c;
+  background: #08080a;
 }
 
 /* Preview transport: if the preview column is ever narrow, let the controls wrap
