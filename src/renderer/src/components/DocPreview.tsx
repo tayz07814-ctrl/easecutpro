@@ -90,6 +90,10 @@ interface Seg {
   ovY?: number
   gain?: number
   speed: number
+  /** A still image sitting on the MAIN lane (a base segment between video clips):
+   *  it has no frames and no audio, so it's drawn to the canvas as an <img> and
+   *  kept OUT of the <video>/seam machinery + contributes silence to the audio. */
+  isImage?: boolean
 }
 
 // Anti-click seam MICRO-CROSSFADE for the LIVE preview. A cut splices two non-
@@ -152,14 +156,17 @@ function docSegments(doc: TimelineDocument): { segs: Seg[]; missing: number } {
       len: Math.max(0.02, framesToSeconds(c.duration, doc.timebase)),
       srcW: c.srcW,
       srcH: c.srcH,
-      muted: c.audioDetached === true || c.muted === true,
+      // An image has no audio; mark it muted so the seamless audio engine keeps it
+      // as a timed-silent slot (no decode failure, elements stay muted → no echo).
+      muted: c.audioDetached === true || c.muted === true || c.kind === 'image',
       ovScale: (typeof c.metadata?.ovScale === 'number' ? c.metadata.ovScale : 1) * cb.scale,
       ovZoomStart: typeof c.metadata?.ovZoomStart === 'number' ? c.metadata.ovZoomStart : 1,
       ovZoomEnd: typeof c.metadata?.ovZoomEnd === 'number' ? c.metadata.ovZoomEnd : 1,
       ovX: (typeof c.metadata?.ovX === 'number' ? c.metadata.ovX : 0) + cb.ovX,
       ovY: (typeof c.metadata?.ovY === 'number' ? c.metadata.ovY : 0) + cb.ovY,
       gain: typeof c.gain === 'number' ? c.gain : 1,
-      speed
+      speed,
+      isImage: c.kind === 'image'
     })
   }
   return { segs, missing }
@@ -264,7 +271,12 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   }, [])
 
   const { segs, missing } = docSegments(doc)
-  const sources = useMemo(() => [...new Set(segs.map((s) => s.src))], [segs.map((s) => s.src).join('|')])
+  // Only VIDEO sources get a <video> slot + the seam/decode-ahead machinery. Image
+  // segments have no frames, so they're excluded here and drawn straight to canvas.
+  const sources = useMemo(
+    () => [...new Set(segs.filter((s) => !s.isImage).map((s) => s.src))],
+    [segs.filter((s) => !s.isImage).map((s) => s.src).join('|')]
+  )
   const urlOf = new Map(segs.map((s) => [s.src, s.url]))
   const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0
 
@@ -337,6 +349,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // collide); a WeakMap drops entries automatically when React unmounts an element.
   const pendingRef = useRef(new WeakMap<HTMLVideoElement, Pending>())
   const badRef = useRef(new Set<string>()) // sources that fired 'error'
+  const imgCacheRef = useRef(new Map<string, HTMLImageElement>()) // still-image main-lane sources
   // Tracks the ACTIVE element's currentTime + the wall time it last CHANGED, so the
   // reconciler can tell a LIVE decoder (new frames arriving) from a stalled/seeking one
   // and keep the playhead advancing on the wall clock instead of freezing on a stall.
@@ -410,6 +423,19 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     if (!ss.length) return -1
     const last = ss[ss.length - 1]
     return t >= last.start + last.len - 1e-4 ? ss.length - 1 : -1
+  }
+
+  /** Lazily-decoded <img> for a still-image main-lane source — drawn to the canvas
+   *  in place of a <video> (which renders nothing for an image). */
+  function liveImage(src: string, url: string): HTMLImageElement {
+    let img = imgCacheRef.current.get(src)
+    if (!img) {
+      img = new Image()
+      img.decoding = 'async'
+      img.src = url
+      imgCacheRef.current.set(src, img)
+    }
+    return img
   }
 
   /** The LIVE <video> currently showing/decoding `src` (falls back to the other slot). */
@@ -747,7 +773,23 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           if (ctx) {
             const cw = cv.width
             const ch = cv.height
-            if (liveEl && liveEl.readyState >= 2 && liveEl.videoWidth > 0 && liveEl.videoHeight > 0 && shown) {
+            if (shown?.isImage) {
+              // Still image on the main lane: draw the <img> (contain + Ken Burns),
+              // never a <video>. Black until the image decodes.
+              const img = liveImage(shown.src, shown.url)
+              ctx.fillStyle = '#000'
+              ctx.fillRect(0, 0, cw, ch)
+              if (img.complete && img.naturalWidth > 0) {
+                const cr = containRect(cw, ch, img.naturalWidth / img.naturalHeight)
+                try {
+                  ctx.drawImage(img, cr.left, cr.top, cr.width, cr.height)
+                } catch {
+                  /* not decodable this tick — keep the black fill */
+                }
+                cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
+                cv.style.transform = kbTransform(shown)
+              }
+            } else if (liveEl && liveEl.readyState >= 2 && liveEl.videoWidth > 0 && liveEl.videoHeight > 0 && shown) {
               // Reproduce `object-fit: contain` (the element path's CSS): letterbox the
               // source inside the canvas, then apply the SAME kenBurns transform to the
               // whole canvas — pixel-equivalent to transforming the <video> element.
