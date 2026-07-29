@@ -39,7 +39,18 @@ class EditorScreen extends StatefulWidget {
   final String? initialClipPath;
   final String? initialClipName;
   final String? projectId; // when set, edits autosave to this Supabase project
-  const EditorScreen({super.key, this.initialClipPath, this.initialClipName, this.projectId});
+  // "Enhance on import" (set from the dashboard): after the initial clip loads,
+  // auto-apply the silence/bad-take cuts and/or auto-generate captions.
+  final bool enhanceCutSilence;
+  final bool enhanceCaptions;
+  const EditorScreen({
+    super.key,
+    this.initialClipPath,
+    this.initialClipName,
+    this.projectId,
+    this.enhanceCutSilence = false,
+    this.enhanceCaptions = false,
+  });
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
@@ -92,9 +103,10 @@ class _EditorScreenState extends State<EditorScreen> {
     _model.addListener(_onModel);
     _tick = Timer.periodic(const Duration(milliseconds: 16), (_) => _interpolate());
     if (widget.initialClipPath != null) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _importPath(widget.initialClipPath!, widget.initialClipName),
-      );
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await _importPath(widget.initialClipPath!, widget.initialClipName);
+        await _autoEnhanceOnImport();
+      });
     } else if (widget.projectId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadProject());
     }
@@ -424,6 +436,51 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  // ---- lane packing (Task 5): items on the SAME track never overlap in time ----
+
+  /// Lowest free lane (0-based) on which [startMs,endMs] doesn't overlap any span
+  /// in [laneSpans] on that same lane. Each span is `[start, end, lane]`.
+  int _freeLane(List<List<int>> laneSpans, int startMs, int endMs) {
+    for (int lane = 0;; lane++) {
+      var ok = true;
+      for (final s in laneSpans) {
+        if (s[2] == lane && startMs < s[1] && endMs > s[0]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) return lane;
+    }
+  }
+
+  /// `[start, end, lane]` spans for the text/caption track matching [captions].
+  List<List<int>> _textLaneSpans(bool captions) =>
+      [for (final t in _texts) if (t.isCaption == captions) [t.startMs, t.endMs, t.lane]];
+
+  /// `[start, end, lane]` spans for the image / PiP track.
+  List<List<int>> _imageLaneSpans() =>
+      [for (final o in _images) [o.startMs, o.endMs, o.lane]];
+
+  /// Clamp a proposed start [ns] for an item of length [len] so it can't overlap a
+  /// neighbour on the same lane — it stops flush against the nearest neighbour edge.
+  /// Neighbours are classified by the item's CURRENT (pre-move, non-overlapping)
+  /// [curStart]/[curEnd] so even a fast drag is clamped to the correct edge.
+  int _clampNoOverlap(
+      List<List<int>> sameLaneSpans, int ns, int curStart, int curEnd, int len, int total) {
+    int lo = 0;
+    int hi = (total - len) < 0 ? 0 : (total - len);
+    for (final s in sameLaneSpans) {
+      final ss = s[0], se = s[1];
+      if (se <= curStart) {
+        if (se > lo) lo = se; // neighbour on the left
+      } else if (ss >= curEnd) {
+        if (ss - len < hi) hi = ss - len; // neighbour on the right
+      }
+    }
+    if (hi < lo) hi = lo;
+    return ns.clamp(lo, hi);
+  }
+
   /// Overlay tool: pick an image and drop it on the video as a PiP / sticker
   /// (draggable + pinch-resizable on the preview, baked into export).
   Future<void> _addOverlay() async {
@@ -435,6 +492,9 @@ class _EditorScreenState extends State<EditorScreen> {
       startMs: _positionMs,
       endMs: (_positionMs + 4000).clamp(0, _totalMs > 0 ? _totalMs : _positionMs + 4000),
     );
+    // Drop onto the lowest free lane at the playhead so it never lands on top of
+    // an existing image (respecting each item's own duration).
+    o.lane = _freeLane(_imageLaneSpans(), o.startMs, o.endMs);
     _pushHistory();
     setState(() {
       _images.add(o);
@@ -698,14 +758,18 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() {
       for (int k = 0; k < n; k++) {
         final start = (slot * k + slot / 2 - clipMs / 2).clamp(0, maxStart).round();
-        _images.add(ImageOverlay(
+        final end = (start + clipMs).clamp(0, _totalMs);
+        final o = ImageOverlay(
           bytes: files[k].bytes!,
           x: 0.5,
           y: 0.5,
           scale: 1.0, // full-frame b-roll
           startMs: start,
-          endMs: (start + clipMs).clamp(0, _totalMs),
-        ));
+          endMs: end,
+        );
+        // Stack onto a free lane if this slot would collide with one already placed.
+        o.lane = _freeLane(_imageLaneSpans(), start, end);
+        _images.add(o);
       }
     });
     _toast('Placed $n b-roll clip${n == 1 ? '' : 's'} — drag any to fine-tune.');
@@ -803,6 +867,67 @@ class _EditorScreenState extends State<EditorScreen> {
     // No snackbar — the top-bar / transport undo buttons are the undo affordance.
   }
 
+  /// "Enhance on import": after the initial clip loads, optionally auto-apply the
+  /// silence/bad-take cuts and/or auto-generate captions — no review sheet, mirroring
+  /// the web "Enhance & open editor" flow. Runs cuts first (so captions land on the
+  /// cut timeline), reusing the cached transcript so it never transcribes twice.
+  Future<void> _autoEnhanceOnImport() async {
+    if (!mounted || !(widget.enhanceCutSilence || widget.enhanceCaptions)) return;
+    final src = _model.sourcePath;
+    if (src == null || !_model.hasBase) return;
+    // The judge + keep-range maths need the real source duration; the player may
+    // not have reported it yet, so probe it directly if it's still unknown.
+    if (_sourceDurationMs <= 0) {
+      final d = await _exporter.duration('file://$src');
+      if (!mounted) return;
+      if (d > 0) {
+        _sourceDurationMs = d;
+        _model.setDuration(d);
+      }
+    }
+    if (_sourceDurationMs <= 0) return; // can't safely enhance without a duration
+    if (widget.enhanceCutSilence) {
+      await _autoApplySilenceCuts();
+      if (!mounted) return;
+    }
+    if (widget.enhanceCaptions && mounted) {
+      await _generateCaptions();
+    }
+  }
+
+  /// Transcribe → judge → APPLY the cuts directly (no review), reusing the same
+  /// judge+apply logic as [_runCutLord] but auto-committing.
+  Future<void> _autoApplySilenceCuts() async {
+    if (!_hasBase || _model.sourcePath == null || _sourceDurationMs <= 0) return;
+    final prog = ValueNotifier<String>('Enhancing…');
+    _showProgress(prog);
+    try {
+      _transcript ??=
+          await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
+      final words = _transcript!;
+      if (words.isEmpty) {
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
+      prog.value = 'Finding cuts…';
+      final res = await judge(
+        words,
+        cutLordRetake,
+        _sourceDurationMs / 1000.0,
+        cutSilence: true,
+        minPauseS: SilenceSettings.trimS,
+        padS: SilenceSettings.keepS,
+      ).timeout(const Duration(seconds: 130));
+      if (mounted) Navigator.of(context).pop();
+      await _applyCuts(res.wordCuts, true, cutLordRetake.label);
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      _toast('Auto enhance failed: ${_cleanErr(e)}');
+    } finally {
+      prog.dispose();
+    }
+  }
+
   Future<void> _generateCaptions() async {
     if (!_hasBase || _model.sourcePath == null) {
       _toast('Import a clip first');
@@ -821,8 +946,9 @@ class _EditorScreenState extends State<EditorScreen> {
         if (s == null) continue;
         final e0 = _model.sourceToEdited((l.endS * 1000).round()) ?? (s + 500);
         final e = e0 <= s ? (s + 500) : (e0 > _totalMs ? _totalMs : e0);
+        final lane = _freeLane(_textLaneSpans(true), s, e);
         _texts.add(TextOverlay(
-            text: l.text, y: 0.85, fontSize: 0.05, bold: true, startMs: s, endMs: e, isCaption: true));
+            text: l.text, y: 0.85, fontSize: 0.05, bold: true, startMs: s, endMs: e, isCaption: true, lane: lane));
       }
       if (mounted) {
         Navigator.of(context).pop();
@@ -871,6 +997,9 @@ class _EditorScreenState extends State<EditorScreen> {
   void _openText() => _openSheet(TextSheet(onAdd: (t) {
         t.startMs = _positionMs;
         t.endMs = (_positionMs + 3000).clamp(0, _totalMs > 0 ? _totalMs : _positionMs + 3000);
+        // Place on the lowest free lane at the playhead so it doesn't stack on top
+        // of an existing text block (keeps its own duration intact).
+        t.lane = _freeLane(_textLaneSpans(t.isCaption), t.startMs, t.endMs);
         _pushHistory();
         setState(() {
           _texts.add(t);
@@ -1288,6 +1417,8 @@ class _EditorScreenState extends State<EditorScreen> {
         audios: _audios,
         selectedAudio: _selectedAudio,
         texts: _texts,
+        images: _images,
+        selectedImage: _selectedImage,
         onScrubStart: () => _scrubbing = true,
         onScrub: (ms) => setState(() => _positionMs = ms),
         onScrubEnd: (ms) async {
@@ -1298,9 +1429,36 @@ class _EditorScreenState extends State<EditorScreen> {
           _model.select(i);
           setState(() => _selected = true);
         },
+        // Hold-drag a main clip to reorder it in the sequence: reorder live for
+        // feedback, snapshot at the start, and reload the player once on release.
+        onClipReorderStart: () {
+          setState(() {
+            _selected = true;
+            _selectedText = null;
+            _selectedImage = null;
+          });
+          _pushHistory();
+        },
+        onClipReorder: (from, to) => _model.moveClip(from, to),
+        onClipReorderEnd: () async {
+          _scheduleSave();
+          if (_hasBase) {
+            await _reload(seekTo: _model.clipStartMs(_model.selected < 0 ? 0 : _model.selected));
+          }
+        },
         onSelectText: (t) async {
-          setState(() => _selectedText = t);
+          setState(() {
+            _selectedText = t;
+            _selectedImage = null;
+          });
           await _seek(t.startMs.clamp(0, _totalMs > 0 ? _totalMs : t.startMs)); // jump so it's visible + editable
+        },
+        onSelectImage: (o) async {
+          setState(() {
+            _selectedImage = o;
+            _selectedText = null;
+          });
+          await _seek(o.startMs.clamp(0, _totalMs > 0 ? _totalMs : o.startMs));
         },
         onSelectAudio: (i) async {
           setState(() {
@@ -1351,7 +1509,13 @@ class _EditorScreenState extends State<EditorScreen> {
           setState(() {
             final total = _totalMs;
             final len = t.endMs - t.startMs;
-            final ns = (t.startMs + dMs).clamp(0, (total - len).clamp(0, total));
+            // Same-lane, same-track neighbours (excluding this block).
+            final spans = [
+              for (final o in _texts)
+                if (o.isCaption == t.isCaption && o.lane == t.lane && !identical(o, t))
+                  [o.startMs, o.endMs]
+            ];
+            final ns = _clampNoOverlap(spans, t.startMs + dMs, t.startMs, t.endMs, len, total);
             t.startMs = ns;
             t.endMs = ns + len;
           });
@@ -1368,6 +1532,40 @@ class _EditorScreenState extends State<EditorScreen> {
           });
         },
         onOverlayEditEnd: () => _scheduleSave(),
+        onImageEditStart: () {
+          setState(() {
+            _selectedText = null;
+            _selectedImage = null;
+          });
+          _pushHistory();
+        },
+        onImageMove: (o, dMs) {
+          setState(() {
+            _selectedImage = o;
+            final total = _totalMs;
+            final len = o.endMs - o.startMs;
+            final spans = [
+              for (final x in _images)
+                if (x.lane == o.lane && !identical(x, o)) [x.startMs, x.endMs]
+            ];
+            final ns = _clampNoOverlap(spans, o.startMs + dMs, o.startMs, o.endMs, len, total);
+            o.startMs = ns;
+            o.endMs = ns + len;
+          });
+        },
+        onImageTrim: (o, {startDeltaMs, endDeltaMs}) {
+          setState(() {
+            _selectedImage = o;
+            if (startDeltaMs != null) {
+              o.startMs = (o.startMs + startDeltaMs).clamp(0, o.endMs - 200);
+            }
+            if (endDeltaMs != null) {
+              final max = _totalMs > 0 ? _totalMs : o.endMs + endDeltaMs;
+              o.endMs = (o.endMs + endDeltaMs).clamp(o.startMs + 200, max);
+            }
+          });
+        },
+        onImageEditEnd: () => _scheduleSave(),
         onTrimStart: () {
           _scrubbing = true;
           _pushHistory();

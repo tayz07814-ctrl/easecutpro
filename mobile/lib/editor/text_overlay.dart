@@ -17,6 +17,7 @@ class TextOverlay {
   int startMs;
   int endMs;
   bool isCaption; // generated caption line (replaced on regenerate)
+  int lane; // vertical lane on its timeline track (0 = first), so same-track items never overlap
 
   TextOverlay({
     required this.text,
@@ -30,6 +31,7 @@ class TextOverlay {
     required this.startMs,
     required this.endMs,
     this.isCaption = false,
+    this.lane = 0,
   });
 
   bool activeAt(int ms) => ms >= startMs && ms < endMs;
@@ -46,6 +48,7 @@ class TextOverlay {
         startMs: startMs,
         endMs: endMs,
         isCaption: isCaption,
+        lane: lane,
       );
 
   Map<String, dynamic> toJson() => {
@@ -60,6 +63,7 @@ class TextOverlay {
         's': startMs,
         'e': endMs,
         'cap': isCaption,
+        'lane': lane,
       };
 
   factory TextOverlay.fromJson(Map j) => TextOverlay(
@@ -74,6 +78,7 @@ class TextOverlay {
         startMs: (j['s'] as num?)?.toInt() ?? 0,
         endMs: (j['e'] as num?)?.toInt() ?? 0,
         isCaption: (j['cap'] as bool?) ?? false,
+        lane: (j['lane'] as num?)?.toInt() ?? 0,
       );
 
   TextStyle style(double frameH) => TextStyle(
@@ -128,6 +133,7 @@ class ImageOverlay {
   double scale; // width as a fraction of the frame width
   int startMs;
   int endMs;
+  int lane; // vertical lane on the timeline image track (0 = first)
 
   ImageOverlay({
     required this.bytes,
@@ -136,12 +142,13 @@ class ImageOverlay {
     this.scale = 0.45,
     required this.startMs,
     required this.endMs,
+    this.lane = 0,
   });
 
   bool activeAt(int ms) => ms >= startMs && ms < endMs;
 
   ImageOverlay copy() =>
-      ImageOverlay(bytes: bytes, x: x, y: y, scale: scale, startMs: startMs, endMs: endMs);
+      ImageOverlay(bytes: bytes, x: x, y: y, scale: scale, startMs: startMs, endMs: endMs, lane: lane);
 
   /// Bake to a full-frame transparent PNG at the OUTPUT resolution (base64, no prefix).
   Future<String> bakePngBase64(int width, int height) async {

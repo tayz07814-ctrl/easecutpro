@@ -7,8 +7,9 @@ import 'sheet_scaffold.dart';
 /// New Project wizard (NewProjectWizard.tsx) — pick file(s) + choose enhancements.
 /// UI + navigation only for now; the actual import/processing wires in next.
 class NewProjectWizard extends StatefulWidget {
-  /// Called with the first picked clip (path + name) so the editor auto-loads it.
-  final void Function(String? path, String? name) onCreate;
+  /// Called with the first picked clip (path + name) plus the chosen "enhance on
+  /// import" toggles, so the editor can auto-load and clean/caption it.
+  final void Function(String? path, String? name, bool cutSilence, bool autoCaptions) onCreate;
   const NewProjectWizard({super.key, required this.onCreate});
 
   @override
@@ -110,7 +111,10 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
               ),
               const Spacer(),
               GestureDetector(
-                onTap: ready ? () => widget.onCreate(_files.first.path, _files.first.name) : null,
+                onTap: ready
+                    ? () => widget.onCreate(
+                        _files.first.path, _files.first.name, _cutSilence, _autoCaptions)
+                    : null,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                   decoration: BoxDecoration(

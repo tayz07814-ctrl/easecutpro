@@ -20,12 +20,20 @@ class MiniTimeline extends StatefulWidget {
   final List<AudioTrack> audios; // extra audio tracks (music / voiceover)
   final int selectedAudio; // -1 = none
   final List<TextOverlay> texts; // text + caption overlays
+  final List<ImageOverlay> images; // image / sticker (PiP) overlays
+  final ImageOverlay? selectedImage; // image selected on the preview / timeline
   final VoidCallback onScrubStart;
   final ValueChanged<int> onScrub;
   final ValueChanged<int> onScrubEnd;
   final ValueChanged<int> onSelectClip;
   final ValueChanged<TextOverlay>? onSelectText;
+  final ValueChanged<ImageOverlay>? onSelectImage;
   final ValueChanged<int>? onSelectAudio;
+
+  /// Hold-drag a main video clip to reorder it in the sequence.
+  final VoidCallback? onClipReorderStart;
+  final void Function(int from, int to)? onClipReorder;
+  final VoidCallback? onClipReorderEnd;
 
   /// Drag an audio block along the time axis (shift its timeline start by deltaMs).
   final void Function(int index, int deltaMs)? onAudioMove;
@@ -42,6 +50,14 @@ class MiniTimeline extends StatefulWidget {
   final void Function(TextOverlay t, {int? startDeltaMs, int? endDeltaMs})? onOverlayTrim;
   final VoidCallback? onOverlayEditStart;
   final VoidCallback? onOverlayEditEnd;
+
+  /// Hold-drag an image overlay block along the time axis (shift start+end by deltaMs).
+  final void Function(ImageOverlay o, int deltaMs)? onImageMove;
+
+  /// Trim an image overlay block edge (one of the deltas is set).
+  final void Function(ImageOverlay o, {int? startDeltaMs, int? endDeltaMs})? onImageTrim;
+  final VoidCallback? onImageEditStart;
+  final VoidCallback? onImageEditEnd;
 
   /// Live trim of the selected clip (source ms). Committed on [onTrimEnd].
   final void Function(int index, {int? inMs, int? outMs})? onTrim;
@@ -60,12 +76,18 @@ class MiniTimeline extends StatefulWidget {
     this.audios = const [],
     this.selectedAudio = -1,
     this.texts = const [],
+    this.images = const [],
+    this.selectedImage,
     required this.onScrubStart,
     required this.onScrub,
     required this.onScrubEnd,
     required this.onSelectClip,
     this.onSelectText,
+    this.onSelectImage,
     this.onSelectAudio,
+    this.onClipReorderStart,
+    this.onClipReorder,
+    this.onClipReorderEnd,
     this.onAudioMove,
     this.onAudioTrim,
     this.onAudioEditStart,
@@ -74,6 +96,10 @@ class MiniTimeline extends StatefulWidget {
     this.onOverlayTrim,
     this.onOverlayEditStart,
     this.onOverlayEditEnd,
+    this.onImageMove,
+    this.onImageTrim,
+    this.onImageEditStart,
+    this.onImageEditEnd,
     this.onTrim,
     this.onTrimStart,
     this.onTrimEnd,
@@ -91,6 +117,15 @@ class _MiniTimelineState extends State<MiniTimeline> {
   final ScrollController _sc = ScrollController();
   double _zoom = 1.0;
   bool _userScrolling = false;
+
+  // Long-press "grab" state: which block the user is holding + dragging on the
+  // timeline. A grabbed block is raised/highlighted; a plain drag still scrubs.
+  String? _grabKind; // 'clip' | 'text' | 'image' | 'audio'
+  int _grabIndex = -1; // index into the relevant list (clip index for 'clip')
+  double _lpLastDx = 0; // last cumulative long-press dx (to derive per-frame deltas)
+  double _grabDx = 0; // residual px offset of a grabbed clip from its slot (reorder follow)
+
+  bool _isGrabbed(String kind, int index) => _grabKind == kind && _grabIndex == index;
 
   double _pxPerMs = _basePxPerMs;
   double _viewW = 0;
@@ -325,6 +360,10 @@ class _MiniTimelineState extends State<MiniTimeline> {
                                   const SizedBox(height: 4),
                                   _overlayLane(tracksW, captions: false),
                                 ],
+                                if (widget.images.isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  _imageLane(tracksW),
+                                ],
                                 const SizedBox(height: 8),
                               ],
                             ),
@@ -412,6 +451,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
   Widget _audioRow(int a, double tracksW) {
     final t = widget.audios[a];
     final sel = a == widget.selectedAudio;
+    final grabbed = _isGrabbed('audio', a);
     final len = t.lenMs > 0 ? t.lenMs : _total;
     return Container(
       height: _laneH,
@@ -427,10 +467,34 @@ class _MiniTimelineState extends State<MiniTimeline> {
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: widget.onSelectAudio == null ? null : () => widget.onSelectAudio!(a),
-              onHorizontalDragStart: (_) => widget.onAudioEditStart?.call(),
-              onHorizontalDragUpdate: (d) =>
-                  widget.onAudioMove?.call(a, (d.delta.dx / _pxPerMs).round()),
-              onHorizontalDragEnd: (_) => widget.onAudioEditEnd?.call(),
+              onLongPressStart: widget.onAudioMove == null
+                  ? null
+                  : (_) {
+                      widget.onSelectAudio?.call(a);
+                      widget.onAudioEditStart?.call();
+                      setState(() {
+                        _grabKind = 'audio';
+                        _grabIndex = a;
+                        _lpLastDx = 0;
+                      });
+                    },
+              onLongPressMoveUpdate: widget.onAudioMove == null
+                  ? null
+                  : (d) {
+                      final dx = d.offsetFromOrigin.dx;
+                      widget.onAudioMove!(a, ((dx - _lpLastDx) / _pxPerMs).round());
+                      _lpLastDx = dx;
+                    },
+              onLongPressEnd: widget.onAudioMove == null
+                  ? null
+                  : (_) {
+                      widget.onAudioEditEnd?.call();
+                      setState(() {
+                        _grabKind = null;
+                        _grabIndex = -1;
+                        _lpLastDx = 0;
+                      });
+                    },
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
@@ -441,9 +505,12 @@ class _MiniTimelineState extends State<MiniTimeline> {
                       color: const Color(0xFF1F3326),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: sel ? Ec.green : Ec.green.withValues(alpha: 0.35),
-                        width: sel ? 2 : 1,
+                        color: (sel || grabbed) ? Ec.green : Ec.green.withValues(alpha: 0.35),
+                        width: (sel || grabbed) ? 2 : 1,
                       ),
+                      boxShadow: grabbed
+                          ? [BoxShadow(color: Ec.green.withValues(alpha: 0.5), blurRadius: 10, spreadRadius: 1)]
+                          : null,
                     ),
                     child: Row(
                       children: [
@@ -510,60 +577,258 @@ class _MiniTimelineState extends State<MiniTimeline> {
   }
 
   /// A track of text OR caption blocks, positioned at their [start,end] on the
-  /// time axis. Tap = select; drag body = move in time; drag edges = trim.
+  /// time axis and stacked into vertical [lane]s so same-track items never overlap
+  /// in time. Tap = select; hold+drag body = move in time; drag edges = trim.
   Widget _overlayLane(double tracksW, {required bool captions}) {
     final items = widget.texts.where((t) => t.isCaption == captions).toList();
+    if (items.isEmpty) return const SizedBox.shrink();
     final accent = captions ? Ec.indigo : const Color(0xFFFFD84D);
-    return SizedBox(
-      height: _laneH,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          for (final t in items)
-            Positioned(
-              left: (t.startMs.clamp(0, _total) * _pxPerMs),
-              width: (((t.endMs - t.startMs).clamp(120, _total)) * _pxPerMs).clamp(16.0, tracksW),
-              top: 0,
-              bottom: 0,
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: widget.onSelectText == null ? null : () => widget.onSelectText!(t),
-                onHorizontalDragStart: (_) => widget.onOverlayEditStart?.call(),
-                onHorizontalDragUpdate: (d) =>
-                    widget.onOverlayMove?.call(t, (d.delta.dx / _pxPerMs).round()),
-                onHorizontalDragEnd: (_) => widget.onOverlayEditEnd?.call(),
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      alignment: Alignment.centerLeft,
-                      decoration: BoxDecoration(
-                        color: captions ? const Color(0xFF2A2550) : const Color(0xFF3A2E12),
-                        borderRadius: BorderRadius.circular(5),
-                        border: Border.all(color: accent.withValues(alpha: 0.45)),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(captions ? Icons.closed_caption : Icons.title, size: 12, color: accent),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(t.text,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    color: Ec.text, fontSize: 10.5, fontWeight: FontWeight.w500)),
-                          ),
-                        ],
-                      ),
-                    ),
-                    _overlayTrimGrip(t, accent, left: true),
-                    _overlayTrimGrip(t, accent, left: false),
-                  ],
-                ),
+    int lanes = 1;
+    for (final t in items) {
+      if (t.lane + 1 > lanes) lanes = t.lane + 1;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (int ln = 0; ln < lanes; ln++)
+          Padding(
+            padding: EdgeInsets.only(top: ln == 0 ? 0 : 3),
+            child: SizedBox(
+              height: _laneH,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  for (final t in items)
+                    if (t.lane == ln) _overlayBlock(t, accent, captions, tracksW),
+                ],
               ),
             ),
-        ],
+          ),
+      ],
+    );
+  }
+
+  Widget _overlayBlock(TextOverlay t, Color accent, bool captions, double tracksW) {
+    final grabbed = _grabKind == 'text' && _grabIndex == widget.texts.indexOf(t);
+    return Positioned(
+      left: (t.startMs.clamp(0, _total) * _pxPerMs),
+      width: (((t.endMs - t.startMs).clamp(120, _total)) * _pxPerMs).clamp(16.0, tracksW),
+      top: 0,
+      bottom: 0,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onSelectText == null ? null : () => widget.onSelectText!(t),
+        onLongPressStart: widget.onOverlayMove == null
+            ? null
+            : (_) {
+                widget.onSelectText?.call(t);
+                widget.onOverlayEditStart?.call();
+                setState(() {
+                  _grabKind = 'text';
+                  _grabIndex = widget.texts.indexOf(t);
+                  _lpLastDx = 0;
+                });
+              },
+        onLongPressMoveUpdate: widget.onOverlayMove == null
+            ? null
+            : (d) {
+                final dx = d.offsetFromOrigin.dx;
+                widget.onOverlayMove!(t, ((dx - _lpLastDx) / _pxPerMs).round());
+                _lpLastDx = dx;
+              },
+        onLongPressEnd: widget.onOverlayMove == null
+            ? null
+            : (_) {
+                widget.onOverlayEditEnd?.call();
+                setState(() {
+                  _grabKind = null;
+                  _grabIndex = -1;
+                  _lpLastDx = 0;
+                });
+              },
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              alignment: Alignment.centerLeft,
+              decoration: BoxDecoration(
+                color: captions ? const Color(0xFF2A2550) : const Color(0xFF3A2E12),
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(
+                  color: accent.withValues(alpha: grabbed ? 0.95 : 0.45),
+                  width: grabbed ? 2 : 1,
+                ),
+                boxShadow: grabbed
+                    ? [BoxShadow(color: accent.withValues(alpha: 0.5), blurRadius: 10, spreadRadius: 1)]
+                    : null,
+              ),
+              child: Row(
+                children: [
+                  Icon(captions ? Icons.closed_caption : Icons.title, size: 12, color: accent),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(t.text,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Ec.text, fontSize: 10.5, fontWeight: FontWeight.w500)),
+                  ),
+                ],
+              ),
+            ),
+            _overlayTrimGrip(t, accent, left: true),
+            _overlayTrimGrip(t, accent, left: false),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// A track of image / sticker (PiP) overlay blocks, stacked into vertical lanes
+  /// so same-track items never overlap in time. Tap = select; hold+drag = move.
+  Widget _imageLane(double tracksW) {
+    final items = widget.images;
+    if (items.isEmpty) return const SizedBox.shrink();
+    const accent = Color(0xFF4FD1C5); // teal for image / PiP blocks
+    int lanes = 1;
+    for (final o in items) {
+      if (o.lane + 1 > lanes) lanes = o.lane + 1;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (int ln = 0; ln < lanes; ln++)
+          Padding(
+            padding: EdgeInsets.only(top: ln == 0 ? 0 : 3),
+            child: SizedBox(
+              height: _laneH,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  for (final o in items)
+                    if (o.lane == ln) _imageBlock(o, accent, tracksW),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _imageBlock(ImageOverlay o, Color accent, double tracksW) {
+    final grabbed = _grabKind == 'image' && _grabIndex == widget.images.indexOf(o);
+    final sel = identical(o, widget.selectedImage);
+    return Positioned(
+      left: (o.startMs.clamp(0, _total) * _pxPerMs),
+      width: (((o.endMs - o.startMs).clamp(120, _total)) * _pxPerMs).clamp(16.0, tracksW),
+      top: 0,
+      bottom: 0,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onSelectImage == null ? null : () => widget.onSelectImage!(o),
+        onLongPressStart: widget.onImageMove == null
+            ? null
+            : (_) {
+                widget.onSelectImage?.call(o);
+                widget.onImageEditStart?.call();
+                setState(() {
+                  _grabKind = 'image';
+                  _grabIndex = widget.images.indexOf(o);
+                  _lpLastDx = 0;
+                });
+              },
+        onLongPressMoveUpdate: widget.onImageMove == null
+            ? null
+            : (d) {
+                final dx = d.offsetFromOrigin.dx;
+                widget.onImageMove!(o, ((dx - _lpLastDx) / _pxPerMs).round());
+                _lpLastDx = dx;
+              },
+        onLongPressEnd: widget.onImageMove == null
+            ? null
+            : (_) {
+                widget.onImageEditEnd?.call();
+                setState(() {
+                  _grabKind = null;
+                  _grabIndex = -1;
+                  _lpLastDx = 0;
+                });
+              },
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              alignment: Alignment.centerLeft,
+              decoration: BoxDecoration(
+                color: const Color(0xFF123331),
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(
+                  color: accent.withValues(alpha: (grabbed || sel) ? 0.95 : 0.45),
+                  width: (grabbed || sel) ? 2 : 1,
+                ),
+                boxShadow: grabbed
+                    ? [BoxShadow(color: accent.withValues(alpha: 0.5), blurRadius: 10, spreadRadius: 1)]
+                    : null,
+              ),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: Image.memory(o.bytes,
+                        width: 16, height: 16, fit: BoxFit.cover, gaplessPlayback: true),
+                  ),
+                  const SizedBox(width: 5),
+                  const Expanded(
+                    child: Text('Image',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: Color(0xFFCDEFEB), fontSize: 10.5, fontWeight: FontWeight.w500)),
+                  ),
+                ],
+              ),
+            ),
+            _imageTrimGrip(o, accent, left: true),
+            _imageTrimGrip(o, accent, left: false),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _imageTrimGrip(ImageOverlay o, Color accent, {required bool left}) {
+    return Positioned(
+      left: left ? 0 : null,
+      right: left ? null : 0,
+      top: 0,
+      bottom: 0,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: (_) => widget.onImageEditStart?.call(),
+        onHorizontalDragUpdate: (d) {
+          final dMs = (d.delta.dx / _pxPerMs).round();
+          if (left) {
+            widget.onImageTrim?.call(o, startDeltaMs: dMs);
+          } else {
+            widget.onImageTrim?.call(o, endDeltaMs: dMs);
+          }
+        },
+        onHorizontalDragEnd: (_) => widget.onImageEditEnd?.call(),
+        child: Container(
+          width: 11,
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.horizontal(
+              left: left ? const Radius.circular(5) : Radius.zero,
+              right: left ? Radius.zero : const Radius.circular(5),
+            ),
+          ),
+          child: const Center(
+            child: Icon(Icons.drag_indicator, size: 10, color: Colors.black54),
+          ),
+        ),
       ),
     );
   }
@@ -603,58 +868,130 @@ class _MiniTimelineState extends State<MiniTimeline> {
     );
   }
 
+  /// Rendered pixel width of clip [i]'s slot in the row (used for reorder maths).
+  double _clipW(int i) {
+    final clips = widget.model.clips;
+    if (i < 0 || i >= clips.length) return 0;
+    return (clips[i].timelineLenMs * _pxPerMs).clamp(6.0, double.infinity);
+  }
+
+  /// Hold-drag reorder: track cumulative dx and swap past a neighbour's midpoint.
+  void _onClipHoldMove(LongPressMoveUpdateDetails d) {
+    if (widget.onClipReorder == null) return;
+    final dx = d.offsetFromOrigin.dx;
+    _grabDx += dx - _lpLastDx;
+    _lpLastDx = dx;
+    var idx = _grabIndex;
+    final n = widget.model.clips.length;
+    // Cross right neighbours once dragged past half their width.
+    while (idx < n - 1) {
+      final nextW = _clipW(idx + 1);
+      if (_grabDx > nextW / 2) {
+        widget.onClipReorder!(idx, idx + 1);
+        _grabDx -= nextW;
+        idx += 1;
+      } else {
+        break;
+      }
+    }
+    // Cross left neighbours.
+    while (idx > 0) {
+      final prevW = _clipW(idx - 1);
+      if (_grabDx < -prevW / 2) {
+        widget.onClipReorder!(idx, idx - 1);
+        _grabDx += prevW;
+        idx -= 1;
+      } else {
+        break;
+      }
+    }
+    setState(() => _grabIndex = idx);
+  }
+
   Widget _clip(TimelineModel model, int i) {
     final clip = model.clips[i];
     final selected = model.selected == i;
+    final grabbed = _isGrabbed('clip', i);
     final w = (clip.timelineLenMs * _pxPerMs).clamp(6.0, double.infinity);
-    return SizedBox(
+    final peaks = _clipPeaks(clip);
+    final body = SizedBox(
       width: w,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           GestureDetector(
             onTap: () => widget.onSelectClip(i),
+            onLongPressStart: widget.onClipReorder == null
+                ? null
+                : (_) {
+                    widget.onSelectClip(i);
+                    widget.onClipReorderStart?.call();
+                    setState(() {
+                      _grabKind = 'clip';
+                      _grabIndex = i;
+                      _lpLastDx = 0;
+                      _grabDx = 0;
+                    });
+                  },
+            onLongPressMoveUpdate: widget.onClipReorder == null ? null : _onClipHoldMove,
+            onLongPressEnd: widget.onClipReorder == null
+                ? null
+                : (_) {
+                    widget.onClipReorderEnd?.call();
+                    setState(() {
+                      _grabKind = null;
+                      _grabIndex = -1;
+                      _grabDx = 0;
+                      _lpLastDx = 0;
+                    });
+                  },
             child: Container(
               margin: const EdgeInsets.symmetric(horizontal: 1),
               decoration: BoxDecoration(
                 color: const Color(0xFF312A52),
                 borderRadius: BorderRadius.circular(7),
                 border: Border.all(
-                  color: selected ? Colors.white : Colors.white.withValues(alpha: 0.08),
-                  width: selected ? 2 : 1,
+                  color: grabbed
+                      ? Ec.accentB
+                      : (selected ? Colors.white : Colors.white.withValues(alpha: 0.08)),
+                  width: (grabbed || selected) ? 2 : 1,
                 ),
-                boxShadow: selected
-                    ? [BoxShadow(color: Ec.accentB.withValues(alpha: 0.5), blurRadius: 0, spreadRadius: 1.5)]
-                    : null,
+                boxShadow: grabbed
+                    ? [BoxShadow(color: Ec.accentB.withValues(alpha: 0.6), blurRadius: 12, spreadRadius: 1)]
+                    : selected
+                        ? [BoxShadow(color: Ec.accentB.withValues(alpha: 0.5), blurRadius: 0, spreadRadius: 1.5)]
+                        : null,
               ),
               clipBehavior: Clip.hardEdge,
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // Filmstrip: fixed-width frame tiles (each a distinct frame), not stretched.
-                  ClipRect(
-                    child: OverflowBox(
-                      alignment: Alignment.centerLeft,
-                      minWidth: 0,
-                      maxWidth: double.infinity,
-                      child: _filmstrip(clip, w),
-                    ),
-                  ),
-                  // Thin waveform strip along the bottom (doesn't cover the frames).
-                  Builder(builder: (_) {
-                    final peaks = _clipPeaks(clip);
-                    if (peaks.isEmpty) return const SizedBox.shrink();
-                    return Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      height: 15,
-                      child: Container(
-                        color: const Color(0x66000000),
-                        child: CustomPaint(painter: _WavePainter(peaks)),
+                  // Each clip is split horizontally: TOP half = thumbnail filmstrip,
+                  // BOTTOM half = that clip's waveform peaks (matching the web editor).
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: ClipRect(
+                          child: OverflowBox(
+                            alignment: Alignment.centerLeft,
+                            minWidth: 0,
+                            maxWidth: double.infinity,
+                            child: _filmstrip(clip, w),
+                          ),
+                        ),
                       ),
-                    );
-                  }),
+                      Expanded(
+                        child: Container(
+                          color: const Color(0xFF241C3F),
+                          child: CustomPaint(
+                            painter: _WavePainter(peaks),
+                            child: const SizedBox.expand(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                   // Clip name chip (top-left).
                   Positioned(
                     left: 4,
@@ -689,6 +1026,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
         ],
       ),
     );
+    // A grabbed clip floats under the finger (residual offset between swaps).
+    return grabbed ? Transform.translate(offset: Offset(_grabDx, 0), child: body) : body;
   }
 
   Widget _trimHandle(int i, {required bool left}) {

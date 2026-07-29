@@ -240,6 +240,19 @@ class TimelineModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Reorder a clip within the sequence (timeline drag-to-reorder). Moves the clip
+  /// at [from] so it lands at index [to], shifting the others. Keeps the moved clip
+  /// selected. No-op if the indices are equal or out of range.
+  void moveClip(int from, int to) {
+    if (from < 0 || from >= clips.length) return;
+    to = to.clamp(0, clips.length - 1);
+    if (from == to) return;
+    final c = clips.removeAt(from);
+    clips.insert(to, c);
+    selected = to;
+    notifyListeners();
+  }
+
   /// Replace the whole clip list (undo/redo, restore a snapshot).
   void restore(List<EcClip> next) {
     clips
