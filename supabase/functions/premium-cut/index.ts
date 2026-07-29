@@ -142,8 +142,12 @@ Deno.serve(async (req) => {
     if (!user) return json({ error: 'Not signed in' }, 401)
     const { path } = await req.json().catch(() => ({ path: null }))
     if (typeof path !== 'string' || !path) return json({ error: 'missing path' }, 400)
-    // scope to the caller's own objects (paths are `${uid}/uuid.wav`).
-    if (!path.startsWith(`${user.id}/`)) return json({ error: 'forbidden' }, 403)
+    // scope to the caller's own objects (paths are `${uid}/uuid.wav`). The `..`
+    // guard matches stt's ownPath — the download runs as service role (bypasses
+    // RLS) against the shared stt-audio bucket, so a `${uid}/../<other>/x.wav`
+    // key must not be able to reach another user's upload if the key path is
+    // normalized anywhere upstream.
+    if (!path.startsWith(`${user.id}/`) || path.includes('..')) return json({ error: 'forbidden' }, 403)
 
     // read the uploaded WAV server-side (service role) and base64 it.
     const dl = await admin().storage.from(BUCKET).download(path)
