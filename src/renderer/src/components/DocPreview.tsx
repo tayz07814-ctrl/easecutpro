@@ -1028,8 +1028,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying, seam)
               prevWcSegRef.current = { src: shown.src, end: shown.sourceEnd, di }
               // Decode-ahead: park the warm pipe on the upcoming seam's in-point.
+              // 2s lead: each pipe now has its OWN decoder, so warming early just
+              // gives a long-GOP seek time to land before the cut (no contention).
               const up = ss[di + 1]
-              if (up && !up.isImage && t >= shown.start + shown.len - 1.0) wc.prewarm(up.src, up.sourceStart)
+              if (up && !up.isImage && t >= shown.start + shown.len - 2.0) wc.prewarm(up.src, up.sourceStart)
               cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
               cv.style.transform = kbTransform(shown)
             } else {

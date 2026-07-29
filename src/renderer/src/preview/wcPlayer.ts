@@ -246,7 +246,13 @@ class Pipe {
 }
 
 interface SourcePipes {
-  input: Input | null
+  /** ONE Input per pipe — independent demuxer + decoder each. Sharing a single
+   *  Input's track between both pipes serialized their decoding (both pull
+   *  packets from the same reader), so the warm pipe could NOT decode the next
+   *  in-point while the live pipe was streaming — it only caught up after the
+   *  seam, i.e. the frozen frame at every cut. Two Inputs = two real decoders,
+   *  the decoder twin of the element path's two <video> elements. */
+  inputs: Input[] | null
   pipes: [Pipe, Pipe] | null
   /** Which pipe OWNS the currently-displayed time (recomputed every render).
    *  prewarm() may only ever touch the other one — restarting the owner
@@ -287,7 +293,7 @@ export class WcPlayer {
     for (const [src, sp] of this.sources) {
       if (!want.has(src)) {
         sp.pipes?.forEach((p) => p.dispose())
-        sp.input?.dispose()
+        sp.inputs?.forEach((i) => i.dispose())
         this.sources.delete(src)
       }
     }
@@ -295,22 +301,28 @@ export class WcPlayer {
   }
 
   private open(src: string): void {
-    const sp: SourcePipes = { input: null, pipes: null, owner: 0, ready: false, dead: false }
+    const sp: SourcePipes = { inputs: null, pipes: null, owner: 0, ready: false, dead: false }
     this.sources.set(src, sp)
     void (async () => {
       try {
         const mb = await loadMb()
-        const input = new mb.Input({ source: await inputSourceFor(mb, src), formats: mb.ALL_FORMATS })
-        sp.input = input
-        const track: InputVideoTrack | null = await input.getPrimaryVideoTrack()
-        if (!track || !(await track.canDecode())) throw new Error('undecodable video track: ' + src)
         const onErr = (e: unknown): void => {
           sp.dead = true
           this.fail(e)
         }
-        sp.pipes = [new Pipe(new mb.VideoSampleSink(track), onErr), new Pipe(new mb.VideoSampleSink(track), onErr)]
+        // One INDEPENDENT Input+decoder per pipe so the warm pipe can decode the
+        // next in-point WHILE the live pipe streams (no shared-reader contention).
+        const mkPipe = async (): Promise<{ input: Input; pipe: Pipe }> => {
+          const input = new mb.Input({ source: await inputSourceFor(mb, src), formats: mb.ALL_FORMATS })
+          const track: InputVideoTrack | null = await input.getPrimaryVideoTrack()
+          if (!track || !(await track.canDecode())) throw new Error('undecodable video track: ' + src)
+          return { input, pipe: new Pipe(new mb.VideoSampleSink(track), onErr) }
+        }
+        const [p0, p1] = await Promise.all([mkPipe(), mkPipe()])
+        sp.inputs = [p0.input, p1.input]
+        sp.pipes = [p0.pipe, p1.pipe]
         sp.ready = true
-        console.info('[wc-preview] source ready:', src.slice(-24))
+        console.info('[wc-preview] source ready (dual decoder):', src.slice(-24))
       } catch (e) {
         sp.dead = true
         this.fail(e)
@@ -381,7 +393,7 @@ export class WcPlayer {
   dispose(): void {
     for (const [, sp] of this.sources) {
       sp.pipes?.forEach((p) => p.dispose())
-      sp.input?.dispose()
+      sp.inputs?.forEach((i) => i.dispose())
     }
     this.sources.clear()
   }
