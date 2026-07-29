@@ -141,6 +141,87 @@ class _VolumeSheetState extends State<VolumeSheet> {
   }
 }
 
+/// Per-clip Zoom — a centred punch-in. Implemented on the editor side as a
+/// symmetric crop so it reuses the existing crop preview + export path. Emits the
+/// zoom level (≥1.0); 1.0× = no crop.
+class ZoomSheet extends StatefulWidget {
+  final double initial;
+  final ValueChanged<double> onChanged;
+  const ZoomSheet({super.key, required this.initial, required this.onChanged});
+
+  @override
+  State<ZoomSheet> createState() => _ZoomSheetState();
+}
+
+class _ZoomSheetState extends State<ZoomSheet> {
+  static const _presets = [1.0, 1.2, 1.5, 2.0, 2.5, 3.0];
+  late double _v = widget.initial.clamp(1.0, 3.0);
+
+  void _set(double v) {
+    setState(() => _v = double.parse(v.clamp(1.0, 3.0).toStringAsFixed(2)));
+    widget.onChanged(_v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SheetScaffold(
+      title: 'Zoom',
+      heightFactor: 0.52,
+      trailing: GradientButton(label: 'Done', onTap: () => Navigator.of(context).pop()),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 6, 18, 18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Text('${_v.toStringAsFixed(2)}×',
+                  style: const TextStyle(color: Ec.text, fontSize: 30, fontWeight: FontWeight.w700)),
+            ),
+            const SizedBox(height: 8),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: Ec.accentB,
+                inactiveTrackColor: Ec.chip,
+                thumbColor: Colors.white,
+                overlayShape: SliderComponentShape.noOverlay,
+              ),
+              child: Slider(min: 1.0, max: 3.0, value: _v, onChanged: _set),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final p in _presets)
+                  GestureDetector(
+                    onTap: () => _set(p),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                      decoration: BoxDecoration(
+                        color: (_v - p).abs() < 0.01 ? Ec.indigoTint : Ec.chip,
+                        borderRadius: BorderRadius.circular(9),
+                        border: Border.all(
+                            color: (_v - p).abs() < 0.01 ? Ec.indigo : Colors.white.withValues(alpha: 0.06)),
+                      ),
+                      child: Text('${p == p.roundToDouble() ? p.toStringAsFixed(0) : p}×',
+                          style: TextStyle(
+                              color: (_v - p).abs() < 0.01 ? Ec.indigoText : Ec.textDim,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text('A centred punch-in on this clip. Replaces any aspect crop set here.',
+                style: TextStyle(color: Ec.textFaint, fontSize: 11.5)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Per-clip Crop to an aspect (centered). Emits edge fractions via [onPick].
 class CropSheet extends StatelessWidget {
   final double sourceAspect; // w / h

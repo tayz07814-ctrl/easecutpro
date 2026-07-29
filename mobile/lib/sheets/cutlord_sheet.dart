@@ -11,7 +11,15 @@ import 'sheet_scaffold.dart';
 class CutLordSheet extends StatefulWidget {
   final VoidCallback onOpenSilence;
   final void Function(CutLordModel model, bool cutSilence) onRun;
-  const CutLordSheet({super.key, required this.onOpenSilence, required this.onRun});
+  final VoidCallback onAutoZoom;
+  final VoidCallback onAutoBroll;
+  const CutLordSheet({
+    super.key,
+    required this.onOpenSilence,
+    required this.onRun,
+    required this.onAutoZoom,
+    required this.onAutoBroll,
+  });
 
   @override
   State<CutLordSheet> createState() => _CutLordSheetState();
@@ -23,6 +31,29 @@ class _CutLordSheetState extends State<CutLordSheet> {
   void _run() {
     Navigator.of(context).pop();
     widget.onRun(cutLordRetake, _smartSilence);
+  }
+
+  Widget _autoBtn(IconData icon, String label, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          color: Ec.indigo.withValues(alpha: 0.12),
+          border: Border.all(color: Ec.indigo.withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 16, color: Ec.indigoText),
+            const SizedBox(width: 7),
+            Text(label, style: const TextStyle(color: Ec.indigoText, fontSize: 12.5, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -73,6 +104,14 @@ class _CutLordSheetState extends State<CutLordSheet> {
                       child: const Text('Find silences & bad takes',
                           style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(child: _autoBtn(Icons.zoom_in, 'Auto Zoom', () { Navigator.of(context).pop(); widget.onAutoZoom(); })),
+                      const SizedBox(width: 10),
+                      Expanded(child: _autoBtn(Icons.photo_library_outlined, 'Auto B-roll', () { Navigator.of(context).pop(); widget.onAutoBroll(); })),
+                    ],
                   ),
                   const SizedBox(height: 16),
                   GestureDetector(

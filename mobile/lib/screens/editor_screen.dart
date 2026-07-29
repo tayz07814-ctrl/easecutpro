@@ -27,6 +27,7 @@ import '../sheets/audio_sheet.dart';
 import '../sheets/settings_sheet.dart';
 import '../sheets/silence_modal.dart';
 import '../sheets/clip_tools_sheets.dart';
+import '../editor/autozoom.dart';
 import '../sheets/cut_review_sheet.dart';
 
 /// The EaseCut mobile editor. Everything (preview, export, split/trim/delete, and —
@@ -409,6 +410,9 @@ class _EditorScreenState extends State<EditorScreen> {
       case 'Crop':
         _openCrop();
         break;
+      case 'Zoom':
+        _openZoom();
+        break;
       case 'Extract':
         _extractClipAudio();
         break;
@@ -496,6 +500,24 @@ class _EditorScreenState extends State<EditorScreen> {
     ));
   }
 
+  void _openZoom() {
+    final i = _selectedIndex();
+    if (i < 0) return;
+    final c = _model.clips[i];
+    // recover the current zoom from a symmetric crop (else start at 1.0×)
+    final sym = (c.cropL == c.cropR && c.cropT == c.cropB && c.cropL == c.cropT) ? c.cropL : 0.0;
+    final curZoom = (sym > 0 && sym < 0.49) ? 1.0 / (1.0 - 2 * sym) : 1.0;
+    _pushHistory();
+    _openSheet(ZoomSheet(
+      initial: curZoom,
+      onChanged: (z) {
+        final crop = z <= 1.0 ? 0.0 : (1.0 - 1.0 / z) / 2.0;
+        _model.setCrop(i, l: crop, t: crop, r: crop, b: crop); // centred punch = symmetric crop
+        setState(() {});
+      },
+    ));
+  }
+
   Future<void> _extractClipAudio() async {
     final i = _selectedIndex();
     if (i < 0) return;
@@ -575,7 +597,119 @@ class _EditorScreenState extends State<EditorScreen> {
           _openSilence();
         },
         onRun: _runCutLord,
+        onAutoZoom: _autoZoom,
+        onAutoBroll: _autoBroll,
       ));
+
+  // ---- Auto Zoom: transcript → auto-zoom-judge → per-clip centred punch-in ----
+  Future<void> _autoZoom() async {
+    if (!_hasBase || _model.sourcePath == null) {
+      _toast('Import a clip first');
+      return;
+    }
+    final prog = ValueNotifier<String>('Preparing…');
+    _showProgress(prog);
+    try {
+      _transcript ??=
+          await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
+      final words = _transcript!;
+      // One un-cut clip → split at sentence groups so Auto Zoom has segments.
+      if (_model.clips.length < 2 && words.isNotEmpty) {
+        final groups = groupCaptions(words);
+        final points = <int>[];
+        for (int g = 1; g < groups.length; g++) {
+          final ms = (groups[g].startS * 1000).round();
+          if (ms > 500 && ms < _totalMs - 500) points.add(ms);
+        }
+        points.sort((a, b) => b.compareTo(a)); // descending so earlier splits stay valid
+        for (final ms in points) {
+          _model.splitAt(ms);
+        }
+      }
+      prog.value = 'Finding moments to zoom…';
+      final clips = _model.clips;
+      final eligible = <Map<String, dynamic>>[]; // {i, clipIdx, t, d}
+      for (int ci = 0; ci < clips.length; ci++) {
+        final c = clips[ci];
+        final d = c.timelineLenMs / 1000.0;
+        if (d < 0.9) continue;
+        final buf = StringBuffer();
+        for (final w in words) {
+          final ms = w.start * 1000;
+          if (ms >= c.inMs && ms < c.outMs) {
+            buf.write(w.text.trim());
+            buf.write(' ');
+          }
+        }
+        final t = buf.toString().trim();
+        if (t.isEmpty) continue;
+        eligible.add({'i': eligible.length, 'clipIdx': ci, 't': t.length > 180 ? t.substring(0, 180) : t, 'd': (d * 10).round() / 10});
+      }
+      if (eligible.isEmpty) {
+        if (mounted) Navigator.of(context).pop();
+        prog.dispose();
+        _toast('No clips long enough to zoom.');
+        return;
+      }
+      var picks = await judgeZooms(eligible.map((e) => {'i': e['i'], 't': e['t'], 'd': e['d']}).toList());
+      if (picks.isEmpty) picks = fallbackZooms(eligible.map((e) => {'i': e['i'] as int, 'd': e['d']}).toList());
+
+      final budget = (eligible.length * 0.55).floor().clamp(1, eligible.length);
+      final applied = <int>{};
+      _pushHistory();
+      picks.sort((a, b) => b.level.compareTo(a.level));
+      var n = 0;
+      for (final p in picks) {
+        if (applied.length >= budget) break;
+        if (p.i < 0 || p.i >= eligible.length) continue;
+        if (applied.contains(p.i) || applied.contains(p.i - 1) || applied.contains(p.i + 1)) continue;
+        applied.add(p.i);
+        final clipIdx = eligible[p.i]['clipIdx'] as int;
+        final crop = (1.0 - 1.0 / p.level) / 2.0;
+        _model.setCrop(clipIdx, l: crop, t: crop, r: crop, b: crop);
+        n++;
+      }
+      if (mounted) Navigator.of(context).pop();
+      prog.dispose();
+      await _reload(seekTo: 0);
+      _toast(n > 0 ? 'Added zoom to $n moment${n == 1 ? '' : 's'}.' : 'No zooms added.');
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      prog.dispose();
+      _toast('Auto Zoom failed: ${_cleanErr(e)}');
+    }
+  }
+
+  // ---- Auto B-roll: pick photos → spread them across the timeline as timed,
+  // full-frame overlays (mobile has no stock library, so you supply the images). --
+  Future<void> _autoBroll() async {
+    if (!_hasBase || _totalMs <= 0) {
+      _toast('Import a clip first');
+      return;
+    }
+    final res = await FilePicker.pickFiles(type: FileType.image, allowMultiple: true, withData: true);
+    final files = res?.files.where((f) => f.bytes != null).toList() ?? [];
+    if (files.isEmpty) return;
+    const clipMs = 2500;
+    final n = files.length;
+    final slot = _totalMs / n;
+    final maxStart = (_totalMs - clipMs) <= 0 ? 0 : (_totalMs - clipMs);
+    _pushHistory();
+    setState(() {
+      for (int k = 0; k < n; k++) {
+        final start = (slot * k + slot / 2 - clipMs / 2).clamp(0, maxStart).round();
+        _images.add(ImageOverlay(
+          bytes: files[k].bytes!,
+          x: 0.5,
+          y: 0.5,
+          scale: 1.0, // full-frame b-roll
+          startMs: start,
+          endMs: (start + clipMs).clamp(0, _totalMs),
+        ));
+      }
+    });
+    _toast('Placed $n b-roll clip${n == 1 ? '' : 's'} — drag any to fine-tune.');
+  }
   void _openCaptions() => _openSheet(CaptionsSheet(onGenerate: (_) => _generateCaptions()));
 
   // ---- Cut Lord: transcribe → SHOW transcript → judge in background → apply ----

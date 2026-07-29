@@ -43,6 +43,7 @@ class SelectedToolbar extends StatelessWidget {
                 children: [
                   _tool(Icons.content_cut, 'Split', () => onTool('Split')), // ]|[ approximated
                   _tool(Icons.crop, 'Crop', () => onTool('Crop')),
+                  _tool(Icons.zoom_in, 'Zoom', () => onTool('Zoom')),
                   _tool(Icons.speed, 'Speed', () => onTool('Speed')),
                   _tool(Icons.volume_up, 'Volume', () => onTool('Volume')),
                   _tool(Icons.tune, 'Adjust', () => onTool('Adjust')),
