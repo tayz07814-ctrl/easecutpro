@@ -362,6 +362,21 @@ export default function Dashboard(): JSX.Element {
   const [filter, setFilter] = useState(0)
   const [news, setNews] = useState(0)
   const [dockHidden, setDockHidden] = useState(false)
+  const [showLocalNotice, setShowLocalNotice] = useState(() => {
+    try {
+      return localStorage.getItem('ec_localonly_notice') !== '1'
+    } catch {
+      return true
+    }
+  })
+  const dismissLocalNotice = (): void => {
+    setShowLocalNotice(false)
+    try {
+      localStorage.setItem('ec_localonly_notice', '1')
+    } catch {
+      /* ignore */
+    }
+  }
 
   const activeJobs = batchJobs.filter((j) => j.status === 'queued' || j.status === 'processing')
   const jobIds = useMemo(
@@ -483,6 +498,20 @@ export default function Dashboard(): JSX.Element {
           <div style={css('flex:1;min-width:600px;overflow-y:auto;padding:30px 26px 60px')}>
             <div style={css('max-width:1320px;margin:0 auto')}>
               {src === 'cloud' ? <CoworkPanel /> : (<>
+              {/* one-time notice: local projects are now device-only */}
+              {showLocalNotice && (
+                <div style={css('display:flex;align-items:flex-start;gap:12px;padding:13px 15px;margin-bottom:16px;border-radius:12px;background:rgba(124,107,255,.08);border:1px solid rgba(124,107,255,.24)')}>
+                  <div style={css('width:30px;height:30px;flex:none;border-radius:8px;background:rgba(124,107,255,.16);display:flex;align-items:center;justify-content:center')}>
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="#A99BFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="2.5" width="11" height="15" rx="2" /><path d="M8 5.5h4M8 8.5h4" /></svg>
+                  </div>
+                  <div style={css('flex:1;min-width:0')}>
+                    <div style={css('font-size:13.5px;font-weight:600;letter-spacing:-.01em;color:#EDEDF2')}>Local projects now stay on this device</div>
+                    <div style={css('font-size:12.5px;color:#A6A6BA;line-height:1.5;margin-top:3px')}>They&rsquo;re no longer saved to the cloud. To edit a project on another device, right-click it → <span style={css('color:#C4BAFF')}>Upload to space</span> first (or open Cloud cowork). Clearing this browser&rsquo;s data removes local projects.</div>
+                  </div>
+                  <span onClick={dismissLocalNotice} title="Got it" style={css('cursor:pointer;color:#8B8BA0;font-size:14px;flex:none;padding:2px 4px')}>✕</span>
+                </div>
+              )}
+
               {/* news banner slideshow */}
               <div style={css('position:relative;height:268px;border-radius:16px;overflow:hidden;background:#101016;border:1px solid rgba(255,255,255,.07);margin-bottom:22px')}>
                 <div style={css(`position:absolute;left:44%;right:0;top:0;bottom:0;background:radial-gradient(120% 140% at 80% 20%, ${slide.tone}2e, #101016 62%)`)}>
