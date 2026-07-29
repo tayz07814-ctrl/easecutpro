@@ -120,6 +120,15 @@ export function registerLocalFile(file: File, persist = true): string {
   return id
 }
 
+/** Register a file under a SPECIFIC webmedia id (Cloud Cowork). A shared project's
+ *  media keeps its canonical id on every device, so the project JSON's media refs
+ *  resolve everywhere the file is re-downloaded — no per-device id remapping. */
+export function registerLocalFileAs(id: string, file: File, persist = true): string {
+  registry.set(id, { file, url: URL.createObjectURL(file) })
+  if (persist) void idbPut(id, file)
+  return id
+}
+
 /** Register a file that ALSO lives at a real filesystem path (Android native
  *  import). `file` still holds the bytes (waveform / preview / WebCodecs export
  *  fallback all use it, unchanged), and `nativePath` is remembered so the native

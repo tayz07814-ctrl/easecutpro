@@ -61,6 +61,7 @@ import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
+import { openSpaceProject, saveMyEdit, type CoworkProject } from './cloud/cowork'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideoCloud } from './cloud/batchCleanCloud'
 import { getFile } from './webmedia'
@@ -619,6 +620,10 @@ interface AppState {
   /** id of the montage clip currently open in the single-clip editor (null = not editing a clip). */
   editingClipId: string | null
   currentProjectId: string | null
+  /** When editing a shared Cloud Cowork project (edits persist to R2, not the
+   *  local `projects` table). null for ordinary local projects. `editUserId` is
+   *  the member whose edit version is currently loaded (null = the most recent). */
+  coworkSession: { spaceId: string; project: CoworkProject; editUserId: string | null } | null
   currentProjectName: string
   saveState: 'idle' | 'saving' | 'saved' | 'error'
   past: Project[]
@@ -896,8 +901,21 @@ interface AppState {
   setSaveState: (s: 'idle' | 'saving' | 'saved' | 'error') => void
   /** rename the open project (persisted by autosave). */
   renameCurrentProject: (name: string) => void
-  /** load a saved project record into the editor. */
-  openProjectRecord: (rec: { id: string; name: string; project: Project | null }) => void
+  /** load a saved project record into the editor. `extra` overrides fields in the
+   *  editor-open set (used by Cloud Cowork to attach a coworkSession). */
+  openProjectRecord: (
+    rec: { id: string; name: string; project: Project | null },
+    extra?: Partial<{ currentProjectId: string | null; coworkSession: AppState['coworkSession'] }>
+  ) => void
+  /** Open a shared Cloud Cowork project: download the chosen (or latest) member
+   *  edit + its media from R2, then enter the editor with edits bound to R2. */
+  openCoworkProject: (
+    cp: CoworkProject,
+    editUserId?: string | null,
+    onStep?: (s: string) => void
+  ) => Promise<void>
+  /** Persist the open cowork project as THIS member's R2 edit version. */
+  saveCoworkEdit: () => Promise<void>
   /** build a fresh empty project object (without entering the editor). */
   freshProject: () => Project
   /** leave the editor back to the home dashboard. */
@@ -982,6 +1000,7 @@ export const useStore = create<AppState>((set, get) => ({
   user: null,
   editingClipId: null,
   currentProjectId: null,
+  coworkSession: null,
   currentProjectName: 'Untitled',
   saveState: 'idle',
   past: [],
@@ -3795,16 +3814,18 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => ({ project: { ...s.project, name }, currentProjectName: name })),
   freshProject: () => newProject(),
 
-  goHome: () => set({ view: 'home', selectedClipId: null, selectedSeg: null, selectedTextId: null, selectedWordIds: new Set() }),
+  goHome: () => set({ view: 'home', coworkSession: null, selectedClipId: null, selectedSeg: null, selectedTextId: null, selectedWordIds: new Set() }),
 
-  openProjectRecord: (rec) => {
+  openProjectRecord: (rec, extra) => {
     const project = rec.project ?? newProject()
     const open = (): void => set({
       project,
       currentProjectId: rec.id,
+      coworkSession: null,
       currentProjectName: rec.name,
       saveState: 'idle',
       view: 'editor',
+      ...extra,
       mediaUrl: project.media ? mediaUrl(project.media.path) : null,
       waveform: null,
       musicWaveform: null,
@@ -3846,6 +3867,23 @@ export const useStore = create<AppState>((set, get) => ({
       open()
       kickBackground()
     }
+  },
+
+  openCoworkProject: async (cp, editUserId, onStep) => {
+    const project = await openSpaceProject(cp, editUserId ?? null, onStep)
+    // Enter the editor as a cowork session: currentProjectId stays null (so the
+    // local-projects autosave never fires for it) and coworkSession routes edits
+    // to R2 instead. openProjectRecord hydrates media + mounts the editor.
+    get().openProjectRecord(
+      { id: cp.id, name: cp.name, project },
+      { currentProjectId: null, coworkSession: { spaceId: cp.space_id, project: cp, editUserId: editUserId ?? null } }
+    )
+  },
+
+  saveCoworkEdit: async () => {
+    const { coworkSession, project } = get()
+    if (!coworkSession) return
+    await saveMyEdit(coworkSession.project, project)
   },
 
   runBatchClean: async (items) => {

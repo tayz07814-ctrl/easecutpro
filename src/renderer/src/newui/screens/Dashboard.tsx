@@ -3,6 +3,8 @@ import { css } from '../css'
 import { useProjects } from '../data/useProjects'
 import { useStore } from '../../store'
 import NewProjectWizard from './NewProjectWizard'
+import CoworkPanel from './CoworkPanel'
+import NotificationsBell from './NotificationsBell'
 import type { DashCard } from '../mock'
 
 // Screen 1a — Project dashboard, "Easecut Redesign" layout. Left rail + main
@@ -320,6 +322,7 @@ export default function Dashboard(): JSX.Element {
               <span style={css('width:6px;height:6px;border-radius:50%;background:#E6B26A;animation:ecPulse 1.4s infinite')} />Queue {activeJobs.length}
             </span>
           )}
+          <NotificationsBell onJoined={() => { setSrc('cloud'); setFilter(0) }} />
           <button onClick={() => void dash.batch()} style={css('flex:none;white-space:nowrap;background:transparent;border:1px solid rgba(255,255,255,.12);color:#D6D6E4;font-family:inherit;font-size:13px;font-weight:500;padding:8px 14px;border-radius:9px;cursor:pointer')}>Batch clean</button>
           <button onClick={(e) => { e.stopPropagation(); setWizardOpen(true) }} style={css('flex:none;white-space:nowrap;background:#7C6BFF;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;padding:9px 16px;border-radius:9px;cursor:pointer;box-shadow:0 4px 16px rgba(124,107,255,.32)')}>New project</button>
         </header>
@@ -327,6 +330,7 @@ export default function Dashboard(): JSX.Element {
         <div style={css('flex:1;min-height:0;display:flex;overflow-x:auto')}>
           <div style={css('flex:1;min-width:600px;overflow-y:auto;padding:30px 26px 60px')}>
             <div style={css('max-width:1320px;margin:0 auto')}>
+              {src === 'cloud' ? <CoworkPanel /> : (<>
               {/* news banner slideshow */}
               <div style={css('position:relative;height:268px;border-radius:16px;overflow:hidden;background:#101016;border:1px solid rgba(255,255,255,.07);margin-bottom:22px')}>
                 <div style={css(`position:absolute;left:44%;right:0;top:0;bottom:0;background:radial-gradient(120% 140% at 80% 20%, ${slide.tone}2e, #101016 62%)`)}>
@@ -407,6 +411,7 @@ export default function Dashboard(): JSX.Element {
                   })}
                 </div>
               )}
+              </>)}
             </div>
           </div>
 

@@ -24,6 +24,7 @@ import { resolveMedia } from '../../media/resolver'
 import { primePlayback } from '../../clock'
 import { framesToSeconds } from '@shared/timeline/time'
 import { addMediaToTimeline } from '../../timelineAdd'
+import { listEditVersions, type EditVersion } from '../../cloud/cowork'
 
 function fmtDur(s: number): string {
   if (!s || s < 0) return '0:00'
@@ -124,6 +125,87 @@ function clampN(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v))
 }
 
+function coworkRelTime(iso: string): string {
+  const t = Date.parse(iso)
+  if (!Number.isFinite(t)) return ''
+  const s = Math.max(0, (Date.now() - t) / 1000)
+  if (s < 60) return 'just now'
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
+}
+
+// Cloud Cowork version picker — shown in the editor topbar only when a shared
+// space project is open. Lists every member's edit file; picking one reloads
+// that member's version. The current user's own saves always write their OWN
+// version (see saveMyEdit), so switching in to view a teammate's edit and then
+// editing forks it into your own file rather than overwriting theirs.
+function CoworkVersions(): JSX.Element | null {
+  const cowork = useStore((s) => s.coworkSession)
+  const openCoworkProject = useStore((s) => s.openCoworkProject)
+  const [versions, setVersions] = useState<EditVersion[]>([])
+  const [open, setOpen] = useState(false)
+  const [loadingUid, setLoadingUid] = useState<string | null>(null)
+
+  const pid = cowork?.project.id
+  const editUserId = cowork?.editUserId ?? null
+  useEffect(() => {
+    if (!pid) return
+    let live = true
+    listEditVersions(pid).then((v) => { if (live) setVersions(v) }).catch(() => undefined)
+    return () => { live = false }
+  }, [pid, editUserId])
+
+  useEffect(() => {
+    if (!open) return
+    const close = (): void => setOpen(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [open])
+
+  if (!cowork) return null
+  const currentUid = editUserId ?? versions[0]?.user_id ?? null
+  const current = versions.find((v) => v.user_id === currentUid)
+  const label = current?.member_name || 'Latest edit'
+
+  const pick = async (uid: string): Promise<void> => {
+    setOpen(false)
+    if (uid === currentUid) return
+    setLoadingUid(uid)
+    try {
+      await openCoworkProject(cowork.project, uid)
+    } finally {
+      setLoadingUid(null)
+    }
+  }
+
+  return (
+    <div style={css('position:relative')} onClick={(e) => e.stopPropagation()}>
+      <div onClick={() => setOpen((v) => !v)} style={css('display:flex;align-items:center;gap:7px;font-size:12px;color:#c4baff;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.28);border-radius:8px;padding:6px 11px;cursor:pointer;white-space:nowrap')}>
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#c4baff" strokeWidth="1.4"><circle cx="6" cy="5" r="2.4" /><path d="M2 13c0-2.2 1.8-3.6 4-3.6s4 1.4 4 3.6" /><path d="M11 4.2a2.2 2.2 0 0 1 0 4.1M14 13c0-1.9-1.2-3.2-2.8-3.5" /></svg>
+        <span>{label}</span>
+        <span style={css('color:#8b8ba0;font-size:10px')}>▾</span>
+      </div>
+      {open && (
+        <div style={css('position:absolute;left:0;top:calc(100% + 6px);width:250px;background:#191920;border:1px solid rgba(255,255,255,.1);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.55);padding:6px;z-index:30')}>
+          <div style={css('padding:7px 10px 8px;font-size:11px;color:#7a7a8c')}>Load a member&rsquo;s edits</div>
+          {versions.length === 0 ? (
+            <div style={css('padding:8px 10px;font-size:12.5px;color:#6e6e85')}>No versions yet.</div>
+          ) : (
+            versions.map((v) => (
+              <div key={v.user_id} onClick={() => void pick(v.user_id)} style={css('display:flex;align-items:center;gap:8px;padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer', v.user_id === currentUid ? 'background:rgba(124,107,255,.14);color:#c4baff' : '')}>
+                <span style={css('flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{v.member_name || 'Member'}</span>
+                <span style={css('font-size:10.5px;color:#7a7a8c;flex:none')}>{coworkRelTime(v.updated_at)}</span>
+                {loadingUid === v.user_id ? <span style={css('font-size:10px;color:#a99bff;flex:none')}>…</span> : v.user_id === currentUid ? <span style={css('color:#7ED6A6;font-size:11px;flex:none')}>✓</span> : null}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function TopBar(): JSX.Element {
   const name = useStore((s) => s.project.name)
   const saveState = useStore((s) => s.saveState)
@@ -164,6 +246,7 @@ function TopBar(): JSX.Element {
           <div style={css(`width:6px;height:6px;border-radius:50%;background:${sv.c}`)} />{sv.t}
         </div>
       </div>
+      <CoworkVersions />
       <div style={css('flex:1')} />
       <div style={css('display:flex;align-items:center;gap:4px')}>
         <div onClick={() => canUndo && undo()} style={css(`width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:14px;color:${canUndo ? '#9a9aae' : '#4a4a5c'};cursor:${canUndo ? 'pointer' : 'default'}`)}>↶</div>

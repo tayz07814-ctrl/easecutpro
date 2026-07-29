@@ -238,13 +238,25 @@ function Root(): JSX.Element {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
     const unsub = useStore.subscribe((st, prev) => {
-      if (st.view !== 'editor' || !st.currentProjectId) return
+      if (st.view !== 'editor' || (!st.currentProjectId && !st.coworkSession)) return
       if (st.project === prev.project) return
       useStore.setState({ saveState: 'saving' })
       if (timer) clearTimeout(timer)
       timer = setTimeout(async () => {
         const s = useStore.getState()
-        if (s.view !== 'editor' || !s.currentProjectId) return
+        if (s.view !== 'editor') return
+        // Cloud Cowork project: edits persist to R2 as THIS member's version, not
+        // to the local `projects` table.
+        if (s.coworkSession) {
+          try {
+            await useStore.getState().saveCoworkEdit()
+            useStore.setState({ saveState: 'saved' })
+          } catch {
+            useStore.setState({ saveState: 'error' })
+          }
+          return
+        }
+        if (!s.currentProjectId) return
         try {
           // Dashboard thumbnail. openProjectRecord only eager-loads thumbnails for
           // legacy project.media; a doc-native project (clip dragged/clicked onto
