@@ -10,6 +10,7 @@ import {
   createSpace,
   ensureDefaultSpace,
   deleteSpace,
+  renameSpace,
   listMembers,
   inviteMember,
   removeMember,
@@ -71,6 +72,7 @@ export default function CoworkPanel(): JSX.Element {
   const [copied, setCopied] = useState(false)
   const [copiedLink, setCopiedLink] = useState(false)
   const [busy, setBusy] = useState('')
+  const [membersOpen, setMembersOpen] = useState(false)
   const [sharePick, setSharePick] = useState(false)
   const [localProjects, setLocalProjects] = useState<{ id: string; name: string }[]>([])
 
@@ -166,6 +168,26 @@ export default function CoworkPanel(): JSX.Element {
       setSpaceId(sp[0]?.id || '')
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Could not delete space')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const onRenameSpace = async (): Promise<void> => {
+    if (!space || !isOwner) return
+    const next = window.prompt('Rename this space', space.name)
+    if (next == null) return
+    const name = next.trim()
+    if (!name || name === space.name) return
+    setBusy('Renaming space…')
+    setErr('')
+    setNotice('')
+    try {
+      await renameSpace(space.id, name)
+      await reloadSpaces()
+      setNotice('Space renamed.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not rename the space')
     } finally {
       setBusy('')
     }
@@ -349,15 +371,15 @@ export default function CoworkPanel(): JSX.Element {
   const near = pct >= 90
 
   return (
-    <div style={css('display:flex;flex-direction:column;gap:20px')} onClick={() => setSharePick(false)}>
-      {/* header: title + space selector + actions */}
-      <div style={css('display:flex;align-items:center;gap:12px;flex-wrap:wrap')}>
+    <div style={css('display:flex;flex-direction:column;gap:16px')} onClick={() => { setSharePick(false); setMembersOpen(false) }}>
+      {/* header: title + space selector (+rename) + storage chip + members dropdown + actions */}
+      <div style={css('display:flex;align-items:center;gap:10px;flex-wrap:wrap')}>
         <h1 style={css('margin:0;font-size:19px;font-weight:600;letter-spacing:-.02em')}>Cloud cowork</h1>
         {spaces.length > 0 && (
           <select
             value={spaceId}
             onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setSpaceId(e.target.value)}
+            onChange={(e) => { setSpaceId(e.target.value); setMembersOpen(false) }}
             style={css('background:#111116;color:#EDEDF2;border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:8px 11px;font-size:13px;font-family:inherit;outline:none;cursor:pointer')}
           >
             {spaces.map((s) => (
@@ -365,9 +387,115 @@ export default function CoworkPanel(): JSX.Element {
             ))}
           </select>
         )}
-        <div style={css('flex:1')} />
         {isOwner && space && (
-          <button onClick={(e) => { e.stopPropagation(); void onDeleteSpace() }} style={css('background:transparent;border:1px solid rgba(255,255,255,.12);color:#FF9B9B;font-family:inherit;font-size:12.5px;padding:8px 12px;border-radius:9px;cursor:pointer')}>Delete space</button>
+          <span onClick={(e) => { e.stopPropagation(); void onRenameSpace() }} title="Rename this space" style={css('cursor:pointer;color:#8B8BA0;display:flex;align-items:center;padding:7px;border:1px solid rgba(255,255,255,.1);border-radius:8px')}>
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 13.5V16h2.5l7.4-7.4-2.5-2.5L4 13.5z" /><path d="M12.5 5.1l2.4 2.4" /></svg>
+          </span>
+        )}
+        <div style={css('flex:1')} />
+
+        {/* compact storage chip — small bar + % in the corner */}
+        {space && (
+          <div title={`${fmtBytes(usage.used)} of ${fmtBytes(usage.quota)} used`} style={css('display:flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:#111116')}>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke={near ? '#E6B26A' : '#8B8BA0'} strokeWidth="1.5"><path d="M2 5.5C2 4 4.7 3 8 3s6 1 6 2.5" /><path d="M2 5.5v5C2 12 4.7 13 8 13s6-1 6-2.5v-5" /><path d="M2 8c0 1.5 2.7 2.5 6 2.5s6-1 6-2.5" /></svg>
+            <div style={css('width:42px;height:5px;background:rgba(255,255,255,.09);border-radius:3px;overflow:hidden')}>
+              <div style={css(`width:${pct}%;height:100%;border-radius:3px;background:${near ? '#E6B26A' : '#7C6BFF'}`)} />
+            </div>
+            <span style={css(`font-family:'Geist Mono',monospace;font-size:11px;color:${near ? '#E6B26A' : '#8B8BA0'}`)}>{Math.round(pct)}%</span>
+          </div>
+        )}
+
+        {/* members dropdown — list + space key + requests + invite live here */}
+        {space && (
+          <div style={css('position:relative')} onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setMembersOpen((o) => !o)} style={css('display:flex;align-items:center;gap:7px;background:#111116;border:1px solid rgba(255,255,255,.1);color:#EDEDF2;font-family:inherit;font-size:12.5px;padding:8px 12px;border-radius:9px;cursor:pointer', membersOpen ? 'border-color:rgba(124,107,255,.5)' : '')}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#B9B9CC" strokeWidth="1.4"><circle cx="6" cy="5" r="2.4" /><path d="M2 13c0-2.2 1.8-3.6 4-3.6s4 1.4 4 3.6" /><path d="M11 4.2a2.2 2.2 0 0 1 0 4.1M14 13c0-1.9-1.2-3.2-2.8-3.5" /></svg>
+              <span>Members</span>
+              <span style={css("font-family:'Geist Mono',monospace;font-size:11px;color:#8B8BA0")}>{members.length}</span>
+              {isOwner && requests.length > 0 && (
+                <span style={css('min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#FF6B6B;color:#fff;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center')}>{requests.length}</span>
+              )}
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="#8B8BA0" strokeWidth="1.6" style={css(membersOpen ? 'transform:rotate(180deg)' : '')}><path d="M3 4.5L6 7.5 9 4.5" /></svg>
+            </button>
+            {membersOpen && (
+              <div style={css('position:absolute;right:0;top:calc(100% + 8px);width:344px;max-height:72vh;overflow-y:auto;background:#141419;border:1px solid rgba(255,255,255,.1);border-radius:14px;box-shadow:0 16px 40px rgba(0,0,0,.6);z-index:30;padding:14px')}>
+                {/* pending join requests — owner approves or declines each */}
+                {isOwner && requests.length > 0 && (
+                  <div style={css('margin-bottom:14px;padding:12px 13px;background:rgba(124,107,255,.07);border:1px solid rgba(124,107,255,.22);border-radius:11px')}>
+                    <div style={css('font-size:12.5px;font-weight:600;color:#C4BAFF;margin-bottom:10px')}>{requests.length} request{requests.length > 1 ? 's' : ''} to join</div>
+                    <div style={css('display:flex;flex-direction:column;gap:9px')}>
+                      {requests.map((r) => (
+                        <div key={r.id} style={css('display:flex;align-items:center;gap:10px')}>
+                          <div style={css('width:26px;height:26px;flex:none;border-radius:50%;background:#2A2A34;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#C9C9DA')}>{avatarText(r.username || r.name)}</div>
+                          <div style={css('flex:1;min-width:0')}>
+                            <div style={css('font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{r.username ? `@${r.username}` : r.name}</div>
+                            <div style={css('font-size:10.5px;color:#7A7A8C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{relTime(r.created_at)}</div>
+                          </div>
+                          <button onClick={() => void onDecideRequest(r, true)} style={css('background:#7C6BFF;border:none;color:#fff;font-family:inherit;font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:7px;cursor:pointer')}>Approve</button>
+                          <button onClick={() => void onDecideRequest(r, false)} style={css('background:transparent;border:1px solid rgba(255,255,255,.14);color:#B7B7C6;font-family:inherit;font-size:11.5px;padding:5px 9px;border-radius:7px;cursor:pointer')}>Decline</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* member list */}
+                <div style={css('display:flex;flex-direction:column;gap:9px')}>
+                  {members.map((m) => (
+                    <div key={m.user_id} style={css('display:flex;align-items:center;gap:10px')}>
+                      <div style={css('width:28px;height:28px;flex:none;border-radius:50%;background:#2A2A34;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;color:#C9C9DA')}>{avatarText(m.username || m.name)}</div>
+                      <div style={css('flex:1;min-width:0')}>
+                        <div style={css('font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{m.username ? `@${m.username}` : m.name}{m.user_id === uid ? ' (you)' : ''}</div>
+                        <div style={css('font-size:10.5px;color:#7A7A8C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{m.email || m.name}</div>
+                      </div>
+                      <span style={css('font-size:10px;padding:3px 7px;border-radius:20px;background:rgba(124,107,255,.14);color:#C4BAFF;text-transform:capitalize')}>{m.role}</span>
+                      {isOwner && m.role !== 'owner' && (
+                        <span onClick={() => void onRemoveMember(m.user_id)} style={css('cursor:pointer;color:#6E6E85;font-size:13px;padding:2px 3px')} title="Remove from space">✕</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* shareable space key */}
+                <div style={css('margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07)')}>
+                  <div style={css('display:flex;align-items:center;gap:8px;margin-bottom:9px')}>
+                    <span style={css('font-size:11.5px;color:#8B8BA0')}>Space key</span>
+                    <span style={css("font-family:'Geist Mono',monospace;font-size:12px;letter-spacing:.08em;color:#C4BAFF;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.28);border-radius:7px;padding:4px 9px")}>{space.join_key}</span>
+                  </div>
+                  <div style={css('display:flex;gap:7px;flex-wrap:wrap')}>
+                    <span onClick={() => void onCopyKey()} style={css('cursor:pointer;color:#9A9AAE;font-size:11.5px;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:5px 10px')}>{copied ? 'Copied' : 'Copy key'}</span>
+                    <span onClick={() => void onCopyInviteLink()} title="Copy an invite link that prefills this key" style={css('cursor:pointer;color:#9A9AAE;font-size:11.5px;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:5px 10px')}>{copiedLink ? 'Link copied' : 'Copy link'}</span>
+                    {isOwner && (
+                      <span onClick={() => void onRegenKey()} title="Generate a new key (invalidates the old one)" style={css('cursor:pointer;color:#9A9AAE;font-size:11.5px;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:5px 10px')}>New key</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* invite (owner) */}
+                {isOwner && (
+                  <div style={css('margin-top:14px')}>
+                    <div style={css('display:flex;gap:8px')}>
+                      <input
+                        value={inviteId}
+                        onChange={(e) => setInviteId(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') void onInvite() }}
+                        placeholder="Invite by @username or email"
+                        style={css('flex:1;min-width:0;font-size:12.5px;color:#EDEDF2;background:#0C0C10;border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:8px 10px;font-family:inherit;outline:none')}
+                      />
+                      <button onClick={() => void onInvite()} style={css('background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);color:#EDEDF2;font-family:inherit;font-size:12px;font-weight:500;padding:8px 13px;border-radius:9px;cursor:pointer;white-space:nowrap')}>Invite</button>
+                    </div>
+                    <div style={css('font-size:10.5px;color:#6E6E85;margin-top:7px;line-height:1.45')}>
+                      Invites land in the app for people who already have an EaseCut account (no email is sent). For anyone else, use Copy link.
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {isOwner && space && (
+          <button onClick={(e) => { e.stopPropagation(); void onDeleteSpace() }} style={css('background:transparent;border:1px solid rgba(255,255,255,.12);color:#FF9B9B;font-family:inherit;font-size:12.5px;padding:8px 12px;border-radius:9px;cursor:pointer')}>Delete</button>
         )}
         <button onClick={(e) => { e.stopPropagation(); void onNewSpace() }} style={css('background:#7C6BFF;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;padding:9px 15px;border-radius:9px;cursor:pointer;box-shadow:0 4px 16px rgba(124,107,255,.3)')}>New space</button>
       </div>
@@ -406,95 +534,8 @@ export default function CoworkPanel(): JSX.Element {
       {!space ? (
         <div style={css('padding:50px 0;text-align:center;color:#6E6E85;font-size:13px')}>No space selected.</div>
       ) : (
-        <>
-          {/* quota meter */}
-          <div style={css(`${CARD};padding:16px 18px`)}>
-            <div style={css('display:flex;align-items:baseline;gap:8px;margin-bottom:10px')}>
-              <span style={css('font-size:14px;font-weight:600')}>Storage</span>
-              <span style={css("font-family:'Geist Mono',monospace;font-size:11.5px;color:#8B8BA0")}>
-                {fmtBytes(usage.used)} of {fmtBytes(usage.quota)}
-              </span>
-              <div style={css('flex:1')} />
-              {near && <span style={css('font-size:11.5px;color:#E6B26A')}>Almost full — free up space or add a paid space</span>}
-            </div>
-            <div style={css('height:8px;background:rgba(255,255,255,.06);border-radius:6px;overflow:hidden')}>
-              <div style={css(`width:${pct}%;height:100%;border-radius:6px;background:${near ? '#E6B26A' : 'linear-gradient(90deg,#7C6BFF,#4B3DD1)'}`)} />
-            </div>
-          </div>
-
-          {/* members */}
-          <div style={css(`${CARD};padding:16px 18px`)}>
-            <div style={css('display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap')}>
-              <span style={css('font-size:14px;font-weight:600')}>Members</span>
-              <span style={css("font-family:'Geist Mono',monospace;font-size:11px;color:#6E6E85")}>{members.length}</span>
-              <div style={css('flex:1')} />
-              {/* shareable space key — entering it sends the owner a join request */}
-              <span style={css('font-size:11.5px;color:#8B8BA0')}>Space key</span>
-              <span style={css("font-family:'Geist Mono',monospace;font-size:12px;letter-spacing:.08em;color:#C4BAFF;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.28);border-radius:7px;padding:4px 9px")}>{space.join_key}</span>
-              <span onClick={() => void onCopyKey()} style={css('cursor:pointer;color:#9A9AAE;font-size:11.5px;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:4px 9px')}>{copied ? 'Copied' : 'Copy'}</span>
-              <span onClick={() => void onCopyInviteLink()} title="Copy an invite link that prefills this key" style={css('cursor:pointer;color:#9A9AAE;font-size:11.5px;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:4px 9px')}>{copiedLink ? 'Link copied' : 'Copy link'}</span>
-              {isOwner && (
-                <span onClick={() => void onRegenKey()} title="Generate a new key (invalidates the old one)" style={css('cursor:pointer;color:#9A9AAE;font-size:11.5px;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:4px 9px')}>New key</span>
-              )}
-            </div>
-
-            {/* pending join requests — owner approves or declines each */}
-            {isOwner && requests.length > 0 && (
-              <div style={css('margin-bottom:14px;padding:12px 13px;background:rgba(124,107,255,.07);border:1px solid rgba(124,107,255,.22);border-radius:11px')}>
-                <div style={css('font-size:12.5px;font-weight:600;color:#C4BAFF;margin-bottom:10px')}>
-                  {requests.length} request{requests.length > 1 ? 's' : ''} to join
-                </div>
-                <div style={css('display:flex;flex-direction:column;gap:9px')}>
-                  {requests.map((r) => (
-                    <div key={r.id} style={css('display:flex;align-items:center;gap:11px')}>
-                      <div style={css('width:28px;height:28px;flex:none;border-radius:50%;background:#2A2A34;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;color:#C9C9DA')}>{avatarText(r.username || r.name)}</div>
-                      <div style={css('flex:1;min-width:0')}>
-                        <div style={css('font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{r.username ? `@${r.username}` : r.name}</div>
-                        <div style={css('font-size:11px;color:#7A7A8C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{r.email || r.name} · {relTime(r.created_at)}</div>
-                      </div>
-                      <button onClick={() => void onDecideRequest(r, true)} style={css('background:#7C6BFF;border:none;color:#fff;font-family:inherit;font-size:12px;font-weight:600;padding:6px 13px;border-radius:8px;cursor:pointer')}>Approve</button>
-                      <button onClick={() => void onDecideRequest(r, false)} style={css('background:transparent;border:1px solid rgba(255,255,255,.14);color:#B7B7C6;font-family:inherit;font-size:12px;padding:6px 11px;border-radius:8px;cursor:pointer')}>Decline</button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div style={css('display:flex;flex-direction:column;gap:9px')}>
-              {members.map((m) => (
-                <div key={m.user_id} style={css('display:flex;align-items:center;gap:11px')}>
-                  <div style={css('width:30px;height:30px;flex:none;border-radius:50%;background:#2A2A34;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#C9C9DA')}>{avatarText(m.username || m.name)}</div>
-                  <div style={css('flex:1;min-width:0')}>
-                    <div style={css('font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{m.username ? `@${m.username}` : m.name}{m.user_id === uid ? ' (you)' : ''}</div>
-                    <div style={css('font-size:11px;color:#7A7A8C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{m.email || m.name}</div>
-                  </div>
-                  <span style={css(`font-size:10.5px;padding:3px 8px;border-radius:20px;background:rgba(124,107,255,.14);color:#C4BAFF;text-transform:capitalize`)}>{m.role}</span>
-                  {isOwner && m.role !== 'owner' && (
-                    <span onClick={() => void onRemoveMember(m.user_id)} style={css('cursor:pointer;color:#6E6E85;font-size:14px;padding:2px 4px')} title="Remove from space">✕</span>
-                  )}
-                </div>
-              ))}
-            </div>
-            {isOwner && (
-              <div style={css('margin-top:14px')}>
-                <div style={css('display:flex;gap:8px')}>
-                  <input
-                    value={inviteId}
-                    onChange={(e) => setInviteId(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') void onInvite() }}
-                    placeholder="Invite by @username or account email"
-                    style={css('flex:1;min-width:0;font-size:13px;color:#EDEDF2;background:#0C0C10;border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:9px 11px;font-family:inherit;outline:none')}
-                  />
-                  <button onClick={() => void onInvite()} style={css('background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);color:#EDEDF2;font-family:inherit;font-size:12.5px;font-weight:500;padding:9px 15px;border-radius:9px;cursor:pointer;white-space:nowrap')}>Invite</button>
-                </div>
-                <div style={css('font-size:11px;color:#6E6E85;margin-top:7px;line-height:1.45')}>
-                  Invites land in the app for people who already have an EaseCut account (no email is sent). For anyone else, use <span style={css('color:#9A9AAE')}>Copy link</span> above and send it however you like.
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* projects */}
-          <div style={css(`${CARD};padding:16px 18px`)}>
+        /* center area — projects only */
+        <div style={css(`${CARD};padding:16px 18px;min-height:380px`)}>
             <div style={css('display:flex;align-items:center;gap:8px;margin-bottom:14px;position:relative')}>
               <span style={css('font-size:14px;font-weight:600')}>Projects</span>
               <span style={css("font-family:'Geist Mono',monospace;font-size:11px;color:#6E6E85")}>{projects.length}</span>
@@ -531,8 +572,7 @@ export default function CoworkPanel(): JSX.Element {
                 ))}
               </div>
             )}
-          </div>
-        </>
+        </div>
       )}
     </div>
   )
