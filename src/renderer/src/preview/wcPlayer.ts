@@ -78,19 +78,25 @@ class Pipe {
     private readonly onError: (e: unknown) => void
   ) {}
 
-  /** Coverage score for time t: 0 = this pipe can show t right now (tie-break
-   *  by distance from cur), else the distance to its covered window. A restart
-   *  already decoding toward t counts as covering it. */
-  score(t: number): number {
-    if (this.pendingStart !== null && t >= this.pendingStart - 0.1 && t <= this.pendingStart + 2.5) {
-      return Math.abs(t - this.pendingStart) / 1e6
-    }
+  /** Coverage by DECODED frames only: ~0 when `cur`/queue can show t right
+   *  now, else the distance to the covered window. */
+  frameScore(t: number): number {
     if (!this.cur) return Number.POSITIVE_INFINITY
     const lo = this.cur.timestamp - 0.06
     const last = this.queue.length ? this.queue[this.queue.length - 1] : this.cur
     const hi = last.timestamp + last.duration + COVER_SLACK
     if (t >= lo && t <= hi) return Math.abs(t - this.cur.timestamp) / 1e6 // covered; prefer the closer cur
     return Math.min(Math.abs(t - lo), Math.abs(t - hi))
+  }
+
+  /** Coverage score for time t — a restart already DECODING toward t counts as
+   *  covering it (used to pick which pipe should own t; drawing still needs a
+   *  real frame, see frameScore). */
+  score(t: number): number {
+    if (this.pendingStart !== null && t >= this.pendingStart - 0.1 && t <= this.pendingStart + 2.5) {
+      return Math.abs(t - this.pendingStart) / 1e6
+    }
+    return this.frameScore(t)
   }
 
   /** Restart the iterator at `t` (closing everything queued). The old `cur`
@@ -206,7 +212,10 @@ class Pipe {
 interface SourcePipes {
   input: Input | null
   pipes: [Pipe, Pipe] | null
-  live: 0 | 1
+  /** Which pipe OWNS the currently-displayed time (recomputed every render).
+   *  prewarm() may only ever touch the other one — restarting the owner
+   *  mid-segment killed its frames and froze the picture on short segments. */
+  owner: 0 | 1
   ready: boolean
   dead: boolean
 }
@@ -250,7 +259,7 @@ export class WcPlayer {
   }
 
   private open(src: string): void {
-    const sp: SourcePipes = { input: null, pipes: null, live: 0, ready: false, dead: false }
+    const sp: SourcePipes = { input: null, pipes: null, owner: 0, ready: false, dead: false }
     this.sources.set(src, sp)
     void (async () => {
       try {
@@ -272,32 +281,39 @@ export class WcPlayer {
     })()
   }
 
-  /** Park a source's WARM pipe at an upcoming in-point (seam decode-ahead). */
+  /** Park a source's non-owner pipe at an upcoming in-point (seam decode-ahead).
+   *  NEVER the owner: on segments shorter than the prewarm lead this used to
+   *  restart the pipe still decoding the CURRENT segment — a frozen picture. */
   prewarm(src: string, tSrc: number): void {
     const sp = this.sources.get(src)
     if (!sp?.ready || !sp.pipes) return
-    sp.pipes[sp.live ^ 1].park(tSrc)
+    sp.pipes[sp.owner ^ 1].park(tSrc)
   }
 
   /**
    * Draw the frame for (src, tSrc) letterboxed into a cw×ch canvas context.
-   * Picks the better-covering pipe (flipping live at a seam), advances it while
-   * playing or one-shot-fetches while paused. Returns true if a frame painted.
+   * The pipe that best covers tSrc (a pending restart counts) OWNS the time and
+   * is advanced/one-shot-fetched; drawing prefers the owner's REAL frame and
+   * otherwise falls back to the nearest stale frame either pipe holds — a held
+   * frame for a tick or two beats a black flash. Returns true if painted.
    */
   render(ctx: CanvasRenderingContext2D, cw: number, ch: number, src: string, tSrc: number, playing: boolean): boolean {
     const sp = this.sources.get(src)
     if (!sp?.ready || !sp.pipes || sp.dead) return false
     const [a, b] = sp.pipes
-    const cand = a.score(tSrc) <= b.score(tSrc) ? 0 : 1
-    if (cand !== sp.live && sp.pipes[cand].score(tSrc) < sp.pipes[sp.live].score(tSrc) - 1e-9) sp.live = cand as 0 | 1
-    const pipe = sp.pipes[sp.live]
-    if (playing) pipe.follow(tSrc)
-    else pipe.requestStill(tSrc)
-    const s = pipe.cur
-    if (!s) {
-      if (!playing) return false
-      return false
+    sp.owner = a.score(tSrc) <= b.score(tSrc) ? 0 : 1
+    const own = sp.pipes[sp.owner]
+    const other = sp.pipes[sp.owner ^ 1]
+    if (playing) own.follow(tSrc)
+    else own.requestStill(tSrc)
+    let s: VideoSample | null = null
+    if (own.cur && own.frameScore(tSrc) <= COVER_SLACK) s = own.cur
+    else {
+      const c1 = own.cur
+      const c2 = other.cur
+      s = !c1 ? c2 : !c2 ? c1 : Math.abs(c1.timestamp - tSrc) <= Math.abs(c2.timestamp - tSrc) ? c1 : c2
     }
+    if (!s) return false
     const r = containRect(cw, ch, s.displayWidth / s.displayHeight)
     try {
       s.draw(ctx, r.left, r.top, r.width, r.height)
