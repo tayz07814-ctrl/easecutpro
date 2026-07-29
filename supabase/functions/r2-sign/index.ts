@@ -53,7 +53,7 @@ Deno.serve(async (req: Request) => {
   }
   // Sanitize the relative key: no traversal, no absolute paths — everything stays
   // under spaces/<spaceId>/, so a member can never reach another space's objects.
-  const clean = String(key).replace(/^\/+/, '')
+  const clean = String(key).replace(/^[/]+/, '')
   if (!clean || clean.includes('..') || clean.length > 512) return json({ error: 'invalid key' }, 400)
 
   // Caller identity from the JWT.
@@ -81,10 +81,12 @@ Deno.serve(async (req: Request) => {
   if (!member) return json({ error: 'not a member of this space' }, 403)
 
   // R2 config (server-only).
-  const account = Deno.env.get('R2_ACCOUNT_ID')
-  const accessKeyId = Deno.env.get('R2_ACCESS_KEY_ID')
-  const secretAccessKey = Deno.env.get('R2_SECRET_ACCESS_KEY')
-  const bucket = Deno.env.get('R2_BUCKET')
+  // .trim() defends against a trailing newline/space in a pasted secret (which
+  // otherwise corrupts the SigV4 Authorization header and R2 rejects the request).
+  const account = Deno.env.get('R2_ACCOUNT_ID')?.trim()
+  const accessKeyId = Deno.env.get('R2_ACCESS_KEY_ID')?.trim()
+  const secretAccessKey = Deno.env.get('R2_SECRET_ACCESS_KEY')?.trim()
+  const bucket = Deno.env.get('R2_BUCKET')?.trim()
   if (!account || !accessKeyId || !secretAccessKey || !bucket) {
     return json(
       { error: 'R2 is not configured on the server — set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET' },
