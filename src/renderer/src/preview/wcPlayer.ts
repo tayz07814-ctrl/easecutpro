@@ -66,6 +66,12 @@ class Pipe {
   private pumping = false
   private stillBusy = false
   private stillWant: number | null = null
+  /** Where an in-flight restart is decoding toward. `cur` stays on the STALE
+   *  frame until the restarted iterator's first frame lands, so any "am I
+   *  covering t?" check MUST consult this — judging by the stale `cur` made
+   *  every tick issue another restart, each killing the previous pump before
+   *  it could deliver a frame: a frozen picture with running audio. */
+  private pendingStart: number | null = null
 
   constructor(
     private readonly sink: VideoSampleSink,
@@ -73,8 +79,12 @@ class Pipe {
   ) {}
 
   /** Coverage score for time t: 0 = this pipe can show t right now (tie-break
-   *  by distance from cur), else the distance to its covered window. */
+   *  by distance from cur), else the distance to its covered window. A restart
+   *  already decoding toward t counts as covering it. */
   score(t: number): number {
+    if (this.pendingStart !== null && t >= this.pendingStart - 0.1 && t <= this.pendingStart + 2.5) {
+      return Math.abs(t - this.pendingStart) / 1e6
+    }
     if (!this.cur) return Number.POSITIVE_INFINITY
     const lo = this.cur.timestamp - 0.06
     const last = this.queue.length ? this.queue[this.queue.length - 1] : this.cur
@@ -92,6 +102,7 @@ class Pipe {
     if (old) void old.return(undefined).catch(() => undefined)
     for (const s of this.queue) s.close()
     this.queue = []
+    this.pendingStart = Math.max(0, t)
     try {
       this.iter = this.sink.samples(Math.max(0, t))
     } catch (e) {
@@ -115,6 +126,7 @@ class Pipe {
         }
         if (r.done) break
         this.queue.push(r.value)
+        this.pendingStart = null // the restarted iterator delivered — coverage is real again
       }
     } catch (e) {
       if (myGen === this.gen) this.onError(e)
@@ -123,8 +135,18 @@ class Pipe {
     }
   }
 
-  /** Advance `cur` to the newest decoded frame at or before `t` (playing). */
-  advance(t: number): void {
+  /** Playing: keep `cur` tracking `t`, starting/restarting the iterator as
+   *  needed. Never re-restarts while a restart is still decoding toward a
+   *  nearby time (that's what froze the picture). */
+  follow(t: number): void {
+    if (this.pendingStart !== null) {
+      // a restart is in flight; only abandon it if the playhead ran far past
+      if (Math.abs(t - this.pendingStart) > 2.5) this.restart(t)
+    } else if (!this.iter) {
+      this.restart(t) // first play after a paused still: begin decoding
+    } else if (this.score(t) > 1.5) {
+      this.restart(t) // jumped beyond coverage (scrub-then-play, big skip)
+    }
     let moved = false
     while (this.queue.length && this.queue[0].timestamp <= t) {
       this.cur?.close()
@@ -132,6 +154,14 @@ class Pipe {
       moved = true
     }
     if (moved || this.queue.length < QUEUE_AHEAD) void this.pump()
+  }
+
+  /** Park this pipe decoding at `t` (seam prewarm) unless it's already there
+   *  or already restarting toward it. */
+  park(t: number): void {
+    if (this.pendingStart !== null && Math.abs(t - this.pendingStart) < 0.5) return
+    if (this.score(t) <= 0.25) return
+    this.restart(t)
   }
 
   /** Paused/scrub: fetch exactly the frame at `t` (debounced one-shot). */
@@ -169,6 +199,7 @@ class Pipe {
     this.queue = []
     this.cur?.close()
     this.cur = null
+    this.pendingStart = null
   }
 }
 
@@ -245,8 +276,7 @@ export class WcPlayer {
   prewarm(src: string, tSrc: number): void {
     const sp = this.sources.get(src)
     if (!sp?.ready || !sp.pipes) return
-    const warm = sp.pipes[sp.live ^ 1]
-    if (warm.score(tSrc) > 0.25) warm.restart(tSrc)
+    sp.pipes[sp.live ^ 1].park(tSrc)
   }
 
   /**
@@ -261,12 +291,8 @@ export class WcPlayer {
     const cand = a.score(tSrc) <= b.score(tSrc) ? 0 : 1
     if (cand !== sp.live && sp.pipes[cand].score(tSrc) < sp.pipes[sp.live].score(tSrc) - 1e-9) sp.live = cand as 0 | 1
     const pipe = sp.pipes[sp.live]
-    if (playing) {
-      if (pipe.score(tSrc) > 1.5) pipe.restart(tSrc) // jumped beyond coverage (scrub-then-play, big skip)
-      pipe.advance(tSrc)
-    } else {
-      pipe.requestStill(tSrc)
-    }
+    if (playing) pipe.follow(tSrc)
+    else pipe.requestStill(tSrc)
     const s = pipe.cur
     if (!s) {
       if (!playing) return false
