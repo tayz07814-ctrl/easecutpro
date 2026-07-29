@@ -180,7 +180,7 @@ export default function CoworkPanel(): JSX.Element {
       const who = inviteId.trim()
       await inviteMember(spaceId, who)
       setInviteId('')
-      setNotice(`Invitation sent to ${who} — they'll see it in their notifications.`)
+      setNotice(`Invite sent to ${who} — they'll see it in their in-app notifications.`)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Could not send invite')
     } finally {
@@ -475,15 +475,20 @@ export default function CoworkPanel(): JSX.Element {
               ))}
             </div>
             {isOwner && (
-              <div style={css('display:flex;gap:8px;margin-top:14px')}>
-                <input
-                  value={inviteId}
-                  onChange={(e) => setInviteId(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') void onInvite() }}
-                  placeholder="Invite by username or email"
-                  style={css('flex:1;min-width:0;font-size:13px;color:#EDEDF2;background:#0C0C10;border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:9px 11px;font-family:inherit;outline:none')}
-                />
-                <button onClick={() => void onInvite()} style={css('background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);color:#EDEDF2;font-family:inherit;font-size:12.5px;font-weight:500;padding:9px 15px;border-radius:9px;cursor:pointer;white-space:nowrap')}>Invite</button>
+              <div style={css('margin-top:14px')}>
+                <div style={css('display:flex;gap:8px')}>
+                  <input
+                    value={inviteId}
+                    onChange={(e) => setInviteId(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void onInvite() }}
+                    placeholder="Invite by @username or account email"
+                    style={css('flex:1;min-width:0;font-size:13px;color:#EDEDF2;background:#0C0C10;border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:9px 11px;font-family:inherit;outline:none')}
+                  />
+                  <button onClick={() => void onInvite()} style={css('background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);color:#EDEDF2;font-family:inherit;font-size:12.5px;font-weight:500;padding:9px 15px;border-radius:9px;cursor:pointer;white-space:nowrap')}>Invite</button>
+                </div>
+                <div style={css('font-size:11px;color:#6E6E85;margin-top:7px;line-height:1.45')}>
+                  Invites land in the app for people who already have an EaseCut account (no email is sent). For anyone else, use <span style={css('color:#9A9AAE')}>Copy link</span> above and send it however you like.
+                </div>
               </div>
             )}
           </div>
