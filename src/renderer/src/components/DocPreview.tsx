@@ -392,6 +392,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // "buffering" beat right after open/apply on long videos) — and if it still
   // can't start after a generous window, fall back to the element path.
   const wcAudioWaitRef = useRef(0)
+  // A play edge must not release the audio/master clock until WebCodecs has the
+  // current frame AND a decoded frame ahead. Otherwise a long-GOP source holds
+  // its paused still while audio/playhead run, then visibly catches up later.
+  const wcVideoReadyRef = useRef(false)
+  const wcVideoWaitRef = useRef(0)
   const srcSig = sources.join('|')
   useEffect(() => {
     if (!wcOn) return
@@ -417,7 +422,16 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   useEffect(() => {
     if (Math.abs(playhead - lastWroteRef.current) > 0.0005) {
       tRef.current = playhead // adopt: the user moved the playhead
+      // This accepted external position is now the synchronization baseline.
+      // Without updating it, scrubbing back to the player's previous write
+      // (especially rewind to 0 after editing at 3s) looked like an echoed
+      // internal write and was ignored, leaving the private clock at 3s.
+      lastWroteRef.current = playhead
       audioEngineRef.current?.seek(playhead) // re-anchor the decoupled audio to the scrub
+      if (!playingRef.current) {
+        wcVideoReadyRef.current = false
+        wcVideoWaitRef.current = 0
+      }
     }
   }, [playhead])
 
@@ -428,6 +442,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     .join('|')
   useEffect(() => {
     audioEngineRef.current?.setSegments(segs)
+    wcVideoReadyRef.current = false
+    wcVideoWaitRef.current = 0
     // segs is rebuilt every render; audioSig captures its content.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioSig])
@@ -445,12 +461,23 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     const eng = audioEngineRef.current
     if (!eng) return
     if (playing) {
-      eng.play(tRef.current)
-      // Engine already audible at ▶ → the reconciler's first tick is NOT a rising
-      // edge (a re-anchor there would rebuild the just-built schedule for nothing).
-      engActiveRef.current = eng.active()
+      if (wcOnRef.current) {
+        // The reconciler starts this only after wc.prime() has decoded a frame
+        // ahead. Starting it here made audio outrun a cold video iterator.
+        eng.pause()
+        wcVideoReadyRef.current = false
+        wcVideoWaitRef.current = 0
+        engActiveRef.current = false
+      } else {
+        eng.play(tRef.current)
+        // Engine already audible at ▶ → the reconciler's first tick is NOT a rising
+        // edge (a re-anchor there would rebuild the just-built schedule for nothing).
+        engActiveRef.current = eng.active()
+      }
     } else {
       eng.pause()
+      wcVideoReadyRef.current = false
+      wcVideoWaitRef.current = 0
       engActiveRef.current = false
     }
   }, [playing])
@@ -693,23 +720,56 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         // main-thread hitches). No decoder chasing: frames are drawn from the
         // decode queues in the display section below, never seeked.
         const eng = audioEngineRef.current
-        if (wcRef.current?.failed) setWcOn(false) // decode broke → element path next tick
-        const engActive = !!(eng && eng.active())
-        if (engActive) {
-          wcAudioWaitRef.current = 0
-          const ex = eng!.expected()
-          // follow the audio clock, never backward, never a wild jump forward
-          t = Math.max(t, Math.min(ex, t + Math.max(0.25, dt * 3)))
-        } else {
-          // Audio can't sound yet (decoding / context resuming): HOLD the
-          // clock — a silent picture running ahead of its own sound is worse
-          // than a beat of buffering. If it still can't start, fall back to
-          // the element path (which has element audio).
-          if (!wcAudioWaitRef.current) wcAudioWaitRef.current = now
-          if (now - wcAudioWaitRef.current > 6000) {
-            console.warn('[wc-preview] audio engine never started — falling back to element path')
-            setWcOn(false)
+        const wc = wcRef.current
+        if (wc?.failed) setWcOn(false) // decode broke → element path next tick
+
+        // First prime the CURRENT source while the timeline is held. A paused
+        // still is not sufficient: require one queued future frame so playback
+        // cannot start with a frozen first picture on long-GOP media.
+        if (!wcVideoReadyRef.current) {
+          let videoReady = !active || active.isImage
+          if (active && !active.isImage && wc) {
+            const tSrc = active.sourceStart + clamp(t - active.start, 0, active.len) * active.speed
+            videoReady = wc.prime(active.src, Math.min(tSrc, active.sourceEnd - 0.001))
           }
+          if (videoReady) {
+            wcVideoReadyRef.current = true
+            wcVideoWaitRef.current = 0
+          } else {
+            if (!wcVideoWaitRef.current) wcVideoWaitRef.current = now
+            if (eng?.isPlaying()) eng.pause()
+            if (now - wcVideoWaitRef.current > 6000) setWcOn(false)
+          }
+        }
+
+        if (wcVideoReadyRef.current) {
+          // Do not mark the audio clock as playing until decoded buffers exist;
+          // expected() must never advance on a schedule containing no nodes.
+          if (eng?.failedForCurrentSegments()) {
+            // A revoked/unsupported source must not leave the canvas frozen for
+            // the full buffering timeout; hand back to element A/V immediately.
+            eng.pause()
+            setWcOn(false)
+          } else if (eng?.ready() && !eng.isPlaying()) eng.play(t)
+          const engActive = !!(eng && eng.active())
+          if (engActive) {
+            wcAudioWaitRef.current = 0
+            const ex = eng!.expected()
+            // follow the audio clock, never backward, never a wild jump forward
+            t = Math.max(t, Math.min(ex, t + Math.max(0.25, dt * 3)))
+          } else {
+            // Audio can't sound yet (decoding / context resuming): HOLD the
+            // clock — a silent picture running ahead of its own sound is worse
+            // than a beat of buffering. If it still can't start, fall back to
+            // the element path (which has element audio).
+            if (!wcAudioWaitRef.current) wcAudioWaitRef.current = now
+            if (now - wcAudioWaitRef.current > 6000) {
+              console.warn('[wc-preview] audio engine never started — falling back to element path')
+              setWcOn(false)
+            }
+          }
+        } else {
+          wcAudioWaitRef.current = 0
         }
         if (t >= totalRef.current - 1e-4) {
           playingRef.current = false

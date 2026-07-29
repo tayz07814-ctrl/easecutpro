@@ -64,8 +64,6 @@ class Pipe {
   private iter: AsyncGenerator<VideoSample, void, unknown> | null = null
   private gen = 0
   private pumping = false
-  private stillBusy = false
-  private stillWant: number | null = null
   /** Where an in-flight restart is decoding toward. `cur` stays on the STALE
    *  frame until the restarted iterator's first frame lands, so any "am I
    *  covering t?" check MUST consult this — judging by the stale `cur` made
@@ -169,6 +167,14 @@ class Pipe {
     if (moved || this.queue.length < QUEUE_AHEAD) void this.pump()
   }
 
+  /** Start/follow the streaming iterator and report when it has both the frame
+   *  at `t` and at least one decoded frame after it. The latter is the small
+   *  runway required to start the audio clock without holding the first frame. */
+  prime(t: number): boolean {
+    this.follow(t)
+    return this.pendingStart === null && this.frameScore(t) <= COVER_SLACK && this.queue.length > 0
+  }
+
   /** Park this pipe decoding at `t` (seam prewarm) unless it's already there
    *  or already restarting toward it. */
   park(t: number): void {
@@ -177,30 +183,29 @@ class Pipe {
     this.restart(t)
   }
 
-  /** Paused/scrub: fetch exactly the frame at `t` (debounced one-shot). */
+  /** Paused/scrub: use the SAME sequential iterator playback will consume.
+   *  The previous sparse getSample() path created a second decoder; when Play
+   *  arrived before it finished, its late still could overwrite streamed frames
+   *  and the two decoders contended for hardware. Keeping one iterator means the
+   *  paused frame also leaves a ready-made playback runway in `queue`. */
   requestStill(t: number): void {
-    if (this.cur && Math.abs(this.cur.timestamp - t) <= Math.max(0.02, this.cur.duration)) return
-    this.stillWant = t
-    if (this.stillBusy) return
-    this.stillBusy = true
-    const run = async (): Promise<void> => {
-      try {
-        while (this.stillWant !== null) {
-          const want = this.stillWant
-          this.stillWant = null
-          const s = await this.sink.getSample(want)
-          if (s) {
-            this.cur?.close()
-            this.cur = s
-          }
-        }
-      } catch (e) {
-        this.onError(e)
-      } finally {
-        this.stillBusy = false
-      }
+    // Promote a decoded landing frame BEFORE testing coverage. Checking `cur`
+    // first sees it as empty even though queue[0] is ready, and restarts the
+    // iterator every rAF before that frame can ever be drawn.
+    let moved = false
+    while (this.queue.length && this.queue[0].timestamp <= t) {
+      this.cur?.close()
+      this.cur = this.queue.shift() as VideoSample
+      moved = true
     }
-    void run()
+    if (this.pendingStart !== null) {
+      // A real scrub supersedes an older landing immediately; repeated rAF
+      // requests for the same target leave its decoder alone.
+      if (Math.abs(t - this.pendingStart) > 0.08) this.restart(t)
+    } else if (!this.iter || this.frameScore(t) > 0.08) {
+      this.restart(t)
+    }
+    if (moved || this.queue.length < QUEUE_AHEAD) void this.pump()
   }
 
   dispose(): void {
@@ -296,6 +301,16 @@ export class WcPlayer {
     const sp = this.sources.get(src)
     if (!sp?.ready || !sp.pipes) return
     sp.pipes[sp.owner ^ 1].park(tSrc)
+  }
+
+  /** Prepare sequential playback at a source timestamp. Returns true only when
+   *  the selected pipe has a presentable frame plus decoded runway ahead. */
+  prime(src: string, tSrc: number): boolean {
+    const sp = this.sources.get(src)
+    if (!sp?.ready || !sp.pipes || sp.dead) return false
+    const [a, b] = sp.pipes
+    sp.owner = a.score(tSrc) <= b.score(tSrc) ? 0 : 1
+    return sp.pipes[sp.owner].prime(tSrc)
   }
 
   /**

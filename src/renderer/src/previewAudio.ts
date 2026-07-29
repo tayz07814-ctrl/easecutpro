@@ -11,6 +11,8 @@
 // clock, so seam transitions are sample-adjacent in OUTPUT time (gapless); a 6ms
 // gain ramp at each scheduled edge guards the splice click from a non-zero sample.
 
+import { getFile, isWebMediaId } from './webmedia'
+
 /** A main-lane segment as the audio engine needs it (subset of the preview Seg). */
 export interface AudioSeg {
   src: string
@@ -74,6 +76,7 @@ export class SeamlessAudio {
   private ctx: AudioContext | null = null
   private buffers = new Map<string, AudioBuffer>()
   private decoding = new Map<string, Promise<void>>()
+  private failed = new Set<string>()
   private nodes: AudioBufferSourceNode[] = []
   private segs: AudioSeg[] = []
   private startCtx = 0
@@ -92,14 +95,22 @@ export class SeamlessAudio {
    *  unloaded so `ready()` returns false and the caller keeps element audio. */
   load(src: string, url: string): void {
     if (this.buffers.has(src) || this.decoding.has(src)) return
+    this.failed.delete(src)
     const p = (async () => {
       const ctx = this.ensureCtx()
-      const bytes = await (await fetch(url)).arrayBuffer()
+      // Browser-local media is identified by a stable webmedia id while its
+      // blob URL may be replaced/revoked after a timeline edit. Read the
+      // registered File directly, just like the WebCodecs video path does.
+      const file = isWebMediaId(src) ? getFile(src) : undefined
+      const bytes = file ? await file.arrayBuffer() : await (await fetch(url)).arrayBuffer()
       const buf = await ctx.decodeAudioData(bytes)
       this.buffers.set(src, buf)
-    })().catch(() => {
-      /* leave unloaded → fallback to element audio */
-    })
+    })()
+      .catch(() => {
+        this.failed.add(src)
+        /* leave unloaded → fallback to element audio */
+      })
+      .finally(() => this.decoding.delete(src))
     this.decoding.set(src, p)
   }
 
@@ -111,6 +122,11 @@ export class SeamlessAudio {
   /** Every audible segment's source is decoded → safe to drive the audio. */
   ready(): boolean {
     return this.segs.length > 0 && this.segs.every((s) => s.muted || this.buffers.has(s.src))
+  }
+
+  /** A current audible source finished loading but could not be decoded. */
+  failedForCurrentSegments(): boolean {
+    return this.segs.some((s) => !s.muted && this.failed.has(s.src))
   }
 
   private clearNodes(): void {
