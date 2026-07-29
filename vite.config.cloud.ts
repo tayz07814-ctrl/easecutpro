@@ -19,9 +19,13 @@ function cloudCsp(supabaseUrl: string | undefined): Plugin {
   }
   const https = origin || 'https://*.supabase.co'
   const wss = https.replace(/^https/, 'wss')
+  // Cloud Cowork uploads/downloads media + edit JSON straight to Cloudflare R2 via
+  // presigned URLs; without the R2 host in connect-src the browser blocks those
+  // fetches and the app dies with "Failed to fetch" on share/open.
+  const r2 = 'https://*.r2.cloudflarestorage.com'
   const CSP = [
     "default-src 'self'",
-    `connect-src 'self' blob: data: ${https} ${wss}`,
+    `connect-src 'self' blob: data: ${https} ${wss} ${r2}`,
     "img-src 'self' data: blob:",
     "media-src 'self' blob: data:",
     // Custom fonts register as FontFaces from data:/blob: URLs (uploaded files +

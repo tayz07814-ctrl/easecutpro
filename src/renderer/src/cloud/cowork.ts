@@ -275,7 +275,7 @@ export async function shareProject(
   spaceId: string,
   project: Project,
   name: string,
-  onStep?: (s: string) => void
+  onStep?: (s: string, pct?: number) => void
 ): Promise<CoworkProject> {
   const sb = getSupabase()
   const u = await me()
@@ -289,21 +289,34 @@ export async function shareProject(
 
   const ids = new Set<string>()
   collectMediaIds(project, ids)
-  const manifest: MediaManifest = {}
-  let total = 0
+  // Only files whose bytes are in THIS browser session can be uploaded.
+  const files: { id: string; f: File }[] = []
   for (const id of ids) {
     const f = getFile(id)
-    if (!f) continue // not in this browser session — can't upload its bytes
-    onStep?.(`Uploading ${f.name}…`)
+    if (f) files.push({ id, f })
+  }
+  const totalUnits = files.length + 2 // media files + manifest + edit JSON
+  let done = 0
+  const report = (label: string): void => onStep?.(label, Math.min(99, Math.round((done / totalUnits) * 100)))
+
+  const manifest: MediaManifest = {}
+  let total = 0
+  for (const { id, f } of files) {
+    report(`Uploading ${f.name}…`)
     await r2Put(spaceId, mediaKey(pid, id), f, true)
     manifest[id] = { name: f.name, type: f.type }
     total += f.size
+    done++
   }
+  report('Saving file list…')
   await r2Put(spaceId, manifestKey(pid), new Blob([JSON.stringify(manifest)], { type: 'application/json' }), false)
+  done++
 
-  onStep?.('Saving project…')
+  report('Saving project…')
   const editBlob = new Blob([JSON.stringify(serializeProjectLite(project))], { type: 'application/json' })
   await r2Put(spaceId, editKey(pid, u.id), editBlob, false)
+  done++
+  onStep?.('Uploaded', 100)
 
   const now = new Date().toISOString()
   await sb.from('space_projects').update({ media_bytes: total, updated_at: now }).eq('id', pid)

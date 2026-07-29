@@ -108,7 +108,7 @@ function Card({ card, onOpen, onDots, menuOpen, hovered, onHover, renaming, onRe
       onMouseLeave={() => onHover?.(false)}
       style={css(
         'background:#101015;border:1px solid rgba(255,255,255,.07);border-radius:14px;cursor:pointer;transition:border-color .15s,transform .15s;position:relative',
-        showHover ? 'overflow:visible;border-color:rgba(124,107,255,.45);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.35)' : 'overflow:hidden'
+        showHover ? 'overflow:visible;border-color:rgba(124,107,255,.45);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.35);z-index:20' : 'overflow:hidden'
       )}
     >
       <div style={css('position:relative;aspect-ratio:16/10;background:#0A0A0D;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:13px 13px 0 0')}>
@@ -206,6 +206,45 @@ function BatchDock({ onHide }: { onHide: () => void }): JSX.Element | null {
       <div style={css('flex:1;min-height:0;overflow-y:auto;padding:12px 12px 16px;display:flex;flex-direction:column;gap:8px')}>{rows}</div>
       <div style={css('display:flex;gap:8px;padding:0 12px 14px')}>
         <button onClick={onHide} style={css('flex:1;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#D6D6E4;font-family:inherit;font-size:12.5px;padding:8px;border-radius:8px;cursor:pointer')}>Hide</button>
+      </div>
+    </div>
+  )
+}
+
+// Right-side dock listing live Cloud Cowork uploads (share-a-project → R2), with
+// a per-upload progress bar. Store-backed so it keeps updating as the user moves
+// around the dashboard.
+function CoworkUploadDock(): JSX.Element | null {
+  const uploads = useStore((s) => s.coworkUploads)
+  const dismiss = useStore((s) => s.dismissCoworkUploads)
+  if (!uploads.length) return null
+  const active = uploads.filter((u) => u.status === 'uploading')
+  return (
+    <div style={css('width:326px;flex:none;background:#0A0A0D;border-left:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column')}>
+      <div style={css(`display:flex;align-items:center;gap:10px;padding:19px 18px 17px;border-bottom:1px solid ${HAIR}`)}>
+        <span style={css(`width:7px;height:7px;border-radius:50%;background:${active.length ? '#7C6BFF' : '#7ED6A6'}${active.length ? ';animation:ecPulse 1.4s infinite' : ''}`)} />
+        <span style={css('font-size:13px;font-weight:600;letter-spacing:-.01em')}>{active.length ? `Uploading ${active.length} to space` : 'Uploads'}</span>
+        <div style={css('flex:1')} />
+        <span onClick={dismiss} style={css('font-size:11px;color:#7A7A8C;cursor:pointer')}>Clear done</span>
+      </div>
+      <div style={css('flex:1;min-height:0;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px')}>
+        {uploads.map((u) => {
+          const err = u.status === 'error'
+          const done = u.status === 'done'
+          const color = err ? '#FF9B9B' : done ? '#7ED6A6' : '#7C6BFF'
+          return (
+            <div key={u.id} style={css('background:#101015;border:1px solid rgba(255,255,255,.07);border-radius:11px;padding:12px 13px')}>
+              <div style={css('display:flex;align-items:center;gap:8px;font-size:12.5px')}>
+                <span style={css('flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500')}>{u.name}</span>
+                <span style={css(`font-family:'Geist Mono',monospace;font-size:10.5px;color:${color}`)}>{err ? 'Failed' : done ? 'Done' : `${u.pct}%`}</span>
+              </div>
+              <div style={css('height:3px;background:rgba(255,255,255,.08);border-radius:3px;margin-top:9px;overflow:hidden')}>
+                <div style={css(`width:${err ? 100 : u.pct}%;height:100%;background:${color};border-radius:3px;transition:width .3s`)} />
+              </div>
+              <div style={css('font-size:11px;color:#7A7A8C;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{u.step}</div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -415,8 +454,8 @@ export default function Dashboard(): JSX.Element {
             </div>
           </div>
 
-          {/* batch queue dock (only when there are jobs) */}
-          {!dockHidden && <BatchDock onHide={() => setDockHidden(true)} />}
+          {/* right dock: cowork uploads in the cloud view, batch queue elsewhere */}
+          {src === 'cloud' ? <CoworkUploadDock /> : !dockHidden && <BatchDock onHide={() => setDockHidden(true)} />}
         </div>
       </main>
 

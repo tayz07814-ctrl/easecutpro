@@ -237,17 +237,26 @@ export default function CoworkPanel(): JSX.Element {
     if (!spaceId) return
     setSharePick(false)
     setErr('')
+    setNotice('')
+    // Progress shows in the right-side upload dock (store-backed), so a long
+    // upload keeps reporting even if the user clicks around the dashboard.
+    const jobId = useStore.getState().coworkUploadStart(name)
     try {
+      useStore.getState().coworkUploadPatch(jobId, { step: 'Loading project…' })
       const rec = await getProject(projectId)
       if (!rec?.project) throw new Error('Could not load that project')
-      setBusy('Preparing media…')
+      useStore.getState().coworkUploadPatch(jobId, { step: 'Preparing media…' })
       await hydrateProjectMedia(rec.project)
-      await shareProject(spaceId, rec.project, name, (s) => setBusy(s))
+      await shareProject(spaceId, rec.project, name, (step, pct) =>
+        useStore.getState().coworkUploadPatch(jobId, typeof pct === 'number' ? { step, pct } : { step })
+      )
+      useStore.getState().coworkUploadEnd(jobId)
       await reloadSpace(spaceId)
+      setNotice(`“${name}” uploaded to the space.`)
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not share project')
-    } finally {
-      setBusy('')
+      const msg = e instanceof Error ? e.message : 'Could not share project'
+      useStore.getState().coworkUploadEnd(jobId, msg)
+      setErr(msg)
     }
   }
 

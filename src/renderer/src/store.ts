@@ -568,6 +568,15 @@ export function normalizeSeamFade(v: Partial<SeamFadeSettings> | null | undefine
   }
 }
 
+/** A single Cloud Cowork media upload shown in the dashboard's right-side dock. */
+export interface CoworkUpload {
+  id: string
+  name: string
+  step: string
+  pct: number
+  status: 'uploading' | 'done' | 'error'
+}
+
 interface AppState {
   project: Project
   /** reusable media library (import once, reuse many; persisted). */
@@ -624,6 +633,8 @@ interface AppState {
    *  local `projects` table). null for ordinary local projects. `editUserId` is
    *  the member whose edit version is currently loaded (null = the most recent). */
   coworkSession: { spaceId: string; project: CoworkProject; editUserId: string | null } | null
+  /** Live Cloud Cowork media uploads (newest first) for the dashboard dock. */
+  coworkUploads: CoworkUpload[]
   currentProjectName: string
   saveState: 'idle' | 'saving' | 'saved' | 'error'
   past: Project[]
@@ -916,6 +927,12 @@ interface AppState {
   ) => Promise<void>
   /** Persist the open cowork project as THIS member's R2 edit version. */
   saveCoworkEdit: () => Promise<void>
+  /** Cloud Cowork upload dock: start a job (returns its id), update it, finish it. */
+  coworkUploadStart: (name: string) => string
+  coworkUploadPatch: (id: string, patch: Partial<CoworkUpload>) => void
+  coworkUploadEnd: (id: string, error?: string) => void
+  /** Clear finished/errored upload rows (keeps any still uploading). */
+  dismissCoworkUploads: () => void
   /** build a fresh empty project object (without entering the editor). */
   freshProject: () => Project
   /** leave the editor back to the home dashboard. */
@@ -1001,6 +1018,7 @@ export const useStore = create<AppState>((set, get) => ({
   editingClipId: null,
   currentProjectId: null,
   coworkSession: null,
+  coworkUploads: [],
   currentProjectName: 'Untitled',
   saveState: 'idle',
   past: [],
@@ -3885,6 +3903,23 @@ export const useStore = create<AppState>((set, get) => ({
     if (!coworkSession) return
     await saveMyEdit(coworkSession.project, project)
   },
+
+  coworkUploadStart: (name) => {
+    const id = `up_${Date.now()}_${Math.round(Math.random() * 1e6)}`
+    set((s) => ({
+      coworkUploads: [{ id, name, step: 'Starting…', pct: 0, status: 'uploading' as const }, ...s.coworkUploads].slice(0, 12)
+    }))
+    return id
+  },
+  coworkUploadPatch: (id, patch) =>
+    set((s) => ({ coworkUploads: s.coworkUploads.map((u) => (u.id === id ? { ...u, ...patch } : u)) })),
+  coworkUploadEnd: (id, error) =>
+    set((s) => ({
+      coworkUploads: s.coworkUploads.map((u) =>
+        u.id === id ? { ...u, status: error ? ('error' as const) : ('done' as const), step: error || 'Uploaded', pct: 100 } : u
+      )
+    })),
+  dismissCoworkUploads: () => set((s) => ({ coworkUploads: s.coworkUploads.filter((u) => u.status === 'uploading') })),
 
   runBatchClean: async (items) => {
     if (!items.length) return
