@@ -133,12 +133,13 @@ class EcPlayer(
                     // Keep audio tracks aligned (only corrects when drift > threshold).
                     if (audioPlayers.isNotEmpty()) {
                         pollTick++
-                        if (p.isPlaying && pollTick % 10 == 0) syncAudio(true)
+                        if (p.isPlaying && pollTick % 30 == 0) syncAudio(true)
                     }
                 } catch (_: Exception) {
                 }
             }
-            if (polling) main.postDelayed(this, 100)
+            // ~30 Hz so the Dart playhead has fresh anchors to interpolate between.
+            if (polling) main.postDelayed(this, 33)
         }
     }
     private var pollTick = 0
@@ -304,7 +305,7 @@ class EcPlayer(
     private fun startPolling() {
         if (!polling) {
             polling = true
-            main.postDelayed(poller, 100)
+            main.postDelayed(poller, 33)
         }
     }
 

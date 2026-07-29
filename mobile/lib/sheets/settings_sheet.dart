@@ -17,7 +17,7 @@ class SettingsSheet extends StatelessWidget {
         children: [
           _row(Icons.person_outline, 'Account', 'tayz07814@gmail.com'),
           _row(Icons.high_quality_outlined, 'Default export quality', '720p'),
-          _row(Icons.bolt_outlined, 'Cut Lord model', 'Retake Beta'),
+          _row(Icons.bolt_outlined, 'Cut Lord model', 'Retake'),
           _row(Icons.info_outline, 'About EaseCut', 'v0.1.0 · native'),
         ],
       ),

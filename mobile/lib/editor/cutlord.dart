@@ -14,9 +14,9 @@ class CutLordModel {
   const CutLordModel(this.label, this.slug, this.model, this.reasoning);
 }
 
-const cutLordRetake = CutLordModel('Retake Beta', 'ultracut-judge', 'google/gemini-3.6-flash', 'low');
-const cutLordUltra = CutLordModel('Ultracut Beta', 'ultracut-judge', 'deepseek-v4-flash', 'medium');
-const cutLordPremium = CutLordModel('Premium Cut', 'procut-judge', null, null);
+// One Retake, matching web 0.01: the Retake button runs procut-judge (Claude).
+// (Kept as a single named model so existing call sites don't churn.)
+const cutLordRetake = CutLordModel('Retake', 'procut-judge', null, null);
 
 /// Extract the clip's audio and transcribe it (AssemblyAI → Deepgram).
 Future<List<Word>> extractAndTranscribe(

@@ -5,8 +5,9 @@ import '../theme.dart';
 import '../widgets/controls.dart';
 import 'sheet_scaffold.dart';
 
-/// Cut Lord / Retake Cleaner (RetakeCleanerPanel.tsx) — pick a model to clean the
-/// clip. Runs the real pipeline (extract audio → transcribe → judge → cut) via [onRun].
+/// Retake Cleaner — one action (like web 0.01). Finds silences, fillers and bad
+/// takes on-device and proposes cuts for review. Runs the real pipeline
+/// (extract audio → transcribe → judge → cut) via [onRun].
 class CutLordSheet extends StatefulWidget {
   final VoidCallback onOpenSilence;
   final void Function(CutLordModel model, bool cutSilence) onRun;
@@ -19,15 +20,15 @@ class CutLordSheet extends StatefulWidget {
 class _CutLordSheetState extends State<CutLordSheet> {
   bool _smartSilence = true;
 
-  void _run(CutLordModel m) {
+  void _run() {
     Navigator.of(context).pop();
-    widget.onRun(m, _smartSilence);
+    widget.onRun(cutLordRetake, _smartSilence);
   }
 
   @override
   Widget build(BuildContext context) {
     return SheetScaffold(
-      heightFactor: 0.62,
+      heightFactor: 0.58,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -56,21 +57,23 @@ class _CutLordSheetState extends State<CutLordSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Cleans up your video — removes silences, filler and bad takes. Pick a brain:',
+                  const Text('Cleans up your video — removes silences, filler words and bad takes, then lets you review the cuts before applying.',
                       style: TextStyle(color: Color(0xFF9BA0AC), fontSize: 13, height: 1.5)),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      _model(cutLordRetake, const Color(0xFF6E6AE8)),
-                      const SizedBox(width: 8),
-                      _model(cutLordUltra, const Color(0xFFE8843A)),
-                      const SizedBox(width: 8),
-                      _model(cutLordPremium, const Color(0xFF2E9C6A)),
-                    ],
+                  const SizedBox(height: 18),
+                  GestureDetector(
+                    onTap: _run,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Ec.indigo,
+                        borderRadius: BorderRadius.circular(11),
+                        boxShadow: [BoxShadow(color: Ec.indigo.withValues(alpha: 0.35), blurRadius: 16, offset: const Offset(0, 4))],
+                      ),
+                      child: const Text('Find silences & bad takes',
+                          style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
+                    ),
                   ),
-                  const SizedBox(height: 10),
-                  const Text('Retake = Llama · Ultracut = DeepSeek · Premium = Claude',
-                      textAlign: TextAlign.center, style: TextStyle(color: Ec.textFaint, fontSize: 11)),
                   const SizedBox(height: 16),
                   GestureDetector(
                     onTap: widget.onOpenSilence,
@@ -94,26 +97,6 @@ class _CutLordSheetState extends State<CutLordSheet> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _model(CutLordModel m, Color c) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => _run(m),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 11),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: c,
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: [BoxShadow(color: c.withValues(alpha: 0.35), blurRadius: 14, offset: const Offset(0, 4))],
-          ),
-          child: Text(m.label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
-        ),
       ),
     );
   }

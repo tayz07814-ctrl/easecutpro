@@ -76,10 +76,20 @@ class _EditorScreenState extends State<EditorScreen> {
   Map<String, dynamic> _projectDoc = {}; // full project jsonb (autosave target)
   Timer? _saveTimer;
 
+  // Playhead interpolation: the native player reports position at ~30 Hz; between
+  // those anchors we advance the displayed position by wall-clock time so the
+  // playhead glides at 60 fps instead of stepping. Timeline position advances at
+  // 1× wall time regardless of clip speed, so plain elapsed-ms interpolation is
+  // correct; each native tick re-anchors and corrects any drift.
+  Timer? _tick;
+  int _anchorMs = 0;
+  final Stopwatch _sw = Stopwatch();
+
   @override
   void initState() {
     super.initState();
     _model.addListener(_onModel);
+    _tick = Timer.periodic(const Duration(milliseconds: 16), (_) => _interpolate());
     if (widget.initialClipPath != null) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _importPath(widget.initialClipPath!, widget.initialClipName),
@@ -92,6 +102,7 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void dispose() {
     _saveTimer?.cancel();
+    _tick?.cancel();
     _model.removeListener(_onModel);
     _stateSub?.cancel();
     _sizeSub?.cancel();
@@ -275,10 +286,23 @@ class _EditorScreenState extends State<EditorScreen> {
       _model.setDuration(s.durationMs);
     }
     setState(() {
-      if (!_scrubbing) _positionMs = s.timelineMs;
+      if (!_scrubbing) {
+        _positionMs = s.timelineMs;
+        // Re-anchor the interpolation clock to this authoritative position.
+        _anchorMs = s.timelineMs;
+        _sw..reset()..start();
+      }
       _playing = s.playing;
       if (s.ended) _playing = false;
+      if (!_playing) _sw.stop();
     });
+  }
+
+  /// Advance the displayed playhead between native ticks for smooth 60 fps motion.
+  void _interpolate() {
+    if (!mounted || !_playing || _scrubbing || !_sw.isRunning) return;
+    final p = (_anchorMs + _sw.elapsedMilliseconds).clamp(0, _totalMs);
+    if (p != _positionMs) setState(() => _positionMs = p);
   }
 
   Future<void> _togglePlay() async {
@@ -292,7 +316,12 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<void> _seek(int ms) async {
-    setState(() => _positionMs = ms);
+    setState(() {
+      _positionMs = ms;
+      _anchorMs = ms;
+      _sw.reset();
+      if (_playing) _sw.start();
+    });
     await _player.seek(ms);
   }
 
@@ -628,8 +657,10 @@ class _EditorScreenState extends State<EditorScreen> {
       wordCuts,
       _sourceDurationMs / 1000.0,
       cutSilence: cutSilence,
-      minPauseS: SilenceSettings.trimS,
-      padS: SilenceSettings.keepS,
+      minPauseS: SilenceSettings.minGapS,
+      padS: SilenceSettings.padAfterS,
+      airAfterS: SilenceSettings.padAfterS,
+      leadBeforeS: SilenceSettings.padBeforeS,
     );
     _pushHistory();
     _texts.removeWhere((t) => t.isCaption); // stale after a re-cut

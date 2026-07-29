@@ -95,6 +95,8 @@ List<List<int>> keepRanges(
   bool cutSilence = true,
   double minPauseS = 0.5,
   double padS = 0.1,
+  double airAfterS = 0.3, // silence: air kept after the last word (padAfter)
+  double leadBeforeS = 0.1, // silence: lead kept before the next word (padBefore)
 }) {
   final durMs = (durS * 1000).round();
   final cuts = <List<int>>[]; // [startMs, endMs]
@@ -114,8 +116,8 @@ List<List<int>> keepRanges(
     for (int i = 0; i < words.length - 1; i++) {
       final gap = words[i + 1].start - words[i].end;
       if (gap < minPauseS) continue;
-      final cutStart = words[i].end + 0.3; // keep trailing air
-      final cutEnd = words[i + 1].start - 0.1; // tight lead-in
+      final cutStart = words[i].end + airAfterS; // keep this much trailing air
+      final cutEnd = words[i + 1].start - leadBeforeS; // lead kept into the next word
       if (cutEnd - cutStart >= 0.03) {
         cuts.add([(cutStart * 1000).round(), (cutEnd * 1000).round()]);
       }
