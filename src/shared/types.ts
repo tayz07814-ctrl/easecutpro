@@ -324,7 +324,7 @@ export interface Project {
   timeline?: TimelineDocument
 }
 
-/** A saved project in the library (web: per-user on the server; desktop: local). */
+/** A saved project in the library (cloud web: device-local IndexedDB; desktop: local). */
 export interface ProjectMeta {
   id: string
   name: string
@@ -332,6 +332,8 @@ export interface ProjectMeta {
   thumb: string
   createdAt: number
   updatedAt: number
+  /** device-local folder this project is filed under (null/undefined = unfiled). */
+  folderId?: string | null
 }
 export interface ProjectRec extends ProjectMeta {
   project: Project | null
