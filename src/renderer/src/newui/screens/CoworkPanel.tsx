@@ -21,13 +21,20 @@ import {
   listSpaceProjects,
   spaceUsage,
   shareProject,
+  listSpaceFolders,
+  createSpaceFolder,
+  renameSpaceFolder,
+  deleteSpaceFolder,
+  moveSpaceProjectToFolder,
   fmtBytes,
   GiB,
   type Space,
   type Member,
   type JoinRequest,
+  type SpaceFolder,
   type CoworkProject
 } from '../../cloud/cowork'
+import FolderRail, { projectDragType } from './FolderRail'
 
 // Screen — Cloud Cowork. Shown in the Dashboard when the "Cloud cowork" nav is
 // selected. Spaces (100 GB free each) hold shared projects; every member can
@@ -66,6 +73,8 @@ export default function CoworkPanel(): JSX.Element {
   const [members, setMembers] = useState<Member[]>([])
   const [requests, setRequests] = useState<JoinRequest[]>([])
   const [projects, setProjects] = useState<CoworkProject[]>([])
+  const [folders, setFolders] = useState<SpaceFolder[]>([])
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
 
   const [inviteId, setInviteId] = useState('')
   const [joinKeyInput, setJoinKeyInput] = useState('')
@@ -117,20 +126,27 @@ export default function CoworkPanel(): JSX.Element {
     try {
       // listJoinRequests returns [] for non-owners (RPC guards on ownership),
       // so it's safe to call unconditionally.
-      const [u, m, p, r] = await Promise.all([
+      const [u, m, p, r, f] = await Promise.all([
         spaceUsage(id),
         listMembers(id),
         listSpaceProjects(id),
-        listJoinRequests(id).catch(() => [] as JoinRequest[])
+        listJoinRequests(id).catch(() => [] as JoinRequest[]),
+        listSpaceFolders(id).catch(() => [] as SpaceFolder[])
       ])
       setUsage(u)
       setMembers(m)
       setProjects(p)
       setRequests(r)
+      setFolders(f)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to load space')
     }
   }, [])
+
+  // reset the open folder when switching spaces
+  useEffect(() => {
+    setSelectedFolder(null)
+  }, [spaceId])
 
   useEffect(() => {
     void reloadSpace(spaceId)
@@ -342,7 +358,7 @@ export default function CoworkPanel(): JSX.Element {
       setBusy('')
       // Per-file byte progress shows in the right-side transfer dock (store-backed),
       // so a long upload keeps reporting even if the user clicks around.
-      await shareProject(spaceId, rec.project, name, makeXferReporter())
+      await shareProject(spaceId, rec.project, name, makeXferReporter(), selectedFolder)
       await reloadSpace(spaceId)
       setNotice(`“${name}” uploaded to the space.`)
     } catch (e) {
@@ -362,6 +378,49 @@ export default function CoworkPanel(): JSX.Element {
     }
   }
 
+  // ---- folders ---------------------------------------------------------------
+  const onCreateFolder = async (): Promise<void> => {
+    if (!spaceId) return
+    const name = window.prompt('New folder name')
+    if (name == null || !name.trim()) return
+    try {
+      const f = await createSpaceFolder(spaceId, name)
+      await reloadSpace(spaceId)
+      setSelectedFolder(f.id)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not create folder')
+    }
+  }
+  const onRenameFolder = async (id: string, curName: string): Promise<void> => {
+    const name = window.prompt('Rename folder', curName)
+    if (name == null || !name.trim()) return
+    try {
+      await renameSpaceFolder(id, name)
+      await reloadSpace(spaceId)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not rename folder')
+    }
+  }
+  const onDeleteFolder = async (id: string): Promise<void> => {
+    if (!window.confirm('Delete this folder? Projects inside move back to All projects.')) return
+    try {
+      await deleteSpaceFolder(id)
+      if (selectedFolder === id) setSelectedFolder(null)
+      await reloadSpace(spaceId)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not delete folder')
+    }
+  }
+  const onMoveProject = async (folderId: string | null, projectId: string): Promise<void> => {
+    setProjects((ps) => ps.map((p) => (p.id === projectId ? { ...p, folder_id: folderId } : p))) // optimistic
+    try {
+      await moveSpaceProjectToFolder(projectId, folderId)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not move project')
+      await reloadSpace(spaceId)
+    }
+  }
+
   // ---- render ----------------------------------------------------------------
   if (loading) {
     return <div style={css('padding:60px 0;text-align:center;color:#6E6E85;font-size:13px')}>Loading your spaces…</div>
@@ -369,6 +428,9 @@ export default function CoworkPanel(): JSX.Element {
 
   const pct = usage.quota ? Math.min(100, (usage.used / usage.quota) * 100) : 0
   const near = pct >= 90
+  const folderCounts = { all: projects.length, byId: {} as Record<string, number> }
+  for (const p of projects) if (p.folder_id) folderCounts.byId[p.folder_id] = (folderCounts.byId[p.folder_id] || 0) + 1
+  const visibleProjects = selectedFolder ? projects.filter((p) => (p.folder_id ?? null) === selectedFolder) : projects
 
   return (
     <div style={css('display:flex;flex-direction:column;gap:16px')} onClick={() => { setSharePick(false); setMembersOpen(false) }}>
@@ -554,24 +616,48 @@ export default function CoworkPanel(): JSX.Element {
                 </div>
               )}
             </div>
-            {projects.length === 0 ? (
-              <div style={css('padding:26px 0;text-align:center;color:#6E6E85;font-size:12.5px')}>No shared projects yet — “Add a project” to send one here.</div>
-            ) : (
-              <div style={css('display:flex;flex-direction:column;gap:9px')}>
-                {projects.map((p) => (
-                  <div key={p.id} style={css('display:flex;align-items:center;gap:12px;background:#0E0E12;border:1px solid rgba(255,255,255,.06);border-radius:11px;padding:12px 14px')}>
-                    <div style={css('width:34px;height:34px;flex:none;border-radius:9px;background:rgba(124,107,255,.14);display:flex;align-items:center;justify-content:center')}>
-                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="#A99BFF" strokeWidth="1.6"><rect x="2.5" y="4" width="15" height="12" rx="2" /><path d="M8.5 8.5v3l3-1.5z" fill="#A99BFF" /></svg>
-                    </div>
-                    <div style={css('flex:1;min-width:0')}>
-                      <div style={css('font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{p.name}</div>
-                      <div style={css('font-size:11px;color:#7A7A8C')}>{fmtBytes(p.media_bytes)} · {relTime(p.updated_at)}</div>
-                    </div>
-                    <button onClick={() => void onOpen(p)} style={css('background:#7C6BFF;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;padding:8px 15px;border-radius:8px;cursor:pointer;white-space:nowrap')}>Open</button>
+            {/* folders (shared across members) + project list */}
+            <div style={css('display:flex;gap:18px;align-items:flex-start')}>
+              <FolderRail
+                folders={folders}
+                selected={selectedFolder}
+                counts={folderCounts}
+                onSelect={setSelectedFolder}
+                onCreate={() => void onCreateFolder()}
+                onRename={(id, name) => void onRenameFolder(id, name)}
+                onDelete={(id) => void onDeleteFolder(id)}
+                onDropProject={(fid, pid) => void onMoveProject(fid, pid)}
+              />
+              <div style={css('flex:1;min-width:0')}>
+                {visibleProjects.length === 0 ? (
+                  <div style={css('padding:26px 0;text-align:center;color:#6E6E85;font-size:12.5px')}>
+                    {selectedFolder
+                      ? 'This folder is empty — drag a project here to file it.'
+                      : 'No shared projects yet — “Add a project” to send one here.'}
                   </div>
-                ))}
+                ) : (
+                  <div style={css('display:flex;flex-direction:column;gap:9px')}>
+                    {visibleProjects.map((p) => (
+                      <div
+                        key={p.id}
+                        draggable
+                        onDragStart={(e) => { e.dataTransfer.setData(projectDragType, p.id); e.dataTransfer.effectAllowed = 'move' }}
+                        style={css('display:flex;align-items:center;gap:12px;background:#0E0E12;border:1px solid rgba(255,255,255,.06);border-radius:11px;padding:12px 14px;cursor:grab')}
+                      >
+                        <div style={css('width:34px;height:34px;flex:none;border-radius:9px;background:rgba(124,107,255,.14);display:flex;align-items:center;justify-content:center')}>
+                          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="#A99BFF" strokeWidth="1.6"><rect x="2.5" y="4" width="15" height="12" rx="2" /><path d="M8.5 8.5v3l3-1.5z" fill="#A99BFF" /></svg>
+                        </div>
+                        <div style={css('flex:1;min-width:0')}>
+                          <div style={css('font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{p.name}</div>
+                          <div style={css('font-size:11px;color:#7A7A8C')}>{fmtBytes(p.media_bytes)} · {relTime(p.updated_at)}</div>
+                        </div>
+                        <button onClick={() => void onOpen(p)} style={css('background:#7C6BFF;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;padding:8px 15px;border-radius:8px;cursor:pointer;white-space:nowrap')}>Open</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
         </div>
       )}
     </div>

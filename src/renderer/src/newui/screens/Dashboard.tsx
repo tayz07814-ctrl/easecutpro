@@ -2,7 +2,10 @@ import { useMemo, useState } from 'react'
 import { css } from '../css'
 import { useProjects } from '../data/useProjects'
 import FolderRail, { projectDragType } from './FolderRail'
-import { useStore } from '../../store'
+import { useStore, makeXferReporter } from '../../store'
+import { getProject } from '../../projectsApi'
+import { hydrateProjectMedia } from '../../webapi'
+import { shareProject, listSpaces, listSpaceFolders, type Space, type SpaceFolder } from '../../cloud/cowork'
 import NewProjectWizard from './NewProjectWizard'
 import CoworkPanel from './CoworkPanel'
 import NotificationsBell from './NotificationsBell'
@@ -42,16 +45,95 @@ function initials(email: string): string {
   return (name.slice(0, 2) || 'YO').toUpperCase()
 }
 
-function ContextMenu({ onRename, onDelete }: { onRename?: () => void; onDelete?: () => void }): JSX.Element {
+function ContextMenu({
+  onRename,
+  onDelete,
+  onUpload
+}: {
+  onRename?: () => void
+  onDelete?: () => void
+  onUpload?: (spaceId: string, folderId: string | null) => void
+}): JSX.Element {
+  // Drill-down: root → pick a space → pick a folder → upload. Staying inside one
+  // popover avoids fragile nested-flyout positioning near the grid edges.
+  const [view, setView] = useState<'root' | 'spaces' | 'folders'>('root')
+  const [spaces, setSpaces] = useState<Space[]>([])
+  const [folders, setFolders] = useState<SpaceFolder[]>([])
+  const [space, setSpace] = useState<Space | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const openSpaces = async (): Promise<void> => {
+    setView('spaces')
+    setLoading(true)
+    try {
+      setSpaces(await listSpaces())
+    } catch {
+      setSpaces([])
+    } finally {
+      setLoading(false)
+    }
+  }
+  const openFolders = async (s: Space): Promise<void> => {
+    setSpace(s)
+    setView('folders')
+    setLoading(true)
+    try {
+      setFolders(await listSpaceFolders(s.id))
+    } catch {
+      setFolders([])
+    } finally {
+      setLoading(false)
+    }
+  }
+  const rs = 'padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'
   return (
     <div
       onClick={(e) => e.stopPropagation()}
-      style={css('position:absolute;right:8px;top:calc(100% - 8px);width:160px;background:#191920;border:1px solid rgba(255,255,255,.1);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.55);padding:6px;z-index:6')}
+      style={css('position:absolute;right:8px;top:calc(100% - 8px);width:196px;max-height:288px;overflow-y:auto;background:#191920;border:1px solid rgba(255,255,255,.1);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.55);padding:6px;z-index:6')}
     >
-      <div onClick={onRename} style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}>Rename</div>
-      <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}>Duplicate</div>
-      <div style={css('height:1px;background:rgba(255,255,255,.07);margin:4px 6px')} />
-      <div onClick={onDelete} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#FF9B9B;cursor:pointer')}>Delete</div>
+      {view === 'root' && (
+        <>
+          <div onClick={onRename} style={css(rs)}>Rename</div>
+          <div onClick={(e) => { e.stopPropagation(); void openSpaces() }} style={css(`${rs};display:flex;align-items:center;justify-content:space-between;color:#C4BAFF`)}>
+            Upload to space<span style={css('color:#7A7A8C')}>›</span>
+          </div>
+          <div style={css('height:1px;background:rgba(255,255,255,.07);margin:4px 6px')} />
+          <div onClick={onDelete} style={css(`${rs};color:#FF9B9B`)}>Delete</div>
+        </>
+      )}
+      {view === 'spaces' && (
+        <>
+          <div onClick={(e) => { e.stopPropagation(); setView('root') }} style={css(`${rs};color:#8B8BA0`)}>‹ Back</div>
+          {loading ? (
+            <div style={css(`${rs};color:#6E6E85`)}>Loading…</div>
+          ) : spaces.length ? (
+            spaces.map((s) => (
+              <div key={s.id} onClick={(e) => { e.stopPropagation(); void openFolders(s) }} style={css(`${rs};display:flex;align-items:center;justify-content:space-between`)}>
+                <span style={css('flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis')}>{s.name}</span>
+                <span style={css('color:#7A7A8C')}>›</span>
+              </div>
+            ))
+          ) : (
+            <div style={css(`${rs};color:#6E6E85`)}>No spaces yet</div>
+          )}
+        </>
+      )}
+      {view === 'folders' && (
+        <>
+          <div onClick={(e) => { e.stopPropagation(); setView('spaces') }} style={css(`${rs};color:#8B8BA0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`)}>‹ {space?.name ?? 'Spaces'}</div>
+          <div onClick={(e) => { e.stopPropagation(); if (space) onUpload?.(space.id, null) }} style={css(`${rs};color:#C4BAFF`)}>Upload here (no folder)</div>
+          {loading ? (
+            <div style={css(`${rs};color:#6E6E85`)}>Loading…</div>
+          ) : (
+            folders.map((f) => (
+              <div key={f.id} onClick={(e) => { e.stopPropagation(); if (space) onUpload?.(space.id, f.id) }} style={css(`${rs};display:flex;align-items:center;gap:8px`)}>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#7A7A8C" strokeWidth="1.4" strokeLinejoin="round"><path d="M2 5c0-.66.54-1.2 1.2-1.2h2.4c.4 0 .77.2 1 .53l.5.74c.23.33.6.53 1 .53H12.8c.66 0 1.2.54 1.2 1.2v4.9c0 .66-.54 1.2-1.2 1.2H3.2c-.66 0-1.2-.54-1.2-1.2V5z" /></svg>
+                <span style={css('flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis')}>{f.name}</span>
+              </div>
+            ))
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -68,11 +150,12 @@ interface CardProps {
   onRenameCommit?: (name: string) => void
   onRenameCancel?: () => void
   onDelete?: () => void
+  onUpload?: (spaceId: string, folderId: string | null) => void
   /** when set, the card is draggable and carries this id as the folder-drop payload. */
   dragId?: string
 }
 
-function Card({ card, onOpen, onDots, menuOpen, hovered, onHover, renaming, onRename, onRenameCommit, onRenameCancel, onDelete, dragId }: CardProps): JSX.Element | null {
+function Card({ card, onOpen, onDots, menuOpen, hovered, onHover, renaming, onRename, onRenameCommit, onRenameCancel, onDelete, onUpload, dragId }: CardProps): JSX.Element | null {
   // Grid only ever receives real project cards (video/processing); the leading
   // "new" tile and skeletons are handled elsewhere. Guard keeps the union safe.
   if (card.kind === 'new' || card.kind === 'skeleton') return null
@@ -159,7 +242,7 @@ function Card({ card, onOpen, onDots, menuOpen, hovered, onHover, renaming, onRe
           )}
         </div>
       </div>
-      {menuOpen && <ContextMenu onRename={onRename} onDelete={onDelete} />}
+      {menuOpen && <ContextMenu onRename={onRename} onDelete={onDelete} onUpload={onUpload} />}
     </div>
   )
 }
@@ -300,6 +383,19 @@ export default function Dashboard(): JSX.Element {
 
   const navTitle = NAV.find((n) => n.id === src)?.label ?? 'Projects'
   const slide = NEWS[news] || NEWS[0]
+
+  // Upload a device-local project into a cowork space (+ optional folder). Per-file
+  // progress lands in the transfer dock (shown in this view while active).
+  const uploadToSpace = async (projectId: string, name: string, spaceId: string, folderId: string | null): Promise<void> => {
+    try {
+      const rec = await getProject(projectId)
+      if (!rec?.project) throw new Error('Could not load that project')
+      await hydrateProjectMedia(rec.project)
+      await shareProject(spaceId, rec.project, name, makeXferReporter(), folderId)
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Could not upload to the space')
+    }
+  }
 
   return (
     <div style={css('width:100%;height:100%;display:flex;overflow:hidden;background:#08080A')} className="ec-newui ec-dash" onClick={() => { setAcct(false); setMenuId(null) }}>
@@ -481,6 +577,7 @@ export default function Dashboard(): JSX.Element {
                             onRenameCommit={(name) => { setRenameId(null); void dash.rename(id, name) }}
                             onRenameCancel={() => setRenameId(null)}
                             onDelete={() => { setMenuId(null); if (confirm('Delete this project? This cannot be undone.')) void dash.remove(id) }}
+                            onUpload={(spaceId, folderId) => { setMenuId(null); void uploadToSpace(id, meta.name, spaceId, folderId) }}
                           />
                         )
                       })}
@@ -492,8 +589,16 @@ export default function Dashboard(): JSX.Element {
             </div>
           </div>
 
-          {/* right dock: cowork transfers in the cloud view, batch queue elsewhere */}
-          {src === 'cloud' ? <CoworkTransferDock /> : !dockHidden && <BatchDock onHide={() => setDockHidden(true)} />}
+          {/* right dock: cowork transfers (also visible in the local view while an
+              "Upload to space" is in flight — the dock self-hides when empty) */}
+          {src === 'cloud' ? (
+            <CoworkTransferDock />
+          ) : (
+            <>
+              <CoworkTransferDock />
+              {!dockHidden && <BatchDock onHide={() => setDockHidden(true)} />}
+            </>
+          )}
         </div>
       </main>
 

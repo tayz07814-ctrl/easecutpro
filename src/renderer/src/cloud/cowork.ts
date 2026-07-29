@@ -46,6 +46,12 @@ export interface CoworkProject {
   name: string
   media_bytes: number
   updated_at: string
+  folder_id?: string | null
+}
+/** A folder inside a space (shared across all members). */
+export interface SpaceFolder {
+  id: string
+  name: string
 }
 export interface EditVersion {
   user_id: string
@@ -328,11 +334,46 @@ export async function acceptInvite(n: Notif): Promise<string> {
 export async function listSpaceProjects(spaceId: string): Promise<CoworkProject[]> {
   const { data, error } = await getSupabase()
     .from('space_projects')
-    .select('id,space_id,name,media_bytes,updated_at')
+    .select('id,space_id,name,media_bytes,updated_at,folder_id')
     .eq('space_id', spaceId)
     .order('updated_at', { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []) as CoworkProject[]
+}
+
+// ---- folders ------------------------------------------------------------
+
+export async function listSpaceFolders(spaceId: string): Promise<SpaceFolder[]> {
+  const { data, error } = await getSupabase()
+    .from('space_folders')
+    .select('id,name')
+    .eq('space_id', spaceId)
+    .order('created_at')
+  if (error) throw new Error(error.message)
+  return (data ?? []) as SpaceFolder[]
+}
+export async function createSpaceFolder(spaceId: string, name: string): Promise<SpaceFolder> {
+  const { data, error } = await getSupabase()
+    .from('space_folders')
+    .insert({ space_id: spaceId, name: name.trim() || 'New folder' })
+    .select('id,name')
+    .single()
+  if (error) throw new Error(error.message)
+  return data as SpaceFolder
+}
+export async function renameSpaceFolder(id: string, name: string): Promise<void> {
+  const { error } = await getSupabase().from('space_folders').update({ name: name.trim() }).eq('id', id)
+  if (error) throw new Error(error.message)
+}
+/** Delete a folder; its projects fall back to unfiled (FK on delete set null). */
+export async function deleteSpaceFolder(id: string): Promise<void> {
+  const { error } = await getSupabase().from('space_folders').delete().eq('id', id)
+  if (error) throw new Error(error.message)
+}
+export async function moveSpaceProjectToFolder(projectId: string, folderId: string | null): Promise<void> {
+  const { data, error } = await getSupabase().rpc('cowork_move_project', { p_project: projectId, p_folder: folderId })
+  if (error) throw new Error(error.message)
+  if (String(data) === 'forbidden') throw new Error('Only space members can move projects.')
 }
 export async function spaceUsage(spaceId: string): Promise<{ used: number; quota: number }> {
   const sb = getSupabase()
@@ -360,14 +401,15 @@ export async function shareProject(
   spaceId: string,
   project: Project,
   name: string,
-  xfer?: XferReporter
+  xfer?: XferReporter,
+  folderId?: string | null
 ): Promise<CoworkProject> {
   const sb = getSupabase()
   const u = await me()
   const { data: rec, error } = await sb
     .from('space_projects')
-    .insert({ space_id: spaceId, name: name.trim() || 'Untitled', created_by: u.id })
-    .select('id,space_id,name,media_bytes,updated_at')
+    .insert({ space_id: spaceId, name: name.trim() || 'Untitled', created_by: u.id, folder_id: folderId ?? null })
+    .select('id,space_id,name,media_bytes,updated_at,folder_id')
     .single()
   if (error) throw new Error(error.message)
   const pid = (rec as CoworkProject).id
