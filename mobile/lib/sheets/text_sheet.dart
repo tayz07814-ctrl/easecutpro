@@ -36,16 +36,17 @@ class _TextSheetState extends State<TextSheet> {
   Widget build(BuildContext context) {
     return SheetScaffold(
       title: 'Text',
+      heightFactor: 0.5,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: _segmented(['Text', 'Font', 'Style'], _tab, (i) => setState(() => _tab = i)),
           ),
           Expanded(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: switch (_tab) {
                 0 => _textTab(),
                 1 => _fontTab(),
@@ -70,17 +71,17 @@ class _TextSheetState extends State<TextSheet> {
           ),
           child: TextField(
             controller: _text,
-            maxLines: 4,
-            style: const TextStyle(color: Ec.text, fontSize: 16),
+            maxLines: 3,
+            style: const TextStyle(color: Ec.text, fontSize: 15),
             decoration: const InputDecoration(
-              contentPadding: EdgeInsets.all(14),
+              contentPadding: EdgeInsets.all(12),
               border: InputBorder.none,
               hintText: 'Type your text…',
               hintStyle: TextStyle(color: Ec.textFaint),
             ),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         GestureDetector(
           onTap: () {
             if (_text.text.trim().isEmpty) return;
@@ -96,7 +97,7 @@ class _TextSheetState extends State<TextSheet> {
             Navigator.of(context).pop();
           },
           child: Container(
-            height: 50,
+            height: 44,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               gradient: Ec.gradient,
@@ -105,10 +106,10 @@ class _TextSheetState extends State<TextSheet> {
             child: const Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.add, color: Colors.white, size: 18),
+                Icon(Icons.add, color: Colors.white, size: 16),
                 SizedBox(width: 6),
                 Text('Add to timeline',
-                    style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                    style: TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w700)),
               ],
             ),
           ),
@@ -124,7 +125,7 @@ class _TextSheetState extends State<TextSheet> {
         _card('Alignment',
             child: _segmented(['Left', 'Center', 'Right'], ['left', 'center', 'right'].indexOf(_align),
                 (i) => setState(() => _align = ['left', 'center', 'right'][i]))),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         _card('Size',
             child: EcSliderRow(
               label: 'Font size',
@@ -134,11 +135,11 @@ class _TextSheetState extends State<TextSheet> {
               max: 180,
               onChanged: (v) => setState(() => _size = v / 300),
             )),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         Row(
           children: [
             _glyphToggle('B', _bold, () => setState(() => _bold = !_bold), bold: true),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             _glyphToggle('I', _italic, () => setState(() => _italic = !_italic), italic: true),
           ],
         ),
@@ -153,17 +154,20 @@ class _TextSheetState extends State<TextSheet> {
       children: [
         const Text('PRESETS',
             style: TextStyle(color: Ec.textMute, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         Wrap(
-          spacing: 8,
-          runSpacing: 8,
+          spacing: 6,
+          runSpacing: 6,
           children: [
             for (int i = 0; i < presets.length; i++)
               GestureDetector(
-                onTap: () => setState(() => _preset = i),
+                onTap: () => setState(() {
+                  _preset = i;
+                  _tab = 0;
+                }),
                 child: Container(
-                  width: 82,
-                  padding: const EdgeInsets.all(10),
+                  width: 76,
+                  padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
                     color: const Color(0xFF101014),
                     borderRadius: BorderRadius.circular(10),
@@ -172,27 +176,27 @@ class _TextSheetState extends State<TextSheet> {
                   child: Column(
                     children: [
                       const Text('Aa',
-                          style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
-                      const SizedBox(height: 6),
-                      Text(presets[i], style: const TextStyle(color: Ec.textDim, fontSize: 11)),
+                          style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 5),
+                      Text(presets[i], style: const TextStyle(color: Ec.textDim, fontSize: 10.5)),
                     ],
                   ),
                 ),
               ),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         _card('Text colour',
             child: Row(
               children: [
                 for (final c in [Colors.white, Colors.black, const Color(0xFFFFD84D), const Color(0xFFFF5D6C), Ec.indigo])
                   Padding(
-                    padding: const EdgeInsets.only(right: 10),
+                    padding: const EdgeInsets.only(right: 8),
                     child: GestureDetector(
                       onTap: () => setState(() => _color = c),
                       child: Container(
-                        width: 30,
-                        height: 30,
+                        width: 26,
+                        height: 26,
                         decoration: BoxDecoration(
                           color: c,
                           borderRadius: BorderRadius.circular(8),
@@ -203,7 +207,7 @@ class _TextSheetState extends State<TextSheet> {
                   ),
               ],
             )),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         _card('Background',
             child: EcRow(
               label: 'Show background',
@@ -216,7 +220,7 @@ class _TextSheetState extends State<TextSheet> {
   // ---- helpers ----
   Widget _segmented(List<String> labels, int active, ValueChanged<int> onTap) {
     return Container(
-      padding: const EdgeInsets.all(4),
+      padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: const Color(0xFF101014),
         borderRadius: BorderRadius.circular(12),
@@ -229,7 +233,7 @@ class _TextSheetState extends State<TextSheet> {
               child: GestureDetector(
                 onTap: () => onTap(i),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  padding: const EdgeInsets.symmetric(vertical: 7),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     gradient: active == i ? Ec.gradient : null,
@@ -238,7 +242,7 @@ class _TextSheetState extends State<TextSheet> {
                   child: Text(labels[i],
                       style: TextStyle(
                           color: active == i ? Colors.white : const Color(0xFFB9B9C0),
-                          fontSize: 13,
+                          fontSize: 12.5,
                           fontWeight: FontWeight.w600)),
                 ),
               ),
@@ -250,14 +254,14 @@ class _TextSheetState extends State<TextSheet> {
 
   Widget _card(String title, {required Widget child}) {
     return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: Ec.card2, borderRadius: BorderRadius.circular(14), border: Border.all(color: Ec.hair)),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Ec.card2, borderRadius: BorderRadius.circular(12), border: Border.all(color: Ec.hair)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(title.toUpperCase(),
               style: const TextStyle(color: Ec.textMute, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           child,
         ],
       ),
@@ -268,8 +272,8 @@ class _TextSheetState extends State<TextSheet> {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 44,
-        height: 44,
+        width: 40,
+        height: 40,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: on ? const Color(0xFF7C5CFF).withValues(alpha: 0.18) : Ec.card2,
@@ -279,7 +283,7 @@ class _TextSheetState extends State<TextSheet> {
         child: Text(label,
             style: TextStyle(
                 color: on ? const Color(0xFFC9B8FF) : Ec.textDim,
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: bold ? FontWeight.w800 : FontWeight.w500,
                 fontStyle: italic ? FontStyle.italic : FontStyle.normal)),
       ),
