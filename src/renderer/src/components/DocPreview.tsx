@@ -706,7 +706,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           // than a beat of buffering. If it still can't start, fall back to
           // the element path (which has element audio).
           if (!wcAudioWaitRef.current) wcAudioWaitRef.current = now
-          if (now - wcAudioWaitRef.current > 6000) setWcOn(false)
+          if (now - wcAudioWaitRef.current > 6000) {
+            console.warn('[wc-preview] audio engine never started — falling back to element path')
+            setWcOn(false)
+          }
         }
         if (t >= totalRef.current - 1e-4) {
           playingRef.current = false

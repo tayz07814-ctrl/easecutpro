@@ -281,6 +281,7 @@ export class WcPlayer {
         }
         sp.pipes = [new Pipe(new mb.VideoSampleSink(track), onErr), new Pipe(new mb.VideoSampleSink(track), onErr)]
         sp.ready = true
+        console.info('[wc-preview] source ready:', src.slice(-24))
       } catch (e) {
         sp.dead = true
         this.fail(e)
