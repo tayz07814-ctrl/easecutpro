@@ -14,6 +14,7 @@ import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
 import Dashboard from './newui/screens/Dashboard'
 import MobileDashboard from './newui/screens/MobileDashboard'
+import AdminDashboard from './newui/screens/AdminDashboard'
 import Editor from './newui/screens/Editor'
 import MobileEditor from './newui/screens/MobileEditor'
 import { isNewUi } from './newui/flag'
@@ -153,9 +154,18 @@ if (IS_WEB) {
   })
 }
 
+// Admin console (owner-only): ?admin=1 renders the userbase dashboard instead of
+// the app. It self-gates on the server-side is_app_admin() check, so a non-admin
+// who visits it sees only "not authorized" — the route is not a secret, the RPCs
+// are. Cloud build only (needs the Supabase session).
+const IS_ADMIN_ROUTE =
+  IS_CLOUD && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('admin')
+
 function Root(): JSX.Element {
   const view = useStore((s) => s.view)
   const isMobile = useIsMobile()
+
+  if (IS_ADMIN_ROUTE) return <AdminDashboard />
 
   // The new UI (Dashboard/Editor) never mounts the legacy <App/>, which is the
   // only place that calls store.init() — and init() is what subscribes to the

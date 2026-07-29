@@ -13,8 +13,11 @@
 create or replace function public.profiles_freeze_email() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if auth.role() is distinct from 'service_role' then
-    new.email := old.email; -- ignore any client-supplied email change
+  -- Freeze for end-user REST writes (role authenticated/anon). The Paddle
+  -- webhook (service_role) and admin SECURITY DEFINER functions (owned by
+  -- postgres) run as other roles and may still change it.
+  if current_user in ('authenticated', 'anon') then
+    new.email := old.email;
   end if;
   return new;
 end;
@@ -32,7 +35,9 @@ create trigger profiles_no_email_change before update on public.profiles
 create or replace function public.spaces_freeze_billing() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if auth.role() is distinct from 'service_role' then
+  -- End-user REST writes can't touch billing columns; service_role (webhook)
+  -- and admin definer-functions can.
+  if current_user in ('authenticated', 'anon') then
     new.quota_bytes := old.quota_bytes;
     new.is_paid := old.is_paid;
   end if;
