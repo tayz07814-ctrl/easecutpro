@@ -119,14 +119,16 @@ export function applyDeletions(
   return cmd('Apply cuts', (doc) => applyDeletionsToDocument(doc, trackId, ranges, doc.timebase))
 }
 
-/** Move honouring each lane's rule: main lane ripples when magnet is on, else free. */
+/** Move honouring each lane's rule: main lane ripples when magnet is on, else
+ *  free. `noCollide` skips the never-stack clamp (group moves only). */
 export function moveClipSmart(
   clipId: string,
   toTrackId: string,
   dropStart: number,
-  magnet: boolean
+  magnet: boolean,
+  noCollide = false
 ): Command {
-  return cmd('Move clip', (doc) => moveClipSmartInDoc(doc, clipId, toTrackId, dropStart, magnet))
+  return cmd('Move clip', (doc) => moveClipSmartInDoc(doc, clipId, toTrackId, dropStart, magnet, noCollide))
 }
 
 export function removeTrack(trackId: string): Command {

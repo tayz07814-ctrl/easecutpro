@@ -379,7 +379,9 @@ export class TimelineEngine {
         let preview = this.doc
         for (const g of drag.group) {
           const gl = findClip(preview, g.clipId)
-          if (gl) preview = moveClipSmartInDoc(preview, g.clipId, gl.track.id, Math.max(0, g.originStart + delta), magnet)
+          // noCollide: members shift sequentially — the never-stack clamp would
+          // bounce them off group-mates that haven't moved yet.
+          if (gl) preview = moveClipSmartInDoc(preview, g.clipId, gl.track.id, Math.max(0, g.originStart + delta), magnet, true)
         }
         this.interaction = {
           ...this.interaction,
@@ -473,7 +475,9 @@ export class TimelineEngine {
         const cmds = drag.group
           .map((g) => {
             const gl = findClip(this.doc, g.clipId)
-            return gl ? Commands.moveClipSmart(g.clipId, gl.track.id, Math.max(0, g.originStart + delta), magnet) : null
+            // noCollide: see the group preview path — sequential shifts must not
+            // bounce off group-mates that haven't moved yet.
+            return gl ? Commands.moveClipSmart(g.clipId, gl.track.id, Math.max(0, g.originStart + delta), magnet, true) : null
           })
           .filter((c): c is ReturnType<typeof Commands.moveClipSmart> => c !== null)
         this.batch('Move clips', cmds)

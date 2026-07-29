@@ -78,6 +78,11 @@ const TRACK_KIND_HEIGHT: Record<TrackKind, number> = {
   adjustment: 30
 }
 
+/** Overlay lanes are kind 'video' too, but default to HALF the main lane's
+ *  height — content dropped there shouldn't expand the lane to full size
+ *  (users can still drag the height afterwards). */
+const OVERLAY_LANE_H = TRACK_KIND_HEIGHT.video / 2
+
 const TRACK_KIND_LABEL: Record<TrackKind, string> = {
   video: 'Video',
   audio: 'Audio',
@@ -174,7 +179,7 @@ export function createTrack(i: NewTrack): Track {
     kind: i.kind,
     name: i.name ?? defaultTrackName(i.kind),
     order: i.order,
-    height: i.height ?? defaultTrackHeight(i.kind),
+    height: i.height ?? (i.kind === 'video' && !i.isMain ? OVERLAY_LANE_H : defaultTrackHeight(i.kind)),
     collapsed: false,
     locked: false,
     muted: false,
@@ -335,6 +340,14 @@ export function normalizeTrack(track: Track): Track {
   // ever the default (never a drag detent), so a stored 64 = "never adjusted".
   if (track.kind === 'video' && track.isMain && track.height === 64) {
     track = { ...track, height: TRACK_KIND_HEIGHT.video }
+    changed = true
+  }
+  // One-time upgrade: OVERLAY lanes (non-main video) stored at the main-video
+  // default height drop to the overlay default — half the main lane — so content
+  // landing on them doesn't expand the lane to full main height. The full height
+  // was only ever the created default for these lanes ("never adjusted").
+  if (track.kind === 'video' && !track.isMain && track.height === TRACK_KIND_HEIGHT.video) {
+    track = { ...track, height: OVERLAY_LANE_H }
     changed = true
   }
   const clips = track.clips.map((c) => {
@@ -543,10 +556,38 @@ export function reorderTracksInDoc(doc: TimelineDocument, orderedIds: string[]):
   return normalizeDoc({ ...doc, tracks })
 }
 
+/**
+ * Clips on one lane must never stack: the nearest non-overlapping start for a
+ * clip of `duration` given the lane's other clips. The requested start is
+ * clamped into the closest gap that fits (past the lane's end always fits).
+ */
+export function resolveFreeStart(others: Clip[], start: number, duration: number): number {
+  const sorted = [...others].sort((a, b) => a.start - b.start)
+  let best: number | null = null
+  const consider = (lo: number, hi: number): void => {
+    if (hi < lo) return
+    const c = Math.max(lo, Math.min(hi, start))
+    if (best === null || Math.abs(c - start) < Math.abs(best - start)) best = c
+  }
+  let prevEnd = 0
+  for (const c of sorted) {
+    consider(prevEnd, c.start - duration)
+    prevEnd = Math.max(prevEnd, c.end)
+  }
+  consider(prevEnd, Number.MAX_SAFE_INTEGER)
+  return Math.max(0, Math.round(best ?? start))
+}
+
 export function addClipToDoc(doc: TimelineDocument, clip: Clip): TimelineDocument {
-  if (!findTrack(doc, clip.trackId)) return doc
+  const track = findTrack(doc, clip.trackId)
+  if (!track) return doc
+  // Adds land in the nearest free spot (e.g. "Add text" twice at the playhead
+  // used to stack two clips exactly on top of each other).
+  const c0 = withEnd(clip)
+  const start = resolveFreeStart(track.clips, c0.start, c0.duration)
+  const placed = start === c0.start ? c0 : { ...c0, start, end: start + c0.duration }
   return normalizeDoc(
-    mapTrack(doc, clip.trackId, (t) => ({ ...t, clips: [...t.clips, withEnd(clip)] }))
+    mapTrack(doc, clip.trackId, (t) => ({ ...t, clips: [...t.clips, placed] }))
   )
 }
 
@@ -572,19 +613,26 @@ export function removeClipFromDoc(
   )
 }
 
-/** Free move: place a clip on a (possibly different) track at a frame; negative time is clamped. */
+/** Free move: place a clip on a (possibly different) track at a frame; negative
+ *  time is clamped. Clips never stack — the drop is clamped into the nearest
+ *  free spot — except with `noCollide` (group moves shift members sequentially,
+ *  so mid-flight they'd collide with group-mates that haven't moved yet). */
 export function moveClipInDoc(
   doc: TimelineDocument,
   clipId: string,
   toTrackId: string,
-  toStart: number
+  toStart: number,
+  noCollide = false
 ): TimelineDocument {
   const loc = findClip(doc, clipId)
   if (!loc) return doc
   const to = findTrack(doc, toTrackId)
   if (!to) return doc
   const { track, clip } = loc
-  const start = Math.max(0, Math.round(toStart))
+  const want = Math.max(0, Math.round(toStart))
+  const start = noCollide
+    ? want
+    : resolveFreeStart(to.clips.filter((c) => c.id !== clipId), want, clip.duration)
   if (toTrackId === track.id && start === clip.start) return doc
   let moved: Clip = { ...clip, trackId: toTrackId, start, end: start + clip.duration }
   // A MAIN clip promoted onto an overlay lane keeps its full-frame size: the
@@ -1057,7 +1105,8 @@ export function moveClipSmartInDoc(
   clipId: string,
   toTrackId: string,
   dropStart: number,
-  magnet: boolean
+  magnet: boolean,
+  noCollide = false
 ): TimelineDocument {
   const loc = findClip(doc, clipId)
   const target = findTrack(doc, toTrackId)
@@ -1070,7 +1119,7 @@ export function moveClipSmartInDoc(
   if (toTrackId === origin.id) {
     const same = isGapless(origin, magnet)
       ? magnetMoveInDoc(doc, clipId, toTrackId, start)
-      : moveClipInDoc(doc, clipId, toTrackId, start)
+      : moveClipInDoc(doc, clipId, toTrackId, start, noCollide)
     return pruneEmptyAutoTracksInDoc(same)
   }
 
@@ -1086,7 +1135,9 @@ export function moveClipSmartInDoc(
     const anchor = target.clips.length ? laneAnchor(target) : start
     targetClips = layoutFrom([...others.slice(0, idx), moved, ...others.slice(idx)], anchor)
   } else {
-    targetClips = [...target.clips, { ...moved, start, end: start + clip.duration }]
+    // Free-position lane: never stack — land in the nearest spot that fits.
+    const s = noCollide ? start : resolveFreeStart(target.clips, start, clip.duration)
+    targetClips = [...target.clips, { ...moved, start: s, end: s + clip.duration }]
   }
 
   const tracks = doc.tracks.map((t) => {
