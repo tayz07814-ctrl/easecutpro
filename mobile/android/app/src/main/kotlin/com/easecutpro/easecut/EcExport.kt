@@ -114,6 +114,7 @@ class EcExport(
         when (call.method) {
             "ping" -> result.success(mapOf("ok" to true))
             "export" -> startExport(call, result)
+            "proxy" -> renderProxy(call, result)
             "extractAudio" -> extractAudio(call, result)
             "thumbnails" -> thumbnails(call, result)
             "waveform" -> waveform(call, result)
@@ -123,6 +124,11 @@ class EcExport(
     }
 
     private var audioTx: Transformer? = null
+
+    // The preview proxy renders on its OWN transformer + pending, fully independent of
+    // the export above, so a proxy render and a real export never block each other.
+    private var proxyTx: Transformer? = null
+    private var proxyPending: MethodChannel.Result? = null
 
     /** Extract the source's audio to a compact AAC .m4a (for Cut Lord transcription). */
     private fun extractAudio(call: MethodCall, result: MethodChannel.Result) {
@@ -365,88 +371,10 @@ class EcExport(
             val imgOvs = parseOvs(images)
 
             // --- pass 1: base video sequence (trim + concat + crop/speed/size, audio
-            // kept). Crop/Speed/Presentation are item-level effects (which composite
-            // reliably); overlays are NOT applied here. ---
-            val baseItems = ArrayList<EditedMediaItem>()
-            for (seg in segments) {
-                val uri = seg["uri"] as? String ?: run {
-                    result.error("ec_export", "a segment has no uri", null)
-                    return
-                }
-                val startMs = (seg["startMs"] as? Number)?.toLong() ?: 0L
-                val endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
-                val speed = (seg["speed"] as? Number)?.toFloat() ?: 1f
-                val volume = (seg["volume"] as? Number)?.toFloat() ?: 1f
-                val cl = (seg["cropL"] as? Number)?.toFloat() ?: 0f
-                val ct = (seg["cropT"] as? Number)?.toFloat() ?: 0f
-                val cr = (seg["cropR"] as? Number)?.toFloat() ?: 0f
-                val cb = (seg["cropB"] as? Number)?.toFloat() ?: 0f
-                val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
-                if (endMs > startMs) clip.setEndPositionMs(endMs)
-                val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
-
-                val builder = EditedMediaItem.Builder(mi)
-                val vfx = ArrayList<Effect>()
-                val afx = ArrayList<AudioProcessor>()
-                // Crop (fractions off each edge → NDC [-1,1]); applied before speed.
-                if (cl > 0f || ct > 0f || cr > 0f || cb > 0f) {
-                    vfx.add(Crop(-1f + 2f * cl, 1f - 2f * cr, -1f + 2f * cb, 1f - 2f * ct))
-                }
-                if (speed != 1f && speed > 0f) {
-                    vfx.add(SpeedChangeEffect(speed))
-                    val sonic = SonicAudioProcessor()
-                    sonic.setSpeed(speed)
-                    afx.add(sonic)
-                }
-                // Force output size (every clip normalised so the concat is uniform).
-                vfx.add(Presentation.createForWidthAndHeight(width, height, Presentation.LAYOUT_SCALE_TO_FIT))
-
-                if (volume <= 0.001f) {
-                    builder.setRemoveAudio(true)
-                } else if (volume != 1f) {
-                    val mix = ChannelMixingAudioProcessor()
-                    mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
-                    mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
-                    afx.add(mix)
-                }
-                builder.setEffects(Effects(ImmutableList.copyOf(afx), ImmutableList.copyOf(vfx)))
-                if (fps > 0) builder.setFrameRate(fps)
-                baseItems.add(builder.build())
-            }
-            val sequences = ArrayList<EditedMediaItemSequence>()
-            sequences.add(EditedMediaItemSequence(baseItems))
-
-            // --- extra audio sequences (music / voiceover) — audio only, mixed in.
-            // A track placed later on the timeline gets a silent WAV lead-in so it
-            // starts at the right moment; per-track gain via a channel-mixing matrix.
-            audioTracks?.forEach { a ->
-                val uri = a["uri"] as? String ?: return@forEach
-                val startMs = (a["startMs"] as? Number)?.toLong() ?: 0L
-                val endMs = (a["endMs"] as? Number)?.toLong() ?: 0L
-                val tlStart = (a["timelineStartMs"] as? Number)?.toLong() ?: 0L
-                val vol = (a["volume"] as? Number)?.toFloat() ?: 1f
-                if (vol <= 0.001f) return@forEach // fully muted — nothing to mix
-                val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
-                if (endMs > startMs) clip.setEndPositionMs(endMs)
-                val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
-                val ab = EditedMediaItem.Builder(mi).setRemoveVideo(true)
-                if (vol != 1f) {
-                    val mix = ChannelMixingAudioProcessor()
-                    mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(vol))
-                    mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(vol))
-                    ab.setEffects(Effects(ImmutableList.of<AudioProcessor>(mix), ImmutableList.of<Effect>()))
-                }
-                val seqItems = ArrayList<EditedMediaItem>()
-                if (tlStart > 0) {
-                    silentWav(tlStart)?.let { s ->
-                        seqItems.add(EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(s))).build())
-                    }
-                }
-                seqItems.add(ab.build())
-                sequences.add(EditedMediaItemSequence(seqItems))
-            }
-
-            val pass1Comp = Composition.Builder(sequences).build()
+            // kept) + extra audio-only sequences (music / voiceover). Built by the
+            // shared helper so the preview proxy renders the exact same base. Overlays
+            // are NOT applied here — they are composited in pass 2 below. ---
+            val pass1Comp = buildBaseComposition(segments, width, height, fps, audioTracks)
             val finalOut = File(context.cacheDir, "ec_export_${System.currentTimeMillis()}.mp4")
             val hasOverlays = capOvs.isNotEmpty() || imgOvs.isNotEmpty()
 
@@ -492,6 +420,189 @@ class EcExport(
             transformer = null
             result.error("ec_export", "could not start: ${e.message}", null)
         }
+    }
+
+    /**
+     * Build the FLAT base composition shared by the real export (pass 1) and the
+     * preview proxy: each segment trimmed + normalised (crop / speed / output size /
+     * per-clip volume) and concatenated into one video sequence, plus any extra
+     * audio-only sequences (music / voiceover) mixed in. NO overlays — those are a
+     * separate pass. Throws if a segment is missing its uri.
+     */
+    private fun buildBaseComposition(
+        segments: List<Map<String, Any>>,
+        outW: Int,
+        outH: Int,
+        fps: Int,
+        audioTracks: List<Map<String, Any>>?,
+    ): Composition {
+        val baseItems = ArrayList<EditedMediaItem>()
+        for (seg in segments) {
+            val uri = seg["uri"] as? String ?: throw IllegalArgumentException("a segment has no uri")
+            val startMs = (seg["startMs"] as? Number)?.toLong() ?: 0L
+            val endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
+            val speed = (seg["speed"] as? Number)?.toFloat() ?: 1f
+            val volume = (seg["volume"] as? Number)?.toFloat() ?: 1f
+            val cl = (seg["cropL"] as? Number)?.toFloat() ?: 0f
+            val ct = (seg["cropT"] as? Number)?.toFloat() ?: 0f
+            val cr = (seg["cropR"] as? Number)?.toFloat() ?: 0f
+            val cb = (seg["cropB"] as? Number)?.toFloat() ?: 0f
+            val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
+            if (endMs > startMs) clip.setEndPositionMs(endMs)
+            val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
+
+            val builder = EditedMediaItem.Builder(mi)
+            val vfx = ArrayList<Effect>()
+            val afx = ArrayList<AudioProcessor>()
+            // Crop (fractions off each edge → NDC [-1,1]); applied before speed.
+            if (cl > 0f || ct > 0f || cr > 0f || cb > 0f) {
+                vfx.add(Crop(-1f + 2f * cl, 1f - 2f * cr, -1f + 2f * cb, 1f - 2f * ct))
+            }
+            if (speed != 1f && speed > 0f) {
+                vfx.add(SpeedChangeEffect(speed))
+                val sonic = SonicAudioProcessor()
+                sonic.setSpeed(speed)
+                afx.add(sonic)
+            }
+            // Force output size (every clip normalised so the concat is uniform).
+            vfx.add(Presentation.createForWidthAndHeight(outW, outH, Presentation.LAYOUT_SCALE_TO_FIT))
+
+            if (volume <= 0.001f) {
+                builder.setRemoveAudio(true)
+            } else if (volume != 1f) {
+                val mix = ChannelMixingAudioProcessor()
+                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
+                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
+                afx.add(mix)
+            }
+            builder.setEffects(Effects(ImmutableList.copyOf(afx), ImmutableList.copyOf(vfx)))
+            if (fps > 0) builder.setFrameRate(fps)
+            baseItems.add(builder.build())
+        }
+        val sequences = ArrayList<EditedMediaItemSequence>()
+        sequences.add(EditedMediaItemSequence(baseItems))
+
+        // --- extra audio sequences (music / voiceover) — audio only, mixed in.
+        // A track placed later on the timeline gets a silent WAV lead-in so it
+        // starts at the right moment; per-track gain via a channel-mixing matrix.
+        audioTracks?.forEach { a ->
+            val uri = a["uri"] as? String ?: return@forEach
+            val startMs = (a["startMs"] as? Number)?.toLong() ?: 0L
+            val endMs = (a["endMs"] as? Number)?.toLong() ?: 0L
+            val tlStart = (a["timelineStartMs"] as? Number)?.toLong() ?: 0L
+            val vol = (a["volume"] as? Number)?.toFloat() ?: 1f
+            if (vol <= 0.001f) return@forEach // fully muted — nothing to mix
+            val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
+            if (endMs > startMs) clip.setEndPositionMs(endMs)
+            val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
+            val ab = EditedMediaItem.Builder(mi).setRemoveVideo(true)
+            if (vol != 1f) {
+                val mix = ChannelMixingAudioProcessor()
+                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(vol))
+                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(vol))
+                ab.setEffects(Effects(ImmutableList.of<AudioProcessor>(mix), ImmutableList.of<Effect>()))
+            }
+            val seqItems = ArrayList<EditedMediaItem>()
+            if (tlStart > 0) {
+                silentWav(tlStart)?.let { s ->
+                    seqItems.add(EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(s))).build())
+                }
+            }
+            seqItems.add(ab.build())
+            sequences.add(EditedMediaItemSequence(seqItems))
+        }
+
+        return Composition.Builder(sequences).build()
+    }
+
+    /**
+     * Render a FLAT low-res preview proxy — the export's pass-1 base (video + main
+     * audio, crop/speed/size baked, NO overlays and NO extra audio tracks) — to a temp
+     * MP4. Playing this single file back is seamless across cut boundaries. Runs on its
+     * OWN transformer + pending so it never blocks (or is blocked by) a real export.
+     * Resolves { path, durationMs }; durationMs is the summed timeline length so the
+     * Dart timeline maps 1:1 onto the proxy.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun renderProxy(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val segments = (call.argument<List<Map<String, Any>>>("segments")) ?: emptyList()
+            if (segments.isEmpty()) {
+                result.error("ec_export", "No segments for proxy", null)
+                return
+            }
+            val height = (call.argument<Number>("height"))?.toInt() ?: 540
+            val aspect = (call.argument<Number>("aspect"))?.toDouble() ?: (16.0 / 9.0)
+            // Even output dims (encoders require it); width derived from the aspect (w/h).
+            val outH = (if (height >= 2) height else 540).let { if (it % 2 == 0) it else it - 1 }
+            var outW = Math.round(outH * (if (aspect > 0.0) aspect else 16.0 / 9.0)).toInt()
+            if (outW % 2 != 0) outW += 1
+            if (outW < 2) outW = 2
+
+            // Summed timeline length (Σ (endMs-startMs)/speed) — matches the Dart totalMs.
+            var durMs = 0L
+            for (seg in segments) {
+                val s0 = (seg["startMs"] as? Number)?.toLong() ?: 0L
+                val e0 = (seg["endMs"] as? Number)?.toLong() ?: 0L
+                val sp = (seg["speed"] as? Number)?.toDouble() ?: 1.0
+                val span = if (e0 > s0) (e0 - s0) else 0L
+                durMs += Math.round(span / (if (sp > 0.0) sp else 1.0))
+            }
+
+            // Supersede any in-flight proxy (never touches the export's transformer).
+            cancelProxy()
+
+            val comp = buildBaseComposition(segments, outW, outH, 0, null)
+            val out = File(context.cacheDir, "ec_proxy_${System.currentTimeMillis()}.mp4")
+            val fDur = durMs
+            proxyPending = result
+            val t = Transformer.Builder(context)
+                .setEncoderFactory(
+                    DefaultEncoderFactory.Builder(context)
+                        .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(2_500_000).build())
+                        .setEnableFallback(true)
+                        .build()
+                )
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                        if (proxyPending === result) {
+                            proxyTx = null
+                            proxyPending = null
+                            result.success(mapOf("path" to out.absolutePath, "durationMs" to fDur))
+                        }
+                    }
+
+                    override fun onError(composition: Composition, exportResult: ExportResult, exception: ExportException) {
+                        if (proxyPending === result) {
+                            proxyTx = null
+                            proxyPending = null
+                            result.error("ec_export", "proxy failed: ${exception.message}", null)
+                        }
+                    }
+                })
+                .build()
+            proxyTx = t
+            t.start(comp, out.absolutePath)
+        } catch (e: Exception) {
+            proxyTx = null
+            proxyPending = null
+            result.error("ec_export", "proxy could not start: ${e.message}", null)
+        }
+    }
+
+    /** Cancel any in-flight proxy render (on the main thread) and resolve its pending. */
+    private fun cancelProxy() {
+        val tx = proxyTx
+        proxyTx = null
+        val old = proxyPending
+        proxyPending = null
+        if (tx != null) {
+            try {
+                tx.cancel()
+            } catch (_: Exception) {
+            }
+        }
+        old?.error("ec_export", "proxy superseded", null)
     }
 
     /** Start a Transformer pass; [onDone]/[onErr] fire on the main thread. */
@@ -696,5 +807,11 @@ class EcExport(
         stopPolling()
         transformer = null
         pending = null
+        try {
+            proxyTx?.cancel()
+        } catch (_: Exception) {
+        }
+        proxyTx = null
+        proxyPending = null
     }
 }

@@ -12,6 +12,7 @@ import '../editor/audio_track.dart';
 import '../editor/cutcutpro.dart';
 import '../editor/cutlord.dart';
 import '../editor/silence_settings.dart';
+import '../editor/preview_proxy.dart';
 import '../native/exporter.dart';
 import '../native/player.dart';
 import '../theme.dart';
@@ -61,12 +62,18 @@ class _EditorScreenState extends State<EditorScreen> {
   final NativePlayer _player = NativePlayer();
   final NativeExporter _exporter = NativeExporter();
   final TimelineModel _model = TimelineModel();
+  // Renders + caches a flat "flatten-and-play" proxy of the current cuts for smooth
+  // preview across boundaries; swapped in for the live player when it's ready.
+  late final PreviewProxy _previewProxy = PreviewProxy(_exporter);
   StreamSubscription<PlayerState>? _stateSub;
   StreamSubscription<dynamic>? _sizeSub;
 
   String? _clipName;
   int? _textureId;
   double _aspect = 9 / 16;
+  // Preview proxy: the flat pre-rendered file swapped in for smooth cross-cut playback.
+  String? _proxyPath;
+  bool _proxyActive = false;
 
   int _positionMs = 0;
   int _sourceDurationMs = 0;
@@ -102,6 +109,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void initState() {
     super.initState();
     _model.addListener(_onModel);
+    _previewProxy.addListener(_onProxyReady);
     // Register any user-added fonts before preview/export need them.
     EcFonts.instance.ensureLoaded().then((_) {
       if (mounted) setState(() {});
@@ -122,6 +130,8 @@ class _EditorScreenState extends State<EditorScreen> {
     _saveTimer?.cancel();
     _tick?.cancel();
     _model.removeListener(_onModel);
+    _previewProxy.removeListener(_onProxyReady);
+    _previewProxy.dispose();
     _stateSub?.cancel();
     _sizeSub?.cancel();
     _player.release();
@@ -132,6 +142,9 @@ class _EditorScreenState extends State<EditorScreen> {
   void _onModel() {
     if (mounted) setState(() {});
     _scheduleSave();
+    // Any structural change to the cuts (split/delete/trim/speed/volume/crop/zoom/
+    // reorder/cuts/undo/redo/append) flows through here — (re)render the proxy for it.
+    _maybeUpdateProxy();
   }
 
   // ---- autosave (debounced) + reload ----
@@ -191,6 +204,9 @@ class _EditorScreenState extends State<EditorScreen> {
       _toast('Media not found on this device — re-import to continue');
       return;
     }
+    _previewProxy.reset(); // fresh project — drop any cached proxies
+    _proxyActive = false;
+    _proxyPath = null;
     _clipName = m['clipName'] as String?;
     _sourceDurationMs = (m['durationMs'] as num?)?.toInt() ?? 0;
     _model.sourcePath = src;
@@ -263,7 +279,10 @@ class _EditorScreenState extends State<EditorScreen> {
         _texts.clear();
         _thumbs = [];
         _waveform = [];
+        _proxyActive = false;
+        _proxyPath = null;
       });
+      _previewProxy.reset(); // fresh project — drop any cached proxies
       _textureId ??= await _player.create();
       _stateSub ??= _player.states.listen(_onState);
       _sizeSub ??= _player.sizes.listen((_) {
@@ -286,13 +305,90 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   /// Rebuild the native playlist from the model after an edit, and land the
-  /// playhead at [seekTo] (clamped).
+  /// playhead at [seekTo] (clamped). Delegates source selection to [_loadSource].
   Future<void> _reload({int? seekTo}) async {
     if (!_model.hasBase) return;
-    await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
+    await _loadSource(seekTo: seekTo);
+  }
+
+  /// Load the native player from the best source: the flat preview proxy when it is
+  /// rendered, [PreviewProxy.matches] the current cuts, and the timeline actually has
+  /// cuts ([_proxyWorthwhile]); otherwise the live segment list (the original
+  /// behaviour). Extra audio (music/voiceover) is always mixed live on top. Position
+  /// is preserved; when [resumePlaying] the player continues after the seek (used by
+  /// the mid-play hot-swap so playback isn't interrupted).
+  Future<void> _loadSource({int? seekTo, bool resumePlaying = false}) async {
+    if (!_model.hasBase) return;
+    final proxyReady = _proxyWorthwhile() &&
+        _previewProxy.path != null &&
+        _previewProxy.matches(_proxySegments());
+    if (proxyReady) {
+      final path = _previewProxy.path!;
+      final dur = _previewProxy.durationMs ?? _totalMs;
+      _proxyActive = true;
+      _proxyPath = path;
+      await _player.load([
+        PlayerSegment(
+          uri: 'file://$path',
+          startMs: 0,
+          endMs: dur,
+          timelineStartMs: 0,
+          timelineEndMs: dur,
+          speed: 1.0,
+          volume: 1.0,
+        ),
+      ], audioTracks: _audioTrackMaps());
+    } else {
+      _proxyActive = false;
+      _proxyPath = null;
+      await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
+    }
     final pos = (seekTo ?? _positionMs).clamp(0, _totalMs);
     await _player.seek(pos);
-    setState(() => _positionMs = pos);
+    if (resumePlaying) await _player.play();
+    if (mounted) setState(() => _positionMs = pos);
+  }
+
+  /// The current cut list as native-export-shaped maps (uri + trim + speed + volume +
+  /// crop per clip) — the exact input the native proxy render and the manager's hash
+  /// consume, so crop/speed/volume are baked into the proxy (unlike playerSegments()).
+  List<Map<String, dynamic>> _proxySegments() =>
+      [for (final s in _model.exportSegments()) s.toMap()];
+
+  /// A flat proxy only helps once the timeline has real cut boundaries: more than one
+  /// clip, or a single clip trimmed off its source. A full, untrimmed clip already
+  /// previews smoothly on the live player, so we skip the proxy for it.
+  bool _proxyWorthwhile() {
+    final clips = _model.clips;
+    if (clips.length > 1) return true;
+    if (clips.length == 1) {
+      final c = clips.first;
+      return c.inMs > 0 || (_sourceDurationMs > 0 && c.outMs < _sourceDurationMs);
+    }
+    return false;
+  }
+
+  /// Ask the manager to (re)render a proxy for the current cuts (debounced inside it).
+  /// No-op when a proxy wouldn't help — playback then just stays on the live player.
+  void _maybeUpdateProxy() {
+    if (!_model.hasBase || !_proxyWorthwhile()) return;
+    _previewProxy.update(_proxySegments(), aspect: _aspect);
+  }
+
+  /// The manager produced (or promoted from cache) a proxy. Deferred to a microtask so
+  /// it never re-enters a running edit/reload; the swap preserves position + play.
+  void _onProxyReady() {
+    if (!mounted) return;
+    scheduleMicrotask(_swapToProxyIfReady);
+  }
+
+  /// Hot-swap the player onto the ready proxy when it still matches what's on screen
+  /// and cuts exist. Skips if already on that proxy or the user is scrubbing.
+  void _swapToProxyIfReady() {
+    if (!mounted || !_model.hasBase || _scrubbing) return;
+    if (!_proxyWorthwhile() || !_previewProxy.matches(_proxySegments())) return;
+    if (_proxyActive && _proxyPath == _previewProxy.path) return; // already on it
+    _loadSource(seekTo: _positionMs, resumePlaying: _playing);
   }
 
   void _onState(PlayerState s) {
@@ -1216,6 +1312,9 @@ class _EditorScreenState extends State<EditorScreen> {
   /// Cover-zoom the preview to the crop of the clip under the playhead (per-clip,
   /// matching the export Crop effect).
   Widget _cropped(Widget child) {
+    // The flat proxy already has each clip's crop baked in — re-cropping here would
+    // double it, so pass the texture straight through while the proxy is active.
+    if (_proxyActive) return child;
     final idx = _model.clipIndexAt(_positionMs);
     if (idx < 0 || idx >= _model.clips.length) return child;
     final c = _model.clips[idx];
@@ -1313,6 +1412,29 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  /// Small themed chip shown over the preview while a proxy render is in flight.
+  Widget _proxyChip() => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Ec.sheet.withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Ec.hair2),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 11,
+              height: 11,
+              child: CircularProgressIndicator(strokeWidth: 1.6, color: Ec.indigo),
+            ),
+            SizedBox(width: 7),
+            Text('Updating preview…',
+                style: TextStyle(color: Ec.text, fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      );
+
   Widget _stage(double screenH) {
     final h = (screenH * _stageFrac).clamp(160.0, screenH * 0.58);
     return SizedBox(
@@ -1377,6 +1499,21 @@ class _EditorScreenState extends State<EditorScreen> {
                             bottom: 6,
                             child: Center(child: _textControlBar(_selectedText!)),
                           ),
+                        // "Updating preview…" while the flat proxy is (re)rendering.
+                        Positioned(
+                          top: 8,
+                          left: 0,
+                          right: 0,
+                          child: IgnorePointer(
+                            child: Center(
+                              child: ValueListenableBuilder<bool>(
+                                valueListenable: _previewProxy.rendering,
+                                builder: (_, r, _) =>
+                                    r ? _proxyChip() : const SizedBox.shrink(),
+                              ),
+                            ),
+                          ),
+                        ),
                       ],
                     );
                   },

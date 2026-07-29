@@ -154,6 +154,31 @@ class NativeExporter {
     }
   }
 
+  /// Render a FLAT low-res preview proxy of [segments] (the export's pass-1 base —
+  /// trim + concat + crop/speed/size/volume baked, NO overlays, NO extra audio) to a
+  /// temp file. [segments] are export-shaped maps (uri/startMs/endMs/speed/volume/
+  /// cropL..cropB). Returns the proxy path + its timeline duration (ms), or null on
+  /// any failure so callers can fall back to live segment playback.
+  Future<({String path, int durationMs})?> renderProxy(
+    List<Map<String, dynamic>> segments, {
+    int height = 540,
+    double aspect = 16 / 9,
+  }) async {
+    try {
+      final r = await _m.invokeMethod<Map<dynamic, dynamic>>('proxy', {
+        'segments': segments,
+        'height': height,
+        'aspect': aspect,
+      });
+      final path = r?['path'] as String?;
+      if (path == null || path.isEmpty) return null;
+      final dur = (r?['durationMs'] as num?)?.toInt() ?? 0;
+      return (path: path, durationMs: dur);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<ExportResult> export(ExportSpec spec, {void Function(double pct)? onProgress}) async {
     StreamSubscription<dynamic>? sub;
     if (onProgress != null) {
