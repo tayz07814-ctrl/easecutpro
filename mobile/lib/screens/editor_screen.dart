@@ -1429,17 +1429,20 @@ class _EditorScreenState extends State<EditorScreen> {
           _model.select(i);
           setState(() => _selected = true);
         },
-        // Hold-drag a main clip to reorder it in the sequence: reorder live for
-        // feedback, snapshot at the start, and reload the player once on release.
+        // Hold-drag a main clip to reorder it in the sequence. The grabbed clip
+        // floats under the finger; the reorder is committed once, on release, then
+        // the native player is rebuilt for the new order.
         onClipReorderStart: () {
           setState(() {
             _selected = true;
             _selectedText = null;
             _selectedImage = null;
           });
-          _pushHistory();
         },
-        onClipReorder: (from, to) => _model.moveClip(from, to),
+        onClipReorder: (from, to) {
+          _pushHistory();
+          _model.moveClip(from, to);
+        },
         onClipReorderEnd: () async {
           _scheduleSave();
           if (_hasBase) {

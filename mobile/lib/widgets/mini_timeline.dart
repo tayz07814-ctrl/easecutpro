@@ -123,7 +123,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
   String? _grabKind; // 'clip' | 'text' | 'image' | 'audio'
   int _grabIndex = -1; // index into the relevant list (clip index for 'clip')
   double _lpLastDx = 0; // last cumulative long-press dx (to derive per-frame deltas)
-  double _grabDx = 0; // residual px offset of a grabbed clip from its slot (reorder follow)
+  double _grabDx = 0; // px the grabbed clip floats from its slot (follows the finger)
+  int _dropIndex = -1; // where a grabbed clip would land if released now
 
   bool _isGrabbed(String kind, int index) => _grabKind == kind && _grabIndex == index;
 
@@ -470,7 +471,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
               onLongPressStart: widget.onAudioMove == null
                   ? null
                   : (_) {
-                      widget.onSelectAudio?.call(a);
+                      // Grab (highlight + history) without seeking — a seek here would
+                      // re-align/scroll the timeline mid-grab and fight the move.
                       widget.onAudioEditStart?.call();
                       setState(() {
                         _grabKind = 'audio';
@@ -621,7 +623,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
         onLongPressStart: widget.onOverlayMove == null
             ? null
             : (_) {
-                widget.onSelectText?.call(t);
+                // Grab without seeking (see audio note) — onOverlayEditStart clears
+                // the preview selection so the on-video drag can't interfere.
                 widget.onOverlayEditStart?.call();
                 setState(() {
                   _grabKind = 'text';
@@ -730,7 +733,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
         onLongPressStart: widget.onImageMove == null
             ? null
             : (_) {
-                widget.onSelectImage?.call(o);
+                // Grab without seeking (see audio note); the move handler marks it
+                // selected so it still highlights.
                 widget.onImageEditStart?.call();
                 setState(() {
                   _grabKind = 'image';
@@ -875,37 +879,43 @@ class _MiniTimelineState extends State<MiniTimeline> {
     return (clips[i].timelineLenMs * _pxPerMs).clamp(6.0, double.infinity);
   }
 
-  /// Hold-drag reorder: track cumulative dx and swap past a neighbour's midpoint.
+  /// Where the grabbed clip [from] would be inserted for a finger offset of [dx]
+  /// pixels, by walking neighbours and counting each one crossed past its midpoint.
+  /// The clip list is NOT mutated until release, so widths stay stable here.
+  int _dropIndexFor(int from, double dx) {
+    var target = from;
+    var acc = dx;
+    final n = widget.model.clips.length;
+    while (target < n - 1) {
+      final wNext = _clipW(target + 1);
+      if (acc > wNext / 2) {
+        acc -= wNext;
+        target += 1;
+      } else {
+        break;
+      }
+    }
+    while (target > 0) {
+      final wPrev = _clipW(target - 1);
+      if (acc < -wPrev / 2) {
+        acc += wPrev;
+        target -= 1;
+      } else {
+        break;
+      }
+    }
+    return target;
+  }
+
+  /// Hold-drag reorder: the grabbed clip floats with the finger; the drop slot is
+  /// recomputed each frame and the reorder is committed once, on release.
   void _onClipHoldMove(LongPressMoveUpdateDetails d) {
     if (widget.onClipReorder == null) return;
     final dx = d.offsetFromOrigin.dx;
-    _grabDx += dx - _lpLastDx;
-    _lpLastDx = dx;
-    var idx = _grabIndex;
-    final n = widget.model.clips.length;
-    // Cross right neighbours once dragged past half their width.
-    while (idx < n - 1) {
-      final nextW = _clipW(idx + 1);
-      if (_grabDx > nextW / 2) {
-        widget.onClipReorder!(idx, idx + 1);
-        _grabDx -= nextW;
-        idx += 1;
-      } else {
-        break;
-      }
-    }
-    // Cross left neighbours.
-    while (idx > 0) {
-      final prevW = _clipW(idx - 1);
-      if (_grabDx < -prevW / 2) {
-        widget.onClipReorder!(idx, idx - 1);
-        _grabDx += prevW;
-        idx -= 1;
-      } else {
-        break;
-      }
-    }
-    setState(() => _grabIndex = idx);
+    setState(() {
+      _grabDx = dx;
+      _dropIndex = _dropIndexFor(_grabIndex, dx);
+    });
   }
 
   Widget _clip(TimelineModel model, int i) {
@@ -929,20 +939,25 @@ class _MiniTimelineState extends State<MiniTimeline> {
                     setState(() {
                       _grabKind = 'clip';
                       _grabIndex = i;
-                      _lpLastDx = 0;
                       _grabDx = 0;
+                      _dropIndex = i;
                     });
                   },
             onLongPressMoveUpdate: widget.onClipReorder == null ? null : _onClipHoldMove,
             onLongPressEnd: widget.onClipReorder == null
                 ? null
                 : (_) {
-                    widget.onClipReorderEnd?.call();
+                    final from = _grabIndex;
+                    final to = _dropIndex;
+                    if (to >= 0 && to != from) {
+                      widget.onClipReorder!(from, to); // commit once
+                      widget.onClipReorderEnd?.call();
+                    }
                     setState(() {
                       _grabKind = null;
                       _grabIndex = -1;
                       _grabDx = 0;
-                      _lpLastDx = 0;
+                      _dropIndex = -1;
                     });
                   },
             child: Container(
