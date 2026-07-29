@@ -155,7 +155,8 @@ class CaptionLine {
   final String text;
   final double startS;
   final double endS;
-  CaptionLine(this.text, this.startS, this.endS);
+  final List<Word> words; // the individual words in this line (for karaoke timing)
+  CaptionLine(this.text, this.startS, this.endS, {this.words = const []});
 }
 
 /// Group words into caption lines (≤6 words / ≤2.8s / sentence-ender).
@@ -165,7 +166,7 @@ List<CaptionLine> groupCaptions(List<Word> words) {
   void flush() {
     if (cur.isEmpty) return;
     final text = cur.map((w) => w.text.trim()).join(' ').replaceAllMapped(RegExp(r'\s+([,.!?;:])'), (m) => m[1]!);
-    out.add(CaptionLine(text, cur.first.start, cur.last.end));
+    out.add(CaptionLine(text, cur.first.start, cur.last.end, words: List<Word>.from(cur)));
     cur = [];
   }
 

@@ -35,6 +35,14 @@ class _CaptionsSheetState extends State<CaptionsSheet> {
               _styleCard('boxed', 'Boxed', 'White text on a black bar'),
             ],
           ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _styleCard('word', 'Word', 'One word at a time'),
+              const SizedBox(width: 10),
+              _styleCard('karaoke', 'Karaoke', 'Line, spoken word lit'),
+            ],
+          ),
           const SizedBox(height: 18),
           GestureDetector(
             onTap: () {
@@ -87,17 +95,13 @@ class _CaptionsSheetState extends State<CaptionsSheet> {
             children: [
               Container(
                 height: 34,
+                width: double.infinity,
                 decoration: BoxDecoration(
                   color: id == 'boxed' ? Colors.black : const Color(0xFF201F28),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 alignment: Alignment.center,
-                child: Container(
-                  padding: id == 'boxed' ? const EdgeInsets.symmetric(horizontal: 7, vertical: 1) : null,
-                  color: id == 'boxed' ? Colors.black : null,
-                  child: const Text('Aa',
-                      style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800)),
-                ),
+                child: _preview(id),
               ),
               const SizedBox(height: 9),
               Text(label,
@@ -112,5 +116,32 @@ class _CaptionsSheetState extends State<CaptionsSheet> {
         ),
       ),
     );
+  }
+
+  /// The mini text sample inside a style card's preview bar.
+  Widget _preview(String id) {
+    const white = TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800);
+    switch (id) {
+      case 'boxed':
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+          color: Colors.black,
+          child: const Text('Aa', style: white),
+        );
+      case 'word':
+        return const Text('Word', style: white);
+      case 'karaoke':
+        // Full line with the "spoken" word lit (matches TextOverlay.karaokeHi).
+        return const Text.rich(TextSpan(children: [
+          TextSpan(
+              text: 'the ',
+              style: TextStyle(color: Color(0x8CFFFFFF), fontSize: 13, fontWeight: FontWeight.w800)),
+          TextSpan(
+              text: 'word',
+              style: TextStyle(color: Color(0xFFFFE14D), fontSize: 13, fontWeight: FontWeight.w800)),
+        ]));
+      default: // clean
+        return const Text('Aa', style: white);
+    }
   }
 }

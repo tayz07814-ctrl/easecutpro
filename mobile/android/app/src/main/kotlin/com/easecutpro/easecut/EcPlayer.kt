@@ -4,11 +4,18 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.view.Surface
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ClippingMediaSource
+import androidx.media3.exoplayer.source.ConcatenatingMediaSource
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -55,9 +62,21 @@ class EcPlayer(
     private val audioPlayers = ArrayList<ExoPlayer>()
     private var audioStarts = LongArray(0) // each track's timeline start (ms)
 
-    /** Apply the current clip's speed + volume (per-item preview parity). */
-    private fun applyItemParams(idx: Int) {
+    /** Clip index whose speed/volume are currently applied (avoids redundant re-sets). */
+    private var appliedParamsIdx = -1
+
+    /**
+     * Apply the current clip's speed + volume (per-item preview parity).
+     *
+     * No-ops when [idx] is already the applied clip (unless [force]), so the transition
+     * callback and the per-poll safety net converge without writing playbackParameters /
+     * volume on every tick — and, crucially, without touching the audio pipeline at a
+     * boundary where the speed did not actually change.
+     */
+    private fun applyItemParams(idx: Int, force: Boolean = false) {
         val p = player ?: return
+        if (!force && idx == appliedParamsIdx) return
+        appliedParamsIdx = idx
         val s = if (idx in speeds.indices) speeds[idx] else 1f
         val v = if (idx in vols.indices) vols[idx] else 1f
         try {
@@ -116,6 +135,10 @@ class EcPlayer(
             if (p != null && sink != null) {
                 try {
                     val idx = p.currentMediaItemIndex
+                    // Safety net: keep per-clip speed/volume correct even if a transition
+                    // callback is ever missed for an internal concatenation window. No-op
+                    // while the clip is unchanged.
+                    applyItemParams(idx)
                     val pos = maxOf(0L, p.contentPosition)
                     val base = if (idx in starts.indices) starts[idx] else 0L
                     val sp = if (idx in speeds.indices && speeds[idx] > 0f) speeds[idx] else 1f
@@ -191,8 +214,27 @@ class EcPlayer(
             val st = entry.surfaceTexture()
             val surf = Surface(st)
             surface = surf
-            val p = ExoPlayer.Builder(context).build()
+            // Keep a healthy forward buffer so the NEXT clip in a cut sequence is already
+            // loaded before the play head reaches the boundary — no rebuffer at the cut.
+            // Media3's default already over-buffers for LOCAL files (auto target ~125 MB /
+            // 50 s), so the win here is a *predictable, bounded* window rather than "more":
+            // a 64 MB hard cap (setTargetBufferBytes) keeps 4K/HEVC previews from ballooning
+            // memory while still holding several seconds of read-ahead — plenty to span a
+            // cut on local media. (Deliberately NOT using prioritizeTimeOverSizeThresholds,
+            // which would drop this byte cap and risk OOM on high-bitrate footage.)
+            val loadControl = DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    15_000,
+                    30_000,
+                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
+                )
+                .setTargetBufferBytes(64 * 1024 * 1024)
+                .build()
+            val p = ExoPlayer.Builder(context).setLoadControl(loadControl).build()
             p.repeatMode = Player.REPEAT_MODE_OFF
+            // Never stall the pipeline at a clip boundary — transitions must stay gapless.
+            p.setPauseAtEndOfMediaItems(false)
             p.setVideoSurface(surf)
             p.addListener(object : Player.Listener {
                 override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -221,7 +263,11 @@ class EcPlayer(
             result.error("ec_player", "not created", null)
             return
         }
-        val items = ArrayList<MediaItem>()
+        // One shared DataSource.Factory + ProgressiveMediaSource.Factory for every clip, so
+        // consecutive clips from the same file are read through the same pipeline.
+        val dataSourceFactory = DefaultDataSource.Factory(context)
+        val mediaSourceFactory = ProgressiveMediaSource.Factory(dataSourceFactory)
+        val sources = ArrayList<MediaSource>()
         val s = LongArray(segs.size)
         val e = LongArray(segs.size)
         val sp = FloatArray(segs.size) { 1f }
@@ -235,17 +281,30 @@ class EcPlayer(
             e[i] = (seg["timelineEndMs"] as? Number)?.toLong() ?: (s[i] + maxOf(0L, endMs - startMs))
             sp[i] = (seg["speed"] as? Number)?.toFloat()?.coerceIn(0.1f, 8f) ?: 1f
             vl[i] = (seg["volume"] as? Number)?.toFloat()?.coerceIn(0f, 4f) ?: 1f
-            val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
-            if (endMs > startMs) clip.setEndPositionMs(endMs)
-            items.add(MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build())
+            // Clip each source with a ClippingMediaSource instead of a ClippingConfiguration
+            // MediaItem. Concatenated (below) these play as one continuous stream: because
+            // adjacent clips from the same file share a codec format, ExoPlayer keeps the
+            // video decoder warm across the cut (MediaCodec canKeepCodec) rather than tearing
+            // down and re-preparing a separate source at each boundary — the boundary micro-
+            // freeze. NOTE: ClippingMediaSource positions are in MICROSECONDS (not ms), and
+            // C.TIME_END_OF_SOURCE means "play to the end of the source".
+            val base = mediaSourceFactory.createMediaSource(MediaItem.fromUri(uri))
+            val startUs = startMs * 1000L
+            val endUs = if (endMs > startMs) endMs * 1000L else C.TIME_END_OF_SOURCE
+            sources.add(ClippingMediaSource(base, startUs, endUs))
         }
         starts = s
         ends = e
         speeds = sp
         vols = vl
-        p.setMediaItems(items)
+        appliedParamsIdx = -1
+        // A single ConcatenatingMediaSource (children are prepared eagerly by default) rather
+        // than setMediaItems(): the next clip's extractor is ready ahead of the boundary. Each
+        // child still contributes one window, so currentMediaItemIndex / contentPosition /
+        // onMediaItemTransition / seekTo(index, pos) all keep working exactly as before.
+        p.setMediaSource(ConcatenatingMediaSource(*sources.toTypedArray()))
         p.prepare()
-        applyItemParams(p.currentMediaItemIndex)
+        applyItemParams(p.currentMediaItemIndex, force = true)
 
         // Extra audio tracks (music / voiceover) — previewed via follow-the-leader players.
         releaseAudio()

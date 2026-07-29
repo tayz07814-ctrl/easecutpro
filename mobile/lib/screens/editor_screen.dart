@@ -29,6 +29,7 @@ import '../sheets/silence_modal.dart';
 import '../sheets/clip_tools_sheets.dart';
 import '../editor/autozoom.dart';
 import '../sheets/cut_review_sheet.dart';
+import '../local/fonts_store.dart';
 
 /// The EaseCut mobile editor. Everything (preview, export, split/trim/delete, and —
 /// next — Cut Lord) runs off a single [TimelineModel] of base-video clips fed to the
@@ -101,6 +102,10 @@ class _EditorScreenState extends State<EditorScreen> {
   void initState() {
     super.initState();
     _model.addListener(_onModel);
+    // Register any user-added fonts before preview/export need them.
+    EcFonts.instance.ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    });
     _tick = Timer.periodic(const Duration(milliseconds: 16), (_) => _interpolate());
     if (widget.initialClipPath != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -774,7 +779,7 @@ class _EditorScreenState extends State<EditorScreen> {
     });
     _toast('Placed $n b-roll clip${n == 1 ? '' : 's'} — drag any to fine-tune.');
   }
-  void _openCaptions() => _openSheet(CaptionsSheet(onGenerate: (_) => _generateCaptions()));
+  void _openCaptions() => _openSheet(CaptionsSheet(onGenerate: (style) => _generateCaptions(style)));
 
   // ---- Cut Lord: transcribe → SHOW transcript → judge in background → apply ----
   Future<void> _runCutLord(CutLordModel model, bool cutSilence) async {
@@ -928,7 +933,12 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
-  Future<void> _generateCaptions() async {
+  /// Generate caption overlays from the transcript in the chosen [style]:
+  ///   'clean'/'boxed' — grouped subtitle lines (boxed adds a black bar).
+  ///   'word'          — one word on screen at a time.
+  ///   'karaoke'       — the full line, with the currently-spoken word lit and
+  ///                     advancing word-by-word.
+  Future<void> _generateCaptions([String style = 'clean']) async {
     if (!_hasBase || _model.sourcePath == null) {
       _toast('Import a clip first');
       return;
@@ -938,18 +948,70 @@ class _EditorScreenState extends State<EditorScreen> {
     try {
       _transcript ??=
           await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
-      final lines = groupCaptions(_transcript!);
+      final words = _transcript!;
       _pushHistory();
       _texts.removeWhere((t) => t.isCaption);
-      for (final l in lines) {
-        final s = _model.sourceToEdited((l.startS * 1000).round());
-        if (s == null) continue;
-        final e0 = _model.sourceToEdited((l.endS * 1000).round()) ?? (s + 500);
-        final e = e0 <= s ? (s + 500) : (e0 > _totalMs ? _totalMs : e0);
+      final boxed = style == 'boxed';
+
+      // Map a source [startS,endS] (seconds) window to an edited [start,end] (ms)
+      // pair, skipping (null) anything whose start falls inside a removed region.
+      List<int>? edited(double startS, double endS, int minLen) {
+        final s = _model.sourceToEdited((startS * 1000).round());
+        if (s == null) return null;
+        final e0 = _model.sourceToEdited((endS * 1000).round()) ?? (s + minLen);
+        final e = e0 <= s ? (s + minLen) : (e0 > _totalMs ? _totalMs : e0);
+        return [s, e];
+      }
+
+      void addCap(String text, int s, int e,
+          {List<String>? lineWords, int? highlightWord, double fs = 0.05}) {
         final lane = _freeLane(_textLaneSpans(true), s, e);
         _texts.add(TextOverlay(
-            text: l.text, y: 0.85, fontSize: 0.05, bold: true, startMs: s, endMs: e, isCaption: true, lane: lane));
+          text: text,
+          y: 0.85,
+          fontSize: fs,
+          bold: true,
+          bg: boxed,
+          startMs: s,
+          endMs: e,
+          isCaption: true,
+          lane: lane,
+          lineWords: lineWords,
+          highlightWord: highlightWord,
+        ));
       }
+
+      if (style == 'word') {
+        // One overlay per word — exactly one word visible at a time.
+        for (final w in words) {
+          final r = edited(w.start, w.end, 300);
+          if (r == null) continue;
+          addCap(w.text.trim(), r[0], r[1], fs: 0.06);
+        }
+      } else if (style == 'karaoke') {
+        // Per line, one overlay PER WORD showing the whole line with that word
+        // highlighted, timed [thisWord.start, nextWord.start) so the highlight
+        // advances across the otherwise-static line.
+        for (final l in groupCaptions(words)) {
+          final lw = l.words;
+          if (lw.isEmpty) continue;
+          final tokens = [for (final w in lw) w.text.trim()];
+          for (int wi = 0; wi < lw.length; wi++) {
+            final endS = wi < lw.length - 1 ? lw[wi + 1].start : lw[wi].end;
+            final r = edited(lw[wi].start, endS, 200);
+            if (r == null) continue;
+            addCap(l.text, r[0], r[1], lineWords: tokens, highlightWord: wi);
+          }
+        }
+      } else {
+        // 'clean' / 'boxed' — grouped subtitle lines.
+        for (final l in groupCaptions(words)) {
+          final r = edited(l.startS, l.endS, 500);
+          if (r == null) continue;
+          addCap(l.text, r[0], r[1]);
+        }
+      }
+
       if (mounted) {
         Navigator.of(context).pop();
         setState(() {});
@@ -1218,6 +1280,8 @@ class _EditorScreenState extends State<EditorScreen> {
             });
             _scheduleSave();
           }, c: const Color(0xFFFF8A9A)),
+          // Deselect: clears the selection (and thus the purple outline + this bar).
+          btn(Icons.close, 'Done', () => setState(() => _selectedText = null)),
         ],
       ),
     );
@@ -1284,6 +1348,7 @@ class _EditorScreenState extends State<EditorScreen> {
                                 _selectedImage = o;
                                 _selectedText = null;
                               }),
+                              onDeselect: () => setState(() => _selectedImage = null),
                               onChange: () {
                                 setState(() {});
                                 _scheduleSave();
@@ -1295,7 +1360,11 @@ class _EditorScreenState extends State<EditorScreen> {
                               t: t,
                               frame: frame,
                               selected: identical(t, _selectedText),
-                              onSelect: () => setState(() => _selectedText = t),
+                              onSelect: () => setState(() {
+                                _selectedText = t;
+                                _selectedImage = null;
+                              }),
+                              onDeselect: () => setState(() => _selectedText = null),
                               onChange: () {
                                 setState(() {});
                                 _scheduleSave();

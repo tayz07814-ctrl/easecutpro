@@ -10,6 +10,7 @@ class EditableImageOverlay extends StatefulWidget {
   final bool selected;
   final VoidCallback onSelect;
   final VoidCallback onChange;
+  final VoidCallback? onDeselect;
   const EditableImageOverlay({
     super.key,
     required this.o,
@@ -17,6 +18,7 @@ class EditableImageOverlay extends StatefulWidget {
     required this.selected,
     required this.onSelect,
     required this.onChange,
+    this.onDeselect,
   });
 
   @override
@@ -39,8 +41,10 @@ class _EditableImageOverlayState extends State<EditableImageOverlay> {
       child: FractionalTranslation(
         translation: const Offset(-0.5, -0.5),
         child: GestureDetector(
+          // deferToChild → this only claims taps where the image actually paints,
+          // so taps on empty preview area fall through to the background deselect.
           behavior: HitTestBehavior.deferToChild,
-          onTap: widget.onSelect,
+          onTap: () => widget.selected ? widget.onDeselect?.call() : widget.onSelect(),
           onScaleStart: (_) {
             widget.onSelect();
             _baseScale = o.scale;
@@ -72,6 +76,7 @@ class EditableOverlay extends StatefulWidget {
   final bool selected;
   final VoidCallback onSelect;
   final VoidCallback onChange;
+  final VoidCallback? onDeselect;
 
   const EditableOverlay({
     super.key,
@@ -80,6 +85,7 @@ class EditableOverlay extends StatefulWidget {
     required this.selected,
     required this.onSelect,
     required this.onChange,
+    this.onDeselect,
   });
 
   @override
@@ -92,6 +98,9 @@ class _EditableOverlayState extends State<EditableOverlay> {
   @override
   Widget build(BuildContext context) {
     final t = widget.t;
+    // Text.rich(t.textSpan(...)) so the live preview honours t.fontFamily and the
+    // karaoke word-highlight, matching the export rasterizer exactly.
+    final label = Text.rich(t.textSpan(widget.frame.height), textAlign: TextAlign.center);
     final content = t.bg
         ? Container(
             padding: EdgeInsets.symmetric(
@@ -101,9 +110,9 @@ class _EditableOverlayState extends State<EditableOverlay> {
               color: t.bgColor.withValues(alpha: 0.85),
               borderRadius: BorderRadius.circular(t.fontSize * widget.frame.height * 0.14),
             ),
-            child: Text(t.text, textAlign: TextAlign.center, style: t.style(widget.frame.height)),
+            child: label,
           )
-        : Text(t.text, textAlign: TextAlign.center, style: t.style(widget.frame.height));
+        : label;
 
     // Centre the text box on (x,y)·frame via a top-left Positioned + half-size
     // translate. A finger-drag then maps 1:1 to movement and matches the export
@@ -117,8 +126,11 @@ class _EditableOverlayState extends State<EditableOverlay> {
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: widget.frame.width * 0.92),
           child: GestureDetector(
+            // opaque, but only over the text's own (padded) bounds — so taps on
+            // empty preview area miss it and reach the background deselect. Tapping
+            // an already-selected overlay toggles it off.
             behavior: HitTestBehavior.opaque,
-            onTap: widget.onSelect,
+            onTap: () => widget.selected ? widget.onDeselect?.call() : widget.onSelect(),
             onScaleStart: (_) {
               widget.onSelect();
               _baseFont = t.fontSize;

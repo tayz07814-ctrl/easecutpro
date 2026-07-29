@@ -18,6 +18,12 @@ class TextOverlay {
   int endMs;
   bool isCaption; // generated caption line (replaced on regenerate)
   int lane; // vertical lane on its timeline track (0 = first), so same-track items never overlap
+  String? fontFamily; // null = the app's default font (InstrumentSans)
+  // Karaoke captions: when both are set, the overlay renders [lineWords] joined
+  // with the word at [highlightWord] drawn in an accent colour (the rest dimmed)
+  // instead of the plain [text]. Null on every ordinary overlay.
+  List<String>? lineWords;
+  int? highlightWord;
 
   TextOverlay({
     required this.text,
@@ -32,6 +38,9 @@ class TextOverlay {
     required this.endMs,
     this.isCaption = false,
     this.lane = 0,
+    this.fontFamily,
+    this.lineWords,
+    this.highlightWord,
   });
 
   bool activeAt(int ms) => ms >= startMs && ms < endMs;
@@ -49,6 +58,9 @@ class TextOverlay {
         endMs: endMs,
         isCaption: isCaption,
         lane: lane,
+        fontFamily: fontFamily,
+        lineWords: lineWords == null ? null : List<String>.from(lineWords!),
+        highlightWord: highlightWord,
       );
 
   Map<String, dynamic> toJson() => {
@@ -64,6 +76,9 @@ class TextOverlay {
         'e': endMs,
         'cap': isCaption,
         'lane': lane,
+        if (fontFamily != null) 'ff': fontFamily,
+        if (lineWords != null) 'lw': lineWords,
+        if (highlightWord != null) 'hw': highlightWord,
       };
 
   factory TextOverlay.fromJson(Map j) => TextOverlay(
@@ -79,10 +94,14 @@ class TextOverlay {
         endMs: (j['e'] as num?)?.toInt() ?? 0,
         isCaption: (j['cap'] as bool?) ?? false,
         lane: (j['lane'] as num?)?.toInt() ?? 0,
+        fontFamily: j['ff'] as String?,
+        lineWords: (j['lw'] as List?)?.map((e) => e.toString()).toList(),
+        highlightWord: (j['hw'] as num?)?.toInt(),
       );
 
   TextStyle style(double frameH) => TextStyle(
         color: color,
+        fontFamily: fontFamily,
         fontSize: fontSize * frameH,
         fontWeight: bold ? FontWeight.w800 : FontWeight.w500,
         height: 1.15,
@@ -91,13 +110,38 @@ class TextOverlay {
             : const [Shadow(color: Colors.black, blurRadius: 3, offset: Offset(0, 1))],
       );
 
+  /// Bright accent for the currently-spoken karaoke word.
+  static const Color karaokeHi = Color(0xFFFFE14D);
+
+  /// The inline span(s) for this overlay's text — the single source of truth for
+  /// BOTH the live preview (EditableOverlay) and the export rasterizer
+  /// (bakePngBase64), so they always match. Normally one plain span; for a
+  /// karaoke overlay ([lineWords] + [highlightWord] set) it draws the full line
+  /// with the spoken word in [karaokeHi] and the others dimmed.
+  TextSpan textSpan(double frameH) {
+    final base = style(frameH);
+    final lw = lineWords;
+    final hw = highlightWord;
+    if (lw == null || hw == null || lw.isEmpty) {
+      return TextSpan(text: text.isEmpty ? ' ' : text, style: base);
+    }
+    final dim = base.copyWith(color: color.withValues(alpha: 0.5));
+    final hi = base.copyWith(color: karaokeHi);
+    final children = <TextSpan>[];
+    for (int i = 0; i < lw.length; i++) {
+      children.add(TextSpan(text: lw[i], style: i == hw ? hi : dim));
+      if (i != lw.length - 1) children.add(TextSpan(text: ' ', style: base));
+    }
+    return TextSpan(style: base, children: children);
+  }
+
   /// Bake to a full-frame transparent PNG at the OUTPUT resolution, returned as
   /// base64 (no data: prefix) — the shape the native Media3 OverlayEffect wants.
   Future<String> bakePngBase64(int width, int height) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()));
     final tp = TextPainter(
-      text: TextSpan(text: text.isEmpty ? ' ' : text, style: style(height.toDouble())),
+      text: textSpan(height.toDouble()),
       textDirection: TextDirection.ltr,
       textAlign: TextAlign.center,
     );
@@ -180,7 +224,7 @@ class TextOverlayView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final child = Text(t.text, textAlign: TextAlign.center, style: t.style(frame.height));
+    final child = Text.rich(t.textSpan(frame.height), textAlign: TextAlign.center);
     final wrapped = t.bg
         ? Container(
             padding: EdgeInsets.symmetric(horizontal: t.fontSize * frame.height * 0.25, vertical: t.fontSize * frame.height * 0.1),
