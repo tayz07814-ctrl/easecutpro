@@ -408,6 +408,25 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     wcRef.current?.setSources(segsRef.current.filter((s) => !s.isImage).map((s) => ({ src: s.src })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcSig, wcOn])
+  // Seam cache: whenever the cut layout changes (Apply, edit, load), decode each
+  // cut's landing frame once so the FIRST playback is already armed at every
+  // seam — the warm pipe then only has to stay one ahead. Keyed on the seam
+  // signature so it re-runs on any cut change, not just a source-set change.
+  useEffect(() => {
+    if (!wcOn || !wcRef.current) return
+    const ss = segsRef.current
+    const seams: { src: string; t: number }[] = []
+    if (ss[0] && !ss[0].isImage) seams.push({ src: ss[0].src, t: ss[0].sourceStart }) // play-from-start landing
+    for (let i = 1; i < ss.length; i++) {
+      const a = ss[i - 1]
+      const b = ss[i]
+      if (b.isImage) continue
+      const contiguous = a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.05
+      if (!contiguous) seams.push({ src: b.src, t: b.sourceStart }) // a real cut's in-point
+    }
+    void wcRef.current.cacheSeams(seams)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buddySig, wcOn])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the
