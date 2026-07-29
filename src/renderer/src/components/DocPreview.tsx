@@ -392,6 +392,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // "buffering" beat right after open/apply on long videos) — and if it still
   // can't start after a generous window, fall back to the element path.
   const wcAudioWaitRef = useRef(0)
+  // Previously-shown WC segment, to detect a CUT seam (segment change that is not
+  // a seamless same-source split). On a seam the player must land on the new
+  // in-point via the warm pipe instead of sequentially draining across the
+  // removed span (fast-forward) or cold-restarting (frozen frame).
+  const prevWcSegRef = useRef<{ src: string; end: number; di: number }>({ src: '', end: 0, di: -1 })
   // A play edge must not release the audio/master clock until WebCodecs has the
   // current frame AND a decoded frame ahead. Otherwise a long-GOP source holds
   // its paused still while audio/playhead run, then visibly catches up later.
@@ -1011,7 +1016,17 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             const ch = cv.height
             if (shown && !shown.isImage) {
               const tSrc = shown.sourceStart + clamp(t - shown.start, 0, shown.len) * shown.speed
-              wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying)
+              // Seam = we just crossed into this segment AND it is NOT a seamless
+              // same-source continuation of the previous one (i.e. a real cut).
+              // Tell the player to jump to the in-point rather than roll through
+              // the removed footage. A seamless split (same src, adjacent source)
+              // is not a seam — it must keep decoding straight through.
+              const pv = prevWcSegRef.current
+              const changed = pv.di !== di
+              const contiguous = pv.src === shown.src && Math.abs(pv.end - shown.sourceStart) < 0.05
+              const seam = isPlaying && changed && pv.di !== -1 && !contiguous
+              wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying, seam)
+              prevWcSegRef.current = { src: shown.src, end: shown.sourceEnd, di }
               // Decode-ahead: park the warm pipe on the upcoming seam's in-point.
               const up = ss[di + 1]
               if (up && !up.isImage && t >= shown.start + shown.len - 1.0) wc.prewarm(up.src, up.sourceStart)

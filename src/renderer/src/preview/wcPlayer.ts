@@ -77,13 +77,18 @@ class Pipe {
   ) {}
 
   /** Coverage by DECODED frames only: ~0 when `cur`/queue can show t right
-   *  now, else the distance to the covered window. */
+   *  now, else the distance to the covered window. A parked warm pipe fills the
+   *  QUEUE without promoting `cur` yet, so coverage measures from the front of
+   *  whatever is decoded (cur, else queue[0]) — judging by `cur` alone reported
+   *  a fully-decoded warm pipe as "no coverage" and cold-restarted it at the
+   *  seam, wasting the prewarm and freezing the frame during the cold decode. */
   frameScore(t: number): number {
-    if (!this.cur) return Number.POSITIVE_INFINITY
-    const lo = this.cur.timestamp - 0.06
-    const last = this.queue.length ? this.queue[this.queue.length - 1] : this.cur
+    const front = this.cur ?? (this.queue.length ? this.queue[0] : null)
+    if (!front) return Number.POSITIVE_INFINITY
+    const lo = front.timestamp - 0.06
+    const last = this.queue.length ? this.queue[this.queue.length - 1] : front
     const hi = last.timestamp + last.duration + COVER_SLACK
-    if (t >= lo && t <= hi) return Math.abs(t - this.cur.timestamp) / 1e6 // covered; prefer the closer cur
+    if (t >= lo && t <= hi) return Math.abs(t - front.timestamp) / 1e6 // covered; prefer the closer front
     return Math.min(Math.abs(t - lo), Math.abs(t - hi))
   }
 
@@ -148,22 +153,41 @@ class Pipe {
 
   /** Playing: keep `cur` tracking `t`, starting/restarting the iterator as
    *  needed. Never re-restarts while a restart is still decoding toward a
-   *  nearby time (that's what froze the picture). */
-  follow(t: number): void {
-    if (this.pendingStart !== null) {
-      // a restart is in flight; only abandon it if the playhead ran far past
+   *  nearby time (that's what froze the picture). `jump` marks a real cut seam:
+   *  land ON `t` (discard anything decoded before it, drop the queue if a warm
+   *  swap didn't already put us there) instead of sequentially draining across
+   *  the removed span — that catch-up is the "fast-forward through the cut". */
+  follow(t: number, jump = false): void {
+    // Promote decoded frames up to `t` FIRST (mirrors requestStill): a warm pipe
+    // just handed ownership has its landing frame in the queue, not in `cur` —
+    // draining before the restart test lets it draw instantly instead of
+    // cold-restarting (the frozen frame on a big cut).
+    const drain = (): boolean => {
+      let moved = false
+      while (this.queue.length && this.queue[0].timestamp <= t + 1e-4) {
+        this.cur?.close()
+        this.cur = this.queue.shift() as VideoSample
+        moved = true
+      }
+      return moved
+    }
+    // A cut: land ON the in-point. Restart UNLESS the front decoded frame is
+    // already essentially at `t` — i.e. the warm pipe was pre-parked here and we
+    // can just draw it. Judging by the coverage window (frameScore) is wrong for
+    // a seam: the outgoing live pipe's look-ahead can reach into the removed span
+    // and "cover" t, and draining that is exactly the fast-forward. Front-frame
+    // distance is what tells a ready warm swap from a live pipe mid-removed-span.
+    const front = this.cur ?? (this.queue.length ? this.queue[0] : null)
+    if (jump && this.pendingStart === null && (!front || Math.abs(front.timestamp - t) > 0.05)) {
+      this.restart(t)
+    } else if (this.pendingStart !== null) {
       if (Math.abs(t - this.pendingStart) > 2.5) this.restart(t)
     } else if (!this.iter) {
       this.restart(t) // first play after a paused still: begin decoding
     } else if (this.score(t) > 1.5) {
       this.restart(t) // jumped beyond coverage (scrub-then-play, big skip)
     }
-    let moved = false
-    while (this.queue.length && this.queue[0].timestamp <= t) {
-      this.cur?.close()
-      this.cur = this.queue.shift() as VideoSample
-      moved = true
-    }
+    const moved = drain()
     if (moved || this.queue.length < QUEUE_AHEAD) void this.pump()
   }
 
@@ -320,14 +344,18 @@ export class WcPlayer {
    * otherwise falls back to the nearest stale frame either pipe holds — a held
    * frame for a tick or two beats a black flash. Returns true if painted.
    */
-  render(ctx: CanvasRenderingContext2D, cw: number, ch: number, src: string, tSrc: number, playing: boolean): boolean {
+  render(ctx: CanvasRenderingContext2D, cw: number, ch: number, src: string, tSrc: number, playing: boolean, seam = false): boolean {
     const sp = this.sources.get(src)
     if (!sp?.ready || !sp.pipes || sp.dead) return false
     const [a, b] = sp.pipes
+    // Owner = the pipe that best covers tSrc. At a cut seam the warm pipe parked
+    // on the in-point wins (its queue covers tSrc); the outgoing live pipe does
+    // NOT (its decoded frames end at the previous out-point), so the swap is
+    // decisive instead of the live pipe fast-forwarding through the removed span.
     sp.owner = a.score(tSrc) <= b.score(tSrc) ? 0 : 1
     const own = sp.pipes[sp.owner]
     const other = sp.pipes[sp.owner ^ 1]
-    if (playing) own.follow(tSrc)
+    if (playing) own.follow(tSrc, seam)
     else own.requestStill(tSrc)
     let s: VideoSample | null = null
     if (own.cur && own.frameScore(tSrc) <= COVER_SLACK) s = own.cur
