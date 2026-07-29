@@ -211,37 +211,42 @@ function BatchDock({ onHide }: { onHide: () => void }): JSX.Element | null {
   )
 }
 
-// Right-side dock listing live Cloud Cowork uploads (share-a-project → R2), with
-// a per-upload progress bar. Store-backed so it keeps updating as the user moves
-// around the dashboard.
-function CoworkUploadDock(): JSX.Element | null {
-  const uploads = useStore((s) => s.coworkUploads)
-  const dismiss = useStore((s) => s.dismissCoworkUploads)
-  if (!uploads.length) return null
-  const active = uploads.filter((u) => u.status === 'uploading')
+// Right-side dock listing live Cloud Cowork transfers — uploads while sharing a
+// project to R2, downloads while opening one — each with a real byte-progress
+// bar. Store-backed so it keeps updating as the user moves around the dashboard.
+function CoworkTransferDock(): JSX.Element | null {
+  const transfers = useStore((s) => s.coworkTransfers)
+  const dismiss = useStore((s) => s.dismissCoworkXfers)
+  if (!transfers.length) return null
+  const active = transfers.filter((t) => t.status === 'active')
+  const anyDown = active.some((t) => t.kind === 'download')
+  const title = active.length
+    ? `${anyDown ? 'Downloading' : 'Uploading'} ${active.length} file${active.length > 1 ? 's' : ''}`
+    : 'Transfers'
   return (
     <div style={css('width:326px;flex:none;background:#0A0A0D;border-left:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column')}>
       <div style={css(`display:flex;align-items:center;gap:10px;padding:19px 18px 17px;border-bottom:1px solid ${HAIR}`)}>
         <span style={css(`width:7px;height:7px;border-radius:50%;background:${active.length ? '#7C6BFF' : '#7ED6A6'}${active.length ? ';animation:ecPulse 1.4s infinite' : ''}`)} />
-        <span style={css('font-size:13px;font-weight:600;letter-spacing:-.01em')}>{active.length ? `Uploading ${active.length} to space` : 'Uploads'}</span>
+        <span style={css('font-size:13px;font-weight:600;letter-spacing:-.01em')}>{title}</span>
         <div style={css('flex:1')} />
         <span onClick={dismiss} style={css('font-size:11px;color:#7A7A8C;cursor:pointer')}>Clear done</span>
       </div>
       <div style={css('flex:1;min-height:0;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px')}>
-        {uploads.map((u) => {
-          const err = u.status === 'error'
-          const done = u.status === 'done'
+        {transfers.map((t) => {
+          const err = t.status === 'error'
+          const done = t.status === 'done'
           const color = err ? '#FF9B9B' : done ? '#7ED6A6' : '#7C6BFF'
           return (
-            <div key={u.id} style={css('background:#101015;border:1px solid rgba(255,255,255,.07);border-radius:11px;padding:12px 13px')}>
+            <div key={t.id} style={css('background:#101015;border:1px solid rgba(255,255,255,.07);border-radius:11px;padding:12px 13px')}>
               <div style={css('display:flex;align-items:center;gap:8px;font-size:12.5px')}>
-                <span style={css('flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500')}>{u.name}</span>
-                <span style={css(`font-family:'Geist Mono',monospace;font-size:10.5px;color:${color}`)}>{err ? 'Failed' : done ? 'Done' : `${u.pct}%`}</span>
+                <span style={css(`font-size:12px;color:${color};flex:none`)} title={t.kind}>{t.kind === 'upload' ? '↑' : '↓'}</span>
+                <span style={css('flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500')}>{t.name}</span>
+                <span style={css(`font-family:'Geist Mono',monospace;font-size:10.5px;color:${color}`)}>{err ? 'Failed' : done ? 'Done' : `${t.pct}%`}</span>
               </div>
               <div style={css('height:3px;background:rgba(255,255,255,.08);border-radius:3px;margin-top:9px;overflow:hidden')}>
-                <div style={css(`width:${err ? 100 : u.pct}%;height:100%;background:${color};border-radius:3px;transition:width .3s`)} />
+                <div style={css(`width:${err ? 100 : t.pct}%;height:100%;background:${color};border-radius:3px;transition:width .25s`)} />
               </div>
-              <div style={css('font-size:11px;color:#7A7A8C;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{u.step}</div>
+              <div style={css('font-size:11px;color:#7A7A8C;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{t.step}</div>
             </div>
           )
         })}
@@ -454,8 +459,8 @@ export default function Dashboard(): JSX.Element {
             </div>
           </div>
 
-          {/* right dock: cowork uploads in the cloud view, batch queue elsewhere */}
-          {src === 'cloud' ? <CoworkUploadDock /> : !dockHidden && <BatchDock onHide={() => setDockHidden(true)} />}
+          {/* right dock: cowork transfers in the cloud view, batch queue elsewhere */}
+          {src === 'cloud' ? <CoworkTransferDock /> : !dockHidden && <BatchDock onHide={() => setDockHidden(true)} />}
         </div>
       </main>
 

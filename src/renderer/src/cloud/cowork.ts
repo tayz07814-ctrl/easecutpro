@@ -53,7 +53,27 @@ export interface EditVersion {
   updated_at: string
   bytes: number
 }
-type MediaManifest = Record<string, { name: string; type: string }>
+/** A pending request to join a space (self-service, awaiting owner approval). */
+export interface JoinRequest {
+  id: string
+  user_id: string
+  username: string
+  email: string
+  name: string
+  created_at: string
+}
+/** Per-file transfer reporter. The UI (store) implements this so the dashboard
+ *  dock can show a live progress bar per uploaded/downloaded file. */
+export interface XferHandle {
+  progress(loaded: number, total: number): void
+  done(error?: string): void
+}
+export interface XferReporter {
+  start(name: string, kind: 'upload' | 'download'): XferHandle
+}
+// `size` lets download progress compute a real % even when R2's cross-origin
+// response doesn't expose Content-Length to the XHR progress event.
+type MediaManifest = Record<string, { name: string; type: string; size?: number }>
 
 // ---- helpers ------------------------------------------------------------
 
@@ -83,15 +103,52 @@ async function presign(
   const r = await invokeEdge<{ url: string; key: string }>('r2-sign', { op, spaceId, key, ...opts })
   return r.url
 }
-async function r2Put(spaceId: string, key: string, blob: Blob, countsToQuota: boolean): Promise<void> {
-  const url = await presign('put', spaceId, key, { contentLength: blob.size, countsToQuota })
-  const res = await fetch(url, { method: 'PUT', body: blob })
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`)
+/** PUT via XHR so we get real upload-progress events (fetch exposes none). */
+function xhrPut(url: string, blob: Blob, onProgress?: (loaded: number, total: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', url)
+    if (onProgress) xhr.upload.onprogress = (e): void => { if (e.lengthComputable) onProgress(e.loaded, e.total) }
+    xhr.onload = (): void =>
+      xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed (${xhr.status})`))
+    xhr.onerror = (): void => reject(new Error('Upload failed — network error'))
+    xhr.ontimeout = (): void => reject(new Error('Upload timed out'))
+    xhr.send(blob)
+  })
 }
-async function r2GetBlob(spaceId: string, key: string): Promise<Blob> {
-  const res = await fetch(await presign('get', spaceId, key))
-  if (!res.ok) throw new Error(`Download failed (${res.status})`)
-  return res.blob()
+/** GET a Blob via XHR with progress. `knownTotal` (from the manifest) keeps the
+ *  percentage accurate when R2's cross-origin response hides Content-Length from
+ *  the progress event (only `loaded` is reliably available cross-origin). */
+function xhrGetBlob(url: string, onProgress?: (loaded: number, total: number) => void, knownTotal = 0): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', url)
+    xhr.responseType = 'blob'
+    if (onProgress) xhr.onprogress = (e): void => onProgress(e.loaded, knownTotal || (e.lengthComputable ? e.total : 0))
+    xhr.onload = (): void =>
+      xhr.status >= 200 && xhr.status < 300 ? resolve(xhr.response as Blob) : reject(new Error(`Download failed (${xhr.status})`))
+    xhr.onerror = (): void => reject(new Error('Download failed — network error'))
+    xhr.send()
+  })
+}
+async function r2Put(
+  spaceId: string,
+  key: string,
+  blob: Blob,
+  countsToQuota: boolean,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<void> {
+  const url = await presign('put', spaceId, key, { contentLength: blob.size, countsToQuota })
+  await xhrPut(url, blob, onProgress)
+}
+async function r2GetBlob(
+  spaceId: string,
+  key: string,
+  onProgress?: (loaded: number, total: number) => void,
+  knownTotal = 0
+): Promise<Blob> {
+  const url = await presign('get', spaceId, key)
+  return xhrGetBlob(url, onProgress, knownTotal)
 }
 async function r2GetJson<T>(spaceId: string, key: string): Promise<T> {
   const res = await fetch(await presign('get', spaceId, key))
@@ -199,15 +256,38 @@ export async function removeMember(spaceId: string, userId: string): Promise<voi
   const { error } = await getSupabase().from('space_members').delete().eq('space_id', spaceId).eq('user_id', userId)
   if (error) throw new Error(error.message)
 }
-/** Join a space by its shareable key. Returns the joined space id. */
-export async function joinSpaceByKey(key: string): Promise<string> {
+/** Ask to join a space by its shareable key. Creates a pending request that the
+ *  space owner must approve — nobody joins a space without approval. Returns one
+ *  of: 'requested' | 'pending' (already asked) | 'already_member'. */
+export async function requestJoinByKey(key: string): Promise<'requested' | 'pending' | 'already_member'> {
   const k = key.trim()
   if (!k) throw new Error('Enter a space key')
-  const { data, error } = await getSupabase().rpc('cowork_join_by_key', { p_key: k })
+  const { data, error } = await getSupabase().rpc('cowork_request_join', { p_key: k })
   if (error) throw new Error(error.message)
   const res = String(data)
   if (res === 'not_found') throw new Error('No space matches that key.')
-  return res
+  return res as 'requested' | 'pending' | 'already_member'
+}
+
+/** Owner: list people waiting for approval to join a space. */
+export async function listJoinRequests(spaceId: string): Promise<JoinRequest[]> {
+  const { data, error } = await getSupabase().rpc('cowork_list_requests', { p_space: spaceId })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as JoinRequest[]
+}
+/** Owner: approve (adds the member) or reject a pending join request. */
+export async function decideJoinRequest(requestId: string, approve: boolean): Promise<void> {
+  const { data, error } = await getSupabase().rpc('cowork_decide_request', { p_request: requestId, p_approve: approve })
+  if (error) throw new Error(error.message)
+  if (String(data) === 'forbidden') throw new Error('Only the space owner can do that.')
+}
+/** Owner: mint a fresh random join key (invalidates the old one). Returns it. */
+export async function regenerateJoinKey(spaceId: string): Promise<string> {
+  const { data, error } = await getSupabase().rpc('cowork_regen_key', { p_space: spaceId })
+  if (error) throw new Error(error.message)
+  const key = String(data)
+  if (key === 'forbidden') throw new Error('Only the space owner can regenerate the key.')
+  return key
 }
 
 // ---- notifications ------------------------------------------------------
@@ -230,12 +310,17 @@ export async function markAllNotifsRead(): Promise<void> {
 export async function deleteNotif(id: string): Promise<void> {
   await getSupabase().from('notifications').delete().eq('id', id)
 }
-/** Accept a space invite: join via its key, then mark the notification read. */
+/** Accept an owner-initiated invite. The owner invited this user directly, so no
+ *  approval step is needed — the edge RPC verifies the invite notification exists
+ *  before adding them (a leaked key alone can't be used to self-join anymore). */
 export async function acceptInvite(n: Notif): Promise<string> {
-  if (!n.join_key) throw new Error('This invite is missing its key.')
-  const spaceId = await joinSpaceByKey(n.join_key)
+  if (!n.space_id) throw new Error('This invite is missing its space.')
+  const { data, error } = await getSupabase().rpc('cowork_accept_invite', { p_space: n.space_id })
+  if (error) throw new Error(error.message)
+  const res = String(data)
+  if (res === 'no_invite') throw new Error('This invite is no longer valid.')
   await markNotifRead(n.id)
-  return spaceId
+  return res
 }
 
 // ---- projects -----------------------------------------------------------
@@ -275,7 +360,7 @@ export async function shareProject(
   spaceId: string,
   project: Project,
   name: string,
-  onStep?: (s: string, pct?: number) => void
+  xfer?: XferReporter
 ): Promise<CoworkProject> {
   const sb = getSupabase()
   const u = await me()
@@ -295,28 +380,34 @@ export async function shareProject(
     const f = getFile(id)
     if (f) files.push({ id, f })
   }
-  const totalUnits = files.length + 2 // media files + manifest + edit JSON
-  let done = 0
-  const report = (label: string): void => onStep?.(label, Math.min(99, Math.round((done / totalUnits) * 100)))
 
+  // One dock row per media file, each with a live byte-progress bar.
   const manifest: MediaManifest = {}
   let total = 0
   for (const { id, f } of files) {
-    report(`Uploading ${f.name}…`)
-    await r2Put(spaceId, mediaKey(pid, id), f, true)
-    manifest[id] = { name: f.name, type: f.type }
+    const h = xfer?.start(f.name, 'upload')
+    try {
+      await r2Put(spaceId, mediaKey(pid, id), f, true, (l, t) => h?.progress(l, t))
+      h?.done()
+    } catch (e) {
+      h?.done(e instanceof Error ? e.message : 'Upload failed')
+      throw e
+    }
+    manifest[id] = { name: f.name, type: f.type, size: f.size }
     total += f.size
-    done++
   }
-  report('Saving file list…')
-  await r2Put(spaceId, manifestKey(pid), new Blob([JSON.stringify(manifest)], { type: 'application/json' }), false)
-  done++
 
-  report('Saving project…')
+  // Manifest + this member's edit JSON are tiny — one combined "Project data" row.
+  const h = xfer?.start('Project data', 'upload')
   const editBlob = new Blob([JSON.stringify(serializeProjectLite(project))], { type: 'application/json' })
-  await r2Put(spaceId, editKey(pid, u.id), editBlob, false)
-  done++
-  onStep?.('Uploaded', 100)
+  try {
+    await r2Put(spaceId, manifestKey(pid), new Blob([JSON.stringify(manifest)], { type: 'application/json' }), false)
+    await r2Put(spaceId, editKey(pid, u.id), editBlob, false, (l, t) => h?.progress(l, t))
+    h?.done()
+  } catch (e) {
+    h?.done(e instanceof Error ? e.message : 'Upload failed')
+    throw e
+  }
 
   const now = new Date().toISOString()
   await sb.from('space_projects').update({ media_bytes: total, updated_at: now }).eq('id', pid)
@@ -332,7 +423,8 @@ export async function shareProject(
 export async function openSpaceProject(
   cp: CoworkProject,
   editUserId: string | null,
-  onStep?: (s: string) => void
+  onStep?: (s: string) => void,
+  xfer?: XferReporter
 ): Promise<Project> {
   const { space_id: spaceId, id: pid } = cp
   let uid = editUserId
@@ -353,14 +445,17 @@ export async function openSpaceProject(
   collectMediaIds(project, ids)
   for (const id of ids) {
     if (hasLocalFile(id)) continue
+    const meta = manifest[id]
+    const name = meta?.name || `${id.replace('webmedia:', '')}.mp4`
+    onStep?.('Downloading media…')
+    const h = xfer?.start(name, 'download')
     try {
-      onStep?.('Downloading media…')
-      const blob = await r2GetBlob(spaceId, mediaKey(pid, id))
-      const meta = manifest[id]
-      const name = meta?.name || `${id.replace('webmedia:', '')}.mp4`
+      const blob = await r2GetBlob(spaceId, mediaKey(pid, id), (l, t) => h?.progress(l, t), meta?.size || 0)
       registerLocalFileAs(id, new File([blob], name, { type: meta?.type || blob.type || 'video/mp4' }))
+      h?.done()
     } catch {
       /* a missing media file just shows as a missing clip; the rest still opens */
+      h?.done('Download failed')
     }
   }
   return project
@@ -391,7 +486,7 @@ export async function saveMyEdit(cp: CoworkProject, project: Project): Promise<v
       const f = getFile(id)
       if (!f) continue // bytes not in this session — can't upload
       await r2Put(cp.space_id, mediaKey(cp.id, id), f, true)
-      manifest[id] = { name: f.name, type: f.type }
+      manifest[id] = { name: f.name, type: f.type, size: f.size }
       addedBytes += f.size
       changed = true
     }

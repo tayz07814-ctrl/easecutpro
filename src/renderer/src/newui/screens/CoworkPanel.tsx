@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { css } from '../css'
-import { useStore } from '../../store'
+import { useStore, makeXferReporter } from '../../store'
 import { listProjects, getProject } from '../../projectsApi'
 import { hydrateProjectMedia } from '../../webapi'
 import {
@@ -13,7 +13,10 @@ import {
   listMembers,
   inviteMember,
   removeMember,
-  joinSpaceByKey,
+  requestJoinByKey,
+  listJoinRequests,
+  decideJoinRequest,
+  regenerateJoinKey,
   listSpaceProjects,
   spaceUsage,
   shareProject,
@@ -21,6 +24,7 @@ import {
   GiB,
   type Space,
   type Member,
+  type JoinRequest,
   type CoworkProject
 } from '../../cloud/cowork'
 
@@ -59,11 +63,13 @@ export default function CoworkPanel(): JSX.Element {
 
   const [usage, setUsage] = useState<{ used: number; quota: number }>({ used: 0, quota: 100 * GiB })
   const [members, setMembers] = useState<Member[]>([])
+  const [requests, setRequests] = useState<JoinRequest[]>([])
   const [projects, setProjects] = useState<CoworkProject[]>([])
 
   const [inviteId, setInviteId] = useState('')
   const [joinKeyInput, setJoinKeyInput] = useState('')
   const [copied, setCopied] = useState(false)
+  const [copiedLink, setCopiedLink] = useState(false)
   const [busy, setBusy] = useState('')
   const [sharePick, setSharePick] = useState(false)
   const [localProjects, setLocalProjects] = useState<{ id: string; name: string }[]>([])
@@ -93,14 +99,32 @@ export default function CoworkPanel(): JSX.Element {
     }
   }, [])
 
+  // Prefill the join key from a shared invite link (?join=KEY).
+  useEffect(() => {
+    try {
+      const k = new URLSearchParams(window.location.search).get('join')
+      if (k) setJoinKeyInput(k.trim())
+    } catch {
+      /* no-op */
+    }
+  }, [])
+
   // ---- per-space load: usage + members + projects ----------------------------
   const reloadSpace = useCallback(async (id: string) => {
     if (!id) return
     try {
-      const [u, m, p] = await Promise.all([spaceUsage(id), listMembers(id), listSpaceProjects(id)])
+      // listJoinRequests returns [] for non-owners (RPC guards on ownership),
+      // so it's safe to call unconditionally.
+      const [u, m, p, r] = await Promise.all([
+        spaceUsage(id),
+        listMembers(id),
+        listSpaceProjects(id),
+        listJoinRequests(id).catch(() => [] as JoinRequest[])
+      ])
       setUsage(u)
       setMembers(m)
       setProjects(p)
+      setRequests(r)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to load space')
     }
@@ -164,19 +188,52 @@ export default function CoworkPanel(): JSX.Element {
     }
   }
 
-  const onJoinByKey = async (): Promise<void> => {
+  const onRequestJoin = async (): Promise<void> => {
     if (!joinKeyInput.trim()) return
-    setBusy('Joining space…')
+    setBusy('Sending request…')
     setErr('')
     setNotice('')
     try {
-      const joined = await joinSpaceByKey(joinKeyInput)
+      const res = await requestJoinByKey(joinKeyInput)
       setJoinKeyInput('')
-      const sp = await reloadSpaces()
-      setSpaceId(joined)
-      setNotice(`Joined “${sp.find((s) => s.id === joined)?.name ?? 'space'}”.`)
+      if (res === 'already_member') setNotice('You’re already a member of that space.')
+      else if (res === 'pending') setNotice('You already have a request waiting for approval.')
+      else setNotice('Request sent — the space owner needs to approve you before you can join.')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not join that space')
+      setErr(e instanceof Error ? e.message : 'Could not send the request')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const onDecideRequest = async (req: JoinRequest, approve: boolean): Promise<void> => {
+    if (!spaceId) return
+    setBusy(approve ? 'Approving…' : 'Declining…')
+    setErr('')
+    setNotice('')
+    try {
+      await decideJoinRequest(req.id, approve)
+      await reloadSpace(spaceId)
+      setNotice(approve ? `${req.username ? '@' + req.username : req.name} was added to the space.` : 'Request declined.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not update the request')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const onRegenKey = async (): Promise<void> => {
+    if (!space || !isOwner) return
+    if (!window.confirm('Generate a new space key? The old key will stop working immediately.')) return
+    setBusy('Generating new key…')
+    setErr('')
+    setNotice('')
+    try {
+      await regenerateJoinKey(space.id)
+      await reloadSpaces()
+      setNotice('New space key generated.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not regenerate the key')
     } finally {
       setBusy('')
     }
@@ -210,6 +267,23 @@ export default function CoworkPanel(): JSX.Element {
     }
   }
 
+  // Shareable invite link — opening it prefills the space key so the recipient
+  // just clicks "Request to join" (owner still approves). Works anywhere the
+  // owner can paste a link (chat, email, etc.), no server email needed.
+  const inviteLink = space?.join_key
+    ? `${window.location.origin}${window.location.pathname}?join=${space.join_key}`
+    : ''
+  const onCopyInviteLink = async (): Promise<void> => {
+    if (!inviteLink) return
+    try {
+      await navigator.clipboard.writeText(inviteLink)
+      setCopiedLink(true)
+      window.setTimeout(() => setCopiedLink(false), 1500)
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
   const onRemoveMember = async (userId: string): Promise<void> => {
     if (!spaceId) return
     setBusy('Removing member…')
@@ -238,25 +312,21 @@ export default function CoworkPanel(): JSX.Element {
     setSharePick(false)
     setErr('')
     setNotice('')
-    // Progress shows in the right-side upload dock (store-backed), so a long
-    // upload keeps reporting even if the user clicks around the dashboard.
-    const jobId = useStore.getState().coworkUploadStart(name)
+    setBusy('Preparing media…')
     try {
-      useStore.getState().coworkUploadPatch(jobId, { step: 'Loading project…' })
       const rec = await getProject(projectId)
       if (!rec?.project) throw new Error('Could not load that project')
-      useStore.getState().coworkUploadPatch(jobId, { step: 'Preparing media…' })
       await hydrateProjectMedia(rec.project)
-      await shareProject(spaceId, rec.project, name, (step, pct) =>
-        useStore.getState().coworkUploadPatch(jobId, typeof pct === 'number' ? { step, pct } : { step })
-      )
-      useStore.getState().coworkUploadEnd(jobId)
+      setBusy('')
+      // Per-file byte progress shows in the right-side transfer dock (store-backed),
+      // so a long upload keeps reporting even if the user clicks around.
+      await shareProject(spaceId, rec.project, name, makeXferReporter())
       await reloadSpace(spaceId)
       setNotice(`“${name}” uploaded to the space.`)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Could not share project'
-      useStore.getState().coworkUploadEnd(jobId, msg)
-      setErr(msg)
+      setErr(e instanceof Error ? e.message : 'Could not share project')
+    } finally {
+      setBusy('')
     }
   }
 
@@ -325,11 +395,11 @@ export default function CoworkPanel(): JSX.Element {
           <input
             value={joinKeyInput}
             onChange={(e) => setJoinKeyInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void onJoinByKey() }}
+            onKeyDown={(e) => { if (e.key === 'Enter') void onRequestJoin() }}
             placeholder="Enter a space key"
             style={css("width:150px;font-size:13px;color:#EDEDF2;background:#0C0C10;border:1px solid rgba(255,255,255,.1);border-radius:9px;padding:9px 11px;font-family:'Geist Mono',monospace;letter-spacing:.06em;outline:none")}
           />
-          <button onClick={() => void onJoinByKey()} style={css('background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);color:#EDEDF2;font-family:inherit;font-size:12.5px;font-weight:500;padding:9px 15px;border-radius:9px;cursor:pointer;white-space:nowrap')}>Join a space</button>
+          <button onClick={() => void onRequestJoin()} title="Sends a request the space owner must approve" style={css('background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);color:#EDEDF2;font-family:inherit;font-size:12.5px;font-weight:500;padding:9px 15px;border-radius:9px;cursor:pointer;white-space:nowrap')}>Request to join</button>
         </div>
       </div>
 
@@ -354,15 +424,41 @@ export default function CoworkPanel(): JSX.Element {
 
           {/* members */}
           <div style={css(`${CARD};padding:16px 18px`)}>
-            <div style={css('display:flex;align-items:center;gap:8px;margin-bottom:14px')}>
+            <div style={css('display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap')}>
               <span style={css('font-size:14px;font-weight:600')}>Members</span>
               <span style={css("font-family:'Geist Mono',monospace;font-size:11px;color:#6E6E85")}>{members.length}</span>
               <div style={css('flex:1')} />
-              {/* shareable space key — anyone who enters it joins the space */}
+              {/* shareable space key — entering it sends the owner a join request */}
               <span style={css('font-size:11.5px;color:#8B8BA0')}>Space key</span>
               <span style={css("font-family:'Geist Mono',monospace;font-size:12px;letter-spacing:.08em;color:#C4BAFF;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.28);border-radius:7px;padding:4px 9px")}>{space.join_key}</span>
               <span onClick={() => void onCopyKey()} style={css('cursor:pointer;color:#9A9AAE;font-size:11.5px;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:4px 9px')}>{copied ? 'Copied' : 'Copy'}</span>
+              <span onClick={() => void onCopyInviteLink()} title="Copy an invite link that prefills this key" style={css('cursor:pointer;color:#9A9AAE;font-size:11.5px;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:4px 9px')}>{copiedLink ? 'Link copied' : 'Copy link'}</span>
+              {isOwner && (
+                <span onClick={() => void onRegenKey()} title="Generate a new key (invalidates the old one)" style={css('cursor:pointer;color:#9A9AAE;font-size:11.5px;border:1px solid rgba(255,255,255,.1);border-radius:7px;padding:4px 9px')}>New key</span>
+              )}
             </div>
+
+            {/* pending join requests — owner approves or declines each */}
+            {isOwner && requests.length > 0 && (
+              <div style={css('margin-bottom:14px;padding:12px 13px;background:rgba(124,107,255,.07);border:1px solid rgba(124,107,255,.22);border-radius:11px')}>
+                <div style={css('font-size:12.5px;font-weight:600;color:#C4BAFF;margin-bottom:10px')}>
+                  {requests.length} request{requests.length > 1 ? 's' : ''} to join
+                </div>
+                <div style={css('display:flex;flex-direction:column;gap:9px')}>
+                  {requests.map((r) => (
+                    <div key={r.id} style={css('display:flex;align-items:center;gap:11px')}>
+                      <div style={css('width:28px;height:28px;flex:none;border-radius:50%;background:#2A2A34;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;color:#C9C9DA')}>{avatarText(r.username || r.name)}</div>
+                      <div style={css('flex:1;min-width:0')}>
+                        <div style={css('font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{r.username ? `@${r.username}` : r.name}</div>
+                        <div style={css('font-size:11px;color:#7A7A8C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{r.email || r.name} · {relTime(r.created_at)}</div>
+                      </div>
+                      <button onClick={() => void onDecideRequest(r, true)} style={css('background:#7C6BFF;border:none;color:#fff;font-family:inherit;font-size:12px;font-weight:600;padding:6px 13px;border-radius:8px;cursor:pointer')}>Approve</button>
+                      <button onClick={() => void onDecideRequest(r, false)} style={css('background:transparent;border:1px solid rgba(255,255,255,.14);color:#B7B7C6;font-family:inherit;font-size:12px;padding:6px 11px;border-radius:8px;cursor:pointer')}>Decline</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div style={css('display:flex;flex-direction:column;gap:9px')}>
               {members.map((m) => (
                 <div key={m.user_id} style={css('display:flex;align-items:center;gap:11px')}>

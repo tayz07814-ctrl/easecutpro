@@ -125,6 +125,10 @@ export default function NotificationsBell({ onJoined }: { onJoined?: (spaceId: s
                     <div style={css('display:flex;gap:8px;padding-left:37px')}>
                       <button onClick={() => void onAccept(n)} disabled={busyId === n.id} style={css('background:#7C6BFF;border:none;color:#fff;font-family:inherit;font-size:12px;font-weight:600;padding:6px 14px;border-radius:8px;cursor:pointer', busyId === n.id ? 'opacity:.6' : '')}>{busyId === n.id ? 'Joining…' : 'Join space'}</button>
                     </div>
+                  ) : (n.kind === 'join_approved' || n.kind === 'join_request') && n.space_id ? (
+                    <div style={css('display:flex;gap:8px;padding-left:37px')}>
+                      <button onClick={() => { onJoined?.(n.space_id as string); setOpen(false) }} style={css('background:rgba(124,107,255,.16);border:1px solid rgba(124,107,255,.32);color:#C4BAFF;font-family:inherit;font-size:12px;font-weight:600;padding:6px 14px;border-radius:8px;cursor:pointer')}>{n.kind === 'join_approved' ? 'Open space' : 'Review request'}</button>
+                    </div>
                   ) : null}
                 </div>
               ))}

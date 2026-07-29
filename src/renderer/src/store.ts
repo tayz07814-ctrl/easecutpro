@@ -61,7 +61,7 @@ import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
-import { openSpaceProject, saveMyEdit, type CoworkProject } from './cloud/cowork'
+import { openSpaceProject, saveMyEdit, fmtBytes, type CoworkProject, type XferReporter } from './cloud/cowork'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideoCloud } from './cloud/batchCleanCloud'
 import { getFile } from './webmedia'
@@ -568,13 +568,15 @@ export function normalizeSeamFade(v: Partial<SeamFadeSettings> | null | undefine
   }
 }
 
-/** A single Cloud Cowork media upload shown in the dashboard's right-side dock. */
-export interface CoworkUpload {
+/** A single Cloud Cowork file transfer (upload OR download) shown in the
+ *  dashboard's right-side dock, with a live byte-progress bar. */
+export interface CoworkTransfer {
   id: string
   name: string
+  kind: 'upload' | 'download'
   step: string
   pct: number
-  status: 'uploading' | 'done' | 'error'
+  status: 'active' | 'done' | 'error'
 }
 
 interface AppState {
@@ -633,8 +635,8 @@ interface AppState {
    *  local `projects` table). null for ordinary local projects. `editUserId` is
    *  the member whose edit version is currently loaded (null = the most recent). */
   coworkSession: { spaceId: string; project: CoworkProject; editUserId: string | null } | null
-  /** Live Cloud Cowork media uploads (newest first) for the dashboard dock. */
-  coworkUploads: CoworkUpload[]
+  /** Live Cloud Cowork transfers (uploads + downloads, newest first) for the dock. */
+  coworkTransfers: CoworkTransfer[]
   currentProjectName: string
   saveState: 'idle' | 'saving' | 'saved' | 'error'
   past: Project[]
@@ -927,12 +929,12 @@ interface AppState {
   ) => Promise<void>
   /** Persist the open cowork project as THIS member's R2 edit version. */
   saveCoworkEdit: () => Promise<void>
-  /** Cloud Cowork upload dock: start a job (returns its id), update it, finish it. */
-  coworkUploadStart: (name: string) => string
-  coworkUploadPatch: (id: string, patch: Partial<CoworkUpload>) => void
-  coworkUploadEnd: (id: string, error?: string) => void
-  /** Clear finished/errored upload rows (keeps any still uploading). */
-  dismissCoworkUploads: () => void
+  /** Cloud Cowork transfer dock: start a row (returns its id), update it, finish it. */
+  coworkXferStart: (name: string, kind: 'upload' | 'download') => string
+  coworkXferPatch: (id: string, patch: Partial<CoworkTransfer>) => void
+  coworkXferEnd: (id: string, error?: string) => void
+  /** Clear finished/errored transfer rows (keeps any still active). */
+  dismissCoworkXfers: () => void
   /** build a fresh empty project object (without entering the editor). */
   freshProject: () => Project
   /** leave the editor back to the home dashboard. */
@@ -958,6 +960,26 @@ interface AppState {
   autoZoomBusy: boolean
   /** Auto Zoom: ask Gemma which of the current cut clips to punch-in and apply it. */
   runAutoZoom: () => Promise<void>
+}
+
+/** A transfer reporter bound to the store — cowork.ts calls `.start()` per file
+ *  and drives `.progress()`/`.done()`, which surface as live rows in the
+ *  dashboard's transfer dock (uploads while sharing, downloads while opening). */
+export function makeXferReporter(): XferReporter {
+  return {
+    start(name, kind) {
+      const id = useStore.getState().coworkXferStart(name, kind)
+      const verb = kind === 'upload' ? 'Uploading' : 'Downloading'
+      return {
+        progress: (loaded, total) =>
+          useStore.getState().coworkXferPatch(id, {
+            pct: total > 0 ? Math.min(99, Math.round((loaded / total) * 100)) : 0,
+            step: total > 0 ? `${verb} · ${fmtBytes(loaded)} / ${fmtBytes(total)}` : `${verb} · ${fmtBytes(loaded)}`
+          }),
+        done: (error) => useStore.getState().coworkXferEnd(id, error)
+      }
+    }
+  }
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -1018,7 +1040,7 @@ export const useStore = create<AppState>((set, get) => ({
   editingClipId: null,
   currentProjectId: null,
   coworkSession: null,
-  coworkUploads: [],
+  coworkTransfers: [],
   currentProjectName: 'Untitled',
   saveState: 'idle',
   past: [],
@@ -3888,7 +3910,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   openCoworkProject: async (cp, editUserId, onStep) => {
-    const project = await openSpaceProject(cp, editUserId ?? null, onStep)
+    // Per-file download progress lands in the dashboard transfer dock.
+    const project = await openSpaceProject(cp, editUserId ?? null, onStep, makeXferReporter())
     // Enter the editor as a cowork session: currentProjectId stays null (so the
     // local-projects autosave never fires for it) and coworkSession routes edits
     // to R2 instead. openProjectRecord hydrates media + mounts the editor.
@@ -3904,22 +3927,27 @@ export const useStore = create<AppState>((set, get) => ({
     await saveMyEdit(coworkSession.project, project)
   },
 
-  coworkUploadStart: (name) => {
-    const id = `up_${Date.now()}_${Math.round(Math.random() * 1e6)}`
+  coworkXferStart: (name, kind) => {
+    const id = `xf_${Date.now()}_${Math.round(Math.random() * 1e6)}`
     set((s) => ({
-      coworkUploads: [{ id, name, step: 'Starting…', pct: 0, status: 'uploading' as const }, ...s.coworkUploads].slice(0, 12)
+      coworkTransfers: [
+        { id, name, kind, step: kind === 'upload' ? 'Preparing…' : 'Starting…', pct: 0, status: 'active' as const },
+        ...s.coworkTransfers
+      ].slice(0, 24)
     }))
     return id
   },
-  coworkUploadPatch: (id, patch) =>
-    set((s) => ({ coworkUploads: s.coworkUploads.map((u) => (u.id === id ? { ...u, ...patch } : u)) })),
-  coworkUploadEnd: (id, error) =>
+  coworkXferPatch: (id, patch) =>
+    set((s) => ({ coworkTransfers: s.coworkTransfers.map((t) => (t.id === id ? { ...t, ...patch } : t)) })),
+  coworkXferEnd: (id, error) =>
     set((s) => ({
-      coworkUploads: s.coworkUploads.map((u) =>
-        u.id === id ? { ...u, status: error ? ('error' as const) : ('done' as const), step: error || 'Uploaded', pct: 100 } : u
+      coworkTransfers: s.coworkTransfers.map((t) =>
+        t.id === id
+          ? { ...t, status: error ? ('error' as const) : ('done' as const), step: error || 'Complete', pct: error ? t.pct : 100 }
+          : t
       )
     })),
-  dismissCoworkUploads: () => set((s) => ({ coworkUploads: s.coworkUploads.filter((u) => u.status === 'uploading') })),
+  dismissCoworkXfers: () => set((s) => ({ coworkTransfers: s.coworkTransfers.filter((t) => t.status === 'active') })),
 
   runBatchClean: async (items) => {
     if (!items.length) return
