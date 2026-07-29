@@ -322,6 +322,15 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buddySig, isMobile])
 
+  // Miss-driven adaptive prewarm lead: stays at the known-good PREWARM_LEAD_S and
+  // only GROWS (bounded) after a seam where the buddy was not ready in time; a run
+  // of clean swaps decays it back. Fast machines never pay more than today; slow
+  // ones buy just enough lead. The use site also caps it at half the kept segment,
+  // so the buddy always idles between seams (the frozen-frame guard the fixed-lead
+  // comment above warns about).
+  const prewarmLeadRef = useRef(PREWARM_LEAD_S)
+  const swapHitsRef = useRef(0)
+
   // ---- refs the reconciler reads (fresh every render) ----
   const segsRef = useRef(segs)
   segsRef.current = segs
@@ -398,6 +407,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioSig])
 
+  // True while the audio engine was audible on the previous reconciler tick — the
+  // reconciler uses the RISING edge to re-anchor a schedule that was built before
+  // the engine could actually sound (see the audio-lock block below).
+  const engActiveRef = useRef(false)
+
   // Start/stop the decoupled audio with playback. On play it schedules the whole
   // edited timeline from the live playhead (gapless); on pause it stops. If sources
   // aren't decoded / the context won't start, active() stays false and the <video>
@@ -405,8 +419,15 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   useEffect(() => {
     const eng = audioEngineRef.current
     if (!eng) return
-    if (playing) eng.play(tRef.current)
-    else eng.pause()
+    if (playing) {
+      eng.play(tRef.current)
+      // Engine already audible at ▶ → the reconciler's first tick is NOT a rising
+      // edge (a re-anchor there would rebuild the just-built schedule for nothing).
+      engActiveRef.current = eng.active()
+    } else {
+      eng.pause()
+      engActiveRef.current = false
+    }
   }, [playing])
 
   // Tear down the AudioContext on unmount.
@@ -670,6 +691,16 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             // the wall clock — corrects drift without ever pulling the playhead backward
             // or letting a stalled/seeking element hold it still.
             if (decoderLive && elemT >= t - 1.5 / 30 && elemT <= nt + 1 / 30) nt = Math.max(nt, elemT)
+            else if (decoderLive && elemT > nt) {
+              // A main-thread hitch (GC, heavy re-render, focus loss) stalls THIS rAF
+              // loop while the decoder AND the audio keep running in real time — dt is
+              // clamped to 0.1s, so t falls behind and the decoder reads as "way
+              // ahead". The chase below then used to SEEK IT BACKWARD to the stale
+              // clock: a random mid-clip jump/stutter with no cut anywhere near. A
+              // LIVE decoder that ran ahead is the truth (it stayed in sync with the
+              // audio, which also kept real time) — adopt its position forward.
+              nt = elemT
+            }
             t = nt
             // Chase: pull the element toward the timeline with ONE seek per seam. It is
             // suppressed while a prior seek is still settling (settled() false) so the
@@ -686,7 +717,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             // freezes the picture. (Micro-joins need no seek and are skipped.)
             {
               const up = ss[covIdx + 1]
-              if (up && !badRef.current.has(up.src) && t >= active.start + active.len - PREWARM_LEAD_S) {
+              const lead = Math.min(prewarmLeadRef.current, Math.max(0.35, active.len / 2))
+              if (up && !badRef.current.has(up.src) && t >= active.start + active.len - lead) {
                 if (up.src !== active.src) {
                   const uv = liveVideo(up.src)
                   if (uv && settled(uv) && Math.abs(uv.currentTime - up.sourceStart) > 0.12) seek(uv, up.sourceStart)
@@ -743,6 +775,20 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                       // cold-seeking the live element, exactly the old single-decoder path.
                       const wv = warmVideo(active.src)
                       const buddyReady = !!wv && settled(wv) && Math.abs(wv.currentTime - next.sourceStart) < 0.15
+                      // Adapt the prewarm lead from the swap OUTCOME (only where a
+                      // buddy exists — growing the lead can't help a source that has
+                      // no second slot): a miss grows it, 3 clean swaps shrink it.
+                      if (wv) {
+                        if (buddyReady) {
+                          if (++swapHitsRef.current >= 3) {
+                            swapHitsRef.current = 0
+                            prewarmLeadRef.current = Math.max(PREWARM_LEAD_S, prewarmLeadRef.current - 0.15)
+                          }
+                        } else {
+                          swapHitsRef.current = 0
+                          prewarmLeadRef.current = Math.min(1.6, prewarmLeadRef.current + 0.3)
+                        }
+                      }
                       if (buddyReady && wv) {
                         const cur = liveSlotRef.current.get(active.src) ?? 0
                         liveSlotRef.current.set(active.src, cur ^ 1) // flip live ↔ buddy
@@ -820,7 +866,19 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       // keeps this a rare correction, not a per-frame reschedule (which would blip).
       {
         const eng = audioEngineRef.current
-        if (isPlaying && eng && eng.active() && Math.abs(eng.expected() - t) > 0.25) eng.seek(t)
+        const engActive = !!(isPlaying && eng && eng.active())
+        if (eng && engActive && !engActiveRef.current) {
+          // RISING EDGE: the engine just became audible MID-play — the decode
+          // finished (or the context finally resumed) after ▶. Its schedule was
+          // built while buffers were missing / the clock was frozen, and the
+          // <video>s mute right now, so without an immediate re-anchor the
+          // preview goes SILENT (or keeps a permanent lip-sync offset). Rebuild
+          // the schedule from the live timeline position.
+          eng.seek(t)
+        } else if (eng && engActive && Math.abs(eng.expected() - t) > 0.25) {
+          eng.seek(t)
+        }
+        engActiveRef.current = engActive
       }
 
       // ---- DISPLAY + per-clip properties, every frame (cheap, idempotent) ----
