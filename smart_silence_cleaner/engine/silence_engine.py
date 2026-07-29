@@ -123,11 +123,15 @@ class SilenceEngine:
             if removed < config.MIN_MEANINGFUL_TRIM_MS:
                 continue  # trimming this little isn't worth a splice
 
-            cut_start = cur.end_ms + s.pad_after_ms
-            cut_end = cut_start + removed
+            # SYMMETRIC trim: keep half the target pause on EACH side of the cut
+            # (silence retained right after the current word AND right before the
+            # next word) so the join reads naturally, instead of biasing all the
+            # kept air to one edge. The removed chunk is centred in the gap.
+            keep_each = target / 2.0
+            cut_start = cur.end_ms + keep_each
+            cut_end = nxt.start_ms - keep_each
             # numeric safety: stay strictly inside the gap
-            cut_end = min(cut_end, nxt.start_ms)
-            if cut_end - cut_start < config.MIN_MEANINGFUL_TRIM_MS:
+            if cut_end <= cut_start or (cut_end - cut_start) < config.MIN_MEANINGFUL_TRIM_MS:
                 continue
 
             reason: CutReason = (

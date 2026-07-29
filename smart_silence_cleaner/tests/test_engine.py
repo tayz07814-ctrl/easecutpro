@@ -37,11 +37,18 @@ def test_trim_to_target() -> None:
     plan = SilenceEngine.plan(words, s, original_duration_ms=2400)
     check("one cut produced", len(plan.cuts) == 1, f"cuts={len(plan.cuts)}")
     if plan.cuts:
-        removed = plan.cuts[0].removed_ms
+        cut = plan.cuts[0]
+        removed = cut.removed_ms
         check("removed == 720ms (900-180)", abs(removed - 720) < 1.0, f"removed={removed}")
         kept_pause = 900 - removed
         check("kept pause == target 180ms", abs(kept_pause - 180) < 1.0, f"kept={kept_pause}")
-        check("cut starts after pad_after (1000+80)", abs(plan.cuts[0].start_ms - 1080) < 1.0, f"start={plan.cuts[0].start_ms}")
+        # SYMMETRIC split: 90ms (target/2) of silence retained on EACH side.
+        silence_before = cut.start_ms - 1000  # after current word (end=1000)
+        silence_after = 1900 - cut.end_ms     # before next word (start=1900)
+        check("90ms kept after current word", abs(silence_before - 90) < 1.0, f"before={silence_before}")
+        check("90ms kept before next word", abs(silence_after - 90) < 1.0, f"after={silence_after}")
+        check("split is symmetric (both sides equal)", abs(silence_before - silence_after) < 0.5,
+              f"before={silence_before} after={silence_after}")
 
 
 def test_below_threshold_kept() -> None:
