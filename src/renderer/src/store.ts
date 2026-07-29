@@ -58,6 +58,12 @@ import {
 } from '@shared/retakeaware/silence'
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
 import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
+// Smart Silence (transcript-gap) engine — the already-verified, self-contained
+// pure engine at ./smartSilence. runSmartSilence feeds it the transcript words and
+// stages its gap cuts; the engine's numbers/behavior are NOT modified here.
+import { planSilence } from './smartSilence/engine'
+import { BALANCED } from './smartSilence/presets'
+import type { SilenceSettings as SmartSilenceSettings } from './smartSilence/types'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
@@ -754,6 +760,15 @@ interface AppState {
    *  only — never touches the silence-detection or Retake β engine internals. */
   smartSilenceCutter: boolean
   setSmartSilenceCutter: (v: boolean) => void
+  /** Smart Silence (transcript-gap) engine settings — the SilenceSettings the
+   *  additive "Find Silences" pass feeds to planSilence. Persisted; default = the
+   *  Balanced preset. Editing it (the Smart Silence settings modal) changes what a
+   *  re-run of runSmartSilence produces. Does NOT touch the engine's numbers. */
+  smartSilenceSettings: SmartSilenceSettings
+  setSmartSilenceSettings: (s: SmartSilenceSettings) => void
+  /** compact Smart Silence settings modal open? */
+  showSmartSilenceSettings: boolean
+  setShowSmartSilenceSettings: (v: boolean) => void
   /** Redesigned UI only: left media panel collapsed to a rail (persisted). Pure
    *  layout state — no effect on media, projects, or any engine. */
   mediaCollapsed: boolean
@@ -785,6 +800,16 @@ interface AppState {
    *  ALL cuts (retakes + silence) itself; no STT, no ONNX VAD. Same review-first
    *  contract (highlight + stage, apply on Execute cuts). Cloud-only. */
   runPremiumCut: () => Promise<void>
+  /** Additive "Find Silences": ensure a transcript (reuse project.transcript when
+   *  present, else run the SAME AssemblyAI transcribe step Retake β uses — NO judge,
+   *  NO word cuts), run the smartSilence engine (planSilence) over the words, and
+   *  stage the transcript-gap cuts as review-first PROTECTED SilenceRegions, exactly
+   *  like runRetakeCutBeta stages its silence. Never auto-executes. */
+  runSmartSilence: () => Promise<void>
+  /** Additive: run ONLY the AssemblyAI transcribe step Retake β uses and store
+   *  project.transcript — no judge, no silence, no word cuts. Powers the Transcript
+   *  tab's transcribe-only button + runSmartSilence's transcript-ensure step. */
+  transcribeOnly: () => Promise<void>
   /** apply everything the user reviewed: delete selected words + cut enabled staged
    *  silences. Async because the VAD-off switch defers the silence pass to here. */
   executeCuts: () => Promise<void>
@@ -2112,6 +2137,28 @@ export const useStore = create<AppState>((set, get) => ({
   showSilenceSettings: false,
   setShowSilenceSettings: (v) => set({ showSilenceSettings: v }),
 
+  // Smart Silence engine settings — persisted; a stored partial is merged onto the
+  // Balanced preset so a stale/older shape can never drop a field the engine needs.
+  smartSilenceSettings: ((): SmartSilenceSettings => {
+    try {
+      const raw = localStorage.getItem('ec.smartSilenceSettings')
+      if (raw) return { ...BALANCED.settings, ...(JSON.parse(raw) as Partial<SmartSilenceSettings>) }
+    } catch {
+      /* ignore */
+    }
+    return { ...BALANCED.settings }
+  })(),
+  setSmartSilenceSettings: (next) => {
+    try {
+      localStorage.setItem('ec.smartSilenceSettings', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+    set({ smartSilenceSettings: next })
+  },
+  showSmartSilenceSettings: false,
+  setShowSmartSilenceSettings: (v) => set({ showSmartSilenceSettings: v }),
+
   stagedSilences: [],
   stagedSilenceSel: new Set<string>(),
   retakeSilenceStaged: false,
@@ -2333,6 +2380,95 @@ export const useStore = create<AppState>((set, get) => ({
         }
       })
     }
+  },
+
+  transcribeOnly: async () => {
+    if (!get().requireServer('Transcribe')) return
+    // Base resolution mirrors runRetakeCutBeta EXACTLY: fold a doc-native timeline
+    // back so a clip dragged straight onto the timeline (legacy media/baseSequence
+    // empty) is still found, and combine a multi-clip base to audio for STT.
+    const stored = get().project
+    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+    const hasBase = !!p0.media || ((p0.baseSequence?.length ?? 0) > 0)
+    if (!hasBase) {
+      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
+      return
+    }
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Cut Lord is listening…' } })
+    try {
+      let path: string
+      if (isMultiBase(p0)) {
+        const combined = await window.api.combineClips(p0.baseSequence!, true)
+        path = combined.path
+      } else {
+        path = p0.media!.path
+      }
+      // The SAME AssemblyAI verbatim transcribe step Retake β runs (cloud:
+      // window.api.transcribe -> transcribeCloud, cached by mediaId and sharing
+      // Retake β's transcript cache) — NO judge, NO silence, NO word cuts.
+      const transcript = await window.api.transcribe(path)
+      const cur = get().project
+      // Persist the folded doc base (identical rationale to runRetakeCutBeta) so the
+      // transcript's word times live in the base's domain and later cuts align.
+      const docBase = !cur.media && !!p0.baseSequence?.length
+      const nextProject: typeof cur = docBase
+        ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript }
+        : { ...cur, transcript }
+      set({
+        project: nextProject,
+        job: { active: false, percent: 100, message: `Transcribed ${transcript.words.length} words` }
+      })
+    } catch (e) {
+      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Transcribe failed', e)
+      set({
+        job: {
+          active: false,
+          percent: 0,
+          message: IS_CLOUD ? 'Transcription couldn’t finish — please try again.' : `Transcription failed: ${safeErrMessage(e)}`
+        }
+      })
+    }
+  },
+
+  runSmartSilence: async () => {
+    // 1. Ensure a transcript. Reuse project.transcript when present (NO re-transcribe);
+    //    otherwise run the same AssemblyAI transcribe step Retake β uses (no judge).
+    if (!get().project.transcript?.words?.length) {
+      await get().transcribeOnly()
+      if (!get().project.transcript?.words?.length) return // transcribeOnly set the error/job
+    }
+    const t = get().project.transcript!
+    // 2. Words (seconds) -> engine words (ms), then run the smartSilence engine
+    //    (planSilence) with the persisted Smart Silence settings. Engine untouched.
+    const engineWords = t.words.map((w) => ({ startMs: w.start * 1000, endMs: w.end * 1000, text: w.text }))
+    const durationMs = engineWords.length ? engineWords[engineWords.length - 1].endMs : 0
+    const plan = planSilence(engineWords, get().smartSilenceSettings, durationMs || undefined)
+    // 3. plan.cuts -> PROTECTED SilenceRegions (ms -> s). protect:true makes
+    //    computeKeepRanges apply these exact symmetric spans VERBATIM — no VAD /
+    //    valley-snap / edgeTrim / bridge — which is precisely a transcript-only cut.
+    const regions: SilenceRegion[] = plan.cuts.map((c, i) => ({
+      id: `ss${i}-${uid()}`,
+      start: c.startMs / 1000,
+      end: c.endMs / 1000,
+      action: 'remove' as const,
+      protect: true
+    }))
+    // 4. Stage EXACTLY like runRetakeCutBeta stages its silence: stagedSilences +
+    //    stagedSilenceSel (all enabled), with retakeSilenceStaged=true so Execute
+    //    applies them verbatim and never re-runs the shared VAD over them. Review-
+    //    first — nothing is cut until the panel's "Apply N cuts" (executeCuts).
+    set({
+      stagedSilences: regions,
+      stagedSilenceSel: new Set(regions.map((r) => r.id)),
+      retakeSilenceStaged: true,
+      job: {
+        active: false,
+        percent: 100,
+        message: regions.length
+          ? `Smart Silence: ${regions.length} silence gap${regions.length === 1 ? '' : 's'} found — review, then Execute cuts`
+          : 'Smart Silence: no gaps over the threshold — nothing to cut'
+      }
+    })
   },
 
   runUltracut: async () => {

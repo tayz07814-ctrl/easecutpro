@@ -10,6 +10,7 @@ import { Icon } from '../../components/mobile/Icon'
 import MobileTextPanel from '../../components/mobile/MobileTextPanel'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
+import SmartSilenceSettingsModal from './SmartSilenceSettingsModal'
 import MobileExportDrawer from '../../components/mobile/MobileExportDrawer'
 import SettingsModal from '../../components/SettingsModal'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
@@ -332,6 +333,7 @@ export default function MobileEditor(): JSX.Element {
         </Sheet>
       )}
       <SilenceSettingsModal />
+      <SmartSilenceSettingsModal />
       {showExportModal && createPortal(<MobileExportDrawer />, document.body)}
       {showSettings && createPortal(<SettingsModal />, document.body)}
     </div>
