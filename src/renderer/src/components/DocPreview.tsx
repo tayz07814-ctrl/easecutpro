@@ -946,8 +946,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           if (ctx) {
             const cw = cv.width
             const ch = cv.height
-            ctx.fillStyle = '#000'
-            ctx.fillRect(0, 0, cw, ch)
             if (shown && !shown.isImage) {
               const tSrc = shown.sourceStart + clamp(t - shown.start, 0, shown.len) * shown.speed
               wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying)
@@ -956,8 +954,13 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               if (up && !up.isImage && t >= shown.start + shown.len - 1.0) wc.prewarm(up.src, up.sourceStart)
               cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
               cv.style.transform = kbTransform(shown)
-            } else if (cv.style.transform !== '') {
-              cv.style.transform = '' // gap / image: don't keep the last clip's zoom
+            } else {
+              // Gaps are intentionally black. For video segments render() keeps
+              // the previous painted frame until its replacement is decoded,
+              // avoiding a black flash at cold cut landings.
+              ctx.fillStyle = '#000'
+              ctx.fillRect(0, 0, cw, ch)
+              if (cv.style.transform !== '') cv.style.transform = ''
             }
           }
         }

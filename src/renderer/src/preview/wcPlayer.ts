@@ -123,7 +123,7 @@ class Pipe {
     this.pumping = true
     const myGen = this.gen
     try {
-      while (this.iter && this.queue.length < QUEUE_AHEAD) {
+      while (myGen === this.gen && this.iter && this.queue.length < QUEUE_AHEAD) {
         const it = this.iter
         const r = await it.next()
         if (myGen !== this.gen) {
@@ -137,7 +137,14 @@ class Pipe {
     } catch (e) {
       if (myGen === this.gen) this.onError(e)
     } finally {
-      if (myGen === this.gen) this.pumping = false
+      this.pumping = false
+      // restart() may have installed a replacement iterator while this pump
+      // was awaiting the cancelled generation's next frame. Its pump() call
+      // saw the latch and returned, so explicitly start it now; without this
+      // handoff the new iterator remains permanently idle (audio runs while
+      // the picture freezes). Keeping the handoff serial also avoids two
+      // iterators pulling from the same VideoSampleSink concurrently.
+      if (myGen !== this.gen && this.iter && this.queue.length < QUEUE_AHEAD) void this.pump()
     }
   }
 
@@ -316,6 +323,10 @@ export class WcPlayer {
     if (!s) return false
     const r = containRect(cw, ch, s.displayWidth / s.displayHeight)
     try {
+      // Clear only once a replacement frame is ready. Clearing in the caller
+      // before render() knew that left a black canvas during every cold decode.
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, cw, ch)
       s.draw(ctx, r.left, r.top, r.width, r.height)
     } catch {
       return false
