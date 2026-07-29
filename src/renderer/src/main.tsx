@@ -17,6 +17,7 @@ import MobileDashboard from './newui/screens/MobileDashboard'
 import AdminDashboard from './newui/screens/AdminDashboard'
 import Editor from './newui/screens/Editor'
 import MobileEditor from './newui/screens/MobileEditor'
+import { SmartSilenceCleaner } from './smartSilence/ui/SmartSilenceCleaner'
 import { isNewUi } from './newui/flag'
 import { useIsMobile } from './useMobile'
 import './styles.css'
@@ -167,10 +168,17 @@ const IS_ADMIN_ROUTE =
   (window.location.pathname.replace(/\/+$/, '') === ADMIN_PATH ||
     new URLSearchParams(window.location.search).has('admin'))
 
+// Smart Silence Cleaner (isolated preview): `?silence=1` renders the new
+// transcript-gap silence page instead of the app, for testing. Additive + hidden
+// — normal users never hit it, and it touches none of the existing silence code.
+const IS_SILENCE_ROUTE =
+  typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('silence')
+
 function Root(): JSX.Element {
   const view = useStore((s) => s.view)
   const isMobile = useIsMobile()
 
+  if (IS_SILENCE_ROUTE) return <SmartSilenceCleaner />
   if (IS_ADMIN_ROUTE) return <AdminDashboard />
 
   // The new UI (Dashboard/Editor) never mounts the legacy <App/>, which is the
