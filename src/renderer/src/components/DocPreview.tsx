@@ -412,6 +412,94 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // Tear down the AudioContext on unmount.
   useEffect(() => () => audioEngineRef.current?.dispose(), [])
 
+  // ---- FIRST-PASS SEAM PRE-WARM (desktop) ----
+  // "The first play through a cut stutters; after passing it once (or scrubbing
+  // over it) the same cut is smooth": the FIRST seek to any landing point pays
+  // demux + keyframe-decode + paging the blob's bytes off disk; every later seek
+  // to the same spot is warm and lands in tens of ms — which is exactly why the
+  // second pass (and scrub-back) is clean. So make that first visit HERE, while
+  // paused, as soon as the cut list changes: walk every seam landing point in
+  // playback order starting at the playhead (an early ▶ meets warmed seams
+  // first). Seeks go to the element that will actually perform them at play time
+  // whenever it's hidden (the same-source buddy, other sources' live slots); the
+  // SHOWN source without a buddy gets a DETACHED warmer element instead so the
+  // visible paused frame never moves — the page/media-cache warmth transfers.
+  // The queue aborts the moment playback starts and re-arms on the next pause or
+  // edit; a fully-warmed signature is remembered so pause toggles don't re-walk.
+  // Mobile is skipped: one hardware decode pipeline — a warmer would contend
+  // with the live picture (the frozen-frame class of bugs).
+  const warmedSigRef = useRef('')
+  useEffect(() => {
+    if (isMobile || playing || warmedSigRef.current === buddySig) return
+    let cancelled = false
+    const detached = new Map<string, HTMLVideoElement>()
+    const settleWait = (v: HTMLVideoElement, target: number): Promise<void> =>
+      new Promise((res) => {
+        const t0 = performance.now()
+        const tick = (): void => {
+          if (cancelled || Math.abs(v.currentTime - target) < 0.1 || performance.now() - t0 > 1200) res()
+          else setTimeout(tick, 50)
+        }
+        tick()
+      })
+    const run = async (): Promise<void> => {
+      const ss = segsRef.current
+      const seams: { src: string; sameSrc: boolean; at: number; landing: number }[] = []
+      for (let i = 1; i < ss.length; i++) {
+        const a = ss[i - 1]
+        const b = ss[i]
+        if (b.isImage) continue // no <video> to seek
+        const jump = b.sourceStart - a.sourceEnd
+        if (a.src === b.src && jump >= 0 && jump <= 0.12) continue // micro-join: plays through, no seek
+        seams.push({ src: b.src, sameSrc: a.src === b.src, at: b.start, landing: b.sourceStart })
+      }
+      const t = tRef.current
+      const ordered = [...seams.filter((s) => s.at >= t), ...seams.filter((s) => s.at < t)]
+      for (const s of ordered) {
+        if (cancelled || playingRef.current || nativeActiveRef.current) return
+        if (badRef.current.has(s.src)) continue
+        const di = displayIdxAt(tRef.current)
+        const shownSrc = di >= 0 ? segsRef.current[di].src : null
+        const wv = s.sameSrc ? warmVideo(s.src) : undefined
+        const v = wv ?? (s.src !== shownSrc ? liveVideo(s.src) : undefined)
+        if (v) {
+          if (Math.abs(v.currentTime - s.landing) < 0.06) continue // already parked there
+          seek(v, s.landing)
+          await settleWait(v, s.landing)
+        } else {
+          let w = detached.get(s.src)
+          if (!w) {
+            w = document.createElement('video')
+            w.preload = 'auto'
+            w.muted = true
+            w.src = urlOf.get(s.src) ?? ''
+            detached.set(s.src, w)
+          }
+          w.currentTime = Math.max(0.033, s.landing)
+          await settleWait(w, s.landing)
+        }
+      }
+      // Park the buddy back at the FIRST upcoming seam so the play-time prewarm
+      // finds it already in place (no seek at all at the first crossing).
+      const first = ordered.find((s) => s.sameSrc && warmVideo(s.src))
+      if (!cancelled && !playingRef.current && first) {
+        const wv = warmVideo(first.src)
+        if (wv && Math.abs(wv.currentTime - first.landing) > 0.06) seek(wv, first.landing)
+      }
+      if (!cancelled) warmedSigRef.current = buddySig
+    }
+    void run()
+    return () => {
+      cancelled = true
+      for (const w of detached.values()) {
+        w.removeAttribute('src')
+        w.load() // release the detached decoder immediately
+      }
+    }
+    // buddySig captures the seam content; the helpers/refs are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buddySig, playing, isMobile])
+
   function segAtTime(t: number): number {
     return segsRef.current.findIndex((s) => t >= s.start && t < s.start + s.len)
   }
