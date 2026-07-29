@@ -69,27 +69,37 @@ export function TrackLane({
     flush()
   }
   const keepCut = (c: Cut): void => c.ids.forEach((id) => { if (selectedWordIds.has(id)) selectWord(id, true) })
-  const setCutRange = (c: Cut, s: number, e: number): void => {
-    if (!twords) return
-    const target = new Set(twords.filter((w) => w.end > s + 0.01 && w.start < e - 0.01).map((w) => w.id))
-    const cur = new Set(c.ids)
-    for (const id of cur) if (!target.has(id) && selectedWordIds.has(id)) selectWord(id, true)
-    for (const id of target) if (!cur.has(id) && !selectedWordIds.has(id)) selectWord(id, true)
-  }
   const dragCutEdge = (ev0: ReactPointerEvent, c: Cut, side: 'l' | 'r'): void => {
     ev0.preventDefault(); ev0.stopPropagation()
     const lane = (ev0.currentTarget as HTMLElement).closest('.ec-tl-lane') as HTMLElement | null
     if (!lane) return
     const rect = lane.getBoundingClientRect()
+    // Words this drag has claimed so far — the only ids it may deselect, so the
+    // other bands are never touched. selectWord(additive) is a TOGGLE, so every
+    // guard must read FRESH store state: the render-time selectedWordIds snapshot
+    // goes stale after the first toggle, and stale guards re-flipped the same
+    // words on every pointermove — scrambling every band on the lane.
+    let claimed = new Set(c.ids)
     const move = (ev: PointerEvent): void => {
+      if (!twords) return
       // pointer px → EDITED seconds → SOURCE seconds (words live in source time)
       const t = docEditedToSource(doc, Math.max(0, (ev.clientX - rect.left) / zoom))
-      if (side === 'l') setCutRange(c, Math.min(t, c.e - 0.15), c.e)
-      else setCutRange(c, c.s, Math.max(t, c.s + 0.15))
+      const s = side === 'l' ? Math.min(t, c.e - 0.15) : c.s
+      const e = side === 'l' ? c.e : Math.max(t, c.s + 0.15)
+      const target = new Set(twords.filter((w) => w.end > s + 0.01 && w.start < e - 0.01).map((w) => w.id))
+      const sel = useStore.getState().selectedWordIds
+      for (const id of claimed) if (!target.has(id) && sel.has(id)) selectWord(id, true)
+      for (const id of target) if (!sel.has(id)) selectWord(id, true)
+      claimed = target
     }
-    const up = (): void => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    const up = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+    }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
   }
 
   // Cut seams on the MAIN lane: a clip that starts right where the previous one
@@ -140,8 +150,9 @@ export function TrackLane({
             title="Staged cut — click to keep it, drag an edge to adjust"
             style={{ left: es * zoom, width: Math.max(3, (ee - es) * zoom) }}
           >
-            <div className="ec-tl-cut-edge l" onPointerDown={(e) => dragCutEdge(e, c, 'l')} />
-            <div className="ec-tl-cut-edge r" onPointerDown={(e) => dragCutEdge(e, c, 'r')} />
+            {/* click after an edge-drag bubbles here and would fire keepCut on the band */}
+            <div className="ec-tl-cut-edge l" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => dragCutEdge(e, c, 'l')} />
+            <div className="ec-tl-cut-edge r" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => dragCutEdge(e, c, 'r')} />
           </div>
         )
       })}
