@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { css } from '../css'
 import { useProjects } from '../data/useProjects'
+import FolderRail, { projectDragType } from './FolderRail'
 import { useStore } from '../../store'
 import NewProjectWizard from './NewProjectWizard'
 import CoworkPanel from './CoworkPanel'
@@ -67,9 +68,11 @@ interface CardProps {
   onRenameCommit?: (name: string) => void
   onRenameCancel?: () => void
   onDelete?: () => void
+  /** when set, the card is draggable and carries this id as the folder-drop payload. */
+  dragId?: string
 }
 
-function Card({ card, onOpen, onDots, menuOpen, hovered, onHover, renaming, onRename, onRenameCommit, onRenameCancel, onDelete }: CardProps): JSX.Element | null {
+function Card({ card, onOpen, onDots, menuOpen, hovered, onHover, renaming, onRename, onRenameCommit, onRenameCancel, onDelete, dragId }: CardProps): JSX.Element | null {
   // Grid only ever receives real project cards (video/processing); the leading
   // "new" tile and skeletons are handled elsewhere. Guard keeps the union safe.
   if (card.kind === 'new' || card.kind === 'skeleton') return null
@@ -106,6 +109,15 @@ function Card({ card, onOpen, onDots, menuOpen, hovered, onHover, renaming, onRe
       onClick={onOpen}
       onMouseEnter={() => onHover?.(true)}
       onMouseLeave={() => onHover?.(false)}
+      draggable={!!dragId && !renaming}
+      onDragStart={
+        dragId
+          ? (e): void => {
+              e.dataTransfer.setData(projectDragType, dragId)
+              e.dataTransfer.effectAllowed = 'move'
+            }
+          : undefined
+      }
       style={css(
         'background:#101015;border:1px solid rgba(255,255,255,.07);border-radius:14px;cursor:pointer;transition:border-color .15s,transform .15s;position:relative',
         showHover ? 'overflow:visible;border-color:rgba(124,107,255,.45);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.35);z-index:20' : 'overflow:hidden'
@@ -427,34 +439,55 @@ export default function Dashboard(): JSX.Element {
                 </div>
               </div>
 
-              {/* grid */}
-              {pairs.length === 0 ? (
-                <div style={css('padding:60px 0;text-align:center;color:#6E6E85;font-size:13px')}>
-                  {dash.loading ? 'Loading projects…' : dash.query ? 'No projects match your search.' : 'No projects yet — start one with “New project”.'}
+              {/* folders (device-local) + project grid */}
+              <div style={css('display:flex;gap:22px;align-items:flex-start')}>
+                <FolderRail
+                  folders={dash.folders}
+                  selected={dash.selectedFolder}
+                  counts={dash.folderCounts}
+                  onSelect={dash.setSelectedFolder}
+                  onCreate={() => void dash.createFolder()}
+                  onRename={(fid, name) => void dash.renameFolder(fid, name)}
+                  onDelete={(fid) => void dash.removeFolder(fid)}
+                  onDropProject={(fid, pid) => void dash.moveToFolder(pid, fid)}
+                />
+                <div style={css('flex:1;min-width:0')}>
+                  {pairs.length === 0 ? (
+                    <div style={css('padding:60px 0;text-align:center;color:#6E6E85;font-size:13px')}>
+                      {dash.loading
+                        ? 'Loading projects…'
+                        : dash.query
+                          ? 'No projects match your search.'
+                          : dash.selectedFolder
+                            ? 'This folder is empty — drag a project here to file it.'
+                            : 'No projects yet — start one with “New project”.'}
+                    </div>
+                  ) : (
+                    <div style={css('display:grid;grid-template-columns:repeat(auto-fill,minmax(226px,1fr));gap:18px')}>
+                      {pairs.map(({ meta, card }) => {
+                        const id = meta.id
+                        return (
+                          <Card
+                            key={id}
+                            card={card}
+                            dragId={id}
+                            onOpen={() => void dash.open(id)}
+                            hovered={hoverId === id}
+                            onHover={(v) => setHoverId(v ? id : (h) => (h === id ? null : h))}
+                            menuOpen={menuId === id}
+                            onDots={(e) => { e.stopPropagation(); setMenuId((m) => (m === id ? null : id)) }}
+                            renaming={renameId === id}
+                            onRename={() => { setRenameId(id); setMenuId(null) }}
+                            onRenameCommit={(name) => { setRenameId(null); void dash.rename(id, name) }}
+                            onRenameCancel={() => setRenameId(null)}
+                            onDelete={() => { setMenuId(null); if (confirm('Delete this project? This cannot be undone.')) void dash.remove(id) }}
+                          />
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div style={css('display:grid;grid-template-columns:repeat(auto-fill,minmax(226px,1fr));gap:18px')}>
-                  {pairs.map(({ meta, card }) => {
-                    const id = meta.id
-                    return (
-                      <Card
-                        key={id}
-                        card={card}
-                        onOpen={() => void dash.open(id)}
-                        hovered={hoverId === id}
-                        onHover={(v) => setHoverId(v ? id : (h) => (h === id ? null : h))}
-                        menuOpen={menuId === id}
-                        onDots={(e) => { e.stopPropagation(); setMenuId((m) => (m === id ? null : id)) }}
-                        renaming={renameId === id}
-                        onRename={() => { setRenameId(id); setMenuId(null) }}
-                        onRenameCommit={(name) => { setRenameId(null); void dash.rename(id, name) }}
-                        onRenameCancel={() => setRenameId(null)}
-                        onDelete={() => { setMenuId(null); if (confirm('Delete this project? This cannot be undone.')) void dash.remove(id) }}
-                      />
-                    )
-                  })}
-                </div>
-              )}
+              </div>
               </>)}
             </div>
           </div>

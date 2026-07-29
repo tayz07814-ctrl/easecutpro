@@ -16,6 +16,14 @@ import {
   saveProject,
   type ProjectMeta
 } from '../../projectsApi'
+import {
+  localListFolders,
+  localCreateFolder,
+  localRenameFolder,
+  localDeleteFolder,
+  localMoveProjectToFolder,
+  type LocalFolder
+} from '../../local/library'
 import type { BatchJob } from '../../store'
 import type { DashCard } from '../mock'
 
@@ -55,6 +63,15 @@ export interface DashboardModel {
   remove: (id: string) => Promise<void>
   logout: () => Promise<void>
   refresh: () => Promise<void>
+  // device-local folders
+  folders: LocalFolder[]
+  selectedFolder: string | null
+  setSelectedFolder: (id: string | null) => void
+  folderCounts: { all: number; byId: Record<string, number> }
+  createFolder: () => Promise<void>
+  renameFolder: (id: string, curName: string) => Promise<void>
+  removeFolder: (id: string) => Promise<void>
+  moveToFolder: (projectId: string, folderId: string | null) => Promise<void>
 }
 
 export function useProjects(): DashboardModel {
@@ -67,12 +84,16 @@ export function useProjects(): DashboardModel {
   const setView = useStore((s) => s.setView)
 
   const [projects, setProjects] = useState<ProjectMeta[]>([])
+  const [folders, setFolders] = useState<LocalFolder[]>([])
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
 
   async function refresh(silent = false): Promise<void> {
     if (!silent) setLoading(true)
-    setProjects(await listProjects())
+    const [ps, fs] = await Promise.all([listProjects(), localListFolders()])
+    setProjects(ps)
+    setFolders(fs)
     if (!silent) setLoading(false)
   }
   useEffect(() => {
@@ -93,8 +114,16 @@ export function useProjects(): DashboardModel {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return q ? projects.filter((p) => p.name.toLowerCase().includes(q)) : projects
-  }, [projects, query])
+    let list = q ? projects.filter((p) => p.name.toLowerCase().includes(q)) : projects
+    if (selectedFolder) list = list.filter((p) => (p.folderId ?? null) === selectedFolder)
+    return list
+  }, [projects, query, selectedFolder])
+
+  const folderCounts = useMemo(() => {
+    const byId: Record<string, number> = {}
+    for (const p of projects) if (p.folderId) byId[p.folderId] = (byId[p.folderId] || 0) + 1
+    return { all: projects.length, byId }
+  }, [projects])
 
   const cards = useMemo<DashCard[]>(
     () => [{ kind: 'new' }, ...filtered.map((p) => toCard(p, jobById[p.id]))],
@@ -109,6 +138,8 @@ export function useProjects(): DashboardModel {
     const empty = freshProject()
     empty.name = 'Untitled project'
     const rec = await createProject(empty.name, empty)
+    // land it in the folder that's currently open, if any
+    if (selectedFolder) await localMoveProjectToFolder(rec.id, selectedFolder)
     openProjectRecord({ id: rec.id, name: rec.name, project: empty })
   }
   async function batch(): Promise<void> {
@@ -133,5 +164,54 @@ export function useProjects(): DashboardModel {
     setView('auth')
   }
 
-  return { cards, metas: filtered, loading, query, setQuery, email, open, create, batch, rename, remove, logout, refresh }
+  // ---- local folders --------------------------------------------------------
+  async function createFolder(): Promise<void> {
+    const name = window.prompt('New folder name')
+    if (name == null || !name.trim()) return
+    const f = await localCreateFolder(name)
+    setFolders(await localListFolders())
+    setSelectedFolder(f.id)
+  }
+  async function renameFolder(id: string, curName: string): Promise<void> {
+    const name = window.prompt('Rename folder', curName)
+    if (name == null || !name.trim()) return
+    await localRenameFolder(id, name)
+    setFolders(await localListFolders())
+  }
+  async function removeFolder(id: string): Promise<void> {
+    if (!window.confirm('Delete this folder? Projects inside move back to All projects.')) return
+    await localDeleteFolder(id)
+    if (selectedFolder === id) setSelectedFolder(null)
+    setFolders(await localListFolders())
+    void refresh(true)
+  }
+  async function moveToFolder(projectId: string, folderId: string | null): Promise<void> {
+    // optimistic — reflect immediately, then persist
+    setProjects((ps) => ps.map((p) => (p.id === projectId ? { ...p, folderId } : p)))
+    await localMoveProjectToFolder(projectId, folderId)
+  }
+
+  return {
+    cards,
+    metas: filtered,
+    loading,
+    query,
+    setQuery,
+    email,
+    open,
+    create,
+    batch,
+    rename,
+    remove,
+    logout,
+    refresh,
+    folders,
+    selectedFolder,
+    setSelectedFolder,
+    folderCounts,
+    createFolder,
+    renameFolder,
+    removeFolder,
+    moveToFolder
+  }
 }
