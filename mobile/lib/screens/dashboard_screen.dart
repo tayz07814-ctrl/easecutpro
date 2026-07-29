@@ -4,6 +4,7 @@ import '../cloud/backend.dart';
 import '../theme.dart';
 import '../sheets/new_project_wizard.dart';
 import 'auth_screen.dart';
+import 'cowork_screen.dart';
 import 'editor_screen.dart';
 
 /// Home / dashboard (MobileDashboard.tsx) — now backed by the real Supabase
@@ -190,7 +191,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             color: const Color(0xFF262932),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             onSelected: (v) {
-              if (v == 'logout') _logout();
+              if (v == 'logout') {
+                _logout();
+              } else if (v == 'cowork') {
+                Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const CoworkScreen()))
+                    .then((_) => _load());
+              }
             },
             itemBuilder: (_) => [
               PopupMenuItem(
@@ -198,6 +205,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Text(Backend.email.isEmpty ? 'Signed in' : Backend.email,
                     style: const TextStyle(color: Ec.textMute, fontSize: 12)),
               ),
+              const PopupMenuItem(value: 'cowork', child: Text('Cloud cowork', style: TextStyle(color: Ec.text))),
               const PopupMenuItem(value: 'logout', child: Text('Log out', style: TextStyle(color: Ec.text))),
             ],
             child: Container(
