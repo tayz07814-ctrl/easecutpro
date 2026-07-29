@@ -581,11 +581,19 @@ export function moveClipInDoc(
 ): TimelineDocument {
   const loc = findClip(doc, clipId)
   if (!loc) return doc
-  if (!findTrack(doc, toTrackId)) return doc
+  const to = findTrack(doc, toTrackId)
+  if (!to) return doc
   const { track, clip } = loc
   const start = Math.max(0, Math.round(toStart))
   if (toTrackId === track.id && start === clip.start) return doc
-  const moved: Clip = { ...clip, trackId: toTrackId, start, end: start + clip.duration }
+  let moved: Clip = { ...clip, trackId: toTrackId, start, end: start + clip.duration }
+  // A MAIN clip promoted onto an overlay lane keeps its full-frame size: the
+  // overlay renderers (preview + export) default a missing ovScale to a small
+  // PiP (0.45), which silently SHRANK manually-moved clips. Stamp an explicit
+  // full-size placement once at promotion — b-roll flows set their own.
+  if (track.isMain && !to.isMain && to.kind === 'video' && typeof clip.metadata?.ovScale !== 'number') {
+    moved = { ...moved, metadata: { ...clip.metadata, ovScale: 1, ovX: 0, ovY: 0 } }
+  }
   const tracks = doc.tracks.map((t) => {
     if (t.id === track.id && t.id === toTrackId) {
       return { ...t, clips: t.clips.map((c) => (c.id === clipId ? moved : c)) }

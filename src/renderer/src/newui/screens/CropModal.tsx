@@ -7,10 +7,12 @@
 // design's canvas). Crop values are source-relative fractions, so they apply
 // correctly regardless; only the aspect-preset box shape assumes a 9:16 source.
 
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { css } from '../css'
 import { useStore } from '../../store'
 import { useSharedEngineSnapshot, getSharedEngine } from '../../timelineEngine'
+import { resolveMedia } from '../../media/resolver'
+import { framesToSeconds } from '@shared/timeline/time'
 import * as C from '@shared/timeline/commands'
 import type { Clip as DocClip } from '@shared/timeline/types'
 
@@ -61,6 +63,31 @@ export default function CropModal(): JSX.Element | null {
   const [aspect, setAspect] = useState(cropped ? 1 : 0) // Free if already cropped, else Original
   const stageRef = useRef<HTMLDivElement>(null)
 
+  // The stage matches the SOURCE frame (fallback 9:16), so the box fractions map
+  // 1:1 onto the crop fractions and the still frame underneath is undistorted.
+  const stageAspect = clip?.srcW && clip?.srcH ? clip.srcW / clip.srcH : STAGE_ASPECT
+
+  // Still frame to crop against: the clip's frame under the current playhead
+  // (clamped into the clip), shown as a paused <video> / <img> filling the stage.
+  const playhead = useStore((s) => s.project.playhead)
+  const media = clip?.sourcePath ? resolveMedia(clip.sourcePath) : null
+  const tb = snap?.doc?.timebase
+  let stillT = 0.033
+  if (clip && tb && clip.kind !== 'image') {
+    const startSec = framesToSeconds(clip.start, tb)
+    const endSec = framesToSeconds(clip.end, tb)
+    const local = clampN(playhead, startSec, Math.max(startSec, endSec - 0.05)) - startSec
+    const speed = typeof clip.speed === 'number' && clip.speed > 0 ? clip.speed : 1
+    stillT = clampN(clip.sourceIn + local * speed, clip.sourceIn + 0.033, Math.max(clip.sourceIn + 0.033, clip.sourceOut - 0.05))
+  }
+  const stillRef = useRef<HTMLVideoElement>(null)
+  useEffect(() => {
+    const v = stillRef.current
+    if (v) v.currentTime = stillT
+    // Seek once per open/url — the modal pins its clip, so stillT is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [media?.url])
+
   const close = (): void => setShow(false)
 
   function rect(): DOMRect | null {
@@ -90,7 +117,8 @@ export default function CropModal(): JSX.Element | null {
     window.addEventListener('pointerup', up)
   }
 
-  // Drag the bottom-right corner → resize (free).
+  // Drag the bottom-right corner → resize. A ratio preset stays LOCKED to its
+  // ratio; Free resizes both axes; Original (a full-frame box) drops to Free.
   function onResize(e: ReactPointerEvent): void {
     e.preventDefault()
     e.stopPropagation()
@@ -99,11 +127,23 @@ export default function CropModal(): JSX.Element | null {
     const sx = e.clientX
     const sy = e.clientY
     const b0 = box
-    setAspect(1) // free
+    const a = ASPECTS[aspect]
+    // desired box w/h in STAGE-FRACTION space (the stage matches the source frame)
+    const locked = a && a.ratio != null ? a.ratio / stageAspect : null
+    if (a?.kind === 'original') setAspect(1) // resizing the full frame = free crop
     const move = (ev: PointerEvent): void => {
       const dx = (ev.clientX - sx) / r.width
       const dy = (ev.clientY - sy) / r.height
-      setBox((b) => ({ ...b, w: clampN(b0.w + dx, MIN, 1 - b.x), h: clampN(b0.h + dy, MIN, 1 - b.y) }))
+      setBox((b) => {
+        if (locked != null) {
+          let w = clampN(b0.w + dx, Math.max(MIN, MIN * locked), 1 - b0.x)
+          let h = w / locked
+          if (h > 1 - b0.y) { h = 1 - b0.y; w = h * locked }
+          if (h < MIN) { h = MIN; w = h * locked }
+          return { ...b, w, h }
+        }
+        return { ...b, w: clampN(b0.w + dx, MIN, 1 - b.x), h: clampN(b0.h + dy, MIN, 1 - b.y) }
+      })
     }
     const up = (): void => {
       window.removeEventListener('pointermove', move)
@@ -118,8 +158,8 @@ export default function CropModal(): JSX.Element | null {
     const a = ASPECTS[i]
     if (a.kind === 'original') { setBox({ x: 0, y: 0, w: 1, h: 1 }); return }
     if (a.kind === 'free' || a.ratio == null) return
-    // Largest centred box of the target output ratio within the 9:16 stage.
-    const rf = a.ratio / STAGE_ASPECT // desired w/h in stage-fraction space
+    // Largest centred box of the target output ratio within the source stage.
+    const rf = a.ratio / stageAspect // desired w/h in stage-fraction space
     let w: number
     let h: number
     if (rf >= 1) { w = 1; h = 1 / rf } else { h = 1; w = rf }
@@ -156,7 +196,13 @@ export default function CropModal(): JSX.Element | null {
 
       <div style={css('flex:1;min-height:0;display:flex')}>
         <div style={css('flex:1;min-width:0;display:flex;align-items:center;justify-content:center;padding:34px')}>
-          <div ref={stageRef} style={css('height:100%;max-width:100%;aspect-ratio:9/16;position:relative;background-image:repeating-linear-gradient(135deg,#1b1b22 0 8px,#141419 8px 16px);border-radius:6px;overflow:hidden;touch-action:none')}>
+          <div ref={stageRef} style={css(`height:100%;max-width:100%;aspect-ratio:${clip?.srcW && clip?.srcH ? `${clip.srcW}/${clip.srcH}` : '9/16'};position:relative;background-image:repeating-linear-gradient(135deg,#1b1b22 0 8px,#141419 8px 16px);border-radius:6px;overflow:hidden;touch-action:none`)}>
+            {/* the actual frame being cropped — the crop box + dim mask sit on top */}
+            {media?.url && (clip?.kind === 'image' ? (
+              <img src={media.url} alt="" draggable={false} style={css('position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none')} />
+            ) : (
+              <video ref={stillRef} src={media.url} muted playsInline preload="auto" style={css('position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none')} />
+            ))}
             <div onPointerDown={onMove} style={css(boxStyle)}>
               <div style={css('position:absolute;left:33.3%;top:0;bottom:0;width:1px;background:rgba(255,255,255,.16)')} />
               <div style={css('position:absolute;left:66.6%;top:0;bottom:0;width:1px;background:rgba(255,255,255,.16)')} />
@@ -187,7 +233,7 @@ export default function CropModal(): JSX.Element | null {
               ))}
             </div>
           </div>
-          <div style={css('font-size:12px;color:#7a7a8c;line-height:1.5')}>Drag inside the box to reposition, or pull the bottom-right corner to resize. Applies to the selected clip only.</div>
+          <div style={css('font-size:12px;color:#7a7a8c;line-height:1.5')}>Drag inside the box to reposition, or pull the bottom-right corner to resize — a ratio preset stays locked while resizing; pick Free for unconstrained. Applies to the selected clip only.</div>
           <div style={css('flex:1')} />
           <span onClick={reset} style={css('text-align:center;font-size:12.5px;color:#d6d6e4;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);padding:10px;border-radius:9px;cursor:pointer')}>Reset to full frame</span>
         </div>

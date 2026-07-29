@@ -110,7 +110,8 @@ export async function exportOnDeviceMB(
     ctx.save()
     if (clip) {
       ctx.beginPath()
-      ctx.rect(r.bx, r.by, r.bw, r.bh)
+      if (r.round) ctx.ellipse(r.bx + r.bw / 2, r.by + r.bh / 2, r.bw / 2, r.bh / 2, 0, 0, Math.PI * 2)
+      else ctx.rect(r.bx, r.by, r.bw, r.bh)
       ctx.clip()
     }
     if (Math.abs(scale - 1) > 0.001) {

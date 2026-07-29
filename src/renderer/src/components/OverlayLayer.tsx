@@ -32,6 +32,8 @@ interface OverlayView {
   y: number
   scale: number
   crop: { l: number; t: number; r: number; b: number }
+  /** ellipse-masked ("rounded") overlay — scaled via a single handle only. */
+  rounded: boolean
   zoomStart: number
   zoomEnd: number
   srcW?: number
@@ -45,6 +47,14 @@ interface OverlayView {
 
 function num(v: unknown, d: number): number {
   return typeof v === 'number' ? v : d
+}
+
+/** What a preview gesture can change on an overlay (all optional). */
+interface OverlayPatch {
+  x?: number
+  y?: number
+  scale?: number
+  crop?: { l: number; t: number; r: number; b: number }
 }
 
 /** Active overlay clips from the authoritative document, converted to OverlayView. */
@@ -67,6 +77,7 @@ function docOverlays(doc: TimelineDocument, playheadSec: number): OverlayView[] 
         y: num(m.ovY, 0),
         scale: num(m.ovScale, 0.45),
         crop: { l: c.crop.left, t: c.crop.top, r: c.crop.right, b: c.crop.bottom },
+        rounded: m.ovRound === true,
         zoomStart: num(m.ovZoomStart, 1),
         zoomEnd: num(m.ovZoomEnd, 1),
         srcW: c.srcW,
@@ -98,6 +109,7 @@ function legacyOverlays(clips: Clip[], playhead: number): OverlayView[] {
       y: c.y,
       scale: c.scale,
       crop: c.crop ?? { l: 0, t: 0, r: 0, b: 0 },
+      rounded: false,
       zoomStart: c.zoomStart ?? 1,
       zoomEnd: c.zoomEnd ?? 1,
       srcW: c.srcW,
@@ -160,13 +172,22 @@ export default function OverlayLayer({ frame }: { frame: Rect }): JSX.Element {
     ? docOverlays(snap!.doc, playhead)
     : legacyOverlays(legacyClips, playhead)
 
-  // Commit a placement change: an undoable engine edit in doc mode, else the store.
-  const commit = (id: string, patch: { x?: number; y?: number; scale?: number }): void => {
+  // Commit a placement (and/or crop) change: an undoable engine edit in doc
+  // mode, else the store. Crop + placement land as ONE undo step (batch).
+  const commit = (id: string, patch: OverlayPatch): void => {
     if (docMode) {
       const engine = getSharedEngine()
-      engine?.dispatch(C.setOverlayPlacement(id, { ovX: patch.x, ovY: patch.y, ovScale: patch.scale }))
+      if (!engine) return
+      const cmds = []
+      if (patch.x !== undefined || patch.y !== undefined || patch.scale !== undefined)
+        cmds.push(C.setOverlayPlacement(id, { ovX: patch.x, ovY: patch.y, ovScale: patch.scale }))
+      if (patch.crop)
+        cmds.push(C.setOverlayCrop(id, { left: patch.crop.l, top: patch.crop.t, right: patch.crop.r, bottom: patch.crop.b }))
+      if (cmds.length === 1) engine.dispatch(cmds[0])
+      else if (cmds.length > 1) engine.batch('Crop overlay', cmds)
     } else {
-      updateClip(id, patch)
+      const { crop, ...place } = patch
+      updateClip(id, crop ? { ...place, crop } : place)
     }
   }
   const select = (id: string): void => {
@@ -198,7 +219,7 @@ function OverlayBox({
   view: OverlayView
   frame: Rect
   selected: boolean
-  onCommit: (id: string, patch: { x?: number; y?: number; scale?: number }) => void
+  onCommit: (id: string, patch: OverlayPatch) => void
   onSelect: (id: string) => void
   onSnap: (s: { v: boolean; h: boolean }) => void
 }): JSX.Element {
@@ -210,12 +231,12 @@ function OverlayBox({
 
   // Live drag/resize is kept in local state so the box follows the pointer without
   // spamming undoable edits; the final value commits once on pointer-up.
-  const [live, setLive] = useState<{ x?: number; y?: number; scale?: number } | null>(null)
+  const [live, setLive] = useState<OverlayPatch | null>(null)
   const x = live?.x ?? view.x
   const y = live?.y ?? view.y
   const scale = live?.scale ?? view.scale
 
-  const crop = view.crop
+  const crop = live?.crop ?? view.crop
   const vw = Math.max(0.05, 1 - crop.l - crop.r)
   const vh = Math.max(0.05, 1 - crop.t - crop.b)
   const srcAspect = view.srcW && view.srcH ? view.srcW / view.srcH : 16 / 9
@@ -306,48 +327,119 @@ function OverlayBox({
     onSnap
   })
 
-  function startResize(e: React.MouseEvent): void {
+  /** Shared drag runner: live-preview via setLive, single commit on release. */
+  function runDrag(e: React.PointerEvent | React.MouseEvent, onDelta: (dx: number, dy: number) => OverlayPatch): void {
     e.stopPropagation()
+    if ('preventDefault' in e) e.preventDefault()
     onSelect(view.id)
     const sx = e.clientX
-    const w0 = boxW
-    let ns = view.scale
-    function onMove(ev: MouseEvent): void {
-      ns = clamp((w0 + (ev.clientX - sx)) / frame.width, 0.05, 1.6)
-      setLive({ scale: ns })
+    const sy = e.clientY
+    let patch: OverlayPatch = {}
+    function onMove(ev: PointerEvent): void {
+      patch = onDelta(ev.clientX - sx, ev.clientY - sy)
+      setLive(patch)
     }
     function onUp(): void {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
       setLive(null)
-      onCommit(view.id, { scale: ns })
+      onCommit(view.id, patch)
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  /** Rounded overlays: the single legacy handle — scale only (top-left anchored). */
+  function startResize(e: React.MouseEvent): void {
+    const w0 = boxW
+    runDrag(e, (dx) => ({ scale: clamp((w0 + dx) / frame.width, 0.05, 1.6) }))
+  }
+
+  /** Corner scale: resize about the OPPOSITE corner (it stays put on screen). */
+  function startCorner(e: React.PointerEvent, corner: 'nw' | 'ne' | 'sw' | 'se'): void {
+    const x0 = x
+    const y0 = y
+    const w0 = boxW
+    const h0 = boxH
+    const fromLeft = corner === 'nw' || corner === 'sw'
+    const fromTop = corner === 'nw' || corner === 'ne'
+    runDrag(e, (dx) => {
+      const w = clamp(w0 + (fromLeft ? -dx : dx), 0.05 * frame.width, 1.6 * frame.width)
+      const h = w / croppedAspect
+      const p: OverlayPatch = { scale: w / frame.width }
+      if (fromLeft) p.x = x0 + (w0 - w) / frame.width
+      if (fromTop) p.y = y0 + (h0 - h) / frame.height
+      return p
+    })
+  }
+
+  /** Side crop: drag an edge-centre handle to crop that edge freely. The content
+   *  stays put on screen — the box edge slides over it (x/scale compensate, so
+   *  the un-cropped pixels never move or rescale mid-drag). */
+  function startCrop(e: React.PointerEvent, side: 'n' | 'e' | 's' | 'w'): void {
+    const c0 = { ...crop }
+    const x0 = x
+    const y0 = y
+    const s0 = scale
+    const iw0 = innerW
+    const ih0 = innerH
+    const vw0 = Math.max(0.05, 1 - c0.l - c0.r)
+    runDrag(e, (dx, dy) => {
+      if (side === 'w') {
+        const l = clamp(c0.l + dx / iw0, 0, 1 - c0.r - 0.05)
+        return { crop: { ...c0, l }, x: x0 + ((l - c0.l) * iw0) / frame.width, scale: (s0 * (1 - l - c0.r)) / vw0 }
+      }
+      if (side === 'e') {
+        const r = clamp(c0.r - dx / iw0, 0, 1 - c0.l - 0.05)
+        return { crop: { ...c0, r }, scale: (s0 * (1 - c0.l - r)) / vw0 }
+      }
+      if (side === 'n') {
+        const t = clamp(c0.t + dy / ih0, 0, 1 - c0.b - 0.05)
+        return { crop: { ...c0, t }, y: y0 + ((t - c0.t) * ih0) / frame.height }
+      }
+      const b = clamp(c0.b - dy / ih0, 0, 1 - c0.t - 0.05)
+      return { crop: { ...c0, b } }
+    })
   }
 
   return (
     <div
-      className={'ov-box' + (selected ? ' selected' : '')}
+      className={'ov-box' + (selected ? ' selected' : '') + (view.rounded ? ' rounded' : '')}
       style={{ left: x * frame.width, top: y * frame.height, width: boxW, height: boxH, touchAction: 'none' }}
       onPointerDown={onPointerDown}
     >
-      {isImage ? (
-        <img
-          ref={imgRef}
-          src={ecurl(view.sourcePath)}
-          draggable={false}
-          style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center', willChange: 'transform', backfaceVisibility: 'hidden' }}
-        />
-      ) : (
-        <video
-          ref={ref}
-          playsInline
-          src={ecurl(view.sourcePath)}
-          style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center', willChange: 'transform', backfaceVisibility: 'hidden' }}
-        />
+      {/* inner clipper: crops the media (and rounds it) so the handles on the
+          outer box are never swallowed by overflow:hidden */}
+      <div className="ov-clip">
+        {isImage ? (
+          <img
+            ref={imgRef}
+            src={ecurl(view.sourcePath)}
+            draggable={false}
+            style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center', willChange: 'transform', backfaceVisibility: 'hidden' }}
+          />
+        ) : (
+          <video
+            ref={ref}
+            playsInline
+            src={ecurl(view.sourcePath)}
+            style={{ width: innerW, height: innerH, marginLeft: -crop.l * innerW, marginTop: -crop.t * innerH, transformOrigin: 'center center', willChange: 'transform', backfaceVisibility: 'hidden' }}
+          />
+        )}
+      </div>
+      {selected && view.rounded && <div className="ov-resize" onPointerDown={startResize} />}
+      {selected && !view.rounded && (
+        <>
+          {(['nw', 'ne', 'sw', 'se'] as const).map((c) => (
+            <div key={c} className={`ov-corner ${c}`} onPointerDown={(e) => startCorner(e, c)} />
+          ))}
+          {(['n', 'e', 's', 'w'] as const).map((s) => (
+            <div key={s} className={`ov-cropside ${s}`} onPointerDown={(e) => startCrop(e, s)} />
+          ))}
+        </>
       )}
-      {selected && <div className="ov-resize" onPointerDown={startResize} />}
     </div>
   )
 }

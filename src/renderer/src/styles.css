@@ -152,8 +152,12 @@ body.ec-native-active .m-stage .preview,
 body.ec-native-active .frame { background: transparent !important; }
 
 .overlay-layer { position: absolute; pointer-events: none; }
-.ov-box { position: absolute; overflow: hidden; cursor: move; pointer-events: auto; outline: 1px dashed rgba(255,255,255,0.45); }
+/* overflow stays VISIBLE on the box so the scale/crop handles can sit on its
+   edges; the media is cropped by the inner .ov-clip instead. */
+.ov-box { position: absolute; cursor: move; pointer-events: auto; outline: 1px dashed rgba(255,255,255,0.45); }
 .ov-box.selected { outline: 2px solid var(--accent); }
+.ov-box.rounded, .ov-box.rounded .ov-clip { border-radius: 50%; }
+.ov-clip { position: absolute; inset: 0; overflow: hidden; }
 
 /* Centre-line snap guides shown while dragging an overlay/text to the middle. */
 .snap-guide-v, .snap-guide-h { position: absolute; background: var(--yellow, #ffc83d);
@@ -163,7 +167,19 @@ body.ec-native-active .frame { background: transparent !important; }
 /* No CSS transition here: the Ken Burns zoom is driven per-frame by rAF; a
    transition would fight it and make the motion lag/stutter. */
 .ov-box video, .ov-box img { display: block; position: absolute; left: 0; top: 0; will-change: transform; backface-visibility: hidden; }
-.ov-resize { position: absolute; right: -7px; bottom: -7px; width: 14px; height: 14px; background: var(--accent); border: 2px solid #fff; border-radius: 50%; cursor: nwse-resize; }
+.ov-resize { position: absolute; right: -7px; bottom: -7px; width: 14px; height: 14px; background: var(--accent); border: 2px solid #fff; border-radius: 50%; cursor: nwse-resize; z-index: 2; }
+/* Corner SCALE handles (square knobs) — resize about the opposite corner. */
+.ov-corner { position: absolute; width: 12px; height: 12px; background: #fff; border: 2px solid var(--accent); border-radius: 3px; z-index: 2; }
+.ov-corner.nw { left: -7px; top: -7px; cursor: nwse-resize; }
+.ov-corner.ne { right: -7px; top: -7px; cursor: nesw-resize; }
+.ov-corner.sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
+.ov-corner.se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+/* Edge-centre CROP handles (slim pills) — crop that edge freely. */
+.ov-cropside { position: absolute; background: #fff; border: 1.5px solid var(--accent); border-radius: 4px; z-index: 2; }
+.ov-cropside.n { top: -5px; left: 50%; transform: translateX(-50%); width: 22px; height: 7px; cursor: ns-resize; }
+.ov-cropside.s { bottom: -5px; left: 50%; transform: translateX(-50%); width: 22px; height: 7px; cursor: ns-resize; }
+.ov-cropside.w { left: -5px; top: 50%; transform: translateY(-50%); width: 7px; height: 22px; cursor: ew-resize; }
+.ov-cropside.e { right: -5px; top: 50%; transform: translateY(-50%); width: 7px; height: 22px; cursor: ew-resize; }
 
 /* AI overlay rules panel */
 .overlay-panel { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
@@ -600,7 +616,7 @@ button.small { font-size: 11px; padding: 3px 8px; }
 
 /* ---- Touch dragging: draggable bits capture the gesture; empty timeline pans ---- */
 .clip, .seg, .text-block, .music-block, .ruler, .playhead-grip, .trim, .row-resize,
-.ov-box, .ov-resize, .text-item, .tl-scrollbar, .tl-scrollbar-thumb { touch-action: none; }
+.ov-box, .ov-resize, .ov-corner, .ov-cropside, .text-item, .tl-scrollbar, .tl-scrollbar-thumb { touch-action: none; }
 .timeline-scroll { touch-action: pan-x pan-y; }
 
 /* ============ Mobile (CapCut-style) ============ */

@@ -28,6 +28,9 @@ export interface OverlayRect {
   iy: number
   iw: number
   ih: number
+  /** ellipse-masked ("rounded") overlay — clip to the inscribed ellipse, the
+   *  canvas twin of the preview's border-radius:50% .ov-clip. */
+  round?: boolean
 }
 
 /** Eased Ken Burns ramp: zs→ze over the clip's SOURCE window (OverlayBox uses
@@ -49,6 +52,7 @@ export interface OverlayClipSpec {
   y: number
   scale: number
   crop: { l: number; t: number; r: number; b: number }
+  rounded: boolean
   zs: number
   ze: number
   srcW?: number
@@ -86,6 +90,7 @@ export function planOverlays(doc: TimelineDocument): OverlayClipSpec[] {
         y: num(m.ovY, 0),
         scale: num(m.ovScale, 0.45),
         crop: { l: c.crop.left, t: c.crop.top, r: c.crop.right, b: c.crop.bottom },
+        rounded: m.ovRound === true,
         zs: num(m.ovZoomStart, 1),
         ze: num(m.ovZoomEnd, 1),
         srcW: c.srcW,
@@ -152,7 +157,7 @@ export function overlayRect(W: number, H: number, o: OverlayClipSpec): OverlayRe
   const ih = bh / vh
   const bx = o.x * W
   const by = o.y * H
-  return { bx, by, bw, bh, ix: bx - o.crop.l * iw, iy: by - o.crop.t * ih, iw, ih }
+  return { bx, by, bw, bh, ix: bx - o.crop.l * iw, iy: by - o.crop.t * ih, iw, ih, round: o.rounded || undefined }
 }
 
 /** Full-frame rect for baked text (composited at 0:0 like the ffmpeg overlay). */
