@@ -997,8 +997,10 @@ class _MiniTimelineState extends State<MiniTimeline> {
                         ),
                       ),
                       Expanded(
+                        // Blackish-purple wave bg; the parent block's hardEdge
+                        // clip rounds this Container's bottom corners for us.
                         child: Container(
-                          color: const Color(0xFF241C3F),
+                          color: const Color(0xFF1A1526),
                           child: CustomPaint(
                             painter: _WavePainter(peaks),
                             child: const SizedBox.expand(),
@@ -1082,20 +1084,37 @@ class _MiniTimelineState extends State<MiniTimeline> {
   }
 }
 
-/// Paints a centered amplitude waveform (mirrored bars) from a peaks list.
+/// Paints a centered amplitude waveform: dense, closely-adjacent bright-purple
+/// bars mirrored around the middle, over the blackish-purple wave bg — matching
+/// the web editor's waveform look.
 class _WavePainter extends CustomPainter {
   final List<double> peaks;
-  const _WavePainter(this.peaks);
+  final Color barColor;
+  const _WavePainter(this.peaks, {this.barColor = const Color(0xFF9B7CFF)});
 
   @override
   void paint(Canvas canvas, Size size) {
     if (peaks.isEmpty) return;
     final mid = size.height / 2;
+    // Keep bars off the top/bottom edges so they don't touch the block border.
+    const vPad = 2.0;
+    final maxH = (mid - vPad).clamp(1.0, mid);
+
+    // Subtle brighter center line for the resting axis.
+    canvas.drawLine(
+      Offset(0, mid),
+      Offset(size.width, mid),
+      Paint()
+        ..color = barColor.withValues(alpha: 0.18)
+        ..strokeWidth = 0.75,
+    );
+
     final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.55)
-      ..strokeWidth = 1.4
+      ..color = barColor.withValues(alpha: 0.9)
+      ..strokeWidth = 1.5
       ..strokeCap = StrokeCap.round;
-    final bars = (size.width / 2.5).floor().clamp(1, peaks.length);
+    // ~2.0px pitch → ~1.5px bar + ~0.5px gap: a dense, continuous waveform.
+    final bars = (size.width / 2.0).floor().clamp(1, peaks.length);
     for (int b = 0; b < bars; b++) {
       final x = (b + 0.5) / bars * size.width;
       final a = (b * peaks.length / bars).floor();
@@ -1104,11 +1123,12 @@ class _WavePainter extends CustomPainter {
       for (int j = a; j < e; j++) {
         if (peaks[j] > m) m = peaks[j];
       }
-      final h = (m * (mid - 1)).clamp(0.5, mid - 1);
+      final h = (m * maxH).clamp(0.5, maxH);
       canvas.drawLine(Offset(x, mid - h), Offset(x, mid + h), paint);
     }
   }
 
   @override
-  bool shouldRepaint(_WavePainter old) => !identical(old.peaks, peaks);
+  bool shouldRepaint(_WavePainter old) =>
+      !identical(old.peaks, peaks) || old.barColor != barColor;
 }
