@@ -37,6 +37,7 @@ import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
 import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
+import { WcPlayer, wcSupported } from '../preview/wcPlayer'
 import { useIsMobile } from '../useMobile'
 import { useNativePreview } from '../useNativePreview'
 import OverlayLayer from './OverlayLayer'
@@ -364,15 +365,39 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // and keep the playhead advancing on the wall clock instead of freezing on a stall.
   const ctTrackRef = useRef<{ src: string; ct: number; wall: number }>({ src: '', ct: -1, wall: 0 })
 
-  // Canvas base compositor: DISABLED. In theory drawImage-ing the live decoder into
-  // a <canvas> every rAF removes the seam reveal-flash by construction — but on a
-  // real desktop browser the base <video>s are HARDWARE-decoded and hidden, and
-  // drawImage() from a hidden hardware-decoded video returns BLACK (the frame is a
-  // GPU texture the 2D context can't read back). That turned the whole preview black
-  // with intermittent flashes. Headless Chromium uses SOFTWARE decode so it never
-  // reproduced this. Left wired behind the flag for a future WebCodecs/rVFC redo;
-  // the element-visibility path below is the shipping path.
-  const useCanvas = false
+  // WEBCODECS canvas compositor (desktop): the promised rVFC/WebCodecs redo of
+  // the old (removed) drawImage-a-hidden-<video> canvas path, which returned
+  // BLACK frames from hardware-decoded elements. Mediabunny demuxes each source
+  // and WebCodecs decodes straight to VideoSamples the reconciler paints onto
+  // the canvas — a cut seam is "draw from a different queue", NO seeks, so it
+  // cannot stutter by construction. Sound comes from the SeamlessAudio engine
+  // (the elements stay paused). Mobile keeps the element path (single hardware
+  // decode pipeline), and ANY engine failure — including audio that won't start
+  // — flips wcOn off, handing back to the untouched element machinery below.
+  const [wcOn, setWcOn] = useState(() => !isMobile && wcSupported())
+  const wcOnRef = useRef(wcOn)
+  wcOnRef.current = wcOn
+  const wcRef = useRef<WcPlayer | null>(null)
+  if (wcOn && !wcRef.current) wcRef.current = new WcPlayer()
+  useEffect(() => () => wcRef.current?.dispose(), [])
+  // Fallback frees the decoders immediately (the element path never reads them).
+  useEffect(() => {
+    if (!wcOn && wcRef.current) {
+      wcRef.current.dispose()
+      wcRef.current = null
+    }
+  }, [wcOn])
+  // Waiting-for-audio bookkeeping: on the WC path the videos are paused, so
+  // until the audio engine can actually sound we HOLD the clock (a brief
+  // "buffering" beat right after open/apply on long videos) — and if it still
+  // can't start after a generous window, fall back to the element path.
+  const wcAudioWaitRef = useRef(0)
+  const srcSig = sources.join('|')
+  useEffect(() => {
+    if (!wcOn) return
+    wcRef.current?.setSources(segsRef.current.filter((s) => !s.isImage).map((s) => ({ src: s.src })))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srcSig, wcOn])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the
@@ -451,7 +476,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // with the live picture (the frozen-frame class of bugs).
   const warmedSigRef = useRef('')
   useEffect(() => {
-    if (isMobile || playing || warmedSigRef.current === buddySig) return
+    // Element-path only: the WebCodecs compositor needs no element seek warm-up.
+    if (isMobile || wcOn || playing || warmedSigRef.current === buddySig) return
     let cancelled = false
     const detached = new Map<string, HTMLVideoElement>()
     const settleWait = (v: HTMLVideoElement, target: number): Promise<void> =>
@@ -519,7 +545,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     }
     // buddySig captures the seam content; the helpers/refs are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buddySig, playing, isMobile])
+  }, [buddySig, playing, isMobile, wcOn])
 
   function segAtTime(t: number): number {
     return segsRef.current.findIndex((s) => t >= s.start && t < s.start + s.len)
@@ -639,7 +665,9 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       // frame perfectly still through a pause.
       const wasPlaying = wasPlayingRef.current
       wasPlayingRef.current = isPlaying
-      if (wasPlaying && !isPlaying) {
+      if (!isPlaying) wcAudioWaitRef.current = 0
+      // (element path only — the WC clock has no decoder drift to adopt)
+      if (wasPlaying && !isPlaying && !wcOnRef.current) {
         const di0 = displayIdxAt(tRef.current)
         if (di0 >= 0) {
           const seg = ss[di0]
@@ -659,7 +687,38 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       const covIdx = segAtTime(t)
       const active = covIdx >= 0 ? ss[covIdx] : undefined
 
-      if (isPlaying) {
+      if (isPlaying && wcOnRef.current) {
+        // ---- WEBCODECS clock: pure wall clock, re-anchored to the AUDIO
+        // engine (the authoritative clock — sample-accurate, runs through
+        // main-thread hitches). No decoder chasing: frames are drawn from the
+        // decode queues in the display section below, never seeked.
+        const eng = audioEngineRef.current
+        if (wcRef.current?.failed) setWcOn(false) // decode broke → element path next tick
+        const engActive = !!(eng && eng.active())
+        if (engActive) {
+          wcAudioWaitRef.current = 0
+          const ex = eng!.expected()
+          // follow the audio clock, never backward, never a wild jump forward
+          t = Math.max(t, Math.min(ex, t + Math.max(0.25, dt * 3)))
+        } else {
+          // Audio can't sound yet (decoding / context resuming): HOLD the
+          // clock — a silent picture running ahead of its own sound is worse
+          // than a beat of buffering. If it still can't start, fall back to
+          // the element path (which has element audio).
+          if (!wcAudioWaitRef.current) wcAudioWaitRef.current = now
+          if (now - wcAudioWaitRef.current > 6000) setWcOn(false)
+        }
+        if (t >= totalRef.current - 1e-4) {
+          playingRef.current = false
+          setPlaying(false)
+          t = totalRef.current
+        }
+        if (t > lastWroteRef.current + 0.0005 && now - lastStoreWriteAt.current > 120) {
+          lastWroteRef.current = t
+          lastStoreWriteAt.current = now
+          setPlayhead(t)
+        }
+      } else if (isPlaying) {
         if (active && !badRef.current.has(active.src)) {
           const v = liveVideo(active.src)
           if (v) {
@@ -729,23 +788,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                   if (!micro && wv && settled(wv) && Math.abs(wv.currentTime - up.sourceStart) > 0.06) {
                     seek(wv, up.sourceStart)
                   }
-                  // CANVAS pre-roll: start the buddy MOVING a hair before the seam so
-                  // the swap has it already advancing (kills the 1-frame hold). Only
-                  // safe on the canvas path — the buddy is never DRAWN until it goes
-                  // live, so the ~2 frames of pre-seam (removed) content it plays are
-                  // invisible; on the element path a played-hidden buddy would flash a
-                  // stale frame on reveal, so it stays paused there.
-                  if (
-                    useCanvas &&
-                    !micro &&
-                    wv &&
-                    wv.paused &&
-                    settled(wv) &&
-                    Math.abs(wv.currentTime - up.sourceStart) < 0.2 &&
-                    t >= active.start + active.len - 0.08
-                  ) {
-                    wv.play().catch(() => undefined)
-                  }
                 }
               }
             }
@@ -793,15 +835,9 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                         const cur = liveSlotRef.current.get(active.src) ?? 0
                         liveSlotRef.current.set(active.src, cur ^ 1) // flip live ↔ buddy
                         if (wv.paused) wv.play().catch(() => undefined)
-                        // Canvas path: the OLD live is now the buddy — pause it so it
-                        // stops decoding past its out-point; prewarm re-seeks it to the
-                        // NEXT seam. (Element path keeps its own visibility handling.)
-                        if (useCanvas && !v.paused) v.pause()
                       } else {
-                        // Buddy not ready → cold-seek the live element (old path). Pause
-                        // any buddy we pre-rolled so it can't drift on into removed
-                        // content; prewarm re-seeks it for the next seam.
-                        if (useCanvas && wv && !wv.paused) wv.pause()
+                        // Buddy not ready → cold-seek the live element (old path);
+                        // prewarm re-seeks the buddy for the next seam.
                         seek(v, next.sourceStart)
                       }
                     } else {
@@ -839,7 +875,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           setPlayhead(t)
         }
       } else {
-        // PAUSED: park every element; the LIVE one of the shown source on the exact frame.
+        // PAUSED: park every element; the LIVE one of the shown source on the exact
+        // frame (element path only — the WC compositor fetches its own stills).
         const di = displayIdxAt(t)
         const showSrc = di >= 0 ? ss[di].src : null
         for (const [src, pair] of slotsRef.current) {
@@ -848,7 +885,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             const v = pair[slot]
             if (!v) continue
             if (!v.paused) v.pause()
-            if (slot === li && src === showSrc && di >= 0 && !badRef.current.has(src)) {
+            if (!wcOnRef.current && slot === li && src === showSrc && di >= 0 && !badRef.current.has(src)) {
               const seg = ss[di]
               const want = seg.sourceStart + clamp(t - seg.start, 0, seg.len) * seg.speed
               if (settled(v) && Math.abs(v.currentTime - want) > 0.03) seek(v, want)
@@ -896,61 +933,56 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           progress: s.len > 0 ? (t - s.start) / s.len : 0
         })
 
-      if (useCanvas) {
-        // ── DESKTOP: composite the LIVE decoder's current frame into the <canvas>.
-        // No element is ever shown/hidden, so the compositor stale-frame flash at a
-        // seam is impossible; the pre-rolled buddy makes the swap hold-free too.
+      if (wcOnRef.current) {
+        // ── DESKTOP WEBCODECS: paint the decoded frame for `t` into the canvas.
+        // No element is ever shown/hidden/seeked, so seam flashes and seek stalls
+        // are impossible by construction; the warm pipe makes same-source cuts a
+        // queue swap. Elements stay paused+hidden+muted (SeamlessAudio owns sound).
         const cv = canvasRef.current
-        const liveEl = shown && !badRef.current.has(shown.src) ? liveVideo(shown.src) : undefined
-        if (cv) {
+        const wc = wcRef.current
+        if (cv && wc) {
           if (cv.style.visibility === 'hidden') cv.style.visibility = 'visible' // (native hid it)
           const ctx = cv.getContext('2d')
           if (ctx) {
             const cw = cv.width
             const ch = cv.height
-            if (liveEl && liveEl.readyState >= 2 && liveEl.videoWidth > 0 && liveEl.videoHeight > 0 && shown) {
-              // Reproduce `object-fit: contain` (the element path's CSS): letterbox the
-              // source inside the canvas, then apply the SAME kenBurns transform to the
-              // whole canvas — pixel-equivalent to transforming the <video> element.
-              const cr = containRect(cw, ch, liveEl.videoWidth / liveEl.videoHeight)
-              ctx.fillStyle = '#000'
-              ctx.fillRect(0, 0, cw, ch)
-              try {
-                ctx.drawImage(liveEl, cr.left, cr.top, cr.width, cr.height)
-              } catch {
-                /* frame momentarily not decodable — leave the black fill this tick */
-              }
+            ctx.fillStyle = '#000'
+            ctx.fillRect(0, 0, cw, ch)
+            if (shown && !shown.isImage) {
+              const tSrc = shown.sourceStart + clamp(t - shown.start, 0, shown.len) * shown.speed
+              wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying)
+              // Decode-ahead: park the warm pipe on the upcoming seam's in-point.
+              const up = ss[di + 1]
+              if (up && !up.isImage && t >= shown.start + shown.len - 1.0) wc.prewarm(up.src, up.sourceStart)
               cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
               cv.style.transform = kbTransform(shown)
-            } else {
-              ctx.fillStyle = '#000' // gap / bad / not-yet-decoded → black
-              ctx.fillRect(0, 0, cw, ch)
+            } else if (cv.style.transform !== '') {
+              cv.style.transform = '' // gap / image: don't keep the last clip's zoom
             }
           }
         }
-        // The <video>s stay hidden (decode-only). Manage AUDIO + keep OFF-screen
-        // sources idle. The SHOWN source's slots have their play/pause driven by the
-        // playing/paused branches above (live plays, buddy paused / pre-rolled /
-        // swapped) — don't fight that here.
-        const audioEngineOwns = !!audioEngineRef.current?.active()
-        for (const [src, pair] of slotsRef.current) {
-          const li = liveSlotRef.current.get(src) ?? 0
-          for (let slot = 0; slot < pair.length; slot++) {
-            const v = pair[slot]
+        // Keep every element idle — the compositor owns the picture, the audio
+        // engine owns the sound.
+        for (const [, pair] of slotsRef.current) {
+          for (const v of pair) {
             if (!v) continue
             if (v.style.visibility !== 'hidden') v.style.visibility = 'hidden'
-            if (src !== shown?.src) {
-              if (!v.muted) v.muted = true
-              if (isPlaying && !v.paused) v.pause() // an off-screen source: stop its decoder
-              continue
-            }
-            const isLive = slot === li
-            v.muted = audioEngineOwns || !isLive || shown?.muted === true
-            if (isLive && shown) {
-              v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
-              v.playbackRate = clamp(shown.speed, 0.25, 4)
-            }
+            if (!v.muted) v.muted = true
+            if (!v.paused) v.pause()
           }
+        }
+        // Still-image main-lane segment: same <img> overlay as the element path.
+        const im = imgRef.current
+        if (im && shown?.isImage) {
+          if (im.getAttribute('data-src') !== shown.src) {
+            im.setAttribute('data-src', shown.src)
+            im.src = shown.url
+          }
+          im.style.visibility = 'visible'
+          im.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
+          im.style.transform = kbTransform(shown)
+        } else if (im && im.style.visibility !== 'hidden') {
+          im.style.visibility = 'hidden'
         }
       } else {
         // ── MOBILE / no-canvas: the original element-visibility path (single decoder,
@@ -1069,10 +1101,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               alt=""
               style={{ visibility: 'hidden', position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', willChange: 'transform', backfaceVisibility: 'hidden' }}
             />
-            {useCanvas && frame.width > 0 && frame.height > 0 && (
-              // Desktop base-picture compositor. Sits ABOVE the (hidden, decode-only)
+            {wcOn && frame.width > 0 && frame.height > 0 && (
+              // Desktop WebCodecs compositor. Sits ABOVE the (hidden, idle)
               // <video>s and BELOW the overlays by DOM order. Backing store is frame×dpr
-              // for crispness; the reconciler drawImages the live decoder here each rAF.
+              // for crispness; the reconciler paints decoded VideoSamples here each rAF.
               <canvas
                 ref={canvasRef}
                 width={Math.round(frame.width * dpr)}
