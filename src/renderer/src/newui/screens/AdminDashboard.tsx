@@ -119,7 +119,11 @@ export default function AdminDashboard(): JSX.Element {
   if (state === 'loading')
     return <Center>Loading admin…</Center>
   if (state === 'anon')
-    return <Center>Sign in to the app first, then reopen <code style={{ color: ACCENT }}>?admin=1</code>.</Center>
+    return (
+      <Center>
+        Sign in to the app first (<a href="/" style={{ color: ACCENT }}>open the app →</a>), then return to this URL.
+      </Center>
+    )
   if (state === 'denied')
     return <Center>Not authorized. This account is not an admin.</Center>
 
@@ -144,7 +148,7 @@ export default function AdminDashboard(): JSX.Element {
         <div style={css('font-size:15px;font-weight:700;letter-spacing:-.01em')}>EaseCut Admin</div>
         <div style={css('flex:1')} />
         <button onClick={refresh} disabled={busy} style={btn(false)}>{busy ? 'Refreshing…' : 'Refresh'}</button>
-        <a href="?" style={{ ...btn(false), textDecoration: 'none' }}>← Back to app</a>
+        <a href="/" style={{ ...btn(false), textDecoration: 'none' }}>← Back to app</a>
       </div>
 
       <div style={css('max-width:1200px;margin:0 auto;padding:22px')}>

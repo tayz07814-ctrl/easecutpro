@@ -154,12 +154,18 @@ if (IS_WEB) {
   })
 }
 
-// Admin console (owner-only): ?admin=1 renders the userbase dashboard instead of
-// the app. It self-gates on the server-side is_app_admin() check, so a non-admin
-// who visits it sees only "not authorized" — the route is not a secret, the RPCs
-// are. Cloud build only (needs the Supabase session).
+// Admin console (owner-only): a hard-to-guess path renders the userbase dashboard
+// instead of the app (every path serves index.html on Vercel, so the client
+// routes it). The path is only obscurity — real security is the server-side
+// is_app_admin() check every admin_* RPC enforces, so a non-admin who finds the
+// URL still sees only "not authorized". Cloud build only (needs the Supabase
+// session). `?admin=1` also works as a dev fallback.
+const ADMIN_PATH = '/tayztals32614jz'
 const IS_ADMIN_ROUTE =
-  IS_CLOUD && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('admin')
+  IS_CLOUD &&
+  typeof window !== 'undefined' &&
+  (window.location.pathname.replace(/\/+$/, '') === ADMIN_PATH ||
+    new URLSearchParams(window.location.search).has('admin'))
 
 function Root(): JSX.Element {
   const view = useStore((s) => s.view)
