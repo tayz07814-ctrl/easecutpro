@@ -1,32 +1,18 @@
-// Stage C — Silence Settings adapter (screen 1d). Maps the design's presets +
-// friendly sliders onto the existing vadSilenceSettings profile (persisted via
-// setVadSilenceSettings). It uses the SHARED canonical presets (silencePresets.ts
-// — the same unit-tested bundles the stable app uses), so the new UI and the
-// stable app detect silence identically. No silence-engine change.
+// Silence Settings adapter — now bound to the FSMN (FunASR) engine ported from
+// 0.07. The Retake/Speech-cleaner silence path uses retakeFinalBossSettings
+// (padBefore/padAfter/trimEdges + the audioOverlap crossfade). The old Silero
+// VadSilenceSettings + presets are no longer driven here (they stay in the store
+// for ProCut/Ultracut/Premium, which are unchanged).
 
 import { useStore, type SeamFadeSettings } from '../../store'
-import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
-import {
-  SILENCE_PRESETS,
-  detectPreset as detectSilencePreset,
-  presetValues,
-  type SilencePresetId,
-  type SilencePresetOrCustom
-} from '../../silencePresets'
-
-export type Preset = SilencePresetOrCustom
-export { SILENCE_PRESETS }
-export type { SilencePresetId }
+import { DEFAULT_RETAKE_FINAL_BOSS_SETTINGS, type RetakeFinalBossSettings } from '@shared/retakefinalboss'
 
 export interface SilenceModel {
   show: boolean
-  s: VadSilenceSettings
-  detected: Preset
-  /** the canonical preset definitions (id/label/blurb/values) for rendering. */
-  presets: typeof SILENCE_PRESETS
-  applyPreset: (p: SilencePresetId) => void
-  setField: (k: keyof VadSilenceSettings, v: number | boolean) => void
-  /** Seam blend ("overlap") at cuts — global render setting, separate from presets. */
+  s: RetakeFinalBossSettings
+  setField: (k: keyof RetakeFinalBossSettings, v: number) => void
+  /** Seam blend ("overlap") at cuts — the FSMN audioOverlapMs, mirrored into the
+   *  global render crossfade so preview + export match. */
   seamFade: SeamFadeSettings
   setSeamFade: (patch: Partial<SeamFadeSettings>) => void
   reset: () => void
@@ -34,25 +20,34 @@ export interface SilenceModel {
 }
 
 export function useSilence(): SilenceModel {
-  const s = useStore((st) => st.vadSilenceSettings)
-  const setS = useStore((st) => st.setVadSilenceSettings)
+  const s = useStore((st) => st.retakeFinalBossSettings)
+  const setS = useStore((st) => st.setRetakeFinalBossSettings)
   const show = useStore((st) => st.showSilenceSettings)
   const setShow = useStore((st) => st.setShowSilenceSettings)
   const seamFade = useStore((st) => st.seamFade)
   const setSeamFade = useStore((st) => st.setSeamFade)
+  const applyOverlap = (ms: number): void => {
+    setS({ audioOverlapMs: ms })
+    setSeamFade({ enabled: ms > 0, ms })
+  }
   return {
     show,
     s,
-    detected: detectSilencePreset(s),
-    presets: SILENCE_PRESETS,
     seamFade,
-    setSeamFade,
-    // presetValues() is a full VadSilenceSettings bundle (all 7 fields), so a
-    // preset lands on exactly the tested values — not a partial that leaves
-    // stale fields behind (the old bug that made "Balanced" under-cut).
-    applyPreset: (p) => setS(presetValues(p)),
-    setField: (k, v) => setS({ [k]: v } as Partial<VadSilenceSettings>),
-    reset: () => setS({ ...DEFAULT_VAD_SILENCE_SETTINGS }), // Balanced
+    setField: (k, v) => {
+      if (k === 'audioOverlapMs') applyOverlap(v)
+      else setS({ [k]: v } as Partial<RetakeFinalBossSettings>)
+    },
+    setSeamFade: (patch) => {
+      // Keep the FSMN setting and the render crossfade in lockstep.
+      if (patch.ms !== undefined) applyOverlap(patch.ms)
+      else if (patch.enabled !== undefined) applyOverlap(patch.enabled ? s.audioOverlapMs || 20 : 0)
+      else setSeamFade(patch)
+    },
+    reset: () => {
+      setS({ ...DEFAULT_RETAKE_FINAL_BOSS_SETTINGS })
+      setSeamFade({ enabled: DEFAULT_RETAKE_FINAL_BOSS_SETTINGS.audioOverlapMs > 0, ms: DEFAULT_RETAKE_FINAL_BOSS_SETTINGS.audioOverlapMs })
+    },
     close: () => setShow(false)
   }
 }

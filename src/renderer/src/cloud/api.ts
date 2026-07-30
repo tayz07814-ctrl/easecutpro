@@ -23,6 +23,7 @@ import { premiumCutCloud } from './premiumEngine'
 import { cutCutProCloud } from './procutEngine'
 import { detectSilenceCloud } from './vad'
 import { cloudListProjects, cloudCreateProject, cloudGetProject, cloudSaveProject, cloudDeleteProject } from './projects'
+import { useStore } from '../store'
 import { initSettingsSync } from './settings'
 
 const progressListeners = new Set<(e: ProgressEvent) => void>()
@@ -240,8 +241,16 @@ const cloudApi: Window['api'] & {
     }
   },
 
-  retakeAwareCut: (path, _silenceSettings, vadSilenceSettings) =>
-    retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
+  // Silence now comes from the FSMN (FunASR) engine — the 0.07 engine ported to
+  // 0.01 for the Retake + Speech-cleaner path. Its settings live in the store
+  // (retakeFinalBossSettings); the old Silero VAD args are ignored here (ProCut /
+  // Ultracut / Premium below still pass and use them).
+  retakeAwareCut: (path) =>
+    retakeAwareCutCloud(
+      needLocal(path),
+      (pct, msg) => emit('transcribe', pct, msg),
+      useStore.getState().retakeFinalBossSettings
+    ),
 
   // Ultracut (Beta) — a SEPARATE experimental engine (ultracut-judge, OpenRouter
   // GLM 5.2). Shares nothing with Retake Beta's Opus judge; exposed as its own

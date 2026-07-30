@@ -18,6 +18,7 @@ import type { Project, Word } from '@shared/types'
 import { createEmptyProject } from '@shared/project'
 import type { VadSilenceSettings } from '@shared/vadsilence'
 import { retakeAwareCutCloud } from './retakeEngine'
+import { useStore } from '../store'
 
 /** Clean one imported clip (a `webmedia:` id) into a Project + preview thumb,
  *  using the cloud retake+silence engine. Silence obeys the passed VAD profile
@@ -46,7 +47,10 @@ export async function cleanVideoCloud(
   // Cloud Cut Lord: transcribe → LLM retake cut → VAD silence, all in the browser
   // + the /edge judge. Progress messages ("Cleaning silence…", etc.) surface as
   // the job step. This REPLACES the desktop fillers-list + /api/silence path.
-  const res = await retakeAwareCutCloud(mediaId, (_pct, msg) => msg && onStep(msg), vadSettings)
+  // Batch Cut Lord reuses the Retake engine, so its silence follows the same
+  // FSMN path (the old Silero vadSettings is no longer read for this call).
+  void vadSettings
+  const res = await retakeAwareCutCloud(mediaId, (_pct, msg) => msg && onStep(msg), useStore.getState().retakeFinalBossSettings)
 
   // Bake the retake word-cuts into the transcript (deleted words) and the VAD
   // silences into project.silences — the two fields computeKeepRanges reads.

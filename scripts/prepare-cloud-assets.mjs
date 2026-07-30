@@ -27,9 +27,20 @@ function copyMatching(dir, re) {
 
 const vadDist = join(root, 'node_modules', '@ricky0123', 'vad-web', 'dist')
 const ortDist = join(root, 'node_modules', 'onnxruntime-web', 'dist')
+const fsmnDir = join(root, 'assets', 'fsmn-vad')
 
 const nVad = copyMatching(vadDist, /\.(onnx|worklet\.bundle\.min\.js)$|^vad\.worklet/)
 const nOrt = copyMatching(ortDist, /^ort-wasm.*\.(wasm|mjs|jsep\.mjs)$|^ort\..*wasm.*\.(wasm|mjs)$/)
+let nFsmn = 0
+for (const [source, target] of [
+  ['model_quant.onnx', 'fsmn-vad-quant.onnx'],
+  ['vad.mvn', 'fsmn-vad.mvn']
+]) {
+  const path = join(fsmnDir, source)
+  if (!existsSync(path)) continue
+  copyFileSync(path, join(outDir, target))
+  nFsmn++
+}
 
-console.log(`[cloud-assets] staged ${nVad} vad-web + ${nOrt} onnxruntime files -> ${outDir}`)
-if (!nVad || !nOrt) process.exitCode = 1
+console.log(`[cloud-assets] staged ${nVad} vad-web + ${nOrt} onnxruntime + ${nFsmn} FSMN files -> ${outDir}`)
+if (!nVad || !nOrt || nFsmn !== 2) process.exitCode = 1

@@ -57,6 +57,11 @@ import {
   type RetakeBetaSilenceSettings
 } from '@shared/retakeaware/silence'
 import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSettings } from '@shared/vadsilence'
+import {
+  DEFAULT_RETAKE_FINAL_BOSS_SETTINGS,
+  normalizeRetakeFinalBossSettings,
+  type RetakeFinalBossSettings
+} from '@shared/retakefinalboss'
 import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
 // Smart Silence (transcript-gap) engine — the already-verified, self-contained
 // pure engine at ./smartSilence. runSmartSilence feeds it the transcript words and
@@ -743,6 +748,10 @@ interface AppState {
   /** Retake β silence-detection settings (Retake β ONLY — never FastCut/ProCut). */
   retakeBetaSilenceSettings: RetakeBetaSilenceSettings
   setRetakeBetaSilenceSettings: (patch: Partial<RetakeBetaSilenceSettings>) => void
+  /** FSMN (FunASR) silence settings — the 0.07 engine, now the Retake/Speech-
+   *  cleaner silence path on 0.01. padBefore/padAfter/trimEdges/audioOverlap. */
+  retakeFinalBossSettings: RetakeFinalBossSettings
+  setRetakeFinalBossSettings: (patch: Partial<RetakeFinalBossSettings>) => void
   /** Unified cloud VAD silence-cutting profile — shared by ProCut AND Retake β
    *  (cloud build). One 🔇 Silence Settings modal edits this for both engines. */
   vadSilenceSettings: VadSilenceSettings
@@ -2059,6 +2068,25 @@ export const useStore = create<AppState>((set, get) => ({
       /* ignore */
     }
     set({ retakeBetaSilenceSettings: next })
+  },
+
+  retakeFinalBossSettings: ((): RetakeFinalBossSettings => {
+    try {
+      const raw = localStorage.getItem('ec.retakeFinalBoss')
+      if (raw) return normalizeRetakeFinalBossSettings(JSON.parse(raw))
+    } catch {
+      /* ignore */
+    }
+    return { ...DEFAULT_RETAKE_FINAL_BOSS_SETTINGS }
+  })(),
+  setRetakeFinalBossSettings: (patch) => {
+    const next = normalizeRetakeFinalBossSettings({ ...get().retakeFinalBossSettings, ...patch })
+    try {
+      localStorage.setItem('ec.retakeFinalBoss', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+    set({ retakeFinalBossSettings: next })
   },
 
   vadSilenceSettings: ((): VadSilenceSettings => {

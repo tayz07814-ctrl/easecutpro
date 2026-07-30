@@ -33,6 +33,8 @@ import { spansToWordIds } from '@shared/retakeaware/analyze'
 import { detectArtifacts } from '@shared/retakeaware/artifacts'
 import { retakeBetaVadSafetyOpts } from '@shared/retakeaware/silence'
 import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
+import { DEFAULT_RETAKE_FINAL_BOSS_SETTINGS, type RetakeFinalBossSettings } from '@shared/retakefinalboss'
+import { detectRetakeFinalBossSilences } from './retakeFinalBossVad'
 import { getSupabase, invokeEdge } from './supabase'
 import { extractSttAudio } from './audio'
 import { cachedTranscribe, getCachedTranscript, setCachedTranscript } from './transcriptCache'
@@ -91,7 +93,7 @@ async function saveRetakeDebug(debug: Record<string, unknown>): Promise<string |
 export async function retakeAwareCutCloud(
   mediaId: string,
   onProgress?: (pct: number, msg?: string) => void,
-  vadSettings: VadSilenceSettings = DEFAULT_VAD_SILENCE_SETTINGS
+  fsmnSettings: RetakeFinalBossSettings = DEFAULT_RETAKE_FINAL_BOSS_SETTINGS
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
@@ -182,15 +184,20 @@ export async function retakeAwareCutCloud(
     const m = (w.start + w.end) / 2
     return !cutSpans.some((s) => m >= s.start && m <= s.end)
   })
+  // SILENCE — FSMN (FunASR) engine, ported from 0.07. In-browser ONNX VAD at the
+  // model's published defaults, endpoint cushions removed, then the creator's seam
+  // padding (retakeFinalBossSettings). Replaces the old Silero vadSilenceRegions
+  // pass for the Retake/Speech-cleaner path (ProCut/Ultracut/Premium still use it).
   let silenceRegions: SilenceRegion[] = []
   try {
-    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
+    silenceRegions = await detectRetakeFinalBossSilences(audio.float32, audio.sampleRate, audio.durationS, fsmnSettings)
   } catch (e) {
-    warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
+    warnings.push(`FSMN silence pass failed (${(e as Error).message}) — no silence removed this run.`)
   }
   const silenceDebug = {
-    source: 'vad_pass',
-    settings: vadSettings,
+    source: 'fsmn_vad',
+    settings: fsmnSettings,
+    silence_detector: 'funasr_fsmn_vad_onnx',
     regions_count: silenceRegions.length,
     total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3)),
     // Full lists so a bad cut/kept stretch can be located exactly (compact [start,end] pairs).

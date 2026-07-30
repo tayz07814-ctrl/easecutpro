@@ -1,23 +1,15 @@
 import { css } from '../css'
 import { useSilence } from '../data/useSilence'
-import type { VadSilenceSettings } from '@shared/vadsilence'
+import type { RetakeFinalBossSettings } from '@shared/retakefinalboss'
 
-// Silence Settings — ONE panel. Small preset chips on top, the sliders always
-// visible beneath. Clicking a chip loads its values into the sliders (they're
-// bound to the store, so they move); touching any slider makes the values stop
-// matching every preset, and the highlight flips to "Custom" automatically
-// (detectPreset). No separate presets-vs-custom views.
+// Silence Settings — FSMN (FunASR) engine. The detector runs at the model's
+// fixed published defaults (no strictness dial), so these controls only shape the
+// SEAM geometry around each detected pause: how much audio to protect before/after
+// speech, how tightly to trim the cut edges, and the crossfade at the join.
 
 const FOOT_RESET = 'font-size:12.5px;color:#9a9aae;cursor:pointer;padding:7px 10px;border-radius:8px'
 const FOOT_CANCEL = 'font-size:12.5px;color:#c9c9da;cursor:pointer;padding:8px 14px;border-radius:9px'
 const FOOT_APPLY = 'background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 18px;cursor:pointer;margin-left:8px'
-
-// Honest framing for the VAD threshold: it is NOT a room-noise dial — raising it
-// makes the detector stricter about what counts as speech, so soft-spoken words
-// start counting as silence. Present it as detection strictness with the risk named.
-function strictnessLabel(th: number): string {
-  return th <= 0.68 ? 'Gentle' : th <= 0.78 ? 'Standard' : th <= 0.85 ? 'Strict' : 'Very strict'
-}
 
 function Slider({ label, value, min, max, step, fmt, lo, hi, onChange }: {
   label: string; value: number; min: number; max: number; step: number; fmt: (v: number) => string; lo: string; hi: string; onChange: (v: number) => void
@@ -37,16 +29,11 @@ function Slider({ label, value, min, max, step, fmt, lo, hi, onChange }: {
   )
 }
 
-const CHIP = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid rgba(255,255,255,.12);color:#9a9aae;background:transparent;font-family:inherit'
-const CHIP_ON = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid #7c6bff;color:#a99bff;background:rgba(124,107,255,.12);font-weight:600;font-family:inherit'
-
 export default function SilenceSettingsModal(): JSX.Element | null {
   const sil = useSilence()
   if (!sil.show) return null
 
-  const set = (k: keyof VadSilenceSettings, v: number | boolean): void => sil.setField(k, v)
-  const active = sil.detected // matches a preset id, or 'custom' the moment sliders deviate
-  const activePreset = sil.presets.find((p) => p.id === active)
+  const set = (k: keyof RetakeFinalBossSettings, v: number): void => sil.setField(k, v)
 
   return (
     <div onClick={sil.close} style={css('position:fixed;inset:0;background:rgba(8,8,10,.55);display:grid;place-items:center;z-index:1000')}>
@@ -54,36 +41,16 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         <div style={css('display:flex;align-items:flex-start;justify-content:space-between')}>
           <div>
             <div style={css('font-size:16px;font-weight:650')}>Silence Settings</div>
-            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>Controls silence detection only — retake detection is unaffected.</div>
+            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>FSMN speech detector runs automatically — these shape the pauses it keeps. Retake detection is unaffected.</div>
           </div>
           <div onClick={sil.close} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
         </div>
 
-        {/* Preset chips — small; picking one loads its values into the sliders below. */}
-        <div style={css('display:flex;gap:6px;margin-top:16px;flex-wrap:wrap')}>
-          {sil.presets.map((p) => (
-            <button key={p.id} onClick={() => sil.applyPreset(p.id)} style={css(active === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
-          ))}
-          <span style={css(active === 'custom' ? CHIP_ON + ';cursor:default' : CHIP + ';cursor:default;opacity:.55')}>Custom</span>
-        </div>
-        <div style={css('font-size:11px;color:#71718a;margin-top:8px;line-height:1.45;min-height:15px')}>
-          {activePreset ? activePreset.blurb : 'Your own values — move any slider; pick a chip to go back to a preset.'}
-        </div>
-
-        {/* The sliders — always visible, bound to the live settings. */}
-        <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:16px')}>
-          <Slider label="Trim pauses longer than" value={sil.s.minGapS} min={0.05} max={2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0.05s · tight" hi="2s · relaxed" onChange={(v) => set('minGapS', v)} />
-          <Slider label="Pause to keep at each cut" value={sil.s.padAfterS} min={0} max={0.4} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · gapless" hi="0.4s · gentle" onChange={(v) => set('padAfterS', v)} />
-          <Slider label="Silence detection strictness" value={sil.s.speechThreshold} min={0.5} max={0.9} step={0.01} fmt={(v) => `${strictnessLabel(v)} · ${Math.round(v * 100)}%`} lo="gentle · keeps soft speech" hi="strict · may clip soft speech" onChange={(v) => set('speechThreshold', v)} />
-          <div style={css('display:flex;align-items:flex-start;gap:9px')}>
-            <div onClick={() => set('removeBreaths', !sil.s.removeBreaths)} style={css(sil.s.removeBreaths ? 'width:32px;height:18px;border-radius:9px;background:#7c6bff;position:relative;flex:none;cursor:pointer;margin-top:1px' : 'width:32px;height:18px;border-radius:9px;background:#2a2a34;position:relative;flex:none;cursor:pointer;margin-top:1px')}>
-              <div style={css(sil.s.removeBreaths ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
-            </div>
-            <div style={css('flex:1;min-width:0')}>
-              <div style={css('font-size:12px;color:#c9c9da')}>Remove breaths</div>
-              <div style={css('font-size:10.5px;color:#71718a;margin-top:2px;line-height:1.4')}>Also cuts audible breaths between words. The most aggressive option — leave off if cuts feel clipped.</div>
-            </div>
-          </div>
+        {/* FSMN seam geometry — the detector itself is fixed at published defaults. */}
+        <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:18px')}>
+          <Slider label="Keep before speech" value={sil.s.padBeforeS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · tight" hi="0.5s · gentle lead-in" onChange={(v) => set('padBeforeS', v)} />
+          <Slider label="Keep after speech" value={sil.s.padAfterS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · tight" hi="0.5s · gentle tail" onChange={(v) => set('padAfterS', v)} />
+          <Slider label="Tighten cut edges" value={sil.s.trimEdgesS} min={0} max={0.2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · safe" hi="0.2s · tighter" onChange={(v) => set('trimEdgesS', v)} />
         </div>
 
         {/* Seam blend ("overlap") — a global render setting (export + preview). */}
