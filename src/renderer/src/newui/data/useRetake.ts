@@ -37,14 +37,9 @@ export interface RetakeModel {
   // actions
   /** run Retake Beta — Claude Opus on our official Anthropic key. */
   find: () => void
-  /** run the additive Smart Silence (transcript-gap) pass — ensures a transcript,
-   *  then stages review-first protected silences (no retakes/word cuts). */
-  findSilences: () => void
   /** transcribe ONLY (the AssemblyAI step Retake β uses) — no judge/cuts. The
-   *  Transcript-tab entry point + Smart Silence's transcript-ensure step. */
+   *  Transcript-tab entry point. */
   transcribeOnly: () => void
-  /** open the compact Smart Silence settings modal. */
-  openSmartSilenceSettings: () => void
   /** run Ultracut Beta — a SEPARATE OpenRouter test engine (GLM 5.2), for A/B. */
   findUltracut: () => void
   /** run Premium Cut — Gemini 3.5 Flash LISTENS to the audio (transcript + cuts). */
@@ -84,10 +79,7 @@ export function useRetake(): RetakeModel {
   // delta-judge was removed — its narrow whole-take prompt left intro/outro +
   // off-camera chatter behind and over-cut wide spans.)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
-  // Smart Silence (transcript-gap) — additive "Find Silences" path + transcribe-only.
-  const runSmartSilence = useStore((s) => s.runSmartSilence)
   const transcribeOnly = useStore((s) => s.transcribeOnly)
-  const setShowSmartSilenceSettings = useStore((s) => s.setShowSmartSilenceSettings)
   // Ultracut Beta — a separate OpenRouter test engine, wired to its own button.
   const runUltracut = useStore((s) => s.runUltracut)
   // Premium Cut — Gemini 3.5 Flash multimodal engine, wired to its own button.
@@ -184,9 +176,7 @@ export function useRetake(): RetakeModel {
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
     smartSilence,
     find: () => void runRetakeCutBeta(),
-    findSilences: () => void runSmartSilence(),
     transcribeOnly: () => void transcribeOnly(),
-    openSmartSilenceSettings: () => setShowSmartSilenceSettings(true),
     findUltracut: () => void runUltracut(),
     findPremium: () => void runPremiumCut(),
     execute: () => void executeCuts(),

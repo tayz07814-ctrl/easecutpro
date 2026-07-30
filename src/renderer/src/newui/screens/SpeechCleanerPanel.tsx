@@ -88,15 +88,10 @@ export default function SpeechCleanerPanel(): JSX.Element {
       <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 14px 18px')}>
         <div style={css('font-size:12px;color:#8b8ba0;line-height:1.5')}>Transcribe your video and find retakes, false starts, fillers and dead air — reviewable before anything is cut.</div>
         <button onClick={r.find} style={css('width:100%;margin-top:14px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;border-radius:10px;padding:12px;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.28)')}>Find cuts</button>
-        {/* Smart Silence (transcript-gap) — secondary so "Find cuts" stays primary. */}
-        <button onClick={r.findSilences} style={css('width:100%;margin-top:10px;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);color:#c4baff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px;cursor:pointer')}>Find Silences</button>
-        {/* Find cuts runs both silence engines around the retake judge:
-            step 1 Smart Silence (transcript gaps) -> step 2 retake AI -> step 3
-            Silence settings (FSMN audio VAD). Numbered so it's clear which
-            modal tunes which stage. */}
-        <div style={css('font-size:11px;color:#71718a;margin-top:16px;line-height:1.5')}>Find cuts runs in 3 steps — dead air, then retakes, then silence.</div>
-        <button onClick={r.openSmartSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>1 · Smart Silence settings</button>
-        <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>3 · Silence settings</button>
+        {/* FSMN is the only live silence cutter; the transcript-gap Smart Silence
+            engine is dormant, so its "Find Silences" button and settings entry
+            point are gone. */}
+        <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:12px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>Silence settings</button>
       </div>
     )
   }
@@ -140,14 +135,8 @@ export default function SpeechCleanerPanel(): JSX.Element {
           )}
         </div>
         <div style={css('font-size:11.5px;color:#7a7a8c;margin-top:9px')}>{applied ? `${cuts.length} cut${cuts.length === 1 ? '' : 's'} applied · undo any below.` : `${cuts.length} cut${cuts.length === 1 ? '' : 's'} · nothing is removed until you apply.`}</div>
-        {/* Smart Silence (transcript-gap) — additive; reachable after a transcribe-only
-            or alongside Retake results. Re-running reflects the latest settings. */}
-        {!applied && (
-          <div style={css('display:flex;gap:8px;align-items:center;margin-top:11px')}>
-            <button onClick={r.findSilences} style={css('font-size:11.5px;color:#c4baff;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);padding:6px 11px;border-radius:8px;cursor:pointer;font-family:inherit;font-weight:600')}>Find Silences</button>
-            <button onClick={r.openSmartSilenceSettings} style={css('font-size:11.5px;color:#9a9aae;background:none;border:1px solid rgba(255,255,255,.1);padding:6px 11px;border-radius:8px;cursor:pointer;font-family:inherit')}>Smart Silence settings</button>
-          </div>
-        )}
+        {/* The Smart Silence (transcript-gap) "Find Silences" + settings row lived
+            here. Removed with the engine — FSMN handles silence inside Find cuts. */}
       </div>
 
       {/* cut cards */}

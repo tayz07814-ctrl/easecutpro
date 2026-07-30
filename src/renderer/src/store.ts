@@ -70,6 +70,7 @@ import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay
 // pure engine at ./smartSilence. runSmartSilence feeds it the transcript words and
 // stages its gap cuts; the engine's numbers/behavior are NOT modified here.
 import { planSilence } from './smartSilence/engine'
+import { SMART_SILENCE_DORMANT } from './smartSilence/config'
 import { BALANCED } from './smartSilence/presets'
 import type { SilenceSettings as SmartSilenceSettings } from './smartSilence/types'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
@@ -2511,6 +2512,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   runSmartSilence: async () => {
+    // DORMANT — the transcript-gap engine is retired; FSMN VAD is the only live
+    // silence cutter. Every UI entry point is gone, so this is unreachable; the
+    // guard keeps it inert if anything still holds a reference. Body preserved
+    // for the restore path (see SMART_SILENCE_DORMANT in smartSilence/config).
+    if (SMART_SILENCE_DORMANT) return
     // 1. Ensure a transcript. Reuse project.transcript when present (NO re-transcribe);
     //    otherwise run the same AssemblyAI transcribe step Retake β uses (no judge).
     if (!get().project.transcript?.words?.length) {

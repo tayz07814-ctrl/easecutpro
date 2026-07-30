@@ -10,7 +10,6 @@ import TranscriptDrawer from './TranscriptDrawer'
 import SpeechCleanerPanel from './SpeechCleanerPanel'
 import OverlayPanel from '../../components/OverlayPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
-import SmartSilenceSettingsModal from './SmartSilenceSettingsModal'
 import CutProgressOverlay from './CutProgressOverlay'
 import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
@@ -805,7 +804,6 @@ export default function Editor(): JSX.Element {
         <TimelinePanel />
       </div>
       <SilenceSettingsModal />
-      <SmartSilenceSettingsModal />
       {/* Legacy modals assume the app's global border-box — portal them out of
           the .ec-newui (content-box) subtree so they render correctly. */}
       {showExportModal && createPortal(<ExportModal />, document.body)}
