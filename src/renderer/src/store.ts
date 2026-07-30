@@ -614,6 +614,9 @@ interface AppState {
    *  locked and a centered "Polishing cuts…" bar shows; DocPreview drives it. */
   polishing: { active: boolean; percent: number }
   setPolishing: (v: { active: boolean; percent: number }) => void
+  /** Monotonic request id — bumped on every Apply so DocPreview's polish effect
+   *  re-fires even when `active` was already true (a prior stuck build). */
+  polishReq: number
   tools: { ffmpeg: boolean; ffprobe: boolean; whisper: boolean; whisperModel: boolean } | null
   playing: boolean
   scrubbing: boolean
@@ -1039,6 +1042,7 @@ export const useStore = create<AppState>((set, get) => ({
   setCutJobActive: (v) => set({ cutJobActive: v }),
   polishing: { active: false, percent: 0 },
   setPolishing: (v) => set({ polishing: v }),
+  polishReq: 0,
   tools: null,
   playing: false,
   scrubbing: false,
@@ -2777,9 +2781,10 @@ export const useStore = create<AppState>((set, get) => ({
       // Cuts are now on the timeline. Kick off the PROACTIVE seam-cache build
       // ("Polishing cuts…"): the preview decodes every new cut's landing frame
       // once while the editor is locked, so the first playback is glitch-free.
-      // DocPreview watches polishing.active, does the decode, drives the %, and
-      // clears it. Desktop WebCodecs only — no-ops (self-clears) elsewhere.
-      polishing: { active: true, percent: 0 }
+      // DocPreview watches polishReq, does the decode, drives the %, and clears
+      // it. Desktop WebCodecs only — no-ops (self-clears) elsewhere.
+      polishing: { active: true, percent: 0 },
+      polishReq: st.polishReq + 1
     }))
   },
 

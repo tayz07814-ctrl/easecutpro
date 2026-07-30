@@ -404,22 +404,31 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcSig, wcOn])
 
-  // POLISHING phase: after cuts apply, executeCuts sets polishing.active. Decode
-  // every cut's landing frame ONCE (the seam cache), driving the % bar, then
-  // clear it so the editor unlocks — the first playback is then armed at every
-  // seam. On mobile / no-WebCodecs there's nothing to warm, so it self-clears
-  // instantly. Runs off the CURRENT (post-cut) segments.
-  const polishing = useStore((s) => s.polishing)
+  // POLISHING phase: executeCuts bumps polishReq. Decode every cut's landing
+  // frame ONCE (the seam cache), driving the % bar, then clear it so the editor
+  // unlocks — the first playback is then armed at every seam. Keyed on polishReq
+  // (not the boolean) so it re-fires on EVERY Apply even if a prior build got
+  // stuck active. Seams come from the AUTHORITATIVE post-cut doc (segsRef can lag
+  // a render behind an Apply). A minimum visible window makes a fast build
+  // perceptible; a hard timeout guarantees the lock always releases.
+  const polishReq = useStore((s) => s.polishReq)
   const setPolishing = useStore((s) => s.setPolishing)
   useEffect(() => {
-    if (!polishing.active) return
+    if (!polishReq) return // initial mount (req 0) — nothing applied yet
     let cancelled = false
-    const wc = wcRef.current
-    if (!wcOn || !wc) {
-      setPolishing({ active: false, percent: 100 })
-      return
+    const MIN_MS = 900
+    const start = performance.now()
+    const finish = (): void => {
+      if (cancelled) return
+      const wait = Math.max(0, MIN_MS - (performance.now() - start))
+      window.setTimeout(() => {
+        if (!cancelled) setPolishing({ active: false, percent: 100 })
+      }, wait)
     }
-    const ss = segsRef.current
+    const wc = wcRef.current
+    // Seams from the post-cut doc prop (executeCuts bumped polishReq in the same
+    // update, so this render's `doc` is already the cut timeline).
+    const ss = docSegments(doc).segs
     const seams: { src: string; t: number }[] = []
     if (ss[0] && !ss[0].isImage) seams.push({ src: ss[0].src, t: ss[0].sourceStart })
     for (let i = 1; i < ss.length; i++) {
@@ -429,22 +438,27 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       const contiguous = a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.05
       if (!contiguous) seams.push({ src: b.src, t: b.sourceStart })
     }
-    if (!seams.length) {
-      setPolishing({ active: false, percent: 100 })
-      return
+    console.info('[wc-preview] polishing:', { wcOn, hasPlayer: !!wc, seams: seams.length })
+    if (!wcOn || !wc || !seams.length) {
+      finish()
+      return () => { cancelled = true }
     }
+    const safety = window.setTimeout(() => { if (!cancelled) setPolishing({ active: false, percent: 100 }) }, 30000)
     void wc
       .cacheSeams(seams, (d, total) => {
         if (!cancelled) setPolishing({ active: true, percent: total ? Math.round((d / total) * 100) : 100 })
       })
       .finally(() => {
-        if (!cancelled) setPolishing({ active: false, percent: 100 })
+        window.clearTimeout(safety)
+        console.info('[wc-preview] polishing done')
+        finish()
       })
     return () => {
       cancelled = true
+      window.clearTimeout(safety)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [polishing.active, wcOn])
+  }, [polishReq, wcOn])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the
