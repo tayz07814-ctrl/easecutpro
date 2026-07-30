@@ -35,7 +35,9 @@ import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
 import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
+import type { MediaInfo, SequenceClip } from '@shared/types'
 import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
+import { IS_CLOUD, mediaSrc } from '../platform'
 import OverlayLayer from './OverlayLayer'
 import TextLayer from './TextLayer'
 
@@ -229,6 +231,54 @@ function resume(v: HTMLVideoElement): void {
   if (v.paused) void v.play().catch(() => undefined)
 }
 
+interface BakedPreview {
+  key: string
+  media: MediaInfo
+}
+
+/**
+ * Makes one temporary, gapless proxy after a real cut. The editor continues to
+ * use the original clips while FFmpeg works, then swaps to this single source
+ * when it is ready. That removes decoder seeks at every cut during replay.
+ *
+ * The cloud build deliberately keeps source video on the creator's device, so
+ * it has no FFmpeg backend to bake with and remains on the direct player.
+ */
+function bakeKeyFor(segs: Seg[]): string {
+  return segs.map((s) => [s.src, s.sourceStart, s.sourceEnd, s.start, s.len, s.speed, s.muted ? 1 : 0, s.gain, s.ovScale, s.ovZoomStart, s.ovZoomEnd, s.ovX, s.ovY].join(':')).join('|')
+}
+
+function canBakePreview(segs: Seg[]): boolean {
+  if (segs.length < 2) return false
+  for (let i = 1; i < segs.length; i++) {
+    const prev = segs[i - 1]
+    const next = segs[i]
+    // A rendered proxy collapses time. Do not use it for a manually-created
+    // main-lane gap, which must still play as black space.
+    if (Math.abs(next.start - (prev.start + prev.len)) > 0.04) return false
+    if (!seamContiguous(prev, next)) return true
+  }
+  return false
+}
+
+function bakedSegment(baked: BakedPreview): Seg {
+  const { media } = baked
+  return {
+    src: `baked:${media.path}`,
+    url: mediaSrc(media.path),
+    sourceStart: 0,
+    sourceEnd: media.duration,
+    start: 0,
+    len: Math.max(0.02, media.duration),
+    srcW: media.width,
+    srcH: media.height,
+    motionStart: 0,
+    motionLen: Math.max(0.02, media.duration),
+    gain: 1,
+    speed: 1
+  }
+}
+
 export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Element {
   const project = useStore((s) => s.project)
   const playing = useStore((s) => s.playing)
@@ -248,7 +298,57 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     return () => ro.disconnect()
   }, [])
 
-  const { segs, missing } = docSegments(doc)
+  const sourcePreview = docSegments(doc)
+  const sourceSegs = sourcePreview.segs
+  const bakeKey = bakeKeyFor(sourceSegs)
+  const [baked, setBaked] = useState<BakedPreview | null>(null)
+
+  // Debounce a rapid series of edits, and discard a completed job if its input
+  // is no longer the current document. The original multi-element preview stays
+  // live until this succeeds, so baking can never block editing or playback.
+  useEffect(() => {
+    if (IS_CLOUD || !canBakePreview(sourceSegs)) {
+      setBaked(null)
+      return
+    }
+    let alive = true
+    const timer = window.setTimeout(() => {
+      const clips: SequenceClip[] = sourceSegs.map((s, index) => ({
+        id: `preview-${index}`,
+        sourcePath: s.src,
+        name: `Preview ${index + 1}`,
+        sourceIn: s.sourceStart,
+        sourceOut: s.sourceEnd,
+        sourceDuration: s.sourceEnd,
+        hasAudio: !s.muted,
+        srcW: s.srcW ?? 1920,
+        srcH: s.srcH ?? 1080,
+        fps: 30,
+        speed: s.speed,
+        gain: s.gain,
+        size: s.ovScale,
+        zoomStart: s.ovZoomStart,
+        zoomEnd: s.ovZoomEnd,
+        panX: s.ovX,
+        panY: s.ovY
+      }))
+      void window.api.combineClips(clips, false).then((media) => {
+        if (alive) setBaked({ key: bakeKey, media })
+      }).catch(() => {
+        // Background polish is optional. The direct cut-skipping player remains
+        // the fallback on a missing backend, failed upload, or render error.
+        if (alive) setBaked(null)
+      })
+    }, 900)
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
+  }, [bakeKey])
+
+  const usingBaked = baked?.key === bakeKey
+  const segs = usingBaked && baked ? [bakedSegment(baked)] : sourceSegs
+  const missing = sourcePreview.missing
   const sources = useMemo(() => [...new Set(segs.map((s) => s.src))], [segs.map((s) => s.src).join('|')])
   const urlOf = new Map(segs.map((s) => [s.src, s.url]))
   const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0

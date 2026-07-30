@@ -743,7 +743,14 @@ export async function combineClips(
     in: Math.max(0, c.sourceIn),
     out: Math.max(c.sourceIn + 0.05, c.sourceOut),
     hasAudio: c.hasAudio,
-    isImage: c.isImage
+    isImage: c.isImage,
+    speed: c.speed,
+    gain: c.gain,
+    size: c.size,
+    zoomStart: c.zoomStart,
+    zoomEnd: c.zoomEnd,
+    panX: c.panX,
+    panY: c.panY
   }))
   const dir = outDir || join(homedir(), '.easecutpro', 'combined')
   await mkdir(dir, { recursive: true })

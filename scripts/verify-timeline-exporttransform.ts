@@ -126,6 +126,10 @@ check(
   /function resume\(v: HTMLVideoElement\)/.test(docPreviewSource) &&
     /if \(!warm\) seek\(nv, next\.src, next\.sourceStart\)[\s\S]*?resume\(nv\)/.test(docPreviewSource)
 )
+check(
+  'desktop preview bakes a gapless proxy after a real cut while cloud remains local-first',
+  /function canBakePreview/.test(docPreviewSource) && /window\.api\.combineClips\(clips, false\)/.test(docPreviewSource) && /if \(IS_CLOUD \|\| !canBakePreview/.test(docPreviewSource)
+)
 // the crop offset is ANALYTIC (same trunc'd width expression), never in_w-based:
 // crop's in_w binds at init on variable-size streams (left-anchor bug).
 check(
