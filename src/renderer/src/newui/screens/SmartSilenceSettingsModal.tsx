@@ -146,7 +146,7 @@ function Inner(): JSX.Element {
               <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: -0.2 }}>Smart Silence settings</span>
             </div>
             <span style={{ fontSize: 12, color: T.textDim, lineHeight: 1.5 }}>
-              <b style={{ color: T.text, fontWeight: 600 }}>Step 1</b> of Find cuts — picks <i>which</i> pauses get cut, using the transcript. How tight each cut lands is set in <b style={{ color: T.text, fontWeight: 600 }}>Silence settings</b>. On its own, <b style={{ color: T.text, fontWeight: 600 }}>Find Silences</b> still uses these values for the cuts themselves.
+              Transcript-gap trimming — <b style={{ color: T.text, fontWeight: 600 }}>step 1</b> of Find cuts, and the engine behind <b style={{ color: T.text, fontWeight: 600 }}>Find Silences</b>. Runs before the retake AI; its cuts are combined with Silence settings, so the deeper trim wins at each pause.
             </span>
           </div>
           <div onClick={() => close(false)} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>

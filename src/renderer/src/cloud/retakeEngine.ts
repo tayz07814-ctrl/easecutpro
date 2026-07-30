@@ -16,13 +16,11 @@
 //   stage 3  FSMN VAD       — audio VAD + seam padding ("Silence settings" modal)
 //
 // Nothing is applied between stages: all three produce SOURCE-time spans that are
-// composed at the end, so the judge always sees the complete transcript.
-//
-// The two silence stages have SEPARATE JOBS rather than competing (see
-// applySilenceSelection): stage 1 decides WHICH pauses are worth cutting, stage 3
-// decides HOW TIGHT each cut is. Every applied silence span is an FSMN span, so
-// the "Silence settings" padding/trim controls shape every seam, while "Smart
-// Silence settings" controls which pauses qualify.
+// composed at the end, so the judge always sees the complete transcript. The two
+// silence stages are UNIONED (unionSilenceRegions), which means that wherever
+// they disagree about a pause the MORE AGGRESSIVE one wins — a gentle FSMN preset
+// will still be tightened wherever Smart Silence cut deeper. Both stages are
+// independently tunable and either can be neutralised from its own modal.
 //
 // The desktop path (src/main/retakeaware, runRetakeAwareCut) still uses the
 // hybrid, untouched.
@@ -77,28 +75,19 @@ function edlToRetakeCutSpans(edl: Edl, map: TimestampMap): CutSpan[] {
   return spans
 }
 
-/** Compose the two silence stages: stage 1 (Smart Silence) chooses WHICH pauses
- *  are worth cutting, stage 3 (FSMN) owns HOW TIGHT each cut is. An FSMN region
- *  survives only if Smart Silence also selected that pause, and its boundaries
- *  come entirely from FSMN — so the "Silence settings" padding/trim controls are
- *  what actually shape every seam.
- *
- *  This replaced a union of the two lists. Under the union the wider span won,
- *  and Smart Silence's default (BALANCED keeps ~90ms per side) is tighter than
- *  every FSMN preset (Just Right keeps 300ms/100ms) — so stage 1 overrode stage 3
- *  at essentially every pause and the entire Silence settings modal, trim edges
- *  included, had no visible effect.
- *
- *  If stage 1 produced nothing (no transcript, or it failed), FSMN passes through
- *  unfiltered rather than silently cutting no silence at all. */
-function applySilenceSelection(
-  fsmn: SilenceRegion[],
-  selection: { start: number; end: number }[]
-): SilenceRegion[] {
-  if (!selection.length) return fsmn
-  return fsmn
-    .filter((r) => selection.some((s) => s.start < r.end && s.end > r.start))
-    .map((r, i) => ({ ...r, id: `sil-${i}` }))
+/** Union the two silence stages into one sorted, non-overlapping list. Both
+ *  stages emit `protect: true` verbatim spans, so overlapping pauses collapse
+ *  into the WIDER span — wherever Smart Silence (transcript gaps) and FSMN
+ *  (audio VAD) disagree about a pause, the more aggressive one wins. */
+function unionSilenceRegions(regions: SilenceRegion[]): SilenceRegion[] {
+  const sorted = [...regions].sort((a, b) => a.start - b.start)
+  const out: SilenceRegion[] = []
+  for (const r of sorted) {
+    const last = out[out.length - 1]
+    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end)
+    else out.push({ ...r })
+  }
+  return out.map((r, i) => ({ ...r, id: `sil-${i}` }))
 }
 
 /** Persist every run's debug JSON (transcription + Opus payload/reply + the cuts
@@ -152,11 +141,12 @@ export async function retakeAwareCutCloud(
 
   // 3. SILENCE STAGE 1 — SMART SILENCE (transcript-gap engine, driven by the
   //    "Smart Silence settings" modal). Reads word timestamps only, so it needs
-  //    nothing but the transcript and runs before the judge. Its spans are the
-  //    SELECTION set: they decide which pauses stage 3 is allowed to cut, and
-  //    are never applied directly, so its own padding/target values no longer
-  //    shape any seam. Nothing is applied here either, so the judge below still
-  //    sees the full verbatim word list.
+  //    nothing but the transcript and runs before the judge. Its spans are held
+  //    in SOURCE time and unioned with the FSMN pass (stage 3) at the end —
+  //    nothing is applied here, so the judge below still sees the full verbatim
+  //    word list. NOTE: with removeFillers on, a gap cut spans the filler word
+  //    sitting between two kept words, so this stage can delete filler words as
+  //    well as dead air.
   op(52, 'Trimming dead air…')
   let smartRegions: SilenceRegion[] = []
   try {
@@ -261,22 +251,20 @@ export async function retakeAwareCutCloud(
   }
 
   // Compose stage 1 + stage 3 into the single protected silence list the review
-  // UI and Execute path consume: stage 1 picks the pauses, stage 3 shapes them.
-  const silenceRegions = applySilenceSelection(fsmnRegions, smartRegions)
+  // UI and Execute path consume. Overlapping pauses merge into the wider span.
+  const silenceRegions = unionSilenceRegions([...smartRegions, ...fsmnRegions])
 
   const totalS = (rs: SilenceRegion[]): number => Number(rs.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3))
   const silenceDebug = {
-    source: 'smart_silence_selects+fsmn_shapes',
-    // Stage 1 — transcript-gap engine (Smart Silence settings). SELECTION ONLY:
-    // these spans decide which pauses survive, never where the cut edges land.
-    smart_silence_selection: {
+    source: 'smart_silence+fsmn_vad',
+    // Stage 1 — transcript-gap engine (Smart Silence settings).
+    smart_silence: {
       settings: smartSettings,
       regions_count: smartRegions.length,
       total_removed_s: totalS(smartRegions),
       regions: smartRegions.map((r) => [Number(r.start.toFixed(2)), Number(r.end.toFixed(2))])
     },
-    // Stage 3 — audio VAD engine (Silence settings). OWNS THE SEAM GEOMETRY:
-    // every applied region below is one of these, unchanged.
+    // Stage 3 — audio VAD engine (Silence settings).
     fsmn: {
       settings: fsmnSettings,
       silence_detector: 'funasr_fsmn_vad_onnx',
@@ -284,9 +272,8 @@ export async function retakeAwareCutCloud(
       total_removed_s: totalS(fsmnRegions),
       regions: fsmnRegions.map((r) => [Number(r.start.toFixed(2)), Number(r.end.toFixed(2))])
     },
-    // What was actually applied: the FSMN regions that survived stage 1's
-    // selection. Compare `fsmn.regions_count` against this to see how many
-    // pauses Smart Silence filtered out.
+    // The union actually applied — compare against the two stages above to see
+    // which engine widened any given pause.
     regions_count: silenceRegions.length,
     total_removed_s: totalS(silenceRegions),
     regions: silenceRegions.map((r) => [Number(r.start.toFixed(2)), Number(r.end.toFixed(2))]),
