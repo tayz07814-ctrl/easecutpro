@@ -168,11 +168,15 @@ const IS_ADMIN_ROUTE =
   (window.location.pathname.replace(/\/+$/, '') === ADMIN_PATH ||
     new URLSearchParams(window.location.search).has('admin'))
 
-// Smart Silence Cleaner (isolated preview): `?silence=1` renders the new
-// transcript-gap silence page instead of the app, for testing. Additive + hidden
-// — normal users never hit it, and it touches none of the existing silence code.
+// Smart Silence Cleaner (isolated preview): `?silence=1` USED to render the
+// transcript-gap silence page. DORMANT — the Retake/Speech-cleaner silence path
+// now uses the FSMN engine, so this experimental route is disabled (code kept,
+// import retained, just never mounted). Flip DORMANT off to bring it back.
+const SMART_SILENCE_DORMANT = true
 const IS_SILENCE_ROUTE =
-  typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('silence')
+  !SMART_SILENCE_DORMANT &&
+  typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).has('silence')
 
 function Root(): JSX.Element {
   const view = useStore((s) => s.view)
