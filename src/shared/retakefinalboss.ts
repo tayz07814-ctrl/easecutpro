@@ -36,8 +36,8 @@ export interface SilencePreset {
 export const FSMN_SILENCE_PRESETS: SilencePreset[] = [
   { id: 'chill-talker', label: 'Chill Talker', editable: false, settings: { padBeforeS: 0.4, padAfterS: 0.8, trimEdgesS: 0, audioOverlapMs: 50 } },
   { id: 'just-right', label: 'Just Right', editable: false, settings: { padBeforeS: 0.1, padAfterS: 0.3, trimEdgesS: 0, audioOverlapMs: 50 } },
-  { id: 'no-chill', label: 'No Chill', editable: false, settings: { padBeforeS: 0, padAfterS: 0, trimEdgesS: 0, audioOverlapMs: 50 } },
-  { id: 'espresso-shot', label: 'Espresso Shot', editable: false, settings: { padBeforeS: 0, padAfterS: 0, trimEdgesS: 0, audioOverlapMs: 50 } },
+  { id: 'no-chill', label: 'No Chill', editable: false, settings: { padBeforeS: 0.05, padAfterS: 0.1, trimEdgesS: 0, audioOverlapMs: 50 } },
+  { id: 'espresso-shot', label: 'Espresso Shot', editable: false, settings: { padBeforeS: 0, padAfterS: 0, trimEdgesS: 0.05, audioOverlapMs: 50 } },
   { id: 'mad-scientist', label: 'Mad Scientist', editable: true, settings: { padBeforeS: 0.1, padAfterS: 0.3, trimEdgesS: 0, audioOverlapMs: 0 } }
 ]
 
