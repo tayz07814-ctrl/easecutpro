@@ -146,7 +146,7 @@ function Inner(): JSX.Element {
               <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: -0.2 }}>Smart Silence settings</span>
             </div>
             <span style={{ fontSize: 12, color: T.textDim, lineHeight: 1.5 }}>
-              Transcript-gap trimming — <b style={{ color: T.text, fontWeight: 600 }}>step 1</b> of Find cuts, and the engine behind <b style={{ color: T.text, fontWeight: 600 }}>Find Silences</b>. Runs before the retake AI; its cuts are combined with Silence settings, so the deeper trim wins at each pause.
+              Tunes the transcript-gap silence trimming used by <b style={{ color: T.text, fontWeight: 600 }}>Find Silences</b>. Retake detection is unaffected.
             </span>
           </div>
           <div onClick={() => close(false)} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
@@ -222,7 +222,7 @@ function Inner(): JSX.Element {
           <button onClick={() => close(false)} style={css('background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 18px;cursor:pointer')}>Done</button>
         </div>
         <div style={{ fontSize: 11, color: T.textMute, marginTop: 10, lineHeight: 1.45 }}>
-          Saved automatically. Run <b style={{ color: T.textDim }}>Find cuts</b> or <b style={{ color: T.textDim }}>Find Silences</b> to stage these cuts for review — nothing is removed until you Apply.
+          Saved automatically. Run <b style={{ color: T.textDim }}>Find Silences</b> to stage these cuts for review — nothing is removed until you Apply.
         </div>
       </div>
     </div>
