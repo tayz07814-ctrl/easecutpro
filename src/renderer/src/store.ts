@@ -606,6 +606,14 @@ interface AppState {
   thumbnails: Thumb[]
   selectedWordIds: Set<string>
   job: Job
+  /** True while a "Find cuts" job is running — drives the centered blocking
+   *  overlay (distinct from `job`, which many unrelated ops also use). */
+  cutJobActive: boolean
+  setCutJobActive: (v: boolean) => void
+  /** Proactive seam-cache build after cuts apply. While active the editor is
+   *  locked and a centered "Polishing cuts…" bar shows; DocPreview drives it. */
+  polishing: { active: boolean; percent: number }
+  setPolishing: (v: { active: boolean; percent: number }) => void
   tools: { ffmpeg: boolean; ffprobe: boolean; whisper: boolean; whisperModel: boolean } | null
   playing: boolean
   scrubbing: boolean
@@ -1027,6 +1035,10 @@ export const useStore = create<AppState>((set, get) => ({
   thumbnails: [],
   selectedWordIds: new Set(),
   job: { active: false, percent: 0 },
+  cutJobActive: false,
+  setCutJobActive: (v) => set({ cutJobActive: v }),
+  polishing: { active: false, percent: 0 },
+  setPolishing: (v) => set({ polishing: v }),
   tools: null,
   playing: false,
   scrubbing: false,
@@ -2293,7 +2305,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Import a video first' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Cut Lord…' } })
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Cut Lord…' }, cutJobActive: true })
     try {
       let path: string
       if (isMultiBase(p0)) {
@@ -2385,6 +2397,7 @@ export const useStore = create<AppState>((set, get) => ({
         console.error('[retake-aware-beta] REVIEW-STATE ERROR: words hidden/pre-applied before Execute cuts', audit)
       }
       set({
+        cutJobActive: false,
         job: {
           active: false,
           percent: 100,
@@ -2401,6 +2414,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Show the REAL error on-screen (the vanishing job message hid it on mobile).
       ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Retake β) failed', e)
       set({
+        cutJobActive: false,
         job: {
           active: false,
           percent: 0,
@@ -2548,6 +2562,7 @@ export const useStore = create<AppState>((set, get) => ({
         retakeSilenceStaged: true
       })
       set({
+        cutJobActive: false,
         job: {
           active: false,
           percent: 100,
@@ -2619,6 +2634,7 @@ export const useStore = create<AppState>((set, get) => ({
         retakeSilenceStaged: true
       })
       set({
+        cutJobActive: false,
         job: {
           active: false,
           percent: 100,
@@ -2757,7 +2773,13 @@ export const useStore = create<AppState>((set, get) => ({
         active: false,
         percent: 100,
         message: `Executed: ${hadWords} word(s) cut, ${enabled.length} silence(s) cleaned`
-      }
+      },
+      // Cuts are now on the timeline. Kick off the PROACTIVE seam-cache build
+      // ("Polishing cuts…"): the preview decodes every new cut's landing frame
+      // once while the editor is locked, so the first playback is glitch-free.
+      // DocPreview watches polishing.active, does the decode, drives the %, and
+      // clears it. Desktop WebCodecs only — no-ops (self-clears) elsewhere.
+      polishing: { active: true, percent: 0 }
     }))
   },
 

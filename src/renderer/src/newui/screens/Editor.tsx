@@ -11,6 +11,7 @@ import SpeechCleanerPanel from './SpeechCleanerPanel'
 import OverlayPanel from '../../components/OverlayPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import SmartSilenceSettingsModal from './SmartSilenceSettingsModal'
+import CutProgressOverlay from './CutProgressOverlay'
 import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
 import VideoPreview from '../../components/VideoPreview'
@@ -810,6 +811,8 @@ export default function Editor(): JSX.Element {
       {showExportModal && createPortal(<ExportModal />, document.body)}
       {showSettings && createPortal(<SettingsModal />, document.body)}
       {showCropModal && createPortal(<CropModal />, document.body)}
+      {/* Centered blocking overlay: Finding cuts → Polishing (seam-cache build). */}
+      {createPortal(<CutProgressOverlay />, document.body)}
     </div>
   )
 }

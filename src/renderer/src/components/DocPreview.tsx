@@ -403,6 +403,48 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     wcRef.current?.setSources(segsRef.current.filter((s) => !s.isImage).map((s) => ({ src: s.src })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcSig, wcOn])
+
+  // POLISHING phase: after cuts apply, executeCuts sets polishing.active. Decode
+  // every cut's landing frame ONCE (the seam cache), driving the % bar, then
+  // clear it so the editor unlocks — the first playback is then armed at every
+  // seam. On mobile / no-WebCodecs there's nothing to warm, so it self-clears
+  // instantly. Runs off the CURRENT (post-cut) segments.
+  const polishing = useStore((s) => s.polishing)
+  const setPolishing = useStore((s) => s.setPolishing)
+  useEffect(() => {
+    if (!polishing.active) return
+    let cancelled = false
+    const wc = wcRef.current
+    if (!wcOn || !wc) {
+      setPolishing({ active: false, percent: 100 })
+      return
+    }
+    const ss = segsRef.current
+    const seams: { src: string; t: number }[] = []
+    if (ss[0] && !ss[0].isImage) seams.push({ src: ss[0].src, t: ss[0].sourceStart })
+    for (let i = 1; i < ss.length; i++) {
+      const a = ss[i - 1]
+      const b = ss[i]
+      if (b.isImage) continue
+      const contiguous = a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.05
+      if (!contiguous) seams.push({ src: b.src, t: b.sourceStart })
+    }
+    if (!seams.length) {
+      setPolishing({ active: false, percent: 100 })
+      return
+    }
+    void wc
+      .cacheSeams(seams, (d, total) => {
+        if (!cancelled) setPolishing({ active: true, percent: total ? Math.round((d / total) * 100) : 100 })
+      })
+      .finally(() => {
+        if (!cancelled) setPolishing({ active: false, percent: 100 })
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polishing.active, wcOn])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the

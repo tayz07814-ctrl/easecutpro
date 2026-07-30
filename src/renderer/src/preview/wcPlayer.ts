@@ -247,14 +247,114 @@ async function inputSourceFor(mb: MB, src: string): Promise<BlobSource | UrlSour
   return new mb.UrlSource(url)
 }
 
+const SEAM_CACHE_MAX = 600 // safety cap on cached landing frames
+const SEAM_CACHE_LONG = 720 // longest side of a cached frame (px) — a brief flash; downscale is invisible
+const SEAM_HIT_TOL = 0.12 // how close tSrc must be to a cached landing time to use it (s)
+
 export class WcPlayer {
   /** Flips true on ANY pipeline error — the preview falls back to elements. */
   failed = false
   private sources = new Map<string, SourcePipes>()
+  /** Landing-frame cache: each cut's in-point decoded ONCE (downscaled, held as
+   *  an ImageBitmap decoupled from the live decoders). Built PROACTIVELY during
+   *  the "Polishing" phase after cuts apply, so the FIRST playback draws every
+   *  seam's real landing frame from here instead of holding the stale pre-cut
+   *  frame — no freeze / stutter on cut crossings. Keyed by src. */
+  private seamCache = new Map<string, { t: number; bmp: ImageBitmap; aspect: number }[]>()
+  private cacheGen = 0
 
   private fail(e: unknown): void {
     if (!this.failed) console.warn('[wc-preview] falling back to element path:', e)
     this.failed = true
+  }
+
+  /** Decode + cache every cut's landing frame once (background, blocking-phase).
+   *  `onProgress(done,total)` drives the Polishing bar. Idempotent per (src,t);
+   *  a newer call supersedes it. Non-fatal on any error. */
+  async cacheSeams(list: { src: string; t: number }[], onProgress?: (done: number, total: number) => void): Promise<void> {
+    const myGen = ++this.cacheGen
+    const bySrc = new Map<string, number[]>()
+    for (const { src, t } of list) {
+      const arr = bySrc.get(src) ?? []
+      if (!arr.some((x) => Math.abs(x - t) < 0.02)) arr.push(t)
+      bySrc.set(src, arr)
+    }
+    for (const src of [...this.seamCache.keys()]) if (!bySrc.has(src)) this.dropSeam(src)
+    const total = Math.min(SEAM_CACHE_MAX, [...bySrc.values()].reduce((n, a) => n + a.length, 0))
+    let done = 0
+    onProgress?.(0, total)
+    const mb = await loadMb().catch(() => null)
+    if (!mb || myGen !== this.cacheGen) return
+    let stored = [...this.seamCache.values()].reduce((n, a) => n + a.length, 0)
+    for (const [src, times] of bySrc) {
+      if (myGen !== this.cacheGen || stored >= SEAM_CACHE_MAX) break
+      const store = this.seamCache.get(src) ?? []
+      this.seamCache.set(src, store)
+      const want = times.filter((t) => !store.some((e) => Math.abs(e.t - t) < 0.02)).sort((a, b) => a - b)
+      if (!want.length) {
+        done += times.length
+        onProgress?.(Math.min(done, total), total)
+        continue
+      }
+      let input: Input | null = null
+      try {
+        input = new mb.Input({ source: await inputSourceFor(mb, src), formats: mb.ALL_FORMATS })
+        if (myGen !== this.cacheGen) { input.dispose(); return }
+        const track = await input.getPrimaryVideoTrack()
+        if (!track || !(await track.canDecode())) { input.dispose(); continue }
+        const sink = new mb.VideoSampleSink(track)
+        for await (const samp of sink.samplesAtTimestamps(want)) {
+          if (myGen !== this.cacheGen) { samp?.close(); break }
+          if (samp && stored < SEAM_CACHE_MAX) {
+            try {
+              const dw = samp.displayWidth
+              const dh = samp.displayHeight
+              const scale = Math.min(1, SEAM_CACHE_LONG / Math.max(dw, dh))
+              const w = Math.max(2, Math.round(dw * scale))
+              const h = Math.max(2, Math.round(dh * scale))
+              const off = new OffscreenCanvas(w, h)
+              const octx = off.getContext('2d')
+              if (octx) {
+                samp.draw(octx, 0, 0, w, h)
+                store.push({ t: samp.timestamp, bmp: off.transferToImageBitmap(), aspect: dw / dh })
+                stored++
+              }
+            } catch {
+              /* frame not drawable — skip */
+            }
+          }
+          samp?.close()
+          done++
+          onProgress?.(Math.min(done, total), total)
+        }
+        store.sort((a, b) => a.t - b.t)
+      } catch {
+        /* caching failure is non-fatal — live decode still plays */
+      } finally {
+        input?.dispose()
+      }
+    }
+    onProgress?.(total, total)
+  }
+
+  private dropSeam(src: string): void {
+    for (const e of this.seamCache.get(src) ?? []) e.bmp.close()
+    this.seamCache.delete(src)
+  }
+
+  private seamHit(src: string, t: number): { bmp: ImageBitmap; aspect: number } | null {
+    const arr = this.seamCache.get(src)
+    if (!arr) return null
+    let best: { bmp: ImageBitmap; aspect: number } | null = null
+    let bestD = SEAM_HIT_TOL
+    for (const e of arr) {
+      const d = Math.abs(e.t - t)
+      if (d < bestD) {
+        bestD = d
+        best = e
+      }
+    }
+    return best
   }
 
   /** Declare the current set of base-video sources (idempotent; drops gone ones). */
@@ -329,9 +429,27 @@ export class WcPlayer {
     const other = sp.pipes[sp.owner ^ 1]
     if (playing) own.follow(tSrc)
     else own.requestStill(tSrc)
-    let s: VideoSample | null = null
-    if (own.cur && own.frameScore(tSrc) <= COVER_SLACK) s = own.cur
-    else {
+    // Priority: a GOOD real frame (decoder on time) → the armed seam frame from
+    // the cache (exactly this in-point, pre-decoded in the Polishing phase) →
+    // the nearest stale frame. The cache is what keeps a late decoder from
+    // holding the WRONG (pre-cut) frame on the first pass / dense timelines.
+    const good = own.cur && own.frameScore(tSrc) <= COVER_SLACK ? own.cur : null
+    if (!good) {
+      const hit = this.seamHit(src, tSrc)
+      if (hit) {
+        const rr = containRect(cw, ch, hit.aspect)
+        try {
+          ctx.fillStyle = '#000'
+          ctx.fillRect(0, 0, cw, ch)
+          ctx.drawImage(hit.bmp, rr.left, rr.top, rr.width, rr.height)
+          return true
+        } catch {
+          /* fall through to a real frame */
+        }
+      }
+    }
+    let s: VideoSample | null = good
+    if (!s) {
       const c1 = own.cur
       const c2 = other.cur
       s = !c1 ? c2 : !c2 ? c1 : Math.abs(c1.timestamp - tSrc) <= Math.abs(c2.timestamp - tSrc) ? c1 : c2
@@ -339,8 +457,6 @@ export class WcPlayer {
     if (!s) return false
     const r = containRect(cw, ch, s.displayWidth / s.displayHeight)
     try {
-      // Clear only once a replacement frame is ready. Clearing in the caller
-      // before render() knew that left a black canvas during every cold decode.
       ctx.fillStyle = '#000'
       ctx.fillRect(0, 0, cw, ch)
       s.draw(ctx, r.left, r.top, r.width, r.height)
@@ -351,10 +467,12 @@ export class WcPlayer {
   }
 
   dispose(): void {
+    this.cacheGen++
     for (const [, sp] of this.sources) {
       sp.pipes?.forEach((p) => p.dispose())
       sp.input?.dispose()
     }
     this.sources.clear()
+    for (const src of [...this.seamCache.keys()]) this.dropSeam(src)
   }
 }
