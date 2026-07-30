@@ -90,8 +90,13 @@ export default function SpeechCleanerPanel(): JSX.Element {
         <button onClick={r.find} style={css('width:100%;margin-top:14px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;border-radius:10px;padding:12px;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.28)')}>Find cuts</button>
         {/* Smart Silence (transcript-gap) — secondary so "Find cuts" stays primary. */}
         <button onClick={r.findSilences} style={css('width:100%;margin-top:10px;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);color:#c4baff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px;cursor:pointer')}>Find Silences</button>
-        <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:12px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>Silence settings</button>
-        <button onClick={r.openSmartSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>Smart Silence settings</button>
+        {/* Find cuts runs both silence engines around the retake judge:
+            step 1 Smart Silence (transcript gaps) -> step 2 retake AI -> step 3
+            Silence settings (FSMN audio VAD). Numbered so it's clear which
+            modal tunes which stage. */}
+        <div style={css('font-size:11px;color:#71718a;margin-top:16px;line-height:1.5')}>Find cuts runs in 3 steps — dead air, then retakes, then silence.</div>
+        <button onClick={r.openSmartSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>1 · Smart Silence settings</button>
+        <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>3 · Silence settings</button>
       </div>
     )
   }
