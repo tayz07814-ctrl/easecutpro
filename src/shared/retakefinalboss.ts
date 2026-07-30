@@ -24,6 +24,30 @@ export const DEFAULT_RETAKE_FINAL_BOSS_SETTINGS: RetakeFinalBossSettings = {
   audioOverlapMs: 20
 }
 
+/** Silence presets. Non-editable presets apply fixed values (no sliders shown);
+ *  the single editable one ("Mad Scientist") reveals the custom sliders. */
+export interface SilencePreset {
+  id: string
+  label: string
+  editable: boolean
+  settings: RetakeFinalBossSettings
+}
+
+export const FSMN_SILENCE_PRESETS: SilencePreset[] = [
+  { id: 'chill-talker', label: 'Chill Talker', editable: false, settings: { padBeforeS: 0.4, padAfterS: 0.8, trimEdgesS: 0, audioOverlapMs: 50 } },
+  { id: 'just-right', label: 'Just Right', editable: false, settings: { padBeforeS: 0.1, padAfterS: 0.3, trimEdgesS: 0, audioOverlapMs: 50 } },
+  { id: 'no-chill', label: 'No Chill', editable: false, settings: { padBeforeS: 0, padAfterS: 0, trimEdgesS: 0, audioOverlapMs: 50 } },
+  { id: 'espresso-shot', label: 'Espresso Shot', editable: false, settings: { padBeforeS: 0, padAfterS: 0, trimEdgesS: 0, audioOverlapMs: 50 } },
+  { id: 'mad-scientist', label: 'Mad Scientist', editable: true, settings: { padBeforeS: 0.1, padAfterS: 0.3, trimEdgesS: 0, audioOverlapMs: 0 } }
+]
+
+export const DEFAULT_FSMN_PRESET_ID = 'just-right'
+export const CUSTOM_FSMN_PRESET_ID = 'mad-scientist'
+
+export function getFsmnPreset(id: string | null | undefined): SilencePreset {
+  return FSMN_SILENCE_PRESETS.find((p) => p.id === id) ?? FSMN_SILENCE_PRESETS.find((p) => p.id === DEFAULT_FSMN_PRESET_ID)!
+}
+
 // The fixed FunASR endpoint state machine intentionally widens every returned
 // speech segment. With the published defaults used by fsmnVad.ts, its reported
 // end sits 160 ms after the speech transition and its reported start sits

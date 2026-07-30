@@ -29,6 +29,17 @@ function Slider({ label, value, min, max, step, fmt, lo, hi, onChange }: {
   )
 }
 
+const CHIP = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid rgba(255,255,255,.12);color:#9a9aae;background:transparent;font-family:inherit'
+const CHIP_ON = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid #7c6bff;color:#a99bff;background:rgba(124,107,255,.12);font-weight:600;font-family:inherit'
+
+// One-line summary of a fixed preset's pauses, shown instead of sliders.
+function presetBlurb(padBeforeS: number, padAfterS: number): string {
+  const total = padBeforeS + padAfterS
+  if (total <= 0) return 'Cuts flush to speech — no pause kept. Punchiest.'
+  if (total <= 0.4) return `Keeps a tight ${padBeforeS.toFixed(2)}s lead-in and ${padAfterS.toFixed(2)}s tail.`
+  return `Keeps a relaxed ${padBeforeS.toFixed(2)}s lead-in and ${padAfterS.toFixed(2)}s tail.`
+}
+
 export default function SilenceSettingsModal(): JSX.Element | null {
   const sil = useSilence()
   if (!sil.show) return null
@@ -41,33 +52,49 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         <div style={css('display:flex;align-items:flex-start;justify-content:space-between')}>
           <div>
             <div style={css('font-size:16px;font-weight:650')}>Silence Settings</div>
-            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>FSMN speech detector runs automatically — these shape the pauses it keeps. Retake detection is unaffected.</div>
+            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>Pick a vibe. FSMN detects the speech automatically — Retake detection is unaffected.</div>
           </div>
           <div onClick={sil.close} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
         </div>
 
-        {/* FSMN seam geometry — the detector itself is fixed at published defaults. */}
-        <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:18px')}>
-          <Slider label="Keep before speech" value={sil.s.padBeforeS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · tight" hi="0.5s · gentle lead-in" onChange={(v) => set('padBeforeS', v)} />
-          <Slider label="Keep after speech" value={sil.s.padAfterS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · tight" hi="0.5s · gentle tail" onChange={(v) => set('padAfterS', v)} />
-          <Slider label="Tighten cut edges" value={sil.s.trimEdgesS} min={0} max={0.2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · safe" hi="0.2s · tighter" onChange={(v) => set('trimEdgesS', v)} />
+        {/* Preset chips — the last (Mad Scientist) reveals the sliders. */}
+        <div style={css('display:flex;gap:6px;margin-top:16px;flex-wrap:wrap')}>
+          {sil.presets.map((p) => (
+            <button key={p.id} onClick={() => sil.applyPreset(p.id)} style={css(sil.preset === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
+          ))}
         </div>
 
-        {/* Seam blend ("overlap") — a global render setting (export + preview). */}
-        <div style={css('margin-top:18px;border-top:1px solid rgba(255,255,255,.07);padding-top:16px;display:flex;flex-direction:column;gap:14px')}>
-          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
-            <div onClick={() => sil.setSeamFade({ enabled: !sil.seamFade.enabled })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${sil.seamFade.enabled ? '#7c6bff' : '#2a2a34'}`)}>
-              <div style={css(sil.seamFade.enabled ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
-            </div>
-            <div style={css('flex:1;min-width:0')}>
-              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Blend audio at cuts (overlap)</div>
-              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Crossfades the join: the outgoing audio tails off under the incoming words. Marked with ◢ on the timeline. Turn off for hard cuts.</div>
-            </div>
+        {/* Custom sliders — ONLY for the editable preset (Mad Scientist). */}
+        {sil.editable ? (
+          <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:18px')}>
+            <Slider label="Keep before speech" value={sil.s.padBeforeS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · tight" hi="0.5s · gentle lead-in" onChange={(v) => set('padBeforeS', v)} />
+            <Slider label="Keep after speech" value={sil.s.padAfterS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · tight" hi="0.5s · gentle tail" onChange={(v) => set('padAfterS', v)} />
+            <Slider label="Tighten cut edges" value={sil.s.trimEdgesS} min={0} max={0.2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · safe" hi="0.2s · tighter" onChange={(v) => set('trimEdgesS', v)} />
           </div>
-          {sil.seamFade.enabled && (
-            <Slider label="Overlap amount" value={sil.seamFade.ms} min={0} max={60} step={1} fmt={(v) => `${Math.round(v)} ms`} lo="0 · hard cut" hi="60 ms · smoother" onChange={(v) => sil.setSeamFade({ ms: v })} />
-          )}
-        </div>
+        ) : (
+          <div style={css('font-size:12px;color:#71718a;margin-top:14px;line-height:1.5;min-height:34px')}>
+            {presetBlurb(sil.s.padBeforeS, sil.s.padAfterS)} <span style={css('color:#55556a')}>Pick <b style={css('color:#9a9aae')}>Mad Scientist</b> to fine-tune.</span>
+          </div>
+        )}
+
+        {/* Seam blend ("overlap") — only tweakable in the custom preset; fixed
+            presets set their own overlap. */}
+        {sil.editable && (
+          <div style={css('margin-top:18px;border-top:1px solid rgba(255,255,255,.07);padding-top:16px;display:flex;flex-direction:column;gap:14px')}>
+            <div style={css('display:flex;align-items:flex-start;gap:11px')}>
+              <div onClick={() => sil.setSeamFade({ enabled: !sil.seamFade.enabled })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${sil.seamFade.enabled ? '#7c6bff' : '#2a2a34'}`)}>
+                <div style={css(sil.seamFade.enabled ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
+              </div>
+              <div style={css('flex:1;min-width:0')}>
+                <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Blend audio at cuts (overlap)</div>
+                <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Crossfades the join: the outgoing audio tails off under the incoming words. Marked with ◢ on the timeline. Turn off for hard cuts.</div>
+              </div>
+            </div>
+            {sil.seamFade.enabled && (
+              <Slider label="Overlap amount" value={sil.seamFade.ms} min={0} max={60} step={1} fmt={(v) => `${Math.round(v)} ms`} lo="0 · hard cut" hi="60 ms · smoother" onChange={(v) => sil.setSeamFade({ ms: v })} />
+            )}
+          </div>
+        )}
 
         <div style={css('display:flex;align-items:center;margin-top:20px')}>
           <span onClick={sil.reset} style={css(FOOT_RESET)}>Reset to default</span>

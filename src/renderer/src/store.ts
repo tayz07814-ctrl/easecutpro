@@ -60,6 +60,9 @@ import { DEFAULT_VAD_SILENCE_SETTINGS, normalizeVadSilence, type VadSilenceSetti
 import {
   DEFAULT_RETAKE_FINAL_BOSS_SETTINGS,
   normalizeRetakeFinalBossSettings,
+  getFsmnPreset,
+  DEFAULT_FSMN_PRESET_ID,
+  CUSTOM_FSMN_PRESET_ID,
   type RetakeFinalBossSettings
 } from '@shared/retakefinalboss'
 import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
@@ -763,6 +766,10 @@ interface AppState {
    *  cleaner silence path on 0.01. padBefore/padAfter/trimEdges/audioOverlap. */
   retakeFinalBossSettings: RetakeFinalBossSettings
   setRetakeFinalBossSettings: (patch: Partial<RetakeFinalBossSettings>) => void
+  /** Active FSMN silence preset id. Editing any field flips it to custom
+   *  ('mad-scientist'); the modal only shows the sliders for the editable one. */
+  retakeFinalBossPreset: string
+  setRetakeFinalBossPreset: (id: string) => void
   /** Unified cloud VAD silence-cutting profile — shared by ProCut AND Retake β
    *  (cloud build). One 🔇 Silence Settings modal edits this for both engines. */
   vadSilenceSettings: VadSilenceSettings
@@ -2093,16 +2100,43 @@ export const useStore = create<AppState>((set, get) => ({
     } catch {
       /* ignore */
     }
-    return { ...DEFAULT_RETAKE_FINAL_BOSS_SETTINGS }
+    // No stored value → the default preset's settings.
+    return normalizeRetakeFinalBossSettings(getFsmnPreset(DEFAULT_FSMN_PRESET_ID).settings)
   })(),
+  // Editing any field is "custom" — flip the active preset to the editable one.
   setRetakeFinalBossSettings: (patch) => {
     const next = normalizeRetakeFinalBossSettings({ ...get().retakeFinalBossSettings, ...patch })
     try {
       localStorage.setItem('ec.retakeFinalBoss', JSON.stringify(next))
+      localStorage.setItem('ec.retakeFinalBossPreset', CUSTOM_FSMN_PRESET_ID)
     } catch {
       /* ignore */
     }
-    set({ retakeFinalBossSettings: next })
+    set({ retakeFinalBossSettings: next, retakeFinalBossPreset: CUSTOM_FSMN_PRESET_ID })
+  },
+
+  retakeFinalBossPreset: ((): string => {
+    try {
+      return localStorage.getItem('ec.retakeFinalBossPreset') || DEFAULT_FSMN_PRESET_ID
+    } catch {
+      return DEFAULT_FSMN_PRESET_ID
+    }
+  })(),
+  setRetakeFinalBossPreset: (id) => {
+    const preset = getFsmnPreset(id)
+    const next = normalizeRetakeFinalBossSettings(preset.settings)
+    try {
+      localStorage.setItem('ec.retakeFinalBossPreset', preset.id)
+      localStorage.setItem('ec.retakeFinalBoss', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+    // Apply the preset's values AND mirror its overlap into the render crossfade.
+    set((st) => ({
+      retakeFinalBossPreset: preset.id,
+      retakeFinalBossSettings: next,
+      seamFade: { ...st.seamFade, enabled: next.audioOverlapMs > 0, ms: next.audioOverlapMs }
+    }))
   },
 
   vadSilenceSettings: ((): VadSilenceSettings => {

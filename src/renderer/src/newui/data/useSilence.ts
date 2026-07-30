@@ -5,12 +5,24 @@
 // for ProCut/Ultracut/Premium, which are unchanged).
 
 import { useStore, type SeamFadeSettings } from '../../store'
-import { DEFAULT_RETAKE_FINAL_BOSS_SETTINGS, type RetakeFinalBossSettings } from '@shared/retakefinalboss'
+import {
+  FSMN_SILENCE_PRESETS,
+  getFsmnPreset,
+  DEFAULT_FSMN_PRESET_ID,
+  type RetakeFinalBossSettings,
+  type SilencePreset
+} from '@shared/retakefinalboss'
 
 export interface SilenceModel {
   show: boolean
   s: RetakeFinalBossSettings
   setField: (k: keyof RetakeFinalBossSettings, v: number) => void
+  /** Preset chips + the active id; the sliders only show when the active preset
+   *  is editable (Mad Scientist). */
+  presets: SilencePreset[]
+  preset: string
+  editable: boolean
+  applyPreset: (id: string) => void
   /** Seam blend ("overlap") at cuts — the FSMN audioOverlapMs, mirrored into the
    *  global render crossfade so preview + export match. */
   seamFade: SeamFadeSettings
@@ -22,17 +34,23 @@ export interface SilenceModel {
 export function useSilence(): SilenceModel {
   const s = useStore((st) => st.retakeFinalBossSettings)
   const setS = useStore((st) => st.setRetakeFinalBossSettings)
+  const preset = useStore((st) => st.retakeFinalBossPreset)
+  const applyPreset = useStore((st) => st.setRetakeFinalBossPreset)
   const show = useStore((st) => st.showSilenceSettings)
   const setShow = useStore((st) => st.setShowSilenceSettings)
   const seamFade = useStore((st) => st.seamFade)
   const setSeamFade = useStore((st) => st.setSeamFade)
   const applyOverlap = (ms: number): void => {
-    setS({ audioOverlapMs: ms })
+    setS({ audioOverlapMs: ms }) // flips preset → custom
     setSeamFade({ enabled: ms > 0, ms })
   }
   return {
     show,
     s,
+    presets: FSMN_SILENCE_PRESETS,
+    preset,
+    editable: getFsmnPreset(preset).editable,
+    applyPreset,
     seamFade,
     setField: (k, v) => {
       if (k === 'audioOverlapMs') applyOverlap(v)
@@ -44,10 +62,7 @@ export function useSilence(): SilenceModel {
       else if (patch.enabled !== undefined) applyOverlap(patch.enabled ? s.audioOverlapMs || 20 : 0)
       else setSeamFade(patch)
     },
-    reset: () => {
-      setS({ ...DEFAULT_RETAKE_FINAL_BOSS_SETTINGS })
-      setSeamFade({ enabled: DEFAULT_RETAKE_FINAL_BOSS_SETTINGS.audioOverlapMs > 0, ms: DEFAULT_RETAKE_FINAL_BOSS_SETTINGS.audioOverlapMs })
-    },
+    reset: () => applyPreset(DEFAULT_FSMN_PRESET_ID),
     close: () => setShow(false)
   }
 }
