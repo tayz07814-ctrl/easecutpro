@@ -219,6 +219,16 @@ interface Pending {
   since: number
 }
 
+/**
+ * A media element that reaches the end of one cut piece becomes paused. Seeking
+ * it to the following piece does not reliably restart it (notably in Chromium
+ * after a source-end seek), so a handoff must explicitly request playback on
+ * the destination element as well as changing its currentTime.
+ */
+function resume(v: HTMLVideoElement): void {
+  if (v.paused) void v.play().catch(() => undefined)
+}
+
 export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Element {
   const project = useStore((s) => s.project)
   const playing = useStore((s) => s.playing)
@@ -357,7 +367,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             if (settled(v, active.src) && Math.abs(v.currentTime - want) > 0.25) {
               seek(v, active.src, want)
             }
-            if (v.paused) v.play().catch(() => undefined)
+            resume(v)
             if (settled(v, active.src)) {
               // element is the clock: map its time back to the timeline
               t = active.start + clamp((v.currentTime - active.sourceStart) / active.speed, 0, active.len)
@@ -407,8 +417,14 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                     // re-seek would re-stall the freshly-decoded element.
                     const warm =
                       !!nv && settled(nv, next.src) && Math.abs(nv.currentTime - next.sourceStart) < 0.15
-                    if (nv && !warm) seek(nv, next.src, next.sourceStart)
-                    if (nv && warm && nv.paused) nv.play().catch(() => undefined)
+                    if (nv) {
+                      if (!warm) seek(nv, next.src, next.sourceStart)
+                      // A source-end seek can leave the element paused even
+                      // though the transport is still playing. Resume NOW,
+                      // rather than waiting for the next rAF, so the playhead
+                      // cannot get stranded at the cut boundary.
+                      resume(nv)
+                    }
                   }
                 }
               }

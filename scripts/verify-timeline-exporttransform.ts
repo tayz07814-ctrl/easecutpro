@@ -121,6 +121,11 @@ const docPreviewSource = readFileSync(new URL('../src/renderer/src/components/Do
 check('on-device animated export is rendered at 60fps', /export const FPS = 60/.test(localExportSource))
 check('preview zoom uses a monotonic display-time clock', /motionTRef/.test(docPreviewSource) && /motionT \+ dt/.test(docPreviewSource))
 check('preview zoom runs on the browser compositor', /v\.animate\(/.test(docPreviewSource) && /easing: 'linear'/.test(docPreviewSource))
+check(
+  'preview resumes the destination video immediately after every real-cut handoff',
+  /function resume\(v: HTMLVideoElement\)/.test(docPreviewSource) &&
+    /if \(!warm\) seek\(nv, next\.src, next\.sourceStart\)[\s\S]*?resume\(nv\)/.test(docPreviewSource)
+)
 // the crop offset is ANALYTIC (same trunc'd width expression), never in_w-based:
 // crop's in_w binds at init on variable-size streams (left-anchor bug).
 check(
