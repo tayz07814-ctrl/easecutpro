@@ -392,11 +392,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // "buffering" beat right after open/apply on long videos) — and if it still
   // can't start after a generous window, fall back to the element path.
   const wcAudioWaitRef = useRef(0)
-  // Previously-shown WC segment, to detect a CUT seam (segment change that is not
-  // a seamless same-source split). On a seam the player must land on the new
-  // in-point via the warm pipe instead of sequentially draining across the
-  // removed span (fast-forward) or cold-restarting (frozen frame).
-  const prevWcSegRef = useRef<{ src: string; end: number; di: number }>({ src: '', end: 0, di: -1 })
   // A play edge must not release the audio/master clock until WebCodecs has the
   // current frame AND a decoded frame ahead. Otherwise a long-GOP source holds
   // its paused still while audio/playhead run, then visibly catches up later.
@@ -408,25 +403,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     wcRef.current?.setSources(segsRef.current.filter((s) => !s.isImage).map((s) => ({ src: s.src })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcSig, wcOn])
-  // Seam cache: whenever the cut layout changes (Apply, edit, load), decode each
-  // cut's landing frame once so the FIRST playback is already armed at every
-  // seam — the warm pipe then only has to stay one ahead. Keyed on the seam
-  // signature so it re-runs on any cut change, not just a source-set change.
-  useEffect(() => {
-    if (!wcOn || !wcRef.current) return
-    const ss = segsRef.current
-    const seams: { src: string; t: number }[] = []
-    if (ss[0] && !ss[0].isImage) seams.push({ src: ss[0].src, t: ss[0].sourceStart }) // play-from-start landing
-    for (let i = 1; i < ss.length; i++) {
-      const a = ss[i - 1]
-      const b = ss[i]
-      if (b.isImage) continue
-      const contiguous = a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.05
-      if (!contiguous) seams.push({ src: b.src, t: b.sourceStart }) // a real cut's in-point
-    }
-    void wcRef.current.cacheSeams(seams)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buddySig, wcOn])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the
@@ -1035,22 +1011,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             const ch = cv.height
             if (shown && !shown.isImage) {
               const tSrc = shown.sourceStart + clamp(t - shown.start, 0, shown.len) * shown.speed
-              // Seam = we just crossed into this segment AND it is NOT a seamless
-              // same-source continuation of the previous one (i.e. a real cut).
-              // Tell the player to jump to the in-point rather than roll through
-              // the removed footage. A seamless split (same src, adjacent source)
-              // is not a seam — it must keep decoding straight through.
-              const pv = prevWcSegRef.current
-              const changed = pv.di !== di
-              const contiguous = pv.src === shown.src && Math.abs(pv.end - shown.sourceStart) < 0.05
-              const seam = isPlaying && changed && pv.di !== -1 && !contiguous
-              wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying, seam)
-              prevWcSegRef.current = { src: shown.src, end: shown.sourceEnd, di }
+              wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying)
               // Decode-ahead: park the warm pipe on the upcoming seam's in-point.
-              // 2s lead: each pipe now has its OWN decoder, so warming early just
-              // gives a long-GOP seek time to land before the cut (no contention).
               const up = ss[di + 1]
-              if (up && !up.isImage && t >= shown.start + shown.len - 2.0) wc.prewarm(up.src, up.sourceStart)
+              if (up && !up.isImage && t >= shown.start + shown.len - 1.0) wc.prewarm(up.src, up.sourceStart)
               cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
               cv.style.transform = kbTransform(shown)
             } else {

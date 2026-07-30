@@ -77,18 +77,13 @@ class Pipe {
   ) {}
 
   /** Coverage by DECODED frames only: ~0 when `cur`/queue can show t right
-   *  now, else the distance to the covered window. A parked warm pipe fills the
-   *  QUEUE without promoting `cur` yet, so coverage measures from the front of
-   *  whatever is decoded (cur, else queue[0]) — judging by `cur` alone reported
-   *  a fully-decoded warm pipe as "no coverage" and cold-restarted it at the
-   *  seam, wasting the prewarm and freezing the frame during the cold decode. */
+   *  now, else the distance to the covered window. */
   frameScore(t: number): number {
-    const front = this.cur ?? (this.queue.length ? this.queue[0] : null)
-    if (!front) return Number.POSITIVE_INFINITY
-    const lo = front.timestamp - 0.06
-    const last = this.queue.length ? this.queue[this.queue.length - 1] : front
+    if (!this.cur) return Number.POSITIVE_INFINITY
+    const lo = this.cur.timestamp - 0.06
+    const last = this.queue.length ? this.queue[this.queue.length - 1] : this.cur
     const hi = last.timestamp + last.duration + COVER_SLACK
-    if (t >= lo && t <= hi) return Math.abs(t - front.timestamp) / 1e6 // covered; prefer the closer front
+    if (t >= lo && t <= hi) return Math.abs(t - this.cur.timestamp) / 1e6 // covered; prefer the closer cur
     return Math.min(Math.abs(t - lo), Math.abs(t - hi))
   }
 
@@ -153,41 +148,22 @@ class Pipe {
 
   /** Playing: keep `cur` tracking `t`, starting/restarting the iterator as
    *  needed. Never re-restarts while a restart is still decoding toward a
-   *  nearby time (that's what froze the picture). `jump` marks a real cut seam:
-   *  land ON `t` (discard anything decoded before it, drop the queue if a warm
-   *  swap didn't already put us there) instead of sequentially draining across
-   *  the removed span — that catch-up is the "fast-forward through the cut". */
-  follow(t: number, jump = false): void {
-    // Promote decoded frames up to `t` FIRST (mirrors requestStill): a warm pipe
-    // just handed ownership has its landing frame in the queue, not in `cur` —
-    // draining before the restart test lets it draw instantly instead of
-    // cold-restarting (the frozen frame on a big cut).
-    const drain = (): boolean => {
-      let moved = false
-      while (this.queue.length && this.queue[0].timestamp <= t + 1e-4) {
-        this.cur?.close()
-        this.cur = this.queue.shift() as VideoSample
-        moved = true
-      }
-      return moved
-    }
-    // A cut: land ON the in-point. Restart UNLESS the front decoded frame is
-    // already essentially at `t` — i.e. the warm pipe was pre-parked here and we
-    // can just draw it. Judging by the coverage window (frameScore) is wrong for
-    // a seam: the outgoing live pipe's look-ahead can reach into the removed span
-    // and "cover" t, and draining that is exactly the fast-forward. Front-frame
-    // distance is what tells a ready warm swap from a live pipe mid-removed-span.
-    const front = this.cur ?? (this.queue.length ? this.queue[0] : null)
-    if (jump && this.pendingStart === null && (!front || Math.abs(front.timestamp - t) > 0.05)) {
-      this.restart(t)
-    } else if (this.pendingStart !== null) {
+   *  nearby time (that's what froze the picture). */
+  follow(t: number): void {
+    if (this.pendingStart !== null) {
+      // a restart is in flight; only abandon it if the playhead ran far past
       if (Math.abs(t - this.pendingStart) > 2.5) this.restart(t)
     } else if (!this.iter) {
       this.restart(t) // first play after a paused still: begin decoding
     } else if (this.score(t) > 1.5) {
       this.restart(t) // jumped beyond coverage (scrub-then-play, big skip)
     }
-    const moved = drain()
+    let moved = false
+    while (this.queue.length && this.queue[0].timestamp <= t) {
+      this.cur?.close()
+      this.cur = this.queue.shift() as VideoSample
+      moved = true
+    }
     if (moved || this.queue.length < QUEUE_AHEAD) void this.pump()
   }
 
@@ -246,13 +222,7 @@ class Pipe {
 }
 
 interface SourcePipes {
-  /** ONE Input per pipe — independent demuxer + decoder each. Sharing a single
-   *  Input's track between both pipes serialized their decoding (both pull
-   *  packets from the same reader), so the warm pipe could NOT decode the next
-   *  in-point while the live pipe was streaming — it only caught up after the
-   *  seam, i.e. the frozen frame at every cut. Two Inputs = two real decoders,
-   *  the decoder twin of the element path's two <video> elements. */
-  inputs: Input[] | null
+  input: Input | null
   pipes: [Pipe, Pipe] | null
   /** Which pipe OWNS the currently-displayed time (recomputed every render).
    *  prewarm() may only ever touch the other one — restarting the owner
@@ -277,103 +247,14 @@ async function inputSourceFor(mb: MB, src: string): Promise<BlobSource | UrlSour
   return new mb.UrlSource(url)
 }
 
-const SEAM_CACHE_MAX = 400 // safety cap on cached landing frames
-const SEAM_CACHE_LONG = 720 // longest side of a cached frame (px) — a brief flash, downscale is invisible
-const SEAM_HIT_TOL = 0.12 // how close tSrc must be to a cached landing time to use it (s)
-
 export class WcPlayer {
   /** Flips true on ANY pipeline error — the preview falls back to elements. */
   failed = false
   private sources = new Map<string, SourcePipes>()
-  /** Landing-frame cache: each cut's in-point decoded ONCE (downscaled, held as
-   *  an ImageBitmap decoupled from the decoders). On the very first pass — before
-   *  any warm pipe has run — the seam draws its real landing frame from here
-   *  instead of holding the stale pre-cut frame (the freeze). Keyed by src. */
-  private seamCache = new Map<string, { t: number; bmp: ImageBitmap; aspect: number }[]>()
-  private cacheGen = 0
 
   private fail(e: unknown): void {
     if (!this.failed) console.warn('[wc-preview] falling back to element path:', e)
     this.failed = true
-  }
-
-  /** Decode + cache every cut's landing frame once (background, while paused).
-   *  Idempotent per (src,t); aborts if a newer call supersedes it. */
-  async cacheSeams(list: { src: string; t: number }[]): Promise<void> {
-    const myGen = ++this.cacheGen
-    const bySrc = new Map<string, number[]>()
-    for (const { src, t } of list) {
-      const arr = bySrc.get(src) ?? []
-      if (!arr.some((x) => Math.abs(x - t) < 0.02)) arr.push(t)
-      bySrc.set(src, arr)
-    }
-    for (const src of [...this.seamCache.keys()]) if (!bySrc.has(src)) this.dropSeam(src)
-    const mb = await loadMb().catch(() => null)
-    if (!mb || myGen !== this.cacheGen) return
-    let total = [...this.seamCache.values()].reduce((n, a) => n + a.length, 0)
-    for (const [src, times] of bySrc) {
-      if (myGen !== this.cacheGen || total >= SEAM_CACHE_MAX) break
-      const store = this.seamCache.get(src) ?? []
-      this.seamCache.set(src, store)
-      const want = times.filter((t) => !store.some((e) => Math.abs(e.t - t) < 0.02)).sort((a, b) => a - b)
-      if (!want.length) continue
-      let input: Input | null = null
-      try {
-        input = new mb.Input({ source: await inputSourceFor(mb, src), formats: mb.ALL_FORMATS })
-        if (myGen !== this.cacheGen) { input.dispose(); return }
-        const track = await input.getPrimaryVideoTrack()
-        if (!track || !(await track.canDecode())) { input.dispose(); continue }
-        const sink = new mb.VideoSampleSink(track)
-        for await (const samp of sink.samplesAtTimestamps(want)) {
-          if (myGen !== this.cacheGen) { samp?.close(); break }
-          if (!samp) continue
-          if (total < SEAM_CACHE_MAX) {
-            try {
-              const dw = samp.displayWidth
-              const dh = samp.displayHeight
-              const scale = Math.min(1, SEAM_CACHE_LONG / Math.max(dw, dh))
-              const w = Math.max(2, Math.round(dw * scale))
-              const h = Math.max(2, Math.round(dh * scale))
-              const off = new OffscreenCanvas(w, h)
-              const octx = off.getContext('2d')
-              if (octx) {
-                samp.draw(octx, 0, 0, w, h)
-                store.push({ t: samp.timestamp, bmp: off.transferToImageBitmap(), aspect: dw / dh })
-                total++
-              }
-            } catch {
-              /* frame not drawable — skip */
-            }
-          }
-          samp.close()
-        }
-        store.sort((a, b) => a.t - b.t)
-      } catch {
-        /* caching failure is non-fatal — live decode still plays */
-      } finally {
-        input?.dispose()
-      }
-    }
-  }
-
-  private dropSeam(src: string): void {
-    for (const e of this.seamCache.get(src) ?? []) e.bmp.close()
-    this.seamCache.delete(src)
-  }
-
-  private seamHit(src: string, t: number): { bmp: ImageBitmap; aspect: number } | null {
-    const arr = this.seamCache.get(src)
-    if (!arr) return null
-    let best: { bmp: ImageBitmap; aspect: number } | null = null
-    let bestD = SEAM_HIT_TOL
-    for (const e of arr) {
-      const d = Math.abs(e.t - t)
-      if (d < bestD) {
-        bestD = d
-        best = e
-      }
-    }
-    return best
   }
 
   /** Declare the current set of base-video sources (idempotent; drops gone ones). */
@@ -382,7 +263,7 @@ export class WcPlayer {
     for (const [src, sp] of this.sources) {
       if (!want.has(src)) {
         sp.pipes?.forEach((p) => p.dispose())
-        sp.inputs?.forEach((i) => i.dispose())
+        sp.input?.dispose()
         this.sources.delete(src)
       }
     }
@@ -390,28 +271,22 @@ export class WcPlayer {
   }
 
   private open(src: string): void {
-    const sp: SourcePipes = { inputs: null, pipes: null, owner: 0, ready: false, dead: false }
+    const sp: SourcePipes = { input: null, pipes: null, owner: 0, ready: false, dead: false }
     this.sources.set(src, sp)
     void (async () => {
       try {
         const mb = await loadMb()
+        const input = new mb.Input({ source: await inputSourceFor(mb, src), formats: mb.ALL_FORMATS })
+        sp.input = input
+        const track: InputVideoTrack | null = await input.getPrimaryVideoTrack()
+        if (!track || !(await track.canDecode())) throw new Error('undecodable video track: ' + src)
         const onErr = (e: unknown): void => {
           sp.dead = true
           this.fail(e)
         }
-        // One INDEPENDENT Input+decoder per pipe so the warm pipe can decode the
-        // next in-point WHILE the live pipe streams (no shared-reader contention).
-        const mkPipe = async (): Promise<{ input: Input; pipe: Pipe }> => {
-          const input = new mb.Input({ source: await inputSourceFor(mb, src), formats: mb.ALL_FORMATS })
-          const track: InputVideoTrack | null = await input.getPrimaryVideoTrack()
-          if (!track || !(await track.canDecode())) throw new Error('undecodable video track: ' + src)
-          return { input, pipe: new Pipe(new mb.VideoSampleSink(track), onErr) }
-        }
-        const [p0, p1] = await Promise.all([mkPipe(), mkPipe()])
-        sp.inputs = [p0.input, p1.input]
-        sp.pipes = [p0.pipe, p1.pipe]
+        sp.pipes = [new Pipe(new mb.VideoSampleSink(track), onErr), new Pipe(new mb.VideoSampleSink(track), onErr)]
         sp.ready = true
-        console.info('[wc-preview] source ready (dual decoder):', src.slice(-24))
+        console.info('[wc-preview] source ready:', src.slice(-24))
       } catch (e) {
         sp.dead = true
         this.fail(e)
@@ -445,46 +320,30 @@ export class WcPlayer {
    * otherwise falls back to the nearest stale frame either pipe holds — a held
    * frame for a tick or two beats a black flash. Returns true if painted.
    */
-  render(ctx: CanvasRenderingContext2D, cw: number, ch: number, src: string, tSrc: number, playing: boolean, seam = false): boolean {
+  render(ctx: CanvasRenderingContext2D, cw: number, ch: number, src: string, tSrc: number, playing: boolean): boolean {
     const sp = this.sources.get(src)
     if (!sp?.ready || !sp.pipes || sp.dead) return false
     const [a, b] = sp.pipes
-    // Owner = the pipe that best covers tSrc. At a cut seam the warm pipe parked
-    // on the in-point wins (its queue covers tSrc); the outgoing live pipe does
-    // NOT (its decoded frames end at the previous out-point), so the swap is
-    // decisive instead of the live pipe fast-forwarding through the removed span.
     sp.owner = a.score(tSrc) <= b.score(tSrc) ? 0 : 1
     const own = sp.pipes[sp.owner]
     const other = sp.pipes[sp.owner ^ 1]
-    if (playing) own.follow(tSrc, seam)
+    if (playing) own.follow(tSrc)
     else own.requestStill(tSrc)
-    // Priority: a GOOD real frame (decoder is on time) → the armed seam frame
-    // from the cache (exactly this in-point, decoded up front) → the nearest
-    // stale frame (last resort). The cache is what stops a late warm pipe from
-    // holding the WRONG (pre-cut) frame on the first pass / dense timelines.
-    const s: VideoSample | null =
-      own.cur && own.frameScore(tSrc) <= COVER_SLACK ? own.cur : null
-    if (!s) {
-      const hit = this.seamHit(src, tSrc)
-      if (hit) {
-        const rr = containRect(cw, ch, hit.aspect)
-        try {
-          ctx.fillStyle = '#000'
-          ctx.fillRect(0, 0, cw, ch)
-          ctx.drawImage(hit.bmp, rr.left, rr.top, rr.width, rr.height)
-          return true
-        } catch {
-          /* fall through to a real frame */
-        }
-      }
+    let s: VideoSample | null = null
+    if (own.cur && own.frameScore(tSrc) <= COVER_SLACK) s = own.cur
+    else {
+      const c1 = own.cur
+      const c2 = other.cur
+      s = !c1 ? c2 : !c2 ? c1 : Math.abs(c1.timestamp - tSrc) <= Math.abs(c2.timestamp - tSrc) ? c1 : c2
     }
-    const draw = s ?? (own.cur && (!other.cur || Math.abs(own.cur.timestamp - tSrc) <= Math.abs(other.cur.timestamp - tSrc)) ? own.cur : other.cur)
-    if (!draw) return false
-    const r = containRect(cw, ch, draw.displayWidth / draw.displayHeight)
+    if (!s) return false
+    const r = containRect(cw, ch, s.displayWidth / s.displayHeight)
     try {
+      // Clear only once a replacement frame is ready. Clearing in the caller
+      // before render() knew that left a black canvas during every cold decode.
       ctx.fillStyle = '#000'
       ctx.fillRect(0, 0, cw, ch)
-      draw.draw(ctx, r.left, r.top, r.width, r.height)
+      s.draw(ctx, r.left, r.top, r.width, r.height)
     } catch {
       return false
     }
@@ -492,12 +351,10 @@ export class WcPlayer {
   }
 
   dispose(): void {
-    this.cacheGen++
     for (const [, sp] of this.sources) {
       sp.pipes?.forEach((p) => p.dispose())
-      sp.inputs?.forEach((i) => i.dispose())
+      sp.input?.dispose()
     }
     this.sources.clear()
-    for (const src of [...this.seamCache.keys()]) this.dropSeam(src)
   }
 }
