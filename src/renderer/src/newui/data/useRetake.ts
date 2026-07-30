@@ -37,6 +37,9 @@ export interface RetakeModel {
   // actions
   /** run Retake Beta — Claude Opus on our official Anthropic key. */
   find: () => void
+  /** run the silence-only FSMN pass ("Find Silences") — same engine + settings as
+   *  Find cuts, minus transcription and the retake judge. */
+  findSilences: () => void
   /** transcribe ONLY (the AssemblyAI step Retake β uses) — no judge/cuts. The
    *  Transcript-tab entry point. */
   transcribeOnly: () => void
@@ -79,6 +82,8 @@ export function useRetake(): RetakeModel {
   // delta-judge was removed — its narrow whole-take prompt left intro/outro +
   // off-camera chatter behind and over-cut wide spans.)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
+  // "Find Silences" — the FSMN silence pass on its own.
+  const runFsmnSilence = useStore((s) => s.runFsmnSilence)
   const transcribeOnly = useStore((s) => s.transcribeOnly)
   // Ultracut Beta — a separate OpenRouter test engine, wired to its own button.
   const runUltracut = useStore((s) => s.runUltracut)
@@ -176,6 +181,7 @@ export function useRetake(): RetakeModel {
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
     smartSilence,
     find: () => void runRetakeCutBeta(),
+    findSilences: () => void runFsmnSilence(),
     transcribeOnly: () => void transcribeOnly(),
     findUltracut: () => void runUltracut(),
     findPremium: () => void runPremiumCut(),

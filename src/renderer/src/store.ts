@@ -828,12 +828,15 @@ interface AppState {
    *  ALL cuts (retakes + silence) itself; no STT, no ONNX VAD. Same review-first
    *  contract (highlight + stage, apply on Execute cuts). Cloud-only. */
   runPremiumCut: () => Promise<void>
-  /** Additive "Find Silences": ensure a transcript (reuse project.transcript when
-   *  present, else run the SAME AssemblyAI transcribe step Retake β uses — NO judge,
-   *  NO word cuts), run the smartSilence engine (planSilence) over the words, and
-   *  stage the transcript-gap cuts as review-first PROTECTED SilenceRegions, exactly
-   *  like runRetakeCutBeta stages its silence. Never auto-executes. */
+  /** DORMANT — the transcript-gap engine it drove is retired (see
+   *  SMART_SILENCE_DORMANT in smartSilence/config). Kept for the restore path;
+   *  "Find Silences" is runFsmnSilence below. */
   runSmartSilence: () => Promise<void>
+  /** "Find Silences": the FSMN silence pass ALONE — same engine and same "Silence
+   *  settings" Find cuts uses, with no transcription and no retake judge. Stages
+   *  review-first PROTECTED SilenceRegions exactly like runRetakeCutBeta stages
+   *  its silence. Never auto-executes. */
+  runFsmnSilence: () => Promise<void>
   /** Additive: run ONLY the AssemblyAI transcribe step Retake β uses and store
    *  project.transcript — no judge, no silence, no word cuts. Powers the Transcript
    *  tab's transcribe-only button + runSmartSilence's transcript-ensure step. */
@@ -2555,6 +2558,50 @@ export const useStore = create<AppState>((set, get) => ({
           : 'Smart Silence: no gaps over the threshold — nothing to cut'
       }
     })
+  },
+
+  // "Find Silences" — silence ONLY, using the same FSMN engine and the same
+  // "Silence settings" (retakeFinalBossSettings) Find cuts uses. No transcription
+  // and no retake judge, so it is fast and free: the audio is decoded locally and
+  // the ONNX VAD runs in-browser. Review-first, identical to how runRetakeCutBeta
+  // stages its silence — nothing is cut until the panel's "Apply".
+  runFsmnSilence: async () => {
+    const runFsmn = (
+      window.api as {
+        fsmnSilence?: (path: string, onProgress?: (pct: number, msg?: string) => void) => Promise<SilenceRegion[]>
+      }
+    ).fsmnSilence
+    if (!runFsmn) {
+      set({ job: { active: false, percent: 0, message: 'Find Silences needs the cloud build.' } })
+      return
+    }
+    const stored = get().project
+    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+    if (!p0.media && (p0.baseSequence?.length ?? 0) === 0) {
+      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
+      return
+    }
+    set({ job: { active: true, kind: 'silence', percent: 1, message: 'Warming up…' } })
+    try {
+      const path = isMultiBase(p0) ? (await window.api.combineClips(p0.baseSequence!, true)).path : p0.media!.path
+      const regions = await runFsmn(path, (percent, message) =>
+        set({ job: { active: true, kind: 'silence', percent, message } })
+      )
+      set({
+        stagedSilences: regions,
+        stagedSilenceSel: new Set(regions.map((r) => r.id)),
+        retakeSilenceStaged: true,
+        job: {
+          active: false,
+          percent: 100,
+          message: regions.length
+            ? `${regions.length} silence${regions.length === 1 ? '' : 's'} found — review, then Apply`
+            : 'No silence found — nothing to cut'
+        }
+      })
+    } catch (e) {
+      set({ job: { active: false, percent: 0, message: `Find Silences couldn’t finish: ${safeErrMessage(e)}` } })
+    }
   },
 
   runUltracut: async () => {

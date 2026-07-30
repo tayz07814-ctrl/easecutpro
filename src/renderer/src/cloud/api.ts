@@ -4,7 +4,7 @@
 // on-device WebCodecs path. Retake β + transcription run in-browser against
 // the Supabase edge functions; the other engines are desktop/self-host-only
 // and their UI is hidden by IS_CLOUD gates.
-import type { Project, ProgressEvent } from '@shared/types'
+import type { Project, ProgressEvent, SilenceRegion } from '@shared/types'
 import { generateOverlaysCloud, suggestOverlaysCloud } from './overlayMatch'
 import { invokeEdge } from './supabase'
 import {
@@ -19,6 +19,8 @@ import {
 } from '../webmedia'
 import { hasNativeMedia, pickNativeMedia, nativeFileUrl, type NativePickKind } from './nativeMedia'
 import { retakeAwareCutCloud, ultracutCutCloud, transcribeCloud } from './retakeEngine'
+import { fsmnSilenceOnly } from './retakeFinalBossVad'
+import { extractSttAudio } from './audio'
 import { premiumCutCloud } from './premiumEngine'
 import { cutCutProCloud } from './procutEngine'
 import { detectSilenceCloud } from './vad'
@@ -148,6 +150,8 @@ function needLocal(path: string): string {
 const cloudApi: Window['api'] & {
   ultracutCut: Window['api']['retakeAwareCut']
   premiumCut: Window['api']['retakeAwareCut']
+  /** "Find Silences" — the FSMN silence pass on its own (no STT, no judge). */
+  fsmnSilence: (path: string, onProgress?: (pct: number, msg?: string) => void) => Promise<SilenceRegion[]>
   openAudioDialogMulti: () => Promise<{ path: string; name: string }[]>
 } = {
   // No PC binaries in the cloud — feature gating happens via IS_CLOUD in the
@@ -252,6 +256,29 @@ const cloudApi: Window['api'] & {
       (pct, msg) => emit('transcribe', pct, msg),
       useStore.getState().retakeFinalBossSettings
     ),
+
+  // "Find Silences" — the same FSMN engine and the same "Silence settings"
+  // (retakeFinalBossSettings) Find cuts uses, minus transcription and the retake
+  // judge. Decodes the audio locally and runs the ONNX VAD in-browser, so there
+  // is no edge-function round trip and no STT cost.
+  fsmnSilence: async (path, onProgress) => {
+    const id = needLocal(path)
+    const op = (pct: number, msg?: string): void => {
+      onProgress?.(pct, msg)
+      emit('silence', pct, msg)
+    }
+    op(4, 'Getting your audio ready…')
+    const audio = await extractSttAudio(id, (p) => op(4 + Math.round(p * 0.36)))
+    op(45, 'Listening for pauses…')
+    const regions = await fsmnSilenceOnly(
+      audio.float32,
+      audio.sampleRate,
+      audio.durationS,
+      useStore.getState().retakeFinalBossSettings
+    )
+    op(100, `Found ${regions.length} silence${regions.length === 1 ? '' : 's'}`)
+    return regions
+  },
 
   // Ultracut (Beta) — a SEPARATE experimental engine (ultracut-judge, OpenRouter
   // GLM 5.2). Shares nothing with Retake Beta's Opus judge; exposed as its own

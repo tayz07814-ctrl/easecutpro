@@ -58,6 +58,20 @@ export function getFsmnPreset(id: string | null | undefined): SilencePreset {
 export const FSMN_AFTER_SPEECH_CUSHION_S = 0.16
 export const FSMN_BEFORE_SPEECH_CUSHION_S = 0.26
 
+// Quiet-tail trim — ON BY DEFAULT, applied after the seam geometry above.
+//
+// FSMN marks where speech stops, but a take rarely stops cleanly there: the clip
+// hangs on a breath, room tone, or a mic settling. That tail is inaudible as
+// speech yet audible as a lag before the cut. So we look at the last
+// TAIL_TRIM_WINDOW_S of every CLIP ENDING (never an opening) and, when it is
+// quieter than TAIL_TRIM_DB, pull the cut that much earlier — there is no speech
+// left in that window to protect.
+//
+// -22 dBFS sits below conversational speech but above a noise floor, so a real
+// trailing word keeps the clip and only dead air is caught.
+export const TAIL_TRIM_DB = -22
+export const TAIL_TRIM_WINDOW_S = 0.2
+
 export function alignFinalBossFsmnGaps(
   rawGaps: { start: number; end: number }[],
   durationS: number
@@ -175,8 +189,14 @@ export function planFinalBossSilenceCuts(
   for (const [index, source] of rawGaps.entries()) {
     const start = Math.max(0, Math.min(durationS, source.start))
     const end = Math.max(0, Math.min(durationS, source.end))
-    const cutStart = start + Math.max(0, settings.padAfterS - settings.trimEdgesS)
-    const cutEnd = end - Math.max(0, settings.padBeforeS - settings.trimEdgesS)
+    // `trimEdgesS` first consumes the protected padding, then keeps cutting PAST
+    // the VAD-defined boundary. That second half is the point of the control: a
+    // zero-padding preset (Espresso Shot is 0/0/50ms) had nothing left to eat, so
+    // the old `Math.max(0, pad - trim)` floor pinned both edges to the gap and the
+    // setting did nothing. The bite past the boundary is bounded by the slider —
+    // normalizeRetakeFinalBossSettings caps trimEdgesS at 0.2s.
+    const cutStart = Math.max(0, start + settings.padAfterS - settings.trimEdgesS)
+    const cutEnd = Math.min(durationS, end - settings.padBeforeS + settings.trimEdgesS)
     if (cutEnd - cutStart < 0.04) continue
     output.push({
       id: `finalboss-sil-${index}`,
@@ -186,5 +206,15 @@ export function planFinalBossSilenceCuts(
       protect: true
     })
   }
-  return output
+
+  // Trim can push a cut past its own gap, so two close pauses can end up on
+  // overlapping spans. Collapse them — protected regions are applied verbatim
+  // downstream, and overlapping verbatim spans would double-cut.
+  const merged: SilenceRegion[] = []
+  for (const region of output.sort((a, b) => a.start - b.start)) {
+    const last = merged[merged.length - 1]
+    if (last && region.start <= last.end) last.end = Math.max(last.end, region.end)
+    else merged.push({ ...region })
+  }
+  return merged.map((region, i) => ({ ...region, id: `finalboss-sil-${i}` }))
 }
