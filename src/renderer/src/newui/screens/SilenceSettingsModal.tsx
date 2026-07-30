@@ -52,7 +52,7 @@ export default function SilenceSettingsModal(): JSX.Element | null {
         <div style={css('display:flex;align-items:flex-start;justify-content:space-between')}>
           <div>
             <div style={css('font-size:16px;font-weight:650')}>Silence Settings</div>
-            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>Pick a vibe. FSMN detects the speech automatically — Retake detection is unaffected.</div>
+            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>Pick a vibe. FSMN listens to the audio — the final step of Find cuts, after the retake AI. Combined with Smart Silence settings, so the deeper trim wins at each pause.</div>
           </div>
           <div onClick={sil.close} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
         </div>
