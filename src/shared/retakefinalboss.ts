@@ -175,8 +175,15 @@ export function planFinalBossSilenceCuts(
   for (const [index, source] of rawGaps.entries()) {
     const start = Math.max(0, Math.min(durationS, source.start))
     const end = Math.max(0, Math.min(durationS, source.end))
-    const cutStart = start + Math.max(0, settings.padAfterS - settings.trimEdgesS)
-    const cutEnd = end - Math.max(0, settings.padBeforeS - settings.trimEdgesS)
+    // `trimEdgesS` first consumes the protected padding, then keeps going PAST
+    // the speech transition. That second half is what makes a zero-padding
+    // preset mean anything: Espresso Shot is padBefore 0 / padAfter 0, so the
+    // old `Math.max(0, pad - trim)` floor pinned both edges to the gap boundary
+    // and silently zeroed the control — the preset's only setting did nothing.
+    // The bite past the boundary is bounded by the slider itself (normalize
+    // caps trimEdgesS at 0.2s), so it can never run away into a whole word.
+    const cutStart = Math.max(0, start + settings.padAfterS - settings.trimEdgesS)
+    const cutEnd = Math.min(durationS, end - settings.padBeforeS + settings.trimEdgesS)
     if (cutEnd - cutStart < 0.04) continue
     output.push({
       id: `finalboss-sil-${index}`,
@@ -186,5 +193,15 @@ export function planFinalBossSilenceCuts(
       protect: true
     })
   }
-  return output
+
+  // Trim can now push a cut past its own gap, so two closely spaced pauses can
+  // land on overlapping spans. Collapse them — protected regions are applied
+  // verbatim downstream, and overlapping verbatim spans would double-cut.
+  const merged: SilenceRegion[] = []
+  for (const region of output.sort((a, b) => a.start - b.start)) {
+    const last = merged[merged.length - 1]
+    if (last && region.start <= last.end) last.end = Math.max(last.end, region.end)
+    else merged.push({ ...region })
+  }
+  return merged.map((region, i) => ({ ...region, id: `finalboss-sil-${i}` }))
 }
