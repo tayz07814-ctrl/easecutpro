@@ -27,6 +27,11 @@ class ExportSegment {
   final double speed; // 1 = normal
   final double volume; // 1 = unity gain, 0 = mute
   final double cropL, cropT, cropR, cropB; // fractions cropped from each edge
+  // Ken Burns moving pan/zoom (baked by the native compositor as a time-varying
+  // transform). When [kb], framing lerps (kbFromScale @ kbFromCx,kbFromCy) →
+  // (kbToScale @ kbToCx,kbToCy) across the clip. scale ≥1; centres 0..1 (.5=mid).
+  final bool kb;
+  final double kbFromScale, kbToScale, kbFromCx, kbFromCy, kbToCx, kbToCy;
   final int timelineStartMs; // audio: lead-in offset before the track plays
   const ExportSegment({
     required this.uri,
@@ -38,6 +43,13 @@ class ExportSegment {
     this.cropT = 0,
     this.cropR = 0,
     this.cropB = 0,
+    this.kb = false,
+    this.kbFromScale = 1.0,
+    this.kbToScale = 1.0,
+    this.kbFromCx = 0.5,
+    this.kbFromCy = 0.5,
+    this.kbToCx = 0.5,
+    this.kbToCy = 0.5,
     this.timelineStartMs = 0,
   });
   Map<String, dynamic> toMap() => {
@@ -50,6 +62,13 @@ class ExportSegment {
         'cropT': cropT,
         'cropR': cropR,
         'cropB': cropB,
+        'kb': kb,
+        'kbFromScale': kbFromScale,
+        'kbToScale': kbToScale,
+        'kbFromCx': kbFromCx,
+        'kbFromCy': kbFromCy,
+        'kbToCx': kbToCx,
+        'kbToCy': kbToCy,
         'timelineStartMs': timelineStartMs,
       };
 }

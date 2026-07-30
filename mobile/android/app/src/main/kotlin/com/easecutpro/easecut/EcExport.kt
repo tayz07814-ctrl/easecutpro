@@ -3,6 +3,7 @@ package com.easecutpro.easecut
 import android.content.Context
 import android.content.ContentValues
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -24,6 +25,7 @@ import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.effect.Crop
+import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.SpeedChangeEffect
@@ -458,6 +460,19 @@ class EcExport(
             if (cl > 0f || ct > 0f || cr > 0f || cb > 0f) {
                 vfx.add(Crop(-1f + 2f * cl, 1f - 2f * cr, -1f + 2f * cb, 1f - 2f * ct))
             }
+            // Ken Burns moving pan/zoom — a per-frame scale+translate that glides the
+            // framing across the clip (Dart zeroes crop when this is on). Added before
+            // speed so its frame timestamps run 0..span.
+            if ((seg["kb"] as? Boolean) == true) {
+                val fs = (seg["kbFromScale"] as? Number)?.toFloat() ?: 1f
+                val ts = (seg["kbToScale"] as? Number)?.toFloat() ?: 1f
+                val fx = (seg["kbFromCx"] as? Number)?.toDouble() ?: 0.5
+                val fy = (seg["kbFromCy"] as? Number)?.toDouble() ?: 0.5
+                val txc = (seg["kbToCx"] as? Number)?.toDouble() ?: 0.5
+                val tyc = (seg["kbToCy"] as? Number)?.toDouble() ?: 0.5
+                val spanUs = (if (endMs > startMs) (endMs - startMs) else 0L) * 1000.0
+                vfx.add(kenBurns(fs, ts, fx, fy, txc, tyc, spanUs))
+            }
             if (speed != 1f && speed > 0f) {
                 vfx.add(SpeedChangeEffect(speed))
                 val sonic = SonicAudioProcessor()
@@ -513,6 +528,44 @@ class EcExport(
         }
 
         return Composition.Builder(sequences).build()
+    }
+
+    /**
+     * A Ken Burns time-varying transform. Per output frame it lerps a zoom (scale ≥1)
+     * and a visible-window CENTRE (0..1) between the from/to keyframes, then returns
+     * the NDC matrix that shows that window (translate the centre to the origin, then
+     * scale up). The window is clamped inside the frame so it never reveals an edge.
+     * [spanUs] is the clip's pre-speed duration; the effect runs before any speed
+     * change, so frame timestamps arrive as 0..span.
+     */
+    private fun kenBurns(
+        fromScale: Float,
+        toScale: Float,
+        fromCx: Double,
+        fromCy: Double,
+        toCx: Double,
+        toCy: Double,
+        spanUs: Double,
+    ): MatrixTransformation {
+        // Normalise against the FIRST frame this instance sees (a fresh instance per
+        // clip) so it works whether Media3 hands us clip-relative or sequence-cumulative
+        // timestamps — either way `rel` runs 0..span across this clip.
+        var baseUs = Long.MIN_VALUE
+        return MatrixTransformation { presentationTimeUs ->
+            if (baseUs == Long.MIN_VALUE) baseUs = presentationTimeUs
+            val rel = (presentationTimeUs - baseUs).toDouble()
+            val f = if (spanUs > 0.0) (rel / spanUs).coerceIn(0.0, 1.0) else 0.0
+            val s = (fromScale + (toScale - fromScale) * f.toFloat()).coerceAtLeast(1.0f)
+            val half = (1.0 / s) / 2.0
+            val cx = (fromCx + (toCx - fromCx) * f).coerceIn(half, 1.0 - half)
+            val cy = (fromCy + (toCy - fromCy) * f).coerceIn(half, 1.0 - half)
+            val ndcx = (cx * 2.0 - 1.0).toFloat()
+            val ndcy = -(cy * 2.0 - 1.0).toFloat() // image y-down → NDC y-up
+            val m = Matrix()
+            m.postTranslate(-ndcx, -ndcy)
+            m.postScale(s, s)
+            m
+        }
     }
 
     /**

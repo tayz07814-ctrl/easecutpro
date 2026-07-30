@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
@@ -222,74 +224,257 @@ class _ZoomSheetState extends State<ZoomSheet> {
   }
 }
 
-/// Per-clip Crop to an aspect (centered). Emits edge fractions via [onPick].
-class CropSheet extends StatelessWidget {
-  final double sourceAspect; // w / h
-  final void Function(double l, double t, double r, double b) onPick;
-  const CropSheet({super.key, required this.sourceAspect, required this.onPick});
+/// Per-clip visual Crop — drag the corners of a live crop box over a frame of the
+/// clip (rule-of-thirds grid), or snap to an aspect preset. Emits edge fractions
+/// live via [onChange] as the box is dragged; the editor applies them to the
+/// preview immediately. Free-form by default; presets centre a fixed aspect.
+class CropSheet extends StatefulWidget {
+  final double sourceAspect; // w / h of the source frame
+  final Uint8List? frame; // optional preview JPEG (nearest thumbnail)
+  final double initL, initT, initR, initB;
+  final void Function(double l, double t, double r, double b) onChange;
+  const CropSheet({
+    super.key,
+    required this.sourceAspect,
+    this.frame,
+    this.initL = 0,
+    this.initT = 0,
+    this.initR = 0,
+    this.initB = 0,
+    required this.onChange,
+  });
 
+  @override
+  State<CropSheet> createState() => _CropSheetState();
+}
+
+class _CropSheetState extends State<CropSheet> {
+  late double _l = widget.initL, _t = widget.initT, _r = widget.initR, _b = widget.initB;
+  static const _minVis = 0.12; // never crop below 12% of a dimension
+
+  // label → target aspect (w/h). -1 = Free (leave the box as-is), 0 = Original.
   static const _presets = <String, double>{
+    'Free': -1,
     'Original': 0,
     '1:1': 1.0,
-    '4:5': 4 / 5,
     '9:16': 9 / 16,
     '16:9': 16 / 9,
+    '4:5': 4 / 5,
     '3:4': 3 / 4,
   };
 
-  List<double> _cropFor(double ta, double sa) {
-    if (ta <= 0 || sa <= 0) return const [0, 0, 0, 0];
-    if ((ta - sa).abs() < 0.001) return const [0, 0, 0, 0];
-    if (ta < sa) {
+  void _emit() => widget.onChange(_l, _t, _r, _b);
+  void _apply(VoidCallback f) {
+    setState(f);
+    _emit();
+  }
+
+  void _snap(double ta) {
+    if (ta < 0) return; // Free
+    final sa = widget.sourceAspect > 0 ? widget.sourceAspect : 16 / 9;
+    List<double> c;
+    if (ta == 0 || (ta - sa).abs() < 0.001) {
+      c = const [0, 0, 0, 0];
+    } else if (ta < sa) {
       final vw = ta / sa;
-      final c = (1 - vw) / 2;
-      return [c, 0, c, 0];
+      final m = (1 - vw) / 2;
+      c = [m, 0, m, 0];
+    } else {
+      final vh = sa / ta;
+      final m = (1 - vh) / 2;
+      c = [0, m, 0, m];
     }
-    final vh = sa / ta;
-    final c = (1 - vh) / 2;
-    return [0, c, 0, c];
+    _apply(() {
+      _l = c[0];
+      _t = c[1];
+      _r = c[2];
+      _b = c[3];
+    });
+  }
+
+  void _dragCorner(bool left, bool top, Offset delta, double mw, double mh) {
+    _apply(() {
+      final dx = delta.dx / mw, dy = delta.dy / mh;
+      if (left) {
+        _l = (_l + dx).clamp(0.0, 1 - _r - _minVis).toDouble();
+      } else {
+        _r = (_r - dx).clamp(0.0, 1 - _l - _minVis).toDouble();
+      }
+      if (top) {
+        _t = (_t + dy).clamp(0.0, 1 - _b - _minVis).toDouble();
+      } else {
+        _b = (_b - dy).clamp(0.0, 1 - _t - _minVis).toDouble();
+      }
+    });
+  }
+
+  void _move(Offset delta, double mw, double mh) {
+    _apply(() {
+      final dx = (delta.dx / mw).clamp(-_l, _r).toDouble();
+      final dy = (delta.dy / mh).clamp(-_t, _b).toDouble();
+      _l += dx;
+      _r -= dx;
+      _t += dy;
+      _b -= dy;
+    });
+  }
+
+  Widget _handle(Offset c, bool left, bool top, double mw, double mh) {
+    const s = 30.0;
+    return Positioned(
+      left: c.dx - s / 2,
+      top: c.dy - s / 2,
+      width: s,
+      height: s,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanUpdate: (d) => _dragCorner(left, top, d.delta, mw, mh),
+        child: Center(
+          child: Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+              color: Ec.indigo,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return SheetScaffold(
-      title: 'Crop / Aspect',
-      heightFactor: 0.5,
+      title: 'Crop',
+      heightFactor: 0.64,
+      trailing: GradientButton(label: 'Done', onTap: () => Navigator.of(context).pop()),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 6, 18, 18),
-        child: Wrap(
-          spacing: 10,
-          runSpacing: 10,
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            for (final e in _presets.entries)
-              GestureDetector(
-                onTap: () {
-                  final c = _cropFor(e.value, sourceAspect);
-                  onPick(c[0].toDouble(), c[1].toDouble(), c[2].toDouble(), c[3].toDouble());
-                  Navigator.of(context).pop();
-                },
-                child: Container(
-                  width: 96,
-                  height: 62,
-                  decoration: BoxDecoration(
-                    color: Ec.chip,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+            Expanded(
+              child: LayoutBuilder(
+                builder: (_, bc) {
+                  final aw = bc.maxWidth, ah = bc.maxHeight;
+                  final aspect = widget.sourceAspect > 0 ? widget.sourceAspect : 16 / 9;
+                  double mw = aw, mh = aw / aspect;
+                  if (mh > ah) {
+                    mh = ah;
+                    mw = ah * aspect;
+                  }
+                  final ox = (aw - mw) / 2, oy = (ah - mh) / 2;
+                  final media = Rect.fromLTWH(ox, oy, mw, mh);
+                  final crop = Rect.fromLTRB(
+                    ox + _l * mw,
+                    oy + _t * mh,
+                    ox + (1 - _r) * mw,
+                    oy + (1 - _b) * mh,
+                  );
+                  return Stack(
                     children: [
-                      Icon(e.value == 0 ? Icons.crop_original : Icons.crop, size: 20, color: Ec.indigoText),
-                      const SizedBox(height: 5),
-                      Text(e.key,
-                          style: const TextStyle(color: Ec.textDim, fontSize: 12, fontWeight: FontWeight.w600)),
+                      Positioned.fromRect(
+                        rect: media,
+                        child: widget.frame != null
+                            ? Image.memory(widget.frame!, fit: BoxFit.fill, gaplessPlayback: true)
+                            : Container(
+                                color: Ec.chip,
+                                alignment: Alignment.center,
+                                child: const Icon(Icons.crop, size: 34, color: Ec.textFaint),
+                              ),
+                      ),
+                      Positioned.fill(child: CustomPaint(painter: _CropPainter(media, crop))),
+                      // move the whole box
+                      Positioned.fromRect(
+                        rect: crop,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onPanUpdate: (d) => _move(d.delta, mw, mh),
+                        ),
+                      ),
+                      _handle(crop.topLeft, true, true, mw, mh),
+                      _handle(crop.topRight, false, true, mw, mh),
+                      _handle(crop.bottomLeft, true, false, mw, mh),
+                      _handle(crop.bottomRight, false, false, mw, mh),
                     ],
-                  ),
-                ),
+                  );
+                },
               ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 40,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  for (final e in _presets.entries)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: GestureDetector(
+                        onTap: () => _snap(e.value),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: Ec.chip,
+                            borderRadius: BorderRadius.circular(9),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+                          ),
+                          child: Text(e.key,
+                              style: const TextStyle(
+                                  color: Ec.textDim, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text('Drag the corners to crop, or tap an aspect. Applies to this clip.',
+                style: TextStyle(color: Ec.textFaint, fontSize: 11.5)),
           ],
         ),
       ),
     );
   }
+}
+
+/// Paints the dim mask outside the crop box plus its border + rule-of-thirds grid.
+class _CropPainter extends CustomPainter {
+  final Rect media;
+  final Rect crop;
+  _CropPainter(this.media, this.crop);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final dim = Paint()..color = Colors.black.withValues(alpha: 0.5);
+    canvas.drawPath(
+      Path()
+        ..addRect(media)
+        ..addRect(crop)
+        ..fillType = PathFillType.evenOdd,
+      dim,
+    );
+    canvas.drawRect(
+      crop,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    final grid = Paint()
+      ..color = Colors.white.withValues(alpha: 0.35)
+      ..strokeWidth = 1;
+    for (var i = 1; i < 3; i++) {
+      final x = crop.left + crop.width * i / 3;
+      canvas.drawLine(Offset(x, crop.top), Offset(x, crop.bottom), grid);
+      final y = crop.top + crop.height * i / 3;
+      canvas.drawLine(Offset(crop.left, y), Offset(crop.right, y), grid);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CropPainter old) => old.crop != crop || old.media != media;
 }

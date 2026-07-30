@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -652,13 +653,40 @@ class _EditorScreenState extends State<EditorScreen> {
     final i = _selectedIndex();
     if (i < 0) return;
     _pushHistory();
+    final c = _model.clips[i];
     _openSheet(CropSheet(
       sourceAspect: _aspect,
-      onPick: (l, t, r, b) {
+      frame: _cropFrame(i),
+      initL: c.cropL,
+      initT: c.cropT,
+      initR: c.cropR,
+      initB: c.cropB,
+      onChange: (l, t, r, b) {
         _model.setCrop(i, l: l, t: t, r: r, b: b); // preview crop is Dart-side (no reload)
         setState(() {});
       },
     ));
+  }
+
+  /// A representative JPEG for the crop box: the filmstrip frame nearest the current
+  /// source position within clip [i] (falls back to null → the sheet shows a
+  /// placeholder box, still fully usable).
+  Uint8List? _cropFrame(int i) {
+    if (_thumbs.isEmpty || i < 0 || i >= _model.clips.length) return null;
+    final c = _model.clips[i];
+    final sp = c.speed <= 0 ? 1.0 : c.speed;
+    final within = (_positionMs - _model.clipStartMs(i)).clamp(0, c.timelineLenMs);
+    final srcMs = c.inMs + (within * sp).round();
+    ThumbFrame? best;
+    int bestD = 1 << 30;
+    for (final t in _thumbs) {
+      final d = (t.ms - srcMs).abs();
+      if (d < bestD) {
+        bestD = d;
+        best = t;
+      }
+    }
+    return best?.jpeg;
   }
 
   void _openZoom() {
@@ -819,6 +847,17 @@ class _EditorScreenState extends State<EditorScreen> {
       final applied = <int>{};
       _pushHistory();
       picks.sort((a, b) => b.level.compareTo(a.level));
+      // Ken Burns pan directions (dx, dy) in normalized frame units — the window
+      // centre glides from -dir to +dir while it slowly pushes in. Mostly horizontal
+      // so the motion reads clearly; cycled so consecutive moments feel different.
+      const dirs = <List<double>>[
+        [1.0, 0.0], // pan right
+        [-1.0, 0.0], // pan left
+        [0.6, 0.5], // drift up-right
+        [-0.6, 0.5], // drift up-left
+        [0.0, 0.0], // straight push-in
+        [0.6, -0.5], // drift down-right
+      ];
       var n = 0;
       for (final p in picks) {
         if (applied.length >= budget) break;
@@ -826,14 +865,27 @@ class _EditorScreenState extends State<EditorScreen> {
         if (applied.contains(p.i) || applied.contains(p.i - 1) || applied.contains(p.i + 1)) continue;
         applied.add(p.i);
         final clipIdx = eligible[p.i]['clipIdx'] as int;
-        final crop = (1.0 - 1.0 / p.level) / 2.0;
-        _model.setCrop(clipIdx, l: crop, t: crop, r: crop, b: crop);
+        final level = p.level.clamp(1.08, 1.2).toDouble(); // start zoom
+        final endScale = (level * 1.06).clamp(1.0, 1.4).toDouble(); // slow push-in
+        // how far the window centre can drift at the start zoom without leaving frame
+        final drift = ((1.0 - 1.0 / level) / 2.0).clamp(0.0, 0.45).toDouble() * 0.75;
+        final d = dirs[n % dirs.length];
+        _model.setKenBurns(
+          clipIdx,
+          fromScale: level,
+          toScale: endScale,
+          fromCx: 0.5 - d[0] * drift,
+          fromCy: 0.5 - d[1] * drift,
+          toCx: 0.5 + d[0] * drift,
+          toCy: 0.5 + d[1] * drift,
+        );
         n++;
       }
       if (mounted) Navigator.of(context).pop();
       prog.dispose();
       await _reload(seekTo: 0);
-      _toast(n > 0 ? 'Added zoom to $n moment${n == 1 ? '' : 's'}.' : 'No zooms added.');
+      _maybeUpdateProxy(); // re-bake the flat proxy so the pan previews smoothly
+      _toast(n > 0 ? 'Added a moving zoom to $n moment${n == 1 ? '' : 's'}.' : 'No zooms added.');
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       prog.dispose();
@@ -1312,17 +1364,37 @@ class _EditorScreenState extends State<EditorScreen> {
   /// Cover-zoom the preview to the crop of the clip under the playhead (per-clip,
   /// matching the export Crop effect).
   Widget _cropped(Widget child) {
-    // The flat proxy already has each clip's crop baked in — re-cropping here would
-    // double it, so pass the texture straight through while the proxy is active.
+    // The flat proxy already has each clip's crop / Ken Burns pan baked in —
+    // re-framing here would double it, so pass the texture straight through while
+    // the proxy is active.
     if (_proxyActive) return child;
     final idx = _model.clipIndexAt(_positionMs);
     if (idx < 0 || idx >= _model.clips.length) return child;
     final c = _model.clips[idx];
-    if (!c.hasCrop) return child;
-    final vw = (1 - c.cropL - c.cropR).clamp(0.05, 1.0);
-    final vh = (1 - c.cropT - c.cropB).clamp(0.05, 1.0);
-    final ax = (c.cropL + c.cropR) > 0 ? (c.cropL - c.cropR) / (c.cropL + c.cropR) : 0.0;
-    final ay = (c.cropT + c.cropB) > 0 ? (c.cropT - c.cropB) / (c.cropT + c.cropB) : 0.0;
+    double vw, vh, ax, ay;
+    if (c.kb) {
+      // Ken Burns: interpolate scale + window centre by the playhead's position in
+      // this clip (the 60 fps interpolation tick re-renders us, so the pan glides).
+      final start = _model.clipStartMs(idx);
+      final len = c.timelineLenMs > 0 ? c.timelineLenMs : 1;
+      final f = ((_positionMs - start) / len).clamp(0.0, 1.0);
+      final scale = (c.kbFromScale + (c.kbToScale - c.kbFromScale) * f).clamp(1.0, 4.0).toDouble();
+      final vis = (1.0 / scale);
+      final half = vis / 2.0;
+      final cx = (c.kbFromCx + (c.kbToCx - c.kbFromCx) * f).clamp(half, 1.0 - half).toDouble();
+      final cy = (c.kbFromCy + (c.kbToCy - c.kbFromCy) * f).clamp(half, 1.0 - half).toDouble();
+      vw = vis.clamp(0.05, 1.0).toDouble();
+      vh = vw;
+      ax = (1 - vw) > 1e-6 ? (2 * (cx - vw / 2) / (1 - vw) - 1).clamp(-1.0, 1.0).toDouble() : 0.0;
+      ay = (1 - vh) > 1e-6 ? (2 * (cy - vh / 2) / (1 - vh) - 1).clamp(-1.0, 1.0).toDouble() : 0.0;
+    } else if (c.hasCrop) {
+      vw = (1 - c.cropL - c.cropR).clamp(0.05, 1.0).toDouble();
+      vh = (1 - c.cropT - c.cropB).clamp(0.05, 1.0).toDouble();
+      ax = (c.cropL + c.cropR) > 0 ? (c.cropL - c.cropR) / (c.cropL + c.cropR) : 0.0;
+      ay = (c.cropT + c.cropB) > 0 ? (c.cropT - c.cropB) / (c.cropT + c.cropB) : 0.0;
+    } else {
+      return child;
+    }
     return ClipRect(
       child: LayoutBuilder(
         builder: (_, bc) => OverflowBox(

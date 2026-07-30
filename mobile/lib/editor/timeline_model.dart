@@ -16,6 +16,13 @@ class EcClip {
   double speed;
   double volume;
   double cropL, cropT, cropR, cropB; // fractions cropped from each edge (0..~0.9)
+  // Ken Burns moving pan/zoom. When [kb] is on, preview + export interpolate the
+  // framing from (kbFromScale @ kbFromCx,kbFromCy) to (kbToScale @ kbToCx,kbToCy)
+  // linearly across the clip's span. scale ≥1 (1 = whole frame); cx/cy are the
+  // visible-window CENTRE in normalized source coords (0..1, .5 = middle). A live
+  // pan REPLACES any static crop on the same clip.
+  bool kb;
+  double kbFromScale, kbToScale, kbFromCx, kbFromCy, kbToCx, kbToCy;
   EcClip(
     this.sourcePath,
     this.inMs,
@@ -26,6 +33,13 @@ class EcClip {
     this.cropT = 0,
     this.cropR = 0,
     this.cropB = 0,
+    this.kb = false,
+    this.kbFromScale = 1.0,
+    this.kbToScale = 1.0,
+    this.kbFromCx = 0.5,
+    this.kbFromCy = 0.5,
+    this.kbToCx = 0.5,
+    this.kbToCy = 0.5,
   });
 
   int get lengthMs => (outMs - inMs) < 0 ? 0 : (outMs - inMs); // source span
@@ -35,9 +49,22 @@ class EcClip {
   }
 
   bool get hasCrop => cropL > 0 || cropT > 0 || cropR > 0 || cropB > 0;
+  bool get hasKenBurns => kb;
 
   EcClip copy() => EcClip(sourcePath, inMs, outMs,
-      speed: speed, volume: volume, cropL: cropL, cropT: cropT, cropR: cropR, cropB: cropB);
+      speed: speed,
+      volume: volume,
+      cropL: cropL,
+      cropT: cropT,
+      cropR: cropR,
+      cropB: cropB,
+      kb: kb,
+      kbFromScale: kbFromScale,
+      kbToScale: kbToScale,
+      kbFromCx: kbFromCx,
+      kbFromCy: kbFromCy,
+      kbToCx: kbToCx,
+      kbToCy: kbToCy);
 
   Map<String, dynamic> toJson() => {
         'src': sourcePath,
@@ -49,6 +76,13 @@ class EcClip {
         'ct': cropT,
         'cr': cropR,
         'cb': cropB,
+        'kb': kb,
+        'kfs': kbFromScale,
+        'kts': kbToScale,
+        'kfx': kbFromCx,
+        'kfy': kbFromCy,
+        'ktx': kbToCx,
+        'kty': kbToCy,
       };
 
   factory EcClip.fromJson(Map j) => EcClip(
@@ -61,6 +95,13 @@ class EcClip {
         cropT: (j['ct'] as num?)?.toDouble() ?? 0,
         cropR: (j['cr'] as num?)?.toDouble() ?? 0,
         cropB: (j['cb'] as num?)?.toDouble() ?? 0,
+        kb: (j['kb'] as bool?) ?? false,
+        kbFromScale: (j['kfs'] as num?)?.toDouble() ?? 1.0,
+        kbToScale: (j['kts'] as num?)?.toDouble() ?? 1.0,
+        kbFromCx: (j['kfx'] as num?)?.toDouble() ?? 0.5,
+        kbFromCy: (j['kfy'] as num?)?.toDouble() ?? 0.5,
+        kbToCx: (j['ktx'] as num?)?.toDouble() ?? 0.5,
+        kbToCy: (j['kty'] as num?)?.toDouble() ?? 0.5,
       );
 }
 
@@ -130,6 +171,13 @@ class TimelineModel extends ChangeNotifier {
             cropT: c.cropT,
             cropR: c.cropR,
             cropB: c.cropB,
+            kb: c.kb,
+            kbFromScale: c.kbFromScale,
+            kbToScale: c.kbToScale,
+            kbFromCx: c.kbFromCx,
+            kbFromCy: c.kbFromCy,
+            kbToCx: c.kbToCx,
+            kbToCy: c.kbToCy,
           ))
       .toList();
 
@@ -214,6 +262,38 @@ class TimelineModel extends ChangeNotifier {
     if (t != null) c.cropT = t.clamp(0.0, 0.9);
     if (r != null) c.cropR = r.clamp(0.0, 0.9);
     if (b != null) c.cropB = b.clamp(0.0, 0.9);
+    c.kb = false; // a manual crop / punch-in replaces any Ken Burns pan
+    notifyListeners();
+  }
+
+  /// Apply a Ken Burns moving pan/zoom to a clip: framing glides from
+  /// (fromScale @ fromCx,fromCy) to (toScale @ toCx,toCy) over the clip. Scale ≥1
+  /// (1 = whole frame); centres are 0..1 (.5 = middle). Clears any static crop.
+  void setKenBurns(int index,
+      {required double fromScale,
+      required double toScale,
+      required double fromCx,
+      required double fromCy,
+      required double toCx,
+      required double toCy}) {
+    if (index < 0 || index >= clips.length) return;
+    final c = clips[index];
+    c.kb = true;
+    c.kbFromScale = fromScale.clamp(1.0, 4.0);
+    c.kbToScale = toScale.clamp(1.0, 4.0);
+    c.kbFromCx = fromCx.clamp(0.0, 1.0);
+    c.kbFromCy = fromCy.clamp(0.0, 1.0);
+    c.kbToCx = toCx.clamp(0.0, 1.0);
+    c.kbToCy = toCy.clamp(0.0, 1.0);
+    c.cropL = c.cropT = c.cropR = c.cropB = 0; // pan owns the framing now
+    notifyListeners();
+  }
+
+  /// Turn a clip's Ken Burns pan off (back to full frame / static crop).
+  void clearKenBurns(int index) {
+    if (index < 0 || index >= clips.length) return;
+    if (!clips[index].kb) return;
+    clips[index].kb = false;
     notifyListeners();
   }
 
