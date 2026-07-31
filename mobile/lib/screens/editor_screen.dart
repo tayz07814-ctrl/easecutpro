@@ -360,6 +360,13 @@ class _EditorScreenState extends State<EditorScreen> {
   /// clip, or a single clip trimmed off its source. A full, untrimmed clip already
   /// previews smoothly on the live player, so we skip the proxy for it.
   bool _proxyWorthwhile() {
+    // Disabled: the native preview now plays the cut list through Media3
+    // CompositionPlayer, which steps over removed ranges in one continuous decode
+    // (seamless across seams, no proxy render / pre-warm). The flatten proxy is kept
+    // in the tree but no longer used for playback, so crop + the Ken Burns pan render
+    // live via `_cropped` and the player always receives the real cut segments.
+    return false;
+    // ignore: dead_code
     final clips = _model.clips;
     if (clips.length > 1) return true;
     if (clips.length == 1) {
