@@ -2674,14 +2674,46 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     engine.batch(variation.name ? `Variation: ${variation.name}` : 'Apply variation', cmds)
-    const total = variationDuration(variation)
-    set({
+
+    // A variation IS the edit, so the legacy cut state has to go with it.
+    //
+    // TimelinePanel keeps the main lane in sync with the legacy cut fields: in
+    // doc mode it ripple-deletes computeKeepRanges' removals out of the lane
+    // whenever the cut signature changes, and in legacy mode it rebuilds the doc
+    // from those fields outright. Either way, leaving stale silences or deleted
+    // transcript words behind means the next cut-state change re-subtracts them
+    // FROM the variation — the creator asked for 79.8–86.8s and silently got a
+    // shorter clip with its pauses removed.
+    //
+    // Clearing them makes computeKeepRanges return the whole source, so that sync
+    // becomes a no-op and the arrangement is exactly what the JSON asked for. The
+    // doc is also written straight to project.timeline so it is authoritative even
+    // if the timeline panel is unmounted and its persist subscriber never runs.
+    const transcript = get().project.transcript
+    set((s) => ({
+      project: {
+        ...s.project,
+        timeline: engine.document,
+        silences: [],
+        manualCuts: [],
+        keepOverrides: [],
+        baseSplits: [],
+        transcript:
+          transcript && transcript.words.some((w) => w.deleted)
+            ? { ...transcript, words: transcript.words.map((w) => (w.deleted ? { ...w, deleted: false } : w)) }
+            : transcript
+      },
+      // Pending review state belongs to the edit we just replaced.
+      stagedSilences: [],
+      stagedSilenceSel: new Set<string>(),
+      retakeSilenceStaged: false,
+      selectedWordIds: new Set<string>(),
       job: {
         active: false,
         percent: 100,
-        message: `${variation.clips.length} clip${variation.clips.length === 1 ? '' : 's'} arranged — ${total.toFixed(1)}s`
+        message: `${variation.clips.length} clip${variation.clips.length === 1 ? '' : 's'} arranged — ${variationDuration(variation).toFixed(1)}s`
       }
-    })
+    }))
   },
 
   runUltracut: async () => {

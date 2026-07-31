@@ -151,7 +151,7 @@ export default function VariationsPanel(): JSX.Element {
             {applied ? 'Re-apply arrangement' : `Apply ${variation.clips.length} clip${variation.clips.length === 1 ? '' : 's'}`}
           </button>
           <div style={css('margin-top:8px;font-size:11px;color:#6e6e85;line-height:1.5')}>
-            Replaces the main video track. Undo (⌘Z) puts it back.
+            Replaces the main video track and clears any existing cuts, so your clips play exactly as listed — pauses and all. Undo (⌘Z) puts it back.
           </div>
         </>
       )}
