@@ -32,6 +32,12 @@ export interface RetakeModel {
   isDeleted: (id: string) => boolean
   isChipSel: (stagedId?: string) => boolean
   smartSilence: boolean
+  /** Selected staged silences as plain spans. "Find Silences" needs NO transcript,
+   *  so when there is none these are the only cuts there are to show — the chip
+   *  path below is anchored to transcript words and yields nothing. */
+  stagedSilenceCuts: { id: string; startS: number; endS: number }[]
+  /** Source runtime, for the summary when there is no transcript to measure. */
+  sourceDurationS: number
   /** count of committed (executed) word cuts still in effect. */
   deletedCount: number
   // actions
@@ -108,7 +114,10 @@ export function useRetake(): RetakeModel {
   if (transcript) for (const w of transcript.words) if (w.deleted) deletedIds.add(w.id)
 
   const failed = !job.active && job.percent === 0 && !!job.message && /fail|couldn|could not|didn/i.test(job.message)
-  const hasResults = !!transcript && (selected.size > 0 || staged.length > 0)
+  // NOT gated on a transcript: FSMN "Find Silences" stages cuts without ever
+  // transcribing, and requiring one here dropped the panel straight back to its
+  // idle screen — the silences were found and staged, but nothing was rendered.
+  const hasResults = selected.size > 0 || staged.length > 0
 
   // The panel is in the EXECUTED review whenever committed cuts exist — no matter
   // HOW they were applied (the panel's Execute button, the import wizard, or a
@@ -186,6 +195,8 @@ export function useRetake(): RetakeModel {
     isDeleted: (id) => deletedIds.has(id),
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
     smartSilence,
+    stagedSilenceCuts: selStaged.map((r) => ({ id: r.id, startS: r.start, endS: r.end })),
+    sourceDurationS: useStore.getState().project.media?.duration ?? 0,
     find: () => void runRetakeCutBeta(),
     findSilences: () => void runFsmnSilence(),
     transcribeOnly: () => void transcribeOnly(),

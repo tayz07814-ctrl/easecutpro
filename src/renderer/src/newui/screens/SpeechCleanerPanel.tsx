@@ -69,14 +69,32 @@ function deriveCuts(r: ReturnType<typeof useRetake>, applied: boolean): Cut[] {
     }
   }
   flush()
+  // "Find Silences" runs WITHOUT transcribing, so on a project that has never
+  // been transcribed there are no words and no chips — the loop above produces
+  // nothing even though silences are staged. Fall back to the raw spans so the
+  // run is visible and reviewable.
+  if (!applied && !r.segments.length) {
+    for (const s of r.stagedSilenceCuts) {
+      cuts.push({
+        id: 's:' + s.id,
+        kind: 'Silence',
+        dot: '#e6b26a',
+        startS: s.startS,
+        endS: s.endS,
+        text: `${(s.endS - s.startS).toFixed(1)}s of dead air`,
+        keep: () => r.toggleChip(s.id)
+      })
+    }
+  }
   return cuts.sort((a, b) => a.startS - b.startS)
 }
 
-// Original (pre-cut) runtime = last spoken word's end.
+// Original (pre-cut) runtime = last spoken word's end, or the source length when
+// there is no transcript to measure (silence-only runs).
 function originalRuntime(r: ReturnType<typeof useRetake>): number {
   let end = 0
   for (const seg of r.segments) for (const w of seg.words) end = Math.max(end, w.end)
-  return end
+  return end || r.sourceDurationS
 }
 
 export default function SpeechCleanerPanel(): JSX.Element {
