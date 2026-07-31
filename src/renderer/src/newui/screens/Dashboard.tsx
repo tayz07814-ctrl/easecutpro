@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { css } from '../css'
 import { useProjects } from '../data/useProjects'
 import FolderRail, { projectDragType } from './FolderRail'
@@ -9,6 +9,14 @@ import { shareProject, listSpaces, listSpaceFolders, type Space, type SpaceFolde
 import NewProjectWizard from './NewProjectWizard'
 import CoworkPanel from './CoworkPanel'
 import NotificationsBell from './NotificationsBell'
+import {
+  getSubscription,
+  isProNow,
+  checkoutConfigured,
+  onBillingChange,
+  openAccountPanel,
+  type Subscription
+} from '../../cloud/subscription'
 import type { DashCard } from '../mock'
 
 // Screen 1a — Project dashboard, "Easecut Redesign" layout. Left rail + main
@@ -354,6 +362,25 @@ export default function Dashboard(): JSX.Element {
   const dash = useProjects()
   const batchJobs = useStore((s) => s.batchJobs)
   const [acct, setAcct] = useState(false)
+  const [sub, setSub] = useState<Subscription | null>(null)
+  const pro = isProNow(sub)
+
+  // Pro/subscription status for the account menu (cloud only). Refreshes when the
+  // billing bus fires (e.g. after a checkout completes and the webhook writes).
+  useEffect(() => {
+    if (!checkoutConfigured()) return
+    let active = true
+    void getSubscription().then((s) => {
+      if (active) setSub(s)
+    })
+    const off = onBillingChange(async () => {
+      if (active) setSub(await getSubscription())
+    })
+    return () => {
+      active = false
+      off()
+    }
+  }, [])
   const [menuId, setMenuId] = useState<string | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [renameId, setRenameId] = useState<string | null>(null)
@@ -457,12 +484,31 @@ export default function Dashboard(): JSX.Element {
           <div style={css('width:28px;height:28px;border-radius:50%;background:#2A2A34;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#C9C9DA')}>{initials(dash.email)}</div>
           <div style={css('flex:1;min-width:0')}>
             <div style={css('font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{dash.email.split('@')[0] || 'You'}</div>
-            <div style={css('font-size:10.5px;color:#7A7A8C')}>Beta tester</div>
+            <div style={css('font-size:10.5px;color:#7A7A8C')}>{pro ? '★ Pro' : 'Beta tester'}</div>
           </div>
           {acct && (
             <div onClick={(e) => e.stopPropagation()} style={css('position:absolute;left:0;bottom:calc(100% + 6px);width:196px;background:#101015;border:1px solid rgba(255,255,255,.09);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:6px;z-index:20')}>
               <div style={css(`padding:8px 10px 6px;font-size:12px;color:#9A9AAE;border-bottom:1px solid ${HAIR};margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`)}>{dash.email}</div>
-              <div style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}>Account settings</div>
+              {checkoutConfigured() && (
+                <div
+                  onClick={() => {
+                    setAcct(false)
+                    openAccountPanel()
+                  }}
+                  style={css('padding:8px 10px;font-size:13px;border-radius:8px;font-weight:600;cursor:pointer', pro ? 'color:#F5C518' : 'color:#B7B5F4')}
+                >
+                  {pro ? '★ Pro — manage' : '★ Upgrade to Pro'}
+                </div>
+              )}
+              <div
+                onClick={() => {
+                  setAcct(false)
+                  openAccountPanel()
+                }}
+                style={css('padding:8px 10px;font-size:13px;border-radius:8px;cursor:pointer')}
+              >
+                Account settings
+              </div>
               <div onClick={() => void dash.logout()} style={css('padding:8px 10px;font-size:13px;border-radius:8px;color:#9A9AAE;cursor:pointer')}>Log out</div>
             </div>
           )}
