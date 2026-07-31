@@ -76,11 +76,12 @@ export default function AccountModal({
   }
 
   const isPro = billing?.isPro ?? false
-  const trialEnabled = billing?.trialEnabled ?? true
-  const used = billing?.runsUsed ?? 0
-  const limit = billing?.runsLimit ?? 5
-  const left = Math.max(0, limit - used)
   const finalizing = reason === 'success' && !upgraded && !isPro
+  // Free-tier AI-minute usage. minsUnlimited = beta (no free cap in effect).
+  const minsUnlimited = billing?.minutesUnlimited ?? true
+  const usedMin = billing?.usedMinutes ?? 0
+  const limitMin = billing?.limitMinutes ?? 0
+  const leftMin = Math.max(0, limitMin - usedMin)
 
   return (
     <div
@@ -159,7 +160,7 @@ export default function AccountModal({
               ✅ Payment received — activating your subscription… this takes a few seconds.
             </div>
           )}
-          {reason === 'trial' && !isPro && !upgraded && trialEnabled && (
+          {reason === 'trial' && !isPro && !upgraded && !minsUnlimited && (
             <div
               style={{
                 background: 'rgba(245,197,24,.1)',
@@ -171,7 +172,7 @@ export default function AccountModal({
                 fontSize: '14px'
               }}
             >
-              You&rsquo;ve used all {limit} free AI runs. Pick a plan below to keep editing.
+              You&rsquo;ve used all your free AI minutes. Pick a plan below to keep editing.
             </div>
           )}
 
@@ -219,7 +220,7 @@ export default function AccountModal({
                 </div>
               )}
             </div>
-          ) : !trialEnabled ? (
+          ) : minsUnlimited ? (
             <div style={{ marginTop: '10px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span style={{ fontSize: '20px', fontWeight: 600 }}>Free beta</span>
@@ -237,7 +238,7 @@ export default function AccountModal({
                 </span>
               </div>
               <div style={{ fontSize: '13px', color: '#9BA0AC', marginTop: '8px' }}>
-                Unlimited AI runs while we&rsquo;re in beta — no limits. Enjoy!
+                Unlimited AI minutes while we&rsquo;re in beta — no limits. Enjoy!
               </div>
             </div>
           ) : (
@@ -245,20 +246,20 @@ export default function AccountModal({
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', marginBottom: '8px' }}>
                 <span style={{ fontWeight: 600 }}>Free trial</span>
                 <span style={{ color: '#9BA0AC' }}>
-                  {used} / {limit} AI runs used
+                  {usedMin} / {limitMin} free minutes
                 </span>
               </div>
               <div style={{ height: '8px', borderRadius: '100px', background: 'rgba(255,255,255,.08)', overflow: 'hidden' }}>
                 <div
                   style={{
                     height: '100%',
-                    width: `${Math.min(100, (used / limit) * 100)}%`,
-                    background: left > 0 ? 'linear-gradient(90deg,#6366F1,#818CF8)' : '#F5C518'
+                    width: `${Math.min(100, limitMin ? (usedMin / limitMin) * 100 : 0)}%`,
+                    background: leftMin > 0 ? 'linear-gradient(90deg,#6366F1,#818CF8)' : '#F5C518'
                   }}
                 />
               </div>
               <div style={{ fontSize: '13px', color: '#9BA0AC', marginTop: '8px' }}>
-                {left > 0 ? `${left} free run${left === 1 ? '' : 's'} left` : 'Trial ended — upgrade to keep editing'}
+                {leftMin > 0 ? `${leftMin} free minute${leftMin === 1 ? '' : 's'} left` : 'Free trial used up — subscribe to keep editing'}
               </div>
             </div>
           )}
@@ -279,7 +280,7 @@ export default function AccountModal({
                 Choose a plan
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {PLANS.filter((p) => p.id !== 'test').map((p) => (
+                {PLANS.map((p) => (
                   <div
                     key={p.id}
                     style={{

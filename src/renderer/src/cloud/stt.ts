@@ -21,7 +21,7 @@ import type {
   SttDeepgramRes
 } from '@shared/cloud'
 import { getSupabase, invokeEdge } from './supabase'
-import { openAccountPanel } from './subscription'
+import { openAccountPanel, FREE_MINUTES } from './subscription'
 
 type ProgressFn = (pct: number, msg?: string) => void
 
@@ -140,7 +140,8 @@ export async function transcribeVerbatimCloud(
     signed = await sttEdge<SttSignUploadRes>({
       action: 'sign-upload',
       ext: audio.ext,
-      seconds: Math.round(audio.durationS ?? 0)
+      seconds: Math.round(audio.durationS ?? 0),
+      freeMin: FREE_MINUTES
     })
   } catch (e) {
     // Plan AI-minute cap reached for this billing cycle (server-enforced): open

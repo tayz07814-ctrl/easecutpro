@@ -71,7 +71,10 @@ Deno.serve(async (req) => {
         // a hiccup never blocks the product; only bites subscribers over their cap
         // (no-subscription users are unlimited).
         const seconds = Math.max(0, Math.floor(Number(body.seconds) || 0))
-        const gate = await service.rpc('consume_ai_seconds', { p_user: user.id, p_seconds: seconds })
+        // freeMin: the caller's free-tier cap (0 = unlimited). Only the 0.01 build
+        // sends a positive value, so production's beta users stay unlimited.
+        const freeMin = Math.max(0, Math.floor(Number(body.freeMin) || 0))
+        const gate = await service.rpc('consume_ai_seconds', { p_user: user.id, p_seconds: seconds, p_free_min: freeMin })
         const g = gate.data as { allowed?: boolean } | null
         if (!gate.error && g && g.allowed === false) return json({ error: 'minute_limit' }, 402)
 

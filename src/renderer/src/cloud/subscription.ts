@@ -163,9 +163,15 @@ export const PLANS: PlanMeta[] = [
     name: 'Test',
     price: '$1',
     tagline: 'Internal test tier',
-    features: ['100 AI minutes / month']
+    features: ['20 AI minutes / month']
   }
 ]
+
+// Free-tier AI-minute allowance for this build. > 0 turns the free trial ON
+// (the stt gate enforces it, the account panel shows it); production's own build
+// sends 0, so its beta users stay unlimited. Testing value — harden server-side
+// before public launch.
+export const FREE_MINUTES = 20
 
 export interface Billing {
   isPro: boolean
@@ -190,7 +196,7 @@ export async function getBilling(): Promise<Billing> {
     sb.from('subscriptions').select('status, price_id, current_period_end, cancel_at_period_end').maybeSingle(),
     sb.from('usage').select('ai_runs').maybeSingle(),
     sb.rpc('ai_run_limit'),
-    sb.rpc('ai_usage_status')
+    sb.rpc('ai_usage_status', { p_free_min: FREE_MINUTES })
   ])
   const sub = (subRes.data ?? null) as Subscription | null
   const isPro = isProNow(sub)
