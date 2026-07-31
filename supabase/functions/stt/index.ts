@@ -52,6 +52,15 @@ Deno.serve(async (req) => {
         })
 
       case 'sign-upload': {
+        // Per-plan AI-minute gate (per billing cycle): charge this run's audio
+        // seconds against the user's plan cap. Fail-OPEN on any metering error so
+        // a hiccup never blocks the product; only bites subscribers over their cap
+        // (no-subscription users are unlimited).
+        const seconds = Math.max(0, Math.floor(Number(body.seconds) || 0))
+        const gate = await service.rpc('consume_ai_seconds', { p_user: user.id, p_seconds: seconds })
+        const g = gate.data as { allowed?: boolean } | null
+        if (!gate.error && g && g.allowed === false) return json({ error: 'minute_limit' }, 402)
+
         const ext = (String(body.ext || 'wav').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'wav').toLowerCase()
         const path = `${user.id}/${crypto.randomUUID()}.${ext}`
         const { data, error } = await service.storage.from(BUCKET).createSignedUploadUrl(path)

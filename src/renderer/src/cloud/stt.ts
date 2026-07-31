@@ -21,6 +21,7 @@ import type {
   SttDeepgramRes
 } from '@shared/cloud'
 import { getSupabase, invokeEdge } from './supabase'
+import { openAccountPanel } from './subscription'
 
 type ProgressFn = (pct: number, msg?: string) => void
 
@@ -121,7 +122,7 @@ async function deepgramTranscribe(path: string, onProgress?: ProgressFn): Promis
  *  NOTHING is configured/works. The temp audio object is ALWAYS cleaned up
  *  (fire-and-forget), success or failure. */
 export async function transcribeVerbatimCloud(
-  audio: { blob: Blob; ext: string },
+  audio: { blob: Blob; ext: string; durationS?: number },
   onProgress?: ProgressFn
 ): Promise<{ vt: VerbatimTranscript; warnings: string[] }> {
   const warnings: string[] = []
@@ -134,7 +135,24 @@ export async function transcribeVerbatimCloud(
   }
   // ONE upload feeds both providers (they transcribe from a signed download URL).
   onProgress?.(8, 'Preparing your video…')
-  const { path, token } = await sttEdge<SttSignUploadRes>({ action: 'sign-upload', ext: audio.ext })
+  let signed: SttSignUploadRes
+  try {
+    signed = await sttEdge<SttSignUploadRes>({
+      action: 'sign-upload',
+      ext: audio.ext,
+      seconds: Math.round(audio.durationS ?? 0)
+    })
+  } catch (e) {
+    // Plan AI-minute cap reached for this billing cycle (server-enforced): open
+    // the account panel and stop with a friendly, backend-agnostic message.
+    const msg = (e as Error).message
+    if (msg === 'minute_limit' || msg === 'trial_limit') {
+      openAccountPanel(null)
+      throw new Error('You’ve used all your AI minutes for this cycle — upgrade to keep editing.')
+    }
+    throw e
+  }
+  const { path, token } = signed
   try {
     const up = await getSupabase().storage.from('stt-audio').uploadToSignedUrl(path, token, audio.blob)
     if (up.error) throw new Error(`Audio upload failed: ${up.error.message}`)

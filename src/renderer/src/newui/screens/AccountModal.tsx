@@ -181,20 +181,43 @@ export default function AccountModal({
           {billing == null ? (
             <div style={{ color: '#9BA0AC', fontSize: '14px', marginTop: '10px' }}>Loading…</div>
           ) : isPro ? (
-            <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '20px', fontWeight: 600 }}>{billing.planName}</span>
-              <span
-                style={{
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  color: '#34D399',
-                  border: '1px solid rgba(52,211,153,.4)',
-                  borderRadius: '100px',
-                  padding: '3px 10px'
-                }}
-              >
-                Active
-              </span>
+            <div style={{ marginTop: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '20px', fontWeight: 600 }}>{billing.planName}</span>
+                <span
+                  style={{
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: '#34D399',
+                    border: '1px solid rgba(52,211,153,.4)',
+                    borderRadius: '100px',
+                    padding: '3px 10px'
+                  }}
+                >
+                  Active
+                </span>
+              </div>
+              {billing.minutesUnlimited ? (
+                <div style={{ fontSize: '13px', color: '#9BA0AC', marginTop: '10px' }}>Unlimited AI minutes.</div>
+              ) : (
+                <div style={{ marginTop: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#9BA0AC', marginBottom: '6px' }}>
+                    <span>AI minutes this cycle</span>
+                    <span>
+                      {billing.usedMinutes} / {billing.limitMinutes} min
+                    </span>
+                  </div>
+                  <div style={{ height: '8px', borderRadius: '100px', background: 'rgba(255,255,255,.08)', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${Math.min(100, billing.limitMinutes ? (billing.usedMinutes / billing.limitMinutes) * 100 : 0)}%`,
+                        background: billing.usedMinutes < billing.limitMinutes ? 'linear-gradient(90deg,#34D399,#6EE7B7)' : '#F5C518'
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           ) : !trialEnabled ? (
             <div style={{ marginTop: '10px' }}>

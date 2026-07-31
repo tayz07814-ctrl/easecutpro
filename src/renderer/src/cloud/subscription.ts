@@ -165,15 +165,21 @@ export interface Billing {
   runsLimit: number
   /** False while the free-trial limit is switched off (private beta = unlimited). */
   trialEnabled: boolean
+  /** AI-minute usage for the current billing cycle (subscribers). */
+  usedMinutes: number
+  /** Plan's AI-minute cap; 0 when uncapped. */
+  limitMinutes: number
+  minutesUnlimited: boolean
 }
 
 /** Everything the account panel needs — plan + free-trial usage — in one call. */
 export async function getBilling(): Promise<Billing> {
   const sb = getSupabase()
-  const [subRes, usageRes, limitRes] = await Promise.all([
+  const [subRes, usageRes, limitRes, minRes] = await Promise.all([
     sb.from('subscriptions').select('status, price_id, current_period_end, cancel_at_period_end').maybeSingle(),
     sb.from('usage').select('ai_runs').maybeSingle(),
-    sb.rpc('ai_run_limit')
+    sb.rpc('ai_run_limit'),
+    sb.rpc('ai_usage_status')
   ])
   const sub = (subRes.data ?? null) as Subscription | null
   const isPro = isProNow(sub)
@@ -190,7 +196,22 @@ export async function getBilling(): Promise<Billing> {
         ? 'Free trial'
         : 'Free beta'
   const runsUsed = (usageRes.data?.ai_runs as number | undefined) ?? 0
-  return { isPro, status: sub?.status ?? 'none', plan, planName, runsUsed, runsLimit, trialEnabled }
+  const min = (minRes.data ?? {}) as { used_minutes?: number; limit_minutes?: number; unlimited?: boolean }
+  const limitMinutes = Math.max(0, Math.floor(min.limit_minutes ?? 0))
+  const usedMinutes = Math.max(0, Math.floor(min.used_minutes ?? 0))
+  const minutesUnlimited = min.unlimited ?? limitMinutes <= 0
+  return {
+    isPro,
+    status: sub?.status ?? 'none',
+    plan,
+    planName,
+    runsUsed,
+    runsLimit,
+    trialEnabled,
+    usedMinutes,
+    limitMinutes,
+    minutesUnlimited
+  }
 }
 
 // Lets any code open the account/upgrade panel (e.g. when the free trial runs

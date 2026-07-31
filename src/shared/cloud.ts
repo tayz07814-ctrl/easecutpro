@@ -24,6 +24,8 @@ export interface SttSignUploadReq {
   action: 'sign-upload'
   /** audio container extension: m4a | wav */
   ext: string
+  /** audio duration in seconds — metered against the plan's AI-minute cap. */
+  seconds?: number
 }
 export interface SttSignUploadRes {
   /** storage object path inside the stt-audio bucket */
