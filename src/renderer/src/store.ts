@@ -28,6 +28,9 @@ import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { documentToProject, projectToDocument, normalizeDefaultLanes, overlayEventsToDocClips, labelSuggestionsToDocTextClips } from '@shared/timeline/bridge'
 import * as TimelineCommands from '@shared/timeline/commands'
 import type { Command } from '@shared/timeline/commands'
+import { createClip, mainTrackId, findTrack } from '@shared/timeline/model'
+import { secondsToFrames } from '@shared/timeline/time'
+import { variationDuration, type Variation } from '@shared/variations'
 import { getSharedEngine } from './timelineEngine'
 import { docSourceToEdited } from './docTime'
 import { addDocTexts, removeCaptionTexts } from './docTextClips'
@@ -837,6 +840,10 @@ interface AppState {
    *  review-first PROTECTED SilenceRegions exactly like runRetakeCutBeta stages
    *  its silence. Never auto-executes. */
   runFsmnSilence: () => Promise<void>
+  /** Variations: REPLACE the main lane with the creator's clip list, cut from the
+   *  source and joined gapless in the given array order (out-of-order, repeated
+   *  and overlapping ranges are all honoured). One undoable edit. */
+  applyVariation: (variation: Variation) => void
   /** Additive: run ONLY the AssemblyAI transcribe step Retake β uses and store
    *  project.transcript — no judge, no silence, no word cuts. Powers the Transcript
    *  tab's transcribe-only button + runSmartSilence's transcript-ensure step. */
@@ -2602,6 +2609,77 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `Find Silences couldn’t finish: ${safeErrMessage(e)}` } })
     }
+  },
+
+  // VARIATIONS — rebuild the main lane from a creator-supplied clip list.
+  //
+  // Every entry is a range of the SOURCE video, and the ARRAY ORDER is the edit
+  // order: ranges may run out of order, repeat, or overlap. So this does not
+  // "cut" anything in the retake sense — it REPLACES the main lane with exactly
+  // the requested arrangement, laid out gapless in the given order.
+  //
+  // Source identity (path, dimensions, fps, audio) is copied off the lane's
+  // existing first clip, so a variation always references the video already in
+  // the project rather than trusting the file to name one.
+  applyVariation: (variation: Variation) => {
+    const engine = getSharedEngine()
+    const doc = engine?.document
+    if (!engine || !doc) {
+      set({ job: { active: false, percent: 0, message: 'Timeline is still loading — try again in a moment' } })
+      return
+    }
+    const mainId = mainTrackId(doc)
+    const main = mainId ? findTrack(doc, mainId) : undefined
+    const source = (main?.clips ?? []).slice().sort((a, b) => a.start - b.start).find((c) => !!c.sourcePath)
+    if (!mainId || !source?.sourcePath) {
+      set({ job: { active: false, percent: 0, message: 'Import a video first' } })
+      return
+    }
+
+    const tb = doc.timebase
+    const cmds: Command[] = []
+    // Clear the lane first so a variation is a REPLACEMENT, not an append — two
+    // runs in a row give the same result rather than stacking.
+    for (const c of main!.clips) cmds.push(TimelineCommands.removeClip(c.id))
+
+    let playhead = 0
+    for (const [i, v] of variation.clips.entries()) {
+      const inF = secondsToFrames(v.start, tb)
+      const outF = secondsToFrames(v.end, tb)
+      const duration = Math.max(1, outF - inF)
+      cmds.push(
+        TimelineCommands.addClip(
+          createClip({
+            kind: 'video',
+            trackId: mainId,
+            start: playhead,
+            duration,
+            name: v.name || `${i + 1}`,
+            sourcePath: source.sourcePath,
+            sourceIn: inF,
+            sourceOut: outF,
+            sourceDuration: source.sourceDuration,
+            srcW: source.srcW,
+            srcH: source.srcH,
+            srcFps: source.srcFps,
+            hasAudio: source.hasAudio,
+            // Tagged so a later pass can tell a variation clip from a hand edit.
+            metadata: { variationIndex: i, variationName: variation.name ?? '' }
+          })
+        )
+      )
+      playhead += duration
+    }
+
+    engine.batch(variation.name ? `Variation: ${variation.name}` : 'Apply variation', cmds)
+    const total = variationDuration(variation)
+    set({
+      job: {
+        active: false,
+        percent: 100,
+        message: `${variation.clips.length} clip${variation.clips.length === 1 ? '' : 's'} arranged — ${total.toFixed(1)}s`
+      }
+    })
   },
 
   runUltracut: async () => {

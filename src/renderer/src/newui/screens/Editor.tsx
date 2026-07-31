@@ -8,6 +8,7 @@ import EditPanel from './EditPanel'
 import CropModal from './CropModal'
 import TranscriptDrawer from './TranscriptDrawer'
 import SpeechCleanerPanel from './SpeechCleanerPanel'
+import VariationsPanel from './VariationsPanel'
 import OverlayPanel from '../../components/OverlayPanel'
 import SilenceSettingsModal from './SilenceSettingsModal'
 import CutProgressOverlay from './CutProgressOverlay'
@@ -536,9 +537,10 @@ function ComingSoon({ title, note, Icon }: { title: string; note: string; Icon: 
 // Auto b-roll = overlays); "Edit" is the clip/text/overlay inspector. Each panel
 // is the same wired component as before — only the container/nav changed.
 const PANEL_TABS = ['AI tools', 'Edit'] as const
-type AiSub = 'script' | 'zoom' | 'overlay'
+type AiSub = 'script' | 'variations' | 'zoom' | 'overlay'
 const AI_SUB: { id: AiSub; label: string }[] = [
   { id: 'script', label: 'Speech cleaner' },
+  { id: 'variations', label: 'Variations' },
   { id: 'zoom', label: 'Auto zoom' },
   { id: 'overlay', label: 'Auto b-roll' }
 ]
@@ -582,6 +584,8 @@ function RightPanel({ width }: { width: number }): JSX.Element {
           <div style={css(`flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-top:1px solid ${HAIR}`)}>
             {ai === 'script' ? (
               <SpeechCleanerPanel />
+            ) : ai === 'variations' ? (
+              <VariationsPanel />
             ) : ai === 'zoom' ? (
               <AutoZoomPanel />
             ) : (
