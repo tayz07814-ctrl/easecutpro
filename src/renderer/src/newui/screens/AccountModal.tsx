@@ -7,6 +7,7 @@ import { useStore } from '../../store'
 import {
   getBilling,
   openProCheckout,
+  openBillingPortal,
   emitBillingChange,
   stripeTestEnabled,
   PLANS,
@@ -31,6 +32,7 @@ export default function AccountModal({
   const [billing, setBilling] = useState<Billing | null>(null)
   const [busy, setBusy] = useState<PlanId | null>(null)
   const [upgraded, setUpgraded] = useState(false)
+  const [managing, setManaging] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -72,6 +74,17 @@ export default function AccountModal({
     } catch (e) {
       setBusy(null)
       window.alert(e instanceof Error ? e.message : 'Could not open checkout')
+    }
+  }
+
+  async function manage(): Promise<void> {
+    if (managing) return
+    setManaging(true)
+    try {
+      await openBillingPortal()
+    } catch (e) {
+      setManaging(false)
+      window.alert(e instanceof Error ? e.message : 'Could not open billing management')
     }
   }
 
@@ -262,6 +275,28 @@ export default function AccountModal({
                 {leftMin > 0 ? `${leftMin} free minute${leftMin === 1 ? '' : 's'} left` : 'Free trial used up — subscribe to keep editing'}
               </div>
             </div>
+          )}
+
+          {isPro && (
+            <button
+              onClick={() => void manage()}
+              disabled={managing}
+              style={{
+                marginTop: '18px',
+                width: '100%',
+                background: 'rgba(255,255,255,.06)',
+                border: `1px solid ${HAIR}`,
+                color: '#EDEDF2',
+                fontFamily: 'inherit',
+                fontWeight: 600,
+                fontSize: '13.5px',
+                borderRadius: '10px',
+                padding: '11px 16px',
+                cursor: managing ? 'default' : 'pointer'
+              }}
+            >
+              {managing ? 'Opening…' : 'Manage subscription — upgrade, downgrade or cancel'}
+            </button>
           )}
 
           {!isPro && !finalizing && (

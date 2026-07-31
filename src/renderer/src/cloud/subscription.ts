@@ -62,6 +62,15 @@ export async function openProCheckout(
   window.location.href = url
 }
 
+/** Open Stripe's hosted billing portal (upgrade / downgrade / cancel / payment
+ *  method / invoices). Redirects the page to Stripe; the user returns to the app
+ *  afterward. Requires an existing subscription (the portal needs a customer). */
+export async function openBillingPortal(): Promise<void> {
+  const { url } = await invokeEdge<{ url?: string }>('stripe-portal', {})
+  if (!url) throw new Error('Could not open billing management — please try again.')
+  window.location.href = url
+}
+
 /** The signed-in user's subscription row (RLS scopes it to their own), or null. */
 export async function getSubscription(): Promise<Subscription | null> {
   const { data, error } = await getSupabase()

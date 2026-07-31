@@ -14,6 +14,11 @@ verify_jwt = true
 [functions.stripe-checkout]
 verify_jwt = true
 
+# Creates a Stripe Customer Portal session (upgrade/downgrade/cancel) for the
+# signed-in user — same JWT requirement as checkout.
+[functions.stripe-portal]
+verify_jwt = true
+
 # Stripe calls this server-to-server with its own signature, not a Supabase JWT —
 # verification must be OFF or the gateway rejects every webhook before our
 # signature check. The function verifies STRIPE_WEBHOOK_SECRET itself.
