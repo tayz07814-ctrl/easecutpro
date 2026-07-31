@@ -102,7 +102,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (Gemma-4-31B + sharp judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (GPT-5.6 Luna + sharp judge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -128,12 +128,14 @@ export async function retakeAwareCutCloud(
     warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
   }
 
-  // 4. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript: Gemma 4
-  //    31B on CEREBRAS (ultracut-judge edge fn, un-prefixed 'gemma-4-31b' → the
-  //    Cerebras first-party route) on the 'sharp' word-list prompt. Cerebras is
-  //    used instead of OpenRouter's google/gemma-4-31b-it because the OpenRouter
-  //    free provider was rate-limiting (HTTP 429) ~1-in-9 runs, failing the judge.
-  //    Gemma is non-reasoning, so reasoning is 'off'. 0.01 ONLY.
+  // 4. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript:
+  //    OpenAI GPT-5.6 Luna via OpenRouter (ultracut-judge edge fn) on the 'sharp'
+  //    word-list prompt, reasoning effort 'medium'. It replaces Gemma 4 31B, whose
+  //    shared free provider was rate-limiting (HTTP 429) and returning empty
+  //    completions often enough to fail the judge outright.
+  //
+  //    The model MUST also be in the edge function's MODEL_WHITELIST — resolveModel
+  //    silently falls back to the default for anything unlisted. 0.01 ONLY.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
   // 1:1 with vt.words, so EDL word indices resolve to the right times. The FINAL
@@ -146,7 +148,7 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'google/gemma-4-31b-it',
+      model: 'openai/gpt-5.6-luna',
       promptVariant: 'sharp',
       reasoning: 'medium'
     } satisfies ProcutJudgeReq)
