@@ -10,7 +10,6 @@ import {
   type RetakeFinalBossSettings
 } from '@shared/retakefinalboss'
 import { detectFsmnSilences } from './fsmnVad'
-import { conditionForVad } from '@shared/audioConditioning'
 
 /** RMS level of [t0, t1) as dBFS. -Infinity for an empty or digitally silent
  *  window, which reads as "quieter than any threshold". */
@@ -54,14 +53,8 @@ export async function detectRetakeFinalBossSilences(
   durationS: number,
   settings: RetakeFinalBossSettings
 ): Promise<SilenceRegion[]> {
-  // Condition an ANALYSIS COPY: 80 Hz high-pass + level normalisation. The audio
-  // the creator keeps is untouched — preview and export still use the original
-  // decode. Rumble below speech lifts the noise floor the VAD measures, and VAD
-  // thresholds are level-sensitive, so both fixes directly improve where the
-  // speech/silence boundaries land.
-  const audio = conditionForVad(float32, sampleRate)
   const raw = await detectFsmnSilences(
-    audio.detection,
+    float32,
     sampleRate,
     durationS
   )
@@ -71,12 +64,7 @@ export async function detectRetakeFinalBossSilences(
   const planned = planFinalBossSilenceCuts(aligned, settings, durationS)
   // Finally drop any dead-air tail the geometry left on a clip ending — only for
   // the punchy presets, since the relaxed ones exist to KEEP that breathing room.
-  //
-  // Measured against the high-passed but UN-NORMALISED copy: TAIL_TRIM_DB is an
-  // absolute threshold, so measuring the normalised buffer would make -22 dBFS
-  // mean a different thing on every file. High-passing it is still right — rumble
-  // inflates the RMS of a genuinely dead tail and would hide it from the trim.
-  return settings.tailTrim ? trimQuietTails(planned, audio.measured, sampleRate) : planned
+  return settings.tailTrim ? trimQuietTails(planned, float32, sampleRate) : planned
 }
 
 /** Silence-only pass for the "Find Silences" button: the SAME FSMN engine and
