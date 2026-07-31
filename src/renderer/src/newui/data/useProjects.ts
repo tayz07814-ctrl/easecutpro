@@ -68,6 +68,10 @@ export interface DashboardModel {
   selectedFolder: string | null
   setSelectedFolder: (id: string | null) => void
   folderCounts: { all: number; byId: Record<string, number> }
+  /** Real "this week" figures for the sidebar tile. Counted over ALL projects,
+   *  not `metas` — that list is search/folder-filtered, so it would make a global
+   *  stat swing as the creator types. */
+  weekly: { editedThisWeek: number; total: number }
   createFolder: () => Promise<void>
   renameFolder: (id: string, curName: string) => Promise<void>
   removeFolder: (id: string) => Promise<void>
@@ -118,6 +122,11 @@ export function useProjects(): DashboardModel {
     if (selectedFolder) list = list.filter((p) => (p.folderId ?? null) === selectedFolder)
     return list
   }, [projects, query, selectedFolder])
+
+  const weekly = useMemo(() => {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
+    return { editedThisWeek: projects.filter((p) => p.updatedAt > cutoff).length, total: projects.length }
+  }, [projects])
 
   const folderCounts = useMemo(() => {
     const byId: Record<string, number> = {}
@@ -209,6 +218,7 @@ export function useProjects(): DashboardModel {
     selectedFolder,
     setSelectedFolder,
     folderCounts,
+    weekly,
     createFolder,
     renameFolder,
     removeFolder,

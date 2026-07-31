@@ -22,9 +22,9 @@ import type { DashCard } from '../mock'
 // Screen 1a — Project dashboard, "Easecut Redesign" layout. Left rail + main
 // (news banner, drop zone, filter tabs, project grid) + live batch dock.
 // Every functional surface (search, nav, new project, batch, cards, rename,
-// delete, logout) is wired to the real store via useProjects; the news slides
-// and the "this week" headline stats are illustrative design chrome (no backing
-// feed), exactly as the mock ships them.
+// delete, logout) is wired to the real store via useProjects. The "this week"
+// tile is now REAL (counted from project timestamps); the news slides below are
+// still illustrative design chrome with no backing feed.
 
 const HAIR = 'rgba(255,255,255,.06)'
 
@@ -464,18 +464,21 @@ export default function Dashboard(): JSX.Element {
           })}
         </div>
 
+        {/* Real figures only. This tile used to read "1h 47m of dead air removed"
+            and "Avg. trim 21%" — both hard-coded literals from the design mock,
+            identical for every creator forever. Nothing records removed time, so
+            they could not be made accurate; showing invented numbers to a paying
+            creator is worse than showing fewer. Counted over ALL projects, not the
+            filtered card list, so searching doesn't move them. */}
         <div style={css("margin-top:26px;padding:0 10px 10px;font-family:'Geist Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:#5C5C70")}>THIS WEEK</div>
         <div style={css(`background:#111116;border:1px solid ${HAIR};border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px`)}>
           <div>
-            <div style={css('font-size:22px;font-weight:600;letter-spacing:-.02em')}>1h 47m</div>
-            <div style={css('font-size:11.5px;color:#8B8BA0;margin-top:2px')}>of dead air removed</div>
+            <div style={css('font-size:22px;font-weight:600;letter-spacing:-.02em')}>{dash.weekly.editedThisWeek}</div>
+            <div style={css('font-size:11.5px;color:#8B8BA0;margin-top:2px')}>project{dash.weekly.editedThisWeek === 1 ? '' : 's'} edited</div>
           </div>
           <div style={css(`height:1px;background:${HAIR}`)} />
           <div style={css('display:flex;justify-content:space-between;font-size:11.5px;color:#8B8BA0')}>
-            <span>Projects</span><span style={css('color:#EDEDF2')}>{dash.metas.length}</span>
-          </div>
-          <div style={css('display:flex;justify-content:space-between;font-size:11.5px;color:#8B8BA0')}>
-            <span>Avg. trim</span><span style={css('color:#EDEDF2')}>21%</span>
+            <span>All projects</span><span style={css('color:#EDEDF2')}>{dash.weekly.total}</span>
           </div>
         </div>
 
