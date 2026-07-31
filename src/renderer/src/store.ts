@@ -31,6 +31,7 @@ import type { Command } from '@shared/timeline/commands'
 import { createClip, mainTrackId, findTrack } from '@shared/timeline/model'
 import { secondsToFrames } from '@shared/timeline/time'
 import { variationDuration, type Variation } from '@shared/variations'
+import { generateVariationsCloud } from './cloud/variationEngine'
 import { getSharedEngine } from './timelineEngine'
 import { docSourceToEdited } from './docTime'
 import { addDocTexts, removeCaptionTexts } from './docTextClips'
@@ -844,6 +845,14 @@ interface AppState {
    *  source and joined gapless in the given array order (out-of-order, repeated
    *  and overlapping ranges are all honoured). One undoable edit. */
   applyVariation: (variation: Variation) => void
+  /** AI Variations: transcribe if needed, then ask the judge to cast the
+   *  transcript into `count` short-form arrangements. Returns them for review —
+   *  nothing is applied until the creator picks one. */
+  generateVariations: (count: number) => Promise<Variation[]>
+  /** Last AI-generated set, kept in the store so the panel survives a re-render. */
+  aiVariations: Variation[]
+  aiVariationWarnings: string[]
+  aiVariationsBusy: boolean
   /** Additive: run ONLY the AssemblyAI transcribe step Retake β uses and store
    *  project.transcript — no judge, no silence, no word cuts. Powers the Transcript
    *  tab's transcribe-only button + runSmartSilence's transcript-ensure step. */
@@ -2608,6 +2617,58 @@ export const useStore = create<AppState>((set, get) => ({
       })
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `Find Silences couldn’t finish: ${safeErrMessage(e)}` } })
+    }
+  },
+
+  aiVariations: [],
+  aiVariationWarnings: [],
+  aiVariationsBusy: false,
+
+  // AI VARIATIONS — cast the transcript into short-form arrangements.
+  //
+  // Review-first, like every other engine here: the results are held in the store
+  // and nothing touches the timeline until the creator applies one.
+  generateVariations: async (count: number) => {
+    if (get().aiVariationsBusy) return []
+    // Needs words, not audio — reuse the transcript when the project already has
+    // one (Find cuts, or a previous run) instead of paying for STT again.
+    if (!get().project.transcript?.words?.length) {
+      await get().transcribeOnly()
+      if (!get().project.transcript?.words?.length) return [] // transcribeOnly reported why
+    }
+    const stored = get().project
+    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+    const durationS =
+      stored.media?.duration ??
+      (p0.baseSequence ?? []).reduce((n, c) => n + Math.max(0, c.sourceOut - c.sourceIn), 0)
+
+    set({ aiVariationsBusy: true, job: { active: true, kind: 'transcribe', percent: 20, message: 'Casting variations…' } })
+    try {
+      const res = await generateVariationsCloud(
+        get().project.transcript!,
+        durationS,
+        count,
+        (percent, message) => set({ job: { active: true, kind: 'transcribe', percent, message } })
+      )
+      set({
+        aiVariations: res.variations,
+        aiVariationWarnings: res.warnings,
+        aiVariationsBusy: false,
+        job: {
+          active: false,
+          percent: 100,
+          message: res.variations.length
+            ? `${res.variations.length} variation${res.variations.length === 1 ? '' : 's'} ready — pick one to apply`
+            : 'No variations could be built from this transcript'
+        }
+      })
+      return res.variations
+    } catch (e) {
+      set({
+        aiVariationsBusy: false,
+        job: { active: false, percent: 0, message: `Variations couldn’t finish: ${safeErrMessage(e)}` }
+      })
+      return []
     }
   },
 

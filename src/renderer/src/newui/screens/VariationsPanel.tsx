@@ -38,9 +38,14 @@ function fmt(s: number): string {
 
 export default function VariationsPanel(): JSX.Element {
   const applyVariation = useStore((s) => s.applyVariation)
+  const generate = useStore((s) => s.generateVariations)
+  const ai = useStore((s) => s.aiVariations)
+  const aiWarnings = useStore((s) => s.aiVariationWarnings)
+  const busy = useStore((s) => s.aiVariationsBusy)
   const mediaDuration = useStore((s) => s.project.media?.duration ?? 0)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  const [count, setCount] = useState(3)
   const [variation, setVariation] = useState<Variation | null>(null)
   const [error, setError] = useState<string>('')
   const [warnings, setWarnings] = useState<string[]>([])
@@ -77,8 +82,69 @@ export default function VariationsPanel(): JSX.Element {
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 14px 18px')}>
       <div style={css('font-size:12px;color:#8b8ba0;line-height:1.5')}>
-        Upload a JSON list of clips from your video. They’re cut and joined <b style={css('color:#c9c9da')}>in the order you list them</b> — so you can lead with the hook, reorder sections, or repeat a moment.
+        Cut your video into a new running order — lead with the hook, reorder sections, repeat a moment. Let the AI cast it, or upload your own clip list.
       </div>
+
+      {/* AI casting — the transcript goes to the judge, which picks hook / intro /
+          problem / selling point / CTA and sequences them. */}
+      <div style={css('margin-top:14px;background:#0f0f14;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:12px')}>
+        <div style={css('font-size:12.5px;color:#ededf2;font-weight:600')}>Let AI build it</div>
+        <div style={css('font-size:11px;color:#8b8ba0;margin-top:4px;line-height:1.5')}>Reads your transcript and arranges hook, intro, problem, selling point and CTA.</div>
+        <div style={css('display:flex;gap:8px;align-items:center;margin-top:11px')}>
+          <select
+            value={count}
+            onChange={(e) => setCount(Number(e.target.value))}
+            disabled={busy}
+            style={css("flex:none;background:#0a0a0e;border:1px solid rgba(255,255,255,.12);color:#c9c9da;font-family:inherit;font-size:12px;border-radius:8px;padding:9px 8px;cursor:pointer;outline:none")}
+          >
+            {[1, 2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>{n} variation{n === 1 ? '' : 's'}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => void generate(count)}
+            disabled={busy}
+            style={css(
+              'flex:1;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:650;border-radius:9px;padding:10px;cursor:pointer',
+              busy ? 'opacity:.55;cursor:default' : ''
+            )}
+          >
+            {busy ? 'Casting…' : 'Generate'}
+          </button>
+        </div>
+      </div>
+
+      {/* Generated set — pick one to load it into the preview below. */}
+      {ai.length > 0 && (
+        <div style={css('margin-top:12px;display:flex;flex-direction:column;gap:5px')}>
+          {ai.map((g, i) => {
+            const on = variation?.name === g.name
+            return (
+              <div
+                key={i}
+                onClick={() => { setVariation(g); setError(''); setWarnings([]); setApplied(false) }}
+                style={css(
+                  'display:flex;align-items:center;gap:9px;border-radius:9px;padding:9px 11px;cursor:pointer;border:1px solid',
+                  on ? 'border-color:#7c6bff;background:rgba(124,107,255,.12)' : 'border-color:rgba(255,255,255,.08);background:#0f0f14'
+                )}
+              >
+                <span style={css(`flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${on ? '#c4baff' : '#c9c9da'};${on ? 'font-weight:600' : ''}`)}>{g.name}</span>
+                <span style={css("font-family:'Geist Mono',monospace;font-size:10.5px;color:#8b8ba0;flex:none")}>{g.clips.length} · {fmt(variationDuration(g))}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {aiWarnings.length > 0 && (
+        <div style={css('margin-top:10px;font-size:11px;color:#e8c98a;background:rgba(232,201,138,.07);border:1px solid rgba(232,201,138,.22);border-radius:9px;padding:9px 11px;line-height:1.55')}>
+          {aiWarnings.map((w, i) => (
+            <div key={i}>{w}</div>
+          ))}
+        </div>
+      )}
+
+      <div style={css('margin-top:16px;border-top:1px solid rgba(255,255,255,.07);padding-top:14px;font-size:11px;color:#6e6e85')}>Or bring your own</div>
 
       <input
         ref={fileRef}

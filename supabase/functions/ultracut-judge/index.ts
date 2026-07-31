@@ -280,7 +280,56 @@ Word indices are inclusive.
 keep_ms=0 removes the pause completely.
 Return no text outside the JSON.`
 
-const PROMPT_VARIANTS: Record<string, string> = { segment: SYSTEM_SEGMENT }
+// VARIATIONS — a different job from the retake judge above. Nothing is being
+// removed here: the model RE-ORDERS the recording into short-form cuts, selecting
+// sections by word index. Indices only; the client owns the timestamps.
+const SYSTEM_VARIATIONS = `You are a short-form video editor. You receive a verbatim transcript with immutable word indices.
+
+Your job is to CAST the recording into short-form edits by selecting sections and putting them in a new order. You are not removing mistakes and you are not rewriting anything — you are choosing the best moments and sequencing them.
+
+==================================================
+SECTION ROLES
+==================================================
+• hook    — the single most attention-grabbing line in the whole transcript
+• intro   — who the speaker is / what this is about
+• problem — the pain, frustration or need being described
+• selling — the product, solution, benefit or proof
+• cta     — the closing ask (subscribe, link, buy, try it)
+
+==================================================
+RULES
+==================================================
+1. Reference the transcript ONLY by word index. "from" and "to" are inclusive.
+2. Pull sections from ANY part of the transcript, in ANY order. Re-ordering is the entire point — the hook very often comes from the middle or the end.
+3. Every section must be a COMPLETE thought: begin at the first word of a sentence and end at the last word of a sentence. NEVER start or stop mid-sentence.
+4. Each variation is 4–6 sections and roughly 15–45 seconds of speech.
+5. Variations must be MEANINGFULLY different from each other — a different hook, or a genuinely different running order. Do not return near-duplicates that differ by a word or two.
+6. Include hook and cta whenever the transcript contains anything that can serve as one. Skip a role only if the recording genuinely has nothing for it.
+7. Give each variation a short descriptive name of what makes it different (e.g. "Problem First", "Testimonial Lead").
+
+==================================================
+OUTPUT FORMAT
+==================================================
+Reply with VALID JSON ONLY. No markdown, no prose, no explanation.
+
+{
+  "variations": [
+    {
+      "name": "Hook First",
+      "sections": [
+        { "role": "hook", "from": 412, "to": 447 },
+        { "role": "intro", "from": 18, "to": 39 },
+        { "role": "problem", "from": 40, "to": 71 },
+        { "role": "selling", "from": 210, "to": 268 },
+        { "role": "cta", "from": 448, "to": 461 }
+      ]
+    }
+  ]
+}
+
+Return exactly the number of variations requested.`
+
+const PROMPT_VARIANTS: Record<string, string> = { segment: SYSTEM_SEGMENT, variations: SYSTEM_VARIATIONS }
 
 function resolvePrompt(variant: unknown): string {
   if (variant === 'sharp') return SYSTEM
