@@ -2644,9 +2644,11 @@ export const useStore = create<AppState>((set, get) => ({
 
     let playhead = 0
     for (const [i, v] of variation.clips.entries()) {
-      const inF = secondsToFrames(v.start, tb)
-      const outF = secondsToFrames(v.end, tb)
-      const duration = Math.max(1, outF - inF)
+      // MIND THE UNITS: placement (start/duration) is in FRAMES, but the source
+      // slice (sourceIn/sourceOut/sourceDuration) is in SECONDS. Converting the
+      // slice to frames too makes every clip seek far past the end of the media,
+      // which renders as a black preview and a single frozen frame on export.
+      const duration = Math.max(1, secondsToFrames(v.end - v.start, tb))
       cmds.push(
         TimelineCommands.addClip(
           createClip({
@@ -2656,8 +2658,8 @@ export const useStore = create<AppState>((set, get) => ({
             duration,
             name: v.name || `${i + 1}`,
             sourcePath: source.sourcePath,
-            sourceIn: inF,
-            sourceOut: outF,
+            sourceIn: v.start,
+            sourceOut: v.end,
             sourceDuration: source.sourceDuration,
             srcW: source.srcW,
             srcH: source.srcH,
