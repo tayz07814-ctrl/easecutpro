@@ -39,12 +39,31 @@ export interface LocalFolder {
   name: string
 }
 
-let dbPromise: Promise<IDBDatabase | null> | null = null
-function db(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise
-  dbPromise = new Promise((resolve) => {
+/** The signed-in user's id, or null when signed out. */
+async function currentUid(): Promise<string | null> {
+  try {
+    const { data } = await getSupabase().auth.getUser()
+    return data.user?.id ?? null
+  } catch {
+    return null // signed out, offline, or Supabase not configured
+  }
+}
+
+/** One IndexedDB per account.
+ *
+ *  The library used to live in a single `ec-localprojects` database shared by
+ *  everyone who ever signed in on this browser, so logging out and signing in as
+ *  someone else showed the previous person's projects. A signed-out session gets
+ *  its own bucket too, so a guest's work never lands in the next person's
+ *  library either. */
+function dbNameFor(uid: string | null): string {
+  return uid ? `${DB_NAME}-${uid}` : `${DB_NAME}-guest`
+}
+
+function openNamed(name: string): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
     try {
-      const req = indexedDB.open(DB_NAME, 1)
+      const req = indexedDB.open(name, 1)
       req.onupgradeneeded = (): void => {
         const d = req.result
         if (!d.objectStoreNames.contains(P_STORE)) d.createObjectStore(P_STORE, { keyPath: 'id' })
@@ -56,6 +75,29 @@ function db(): Promise<IDBDatabase | null> {
       resolve(null)
     }
   })
+}
+
+let dbPromise: Promise<IDBDatabase | null> | null = null
+let dbUid: string | null = null
+let dbOpened = false
+
+async function db(): Promise<IDBDatabase | null> {
+  const uid = await currentUid()
+  // Re-resolve whenever the account changes, so a login switch inside one page
+  // session cannot keep serving the previous user's handle.
+  if (dbOpened && dbUid === uid && dbPromise) return dbPromise
+  if (dbPromise) {
+    const old = await dbPromise
+    try {
+      old?.close()
+    } catch {
+      /* already closed */
+    }
+  }
+  dbUid = uid
+  dbOpened = true
+  await adoptLegacyLibraryOnce(uid)
+  dbPromise = openNamed(dbNameFor(uid))
   return dbPromise
 }
 
@@ -143,13 +185,96 @@ function toMeta(r: PRow): ProjectMeta {
   }
 }
 
-// ---- one-time claim of the old server-side library ------------------------
-let claimDone = false
-async function claimServerProjectsOnce(): Promise<void> {
-  if (claimDone) return
+// ---- one-time adoption of the shared pre-scoping library ------------------
+//
+// Before the per-account split, every project on this device sat in one
+// unscoped `ec-localprojects` database. Those rows carry no owner, so there is
+// no way to know whose they are — but leaving them shared is the bug being
+// fixed, and dropping them would delete real work.
+//
+// So the first account to open after this update adopts them, and the legacy
+// database is DELETED immediately afterwards. That bounds the exposure to a
+// single hand-off on a device that was already showing them to everyone, and
+// guarantees no second account can ever see them.
+const ADOPT_FLAG = 'ec_local_projects_adopted'
+
+async function adoptLegacyLibraryOnce(uid: string | null): Promise<void> {
   try {
-    if (localStorage.getItem(CLAIM_FLAG) === '1') {
-      claimDone = true
+    if (localStorage.getItem(ADOPT_FLAG) === '1') return
+  } catch {
+    return // localStorage blocked: skip rather than risk repeated adoption
+  }
+  try {
+    const legacy = await openNamed(DB_NAME)
+    if (!legacy) return
+    const read = <T>(store: string): Promise<T[]> =>
+      new Promise((resolve) => {
+        try {
+          if (!legacy.objectStoreNames.contains(store)) return resolve([])
+          const rq = legacy.transaction(store, 'readonly').objectStore(store).getAll()
+          rq.onsuccess = (): void => resolve((rq.result as T[]) || [])
+          rq.onerror = (): void => resolve([])
+        } catch {
+          resolve([])
+        }
+      })
+    const projects = await read<PRow>(P_STORE)
+    const folders = await read<FRow>(F_STORE)
+    try {
+      legacy.close()
+    } catch {
+      /* already closed */
+    }
+
+    if (projects.length || folders.length) {
+      const mine = await openNamed(dbNameFor(uid))
+      if (mine) {
+        await new Promise<void>((resolve) => {
+          try {
+            const tx = mine.transaction([P_STORE, F_STORE], 'readwrite')
+            for (const r of projects) tx.objectStore(P_STORE).put(r)
+            for (const f of folders) tx.objectStore(F_STORE).put(f)
+            tx.oncomplete = (): void => resolve()
+            tx.onerror = (): void => resolve()
+            tx.onabort = (): void => resolve()
+          } catch {
+            resolve()
+          }
+        })
+        try {
+          mine.close()
+        } catch {
+          /* already closed */
+        }
+      }
+    }
+
+    // Gone for good — no other account can inherit them.
+    try {
+      indexedDB.deleteDatabase(DB_NAME)
+    } catch {
+      /* best effort */
+    }
+    localStorage.setItem(ADOPT_FLAG, '1')
+  } catch {
+    /* adoption is best-effort; a failure must never block opening the library */
+  }
+}
+
+// ---- one-time claim of the old server-side library ------------------------
+//
+// PER ACCOUNT, not per device. The server query is RLS-scoped to whoever is
+// signed in, so each user has their own rows to claim; a device-wide flag meant
+// the first account to run it locked everyone else out of their own history.
+const claimedUids = new Set<string>()
+async function claimServerProjectsOnce(): Promise<void> {
+  const uid = await currentUid()
+  if (!uid) return // signed out: nothing of anyone's to claim
+  if (claimedUids.has(uid)) return
+  const flag = `${CLAIM_FLAG}:${uid}`
+  try {
+    if (localStorage.getItem(flag) === '1') {
+      claimedUids.add(uid)
       return
     }
   } catch {
@@ -188,11 +313,11 @@ async function claimServerProjectsOnce(): Promise<void> {
       }
     }
     try {
-      localStorage.setItem(CLAIM_FLAG, '1')
+      localStorage.setItem(flag, '1')
     } catch {
       /* ignore */
     }
-    claimDone = true
+    claimedUids.add(uid)
   } catch {
     /* retry on the next list */
   }
