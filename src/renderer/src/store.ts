@@ -2660,7 +2660,9 @@ export const useStore = create<AppState>((set, get) => ({
             sourcePath: source.sourcePath,
             sourceIn: v.start,
             sourceOut: v.end,
-            sourceDuration: source.sourceDuration,
+            // Full source length, NOT this clip's out-point: headroomAfterFrames
+            // needs it to leave the right trim handle any room to drag.
+            sourceDuration: source.sourceDuration ?? get().project.media?.duration ?? undefined,
             srcW: source.srcW,
             srcH: source.srcH,
             srcFps: source.srcFps,

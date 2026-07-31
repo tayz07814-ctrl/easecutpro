@@ -23,7 +23,7 @@
 
 import { getSharedEngine } from '../timelineEngine'
 import { kenBurnsEase } from '../kenBurns'
-import { planFromDoc, renderAudio, seamFadeSeconds, FPS, exportMsg, type Seg } from './localExport'
+import { planFromDoc, renderAudio, seamFadeSeconds, seekPresented, FPS, exportMsg, type Seg } from './localExport'
 import {
   planOverlays,
   planTexts,
@@ -174,29 +174,7 @@ export async function exportOnDeviceMB(
     }
     return v
   }
-  const seekTo = (v: HTMLVideoElement, tt: number): Promise<void> =>
-    new Promise((res) => {
-      if (Math.abs(v.currentTime - tt) <= 1 / (FPS * 2) && v.readyState >= 2) {
-        res()
-        return
-      }
-      let done = false
-      const finish = (): void => {
-        if (done) return
-        done = true
-        clearTimeout(to)
-        v.removeEventListener('seeked', on)
-        res()
-      }
-      const on = (): void => finish()
-      const to = setTimeout(finish, 2000) // decoder stall: use whatever frame is there
-      v.addEventListener('seeked', on)
-      try {
-        v.currentTime = tt
-      } catch {
-        finish()
-      }
-    })
+  const seekTo = (v: HTMLVideoElement, tt: number): Promise<void> => seekPresented(v, tt, FPS)
 
   const sprites: Sprite[] = []
   const mainImages = new Map<string, ImageBitmap>()

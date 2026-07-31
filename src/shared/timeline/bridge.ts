@@ -130,6 +130,8 @@ export function projectToDocument(project: Project): TimelineDocument {
   }
   const keeps = computeKeepRanges(safe)
   let cursor = 0
+  // clipId -> full source length, so a cut segment keeps its trim headroom.
+  const baseSrcDuration = new Map((project.baseSequence ?? []).map((c) => [c.id, c.sourceDuration]))
   if (project.baseSequence && project.baseSequence.length) {
     for (const seg of virtualKeepsToClipSegments(safe, keeps)) {
       const dur = Math.max(1, s2f(seg.out - seg.in))
@@ -143,6 +145,11 @@ export function projectToDocument(project: Project): TimelineDocument {
           sourcePath: seg.sourcePath,
           sourceIn: seg.in,
           sourceOut: seg.out,
+          // Carry the FULL source length through the cut. Without it
+          // headroomAfterFrames falls back to `sourceOut` and computes ZERO
+          // headroom, so the clip's right trim handle silently refuses to drag
+          // out after a cut (the left one still works — it only needs sourceIn).
+          sourceDuration: baseSrcDuration.get(seg.clipId) ?? seg.out,
           srcW: seg.srcW,
           srcH: seg.srcH,
           name: 'clip',

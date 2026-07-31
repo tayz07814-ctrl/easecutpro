@@ -36,6 +36,56 @@ import type { Project } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 
 export const FPS = 30
+
+type VideoRVFC = HTMLVideoElement & {
+  requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number
+}
+
+/** Seek, and wait until the frame is actually PRESENTED — not merely decoded.
+ *
+ *  `seeked` fires when the decoder finishes the seek. It does NOT promise the new
+ *  frame has reached the compositor, and `new VideoFrame(v)` captures whatever is
+ *  currently presented. Inside a segment the stale frame is the neighbouring one,
+ *  so nobody notices — but at a CUT SEAM the previously presented frame comes from
+ *  a completely different part of the source, which bakes exactly one stray frame
+ *  into every join.
+ *
+ *  requestVideoFrameCallback only runs once a frame is available to draw, so it is
+ *  the real signal. It is armed BEFORE the seek because it delivers the NEXT
+ *  presented frame: arming it afterwards would wait on a presentation that never
+ *  comes for a paused element. `seeked` then starts a short backstop in case the
+ *  callback never arrives, and a long one covers a wedged decoder. */
+export function seekPresented(v: HTMLVideoElement, t: number, fps: number): Promise<void> {
+  return new Promise((res) => {
+    if (Math.abs(v.currentTime - t) <= 1 / (fps * 2) && v.readyState >= 2) {
+      res()
+      return
+    }
+    let done = false
+    let backstop: ReturnType<typeof setTimeout> | undefined
+    const finish = (): void => {
+      if (done) return
+      done = true
+      clearTimeout(stall)
+      if (backstop) clearTimeout(backstop)
+      v.removeEventListener('seeked', onSeeked)
+      res()
+    }
+    const rvfc = (v as VideoRVFC).requestVideoFrameCallback
+    const stall = setTimeout(finish, 2000) // wedged decoder: draw whatever is there
+    const onSeeked = (): void => {
+      if (typeof rvfc !== 'function') finish()
+      else if (!backstop) backstop = setTimeout(finish, 250) // rVFC never arrived
+    }
+    v.addEventListener('seeked', onSeeked)
+    if (typeof rvfc === 'function') rvfc.call(v, () => finish())
+    try {
+      v.currentTime = t
+    } catch {
+      finish()
+    }
+  })
+}
 const AUDIO_RATE = 48000
 
 /** Friendly, rotating export status lines (the % is shown separately in the UI). */
@@ -598,20 +648,7 @@ export async function exportOnDevice(
     })
     return v
   }
-  const seekTo = (v: HTMLVideoElement, t: number): Promise<void> =>
-    new Promise((res) => {
-      const to = setTimeout(() => {
-        v.removeEventListener('seeked', on)
-        res() // decoder stall: use whatever frame is there rather than wedging
-      }, 2000)
-      const on = (): void => {
-        clearTimeout(to)
-        v.removeEventListener('seeked', on)
-        res()
-      }
-      v.addEventListener('seeked', on)
-      v.currentTime = t
-    })
+  const seekTo = (v: HTMLVideoElement, t: number): Promise<void> => seekPresented(v, t, FPS)
 
   // 5) frame loop — offline, sequential, index-timestamped. Source frames come
   //    from PLAY-HARVEST by default: each segment plays ONCE (muted, at the
