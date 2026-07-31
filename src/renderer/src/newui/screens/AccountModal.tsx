@@ -279,7 +279,7 @@ export default function AccountModal({
                 Choose a plan
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {PLANS.map((p) => (
+                {PLANS.filter((p) => p.id !== 'test').map((p) => (
                   <div
                     key={p.id}
                     style={{

@@ -11,7 +11,21 @@
 // Secrets (supabase secrets set): ASSEMBLYAI_API_KEY, DEEPGRAM_API_KEY.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { corsHeaders, json, preflight } from '../_shared/http.ts'
+
+// Inlined from _shared/http.ts so this function deploys as a single file.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
+}
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  })
+}
+function preflight(req: Request): Response | null {
+  return req.method === 'OPTIONS' ? new Response('ok', { headers: corsHeaders }) : null
+}
 
 const BUCKET = 'stt-audio'
 

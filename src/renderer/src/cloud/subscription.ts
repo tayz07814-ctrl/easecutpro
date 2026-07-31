@@ -132,27 +132,38 @@ export interface PlanMeta {
   tagline: string
   features: string[]
 }
+// Minute allowances mirror plan_minute_limit() in the DB — keep the two in sync.
 export const PLANS: PlanMeta[] = [
   {
     id: 'starter',
     name: 'Starter',
     price: '$29',
     tagline: 'For getting started',
-    features: ['10 videos per day', 'AI retake detection', 'Smart silence cutter', 'Manual editor', 'Batch processing']
+    features: ['1,200 AI minutes / month', 'AI retake detection', 'Smart silence cutter', 'Manual editor', 'Batch processing']
   },
   {
     id: 'pro',
     name: 'Pro',
     price: '$49',
     tagline: 'For working creators',
-    features: ['20 videos per day', 'Everything in Starter', 'Priority processing']
+    features: ['2,500 AI minutes / month', 'Everything in Starter', 'Priority processing']
   },
   {
     id: 'unlimited',
     name: 'Unlimited',
     price: '$79',
     tagline: 'For teams & agencies',
-    features: ['Unlimited videos*', 'Everything in Pro', 'Early access features']
+    features: ['Unlimited AI minutes', 'Everything in Pro', 'Early access features']
+  },
+  // Hidden internal test tier ($1, 100 AI minutes) — never shown in the public
+  // plan list (the account panel filters it out); reached only via the
+  // ?stripetest checkout. Present here so a test subscription resolves to a name.
+  {
+    id: 'test',
+    name: 'Test',
+    price: '$1',
+    tagline: 'Internal test tier',
+    features: ['100 AI minutes / month']
   }
 ]
 
