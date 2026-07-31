@@ -8,3 +8,14 @@ verify_jwt = true
 
 [functions.llm-judge]
 verify_jwt = true
+
+# Creates a Stripe Checkout Session for the signed-in user, so it needs a valid
+# Supabase JWT (the gateway rejects anonymous calls before our code runs).
+[functions.stripe-checkout]
+verify_jwt = true
+
+# Stripe calls this server-to-server with its own signature, not a Supabase JWT —
+# verification must be OFF or the gateway rejects every webhook before our
+# signature check. The function verifies STRIPE_WEBHOOK_SECRET itself.
+[functions.stripe-webhook]
+verify_jwt = false
