@@ -16,11 +16,14 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.util.Base64
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.audio.SonicAudioProcessor
@@ -49,6 +52,9 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
+
+/** Length of the audio fade applied on each side of a cut seam (8 ms — inaudible on speech, kills the click). */
+private const val SEAM_FADE_US = 8_000L
 
 /**
  * Native FULL export via Media3 Transformer — the phone's hardware codecs encode the
@@ -439,7 +445,8 @@ class EcExport(
         audioTracks: List<Map<String, Any>>?,
     ): Composition {
         val baseItems = ArrayList<EditedMediaItem>()
-        for (seg in segments) {
+        val lastIndex = segments.size - 1
+        for ((index, seg) in segments.withIndex()) {
             val uri = seg["uri"] as? String ?: throw IllegalArgumentException("a segment has no uri")
             val startMs = (seg["startMs"] as? Number)?.toLong() ?: 0L
             val endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
@@ -489,6 +496,14 @@ class EcExport(
                 mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
                 mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
                 afx.add(mix)
+            }
+            // Seam de-click: this base sequence is a butt-jointed concatenation of the
+            // kept ranges, and a hard audio splice pops (a DC step at the join). Fade
+            // this clip's audio up from / down to silence at the interior joins (never
+            // the real video start/end, and not on muted clips) so both sides of every
+            // seam meet at zero. Applied last, on the final post-speed/volume audio.
+            if (volume > 0.001f && (index > 0 || index < lastIndex)) {
+                afx.add(SeamFadeAudioProcessor(SEAM_FADE_US, index > 0, index < lastIndex))
             }
             builder.setEffects(Effects(ImmutableList.copyOf(afx), ImmutableList.copyOf(vfx)))
             if (fps > 0) builder.setFrameRate(fps)
@@ -565,6 +580,92 @@ class EcExport(
             m.postTranslate(-ndcx, -ndcy)
             m.postScale(s, s)
             m
+        }
+    }
+
+    /**
+     * A tiny seam de-clicker used only inside the offline Transformer passes (export +
+     * preview proxy — never the live player). It linearly fades the first [fadeUs] of
+     * the clip up from silence (when [fadeIn]) and holds back the last [fadeUs] so it
+     * can ramp down to silence at end-of-stream (when [fadeOut]). Because Media3
+     * concatenates sequence items without overlap, this is a fade-to-zero on each side
+     * of a join — both sides meet at 0, so the hard splice no longer pops. PCM16 only;
+     * any other encoding is passed straight through. Runs offline, so the per-call
+     * scratch allocation is fine.
+     */
+    private class SeamFadeAudioProcessor(
+        private val fadeUs: Long,
+        private val fadeIn: Boolean,
+        private val fadeOut: Boolean,
+    ) : BaseAudioProcessor() {
+        private var channels = 0
+        private var fadeFrames = 1
+        private var framePos = 0L
+        private var hold = ShortArray(0) // frames retained so the tail can ramp down on EOS
+        private var heldFrames = 0
+
+        override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+            if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT || (!fadeIn && !fadeOut)) {
+                return AudioProcessor.AudioFormat.NOT_SET // unsupported / nothing to do → passthrough
+            }
+            channels = inputAudioFormat.channelCount
+            fadeFrames = Math.max(1, (inputAudioFormat.sampleRate.toLong() * fadeUs / 1_000_000L).toInt())
+            hold = ShortArray(fadeFrames * channels)
+            return inputAudioFormat
+        }
+
+        override fun queueInput(inputBuffer: ByteBuffer) {
+            val bpf = 2 * channels // bytes per frame (16-bit × channels)
+            val inFrames = inputBuffer.remaining() / bpf
+            if (inFrames == 0) return
+            val total = heldFrames + inFrames
+            // combined = retained tail (heldFrames) followed by the new input frames
+            val combined = ShortArray(total * channels)
+            System.arraycopy(hold, 0, combined, 0, heldFrames * channels)
+            var w = heldFrames * channels
+            repeat(inFrames * channels) { combined[w++] = inputBuffer.getShort() }
+            // Emit all but the last fadeFrames (kept back so we can ramp the true tail).
+            val emit = if (fadeOut) Math.max(0, total - fadeFrames) else total
+            if (emit > 0) {
+                val out = replaceOutputBuffer(emit * bpf)
+                for (f in 0 until emit) {
+                    val g = framePos + f
+                    val gain = if (fadeIn && g < fadeFrames) g.toDouble() / fadeFrames else 1.0
+                    for (c in 0 until channels) {
+                        val s = combined[f * channels + c]
+                        out.putShort(if (gain >= 1.0) s else (s * gain).toInt().toShort())
+                    }
+                }
+                out.flip()
+                framePos += emit
+            }
+            val keep = total - emit
+            System.arraycopy(combined, emit * channels, hold, 0, keep * channels)
+            heldFrames = keep
+        }
+
+        override fun onQueueEndOfStream() {
+            if (heldFrames == 0) return
+            val bpf = 2 * channels
+            val out = replaceOutputBuffer(heldFrames * bpf)
+            for (h in 0 until heldFrames) {
+                val g = framePos + h
+                val gIn = if (fadeIn && g < fadeFrames) g.toDouble() / fadeFrames else 1.0
+                val gOut = if (fadeOut) Math.min(1.0, (heldFrames - 1 - h).toDouble() / fadeFrames) else 1.0
+                val gain = Math.min(gIn, gOut)
+                for (c in 0 until channels) {
+                    val s = hold[h * channels + c]
+                    out.putShort(if (gain >= 1.0) s else (s * gain).toInt().toShort())
+                }
+            }
+            out.flip()
+            framePos += heldFrames
+            heldFrames = 0
+        }
+
+        override fun onFlush() {
+            framePos = 0
+            heldFrames = 0
         }
     }
 
