@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { playClock } from '../clock'
 import { kenBurnsTransform } from '../kenBurns'
@@ -258,20 +258,33 @@ function OverlayBox({
   // Smooth Ken Burns zoom across the clip — GPU-composited (translateZ + scale3d,
   // full float), driven off the shared 60fps play clock for BOTH images and
   // videos so it keeps ramping even over a magnet-off gap on the base lane.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el: HTMLElement | null = isImage ? imgRef.current : ref.current
     if (!el) return
     const at = (prog: number): string => kenBurnsTransform({ zoomStart: zs, zoomEnd: ze, progress: prog })
+    const apply = (time: number): void => {
+      el.style.transform = at(len > 0 ? (time - view.start) / len : 0)
+    }
+    // Apply synchronously before the clip's first paint. Waiting for the first
+    // rAF showed one identity frame, which read as a hitch at overlay start.
+    apply(playing ? playClock.t : playhead)
     if (playing) {
       let raf = 0
-      const loop = (): void => {
-        el.style.transform = at(len > 0 ? (playClock.t - view.start) / len : 0)
+      let visualTime = clamp(playClock.t, view.start, view.start + len)
+      let lastWall = performance.now()
+      const loop = (now: number): void => {
+        const dt = Math.min(0.1, Math.max(0, (now - lastWall) / 1000))
+        lastWall = now
+        // A real seek is allowed to jump. Normal media-time quantization is not:
+        // it can no longer turn a slow overlay pan into visible stair-steps.
+        if (Math.abs(playClock.t - visualTime) > 0.35) visualTime = clamp(playClock.t, view.start, view.start + len)
+        else visualTime = clamp(visualTime + dt, view.start, view.start + len)
+        apply(visualTime)
         raf = requestAnimationFrame(loop)
       }
       raf = requestAnimationFrame(loop)
       return () => cancelAnimationFrame(raf)
     }
-    el.style.transform = at(len > 0 ? (playhead - view.start) / len : 0)
     return undefined
   }, [playing, playhead, view.start, view.sourceIn, len, zs, ze, isImage])
 

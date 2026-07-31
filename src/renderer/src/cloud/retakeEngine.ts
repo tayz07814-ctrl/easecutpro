@@ -2,9 +2,12 @@
 //
 // WORD CUTS are LLM-first: the FULL index-anchored transcript (shared/cutcutpro
 // buildAiPayload) goes to the SINGLE-PASS ultracut judge (the `ultracut-judge`
-// edge fn, OpenRouter). Production runs google/gemini-3.5-flash on the creator's
-// single-pass retake prompt (no first/second-pass framing) and it returns the cut
-// EDL. (procut-judge / Opus is still deployed but the cloud retake no longer uses it.)
+// edge fn). Production runs xai/grok-4.5-latest on OpenRouter
+// (OpenRouter key) with the creator's single-pass retake
+// prompt (no first/second-pass framing) and it returns the cut EDL. If the
+// Grok call fails the edge fn falls back to deepseek-v4-pro via OpenRouter, so
+// a transient outage never yields zero cuts. (procut-judge / Opus is still
+// deployed but the cloud retake no longer uses it.)
 //
 // SILENCE now uses the UNIFIED configurable VAD pass shared with ProCut
 // (vad.ts vadSilenceRegions, driven by the store's VadSilenceSettings): raw
@@ -94,7 +97,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (DeepSeek-V4-flash + sharp judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (Grok-4.5 + sharp judge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
   //    silence engine all read from this single decode (shared clock).
@@ -120,8 +123,8 @@ export async function retakeAwareCutCloud(
   }
 
   // 4. WORD-CUT BRAIN — the SINGLE-PASS ultracut judge over the FULL transcript
-  //    (ultracut-judge edge fn, OpenRouter). Production runs deepseek/deepseek-v4-flash
-  //    on the 'sharp' word-list retake prompt + reasoning:medium; it scans everything
+  //    (ultracut-judge edge fn, OpenRouter). Production runs xai/grok-4.5-latest
+  //    on the 'sharp' word-list retake prompt + reasoning:low; it scans everything
   //    and returns the cut EDL.
   op(72, 'Cut Lord is judging your takes…')
   // buildTimestampMap wants app Words (id/text); the pre-artifact transcript is
@@ -135,25 +138,25 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'deepseek/deepseek-v4-flash',
-      promptVariant: 'sharp',
+      // OpenRouter slug for Gemma-4-31b model.
+      model: 'google/gemma-4-31b-it',
       reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
-      warnings.push('Retake β couldn’t analyze this clip — please try again.')
+      warnings.push("Retake Beta couldn't analyze this clip — please try again.")
     } else if (res.raw == null) {
-      warnings.push('Retake β couldn’t analyze this clip — no takes were cut.')
+      warnings.push("Retake Beta couldn't analyze this clip — no takes were cut.")
     } else {
       const v = validateEdl(res.raw, map)
       if (!v.ok) {
-        warnings.push('Retake β couldn’t read the result — no takes were cut.')
+        warnings.push("Retake Beta couldn't read the result — no takes were cut.")
       } else {
         baseCutSpans = edlToRetakeCutSpans(refineEdl(v.edl, map).edl, map)
       }
     }
   } catch {
-    warnings.push('Retake β couldn’t finish — please try again.')
+    warnings.push("Retake Beta couldn't finish — please try again.")
   }
 
   // 5. SILENCE — the UNIFIED configurable VAD pass (shared with ProCut). ASR-
@@ -180,7 +183,10 @@ export async function retakeAwareCutCloud(
     source: 'vad_pass',
     settings: vadSettings,
     regions_count: silenceRegions.length,
-    total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3))
+    total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3)),
+    // Full lists so a bad cut/kept stretch can be located exactly (compact [start,end] pairs).
+    regions: silenceRegions.map((r) => [Number(r.start.toFixed(2)), Number(r.end.toFixed(2))]),
+    kept_words: keptWords.map((w) => [Number(w.start.toFixed(2)), Number(w.end.toFixed(2))])
   }
 
   // 6. debug JSON (best-effort, private bucket).

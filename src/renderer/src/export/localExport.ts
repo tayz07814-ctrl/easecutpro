@@ -22,7 +22,7 @@ import { framesToSeconds } from '@shared/timeline/time'
 import { resolveMedia } from '../media/resolver'
 import { isWebMediaId, getFile, mp4AudioStartOffset } from '../webmedia'
 import { IS_WEB } from '../platform'
-import { kenBurnsEase } from '../kenBurns'
+import { continuousMotionWindows, kenBurnsEase } from '../kenBurns'
 import {
   planOverlays,
   planTexts,
@@ -35,7 +35,9 @@ import type { OverlayClipSpec, OverlayRect } from './overlays'
 import type { Project } from '@shared/types'
 import type { TimelineDocument } from '@shared/timeline/types'
 
-export const FPS = 30
+// Animated scale/pan at 30fps visibly stair-steps on long, subtle pushes.
+// 60fps matches the preview compositor and keeps every zoom displacement small.
+export const FPS = 60
 const AUDIO_RATE = 48000
 
 /** Friendly, rotating export status lines (the % is shown separately in the UI). */
@@ -63,6 +65,8 @@ export interface Seg {
   ze: number
   ox: number
   oy: number
+  motionStart: number
+  motionLen: number
 }
 
 export interface AudioClipSched {
@@ -190,8 +194,18 @@ export function planFromDoc(doc: TimelineDocument, project: Project): { segs: Se
       zs: num(c.metadata?.ovZoomStart, 1),
       ze: num(c.metadata?.ovZoomEnd, 1),
       ox: num(c.metadata?.ovX, 0),
-      oy: num(c.metadata?.ovY, 0)
+      oy: num(c.metadata?.ovY, 0),
+      motionStart: 0,
+      motionLen: 0
     })
+  }
+  const windows = continuousMotionWindows(
+    segs,
+    (s) => `${s.src}|${s.size}|${s.zs}|${s.ze}|${s.ox}|${s.oy}`
+  )
+  for (let i = 0; i < segs.length; i++) {
+    segs[i].motionStart = windows[i].start
+    segs[i].motionLen = windows[i].len
   }
   const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0
 
@@ -366,9 +380,13 @@ export async function renderAudio(
     a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.003 && Math.abs(a.speed - b.speed) < 1e-3
   const fadeInAt = audible.map((cur, i) => (i === 0 ? true : !contiguous(audible[i - 1].s, cur.s)))
 
-  // Schedule each audible segment playing EXACTLY its body — no overlap, no removed
-  // audio replayed, no fade-out. A post-cut start gets a ~8ms 0→gain ramp; the rest
-  // holds at full gain, so speech at both edges of every cut is preserved verbatim.
+  // Schedule each audible segment playing EXACTLY its body at full gain — speech at
+  // both edges of every cut is preserved verbatim. At a real cut seam the blend is a
+  // TRUE equal-power crossfade: the incoming clip ramps 0→gain (sin) while the
+  // OUTGOING clip's audio continues up to `seamFadeS` PAST its cut point, ramping
+  // gain→0 (cos) UNDER the incoming words. The tail comes from source audio that the
+  // cut removed, capped short (≤60ms) and fading out, so it smooths the join without
+  // audibly replaying the removed take. Contiguous splits play straight through.
   for (let i = 0; i < audible.length; i++) {
     const { s, buf } = audible[i]
     const sp = Math.max(0.01, s.speed)
@@ -382,6 +400,23 @@ export async function renderAudio(
     else g.gain.setValueAtTime(base, Math.max(0, s.start))
     node.connect(g).connect(off.destination)
     node.start(Math.max(0, s.start), Math.max(0, s.sourceStart), Math.max(0.01, s.sourceEnd - s.sourceStart))
+
+    // Outgoing overlap tail at the NEXT seam (only when the next segment starts at a
+    // real cut and the source actually has audio past this clip's cut point).
+    if (seamFadeS > 0 && i + 1 < audible.length && fadeInAt[i + 1]) {
+      const availSrc = Math.max(0, buf.duration - s.sourceEnd) // removed source audio available
+      const tail = Math.min(seamFadeS, availSrc / sp)
+      if (tail > 0.005) {
+        const boundary = Math.max(0, s.start + s.len)
+        const tn = off.createBufferSource()
+        tn.buffer = buf
+        tn.playbackRate.value = sp
+        const tg = off.createGain()
+        tg.gain.setValueCurveAtTime(equalPowerRamp(base, 'out'), boundary, tail)
+        tn.connect(tg).connect(off.destination)
+        tn.start(boundary, s.sourceEnd, Math.max(0.005, tail * sp))
+      }
+    }
   }
   let any = audible.length > 0
   for (const a of extra) {
@@ -681,7 +716,7 @@ export async function exportOnDevice(
     }
     return best
   }
-  // contain-fit + eased Ken Burns (same math as the preview + PC export);
+  // contain-fit + immediate linear Ken Burns (same math as preview + PC export);
   // vw/vh = the source's natural size (video element or decoded image bitmap).
   const fitFor = (
     seg: Seg,
@@ -692,7 +727,7 @@ export async function exportOnDevice(
     const s = Math.min(W / vw, H / vh)
     const dw = vw * s
     const dh = vh * s
-    const prog = seg.len > 0 ? Math.min(1, Math.max(0, (t - seg.start) / seg.len)) : 0
+    const prog = seg.motionLen > 0 ? Math.min(1, Math.max(0, (t - seg.motionStart) / seg.motionLen)) : 0
     return {
       dx: (W - dw) / 2,
       dy: (H - dh) / 2,
@@ -784,7 +819,7 @@ export async function exportOnDevice(
             frame: new VideoFrame(o.v, { timestamp: 0 }),
             z: sp.z,
             rect: o.rect,
-            // eased Ken Burns for this frame (preview twin: OverlayBox zoomFromProg)
+            // linear Ken Burns for this frame (preview twin: OverlayBox)
             scale: sp.zs + (sp.ze - sp.zs) * kenBurnsEase((t - sp.start) / sp.rampLen)
           })
         } catch {

@@ -13,7 +13,9 @@ import { documentToProject } from '../src/shared/timeline/bridge'
 import { computeKeepRanges, virtualKeepsToClipSegments } from '../src/shared/edit'
 import { createTimeline, createTrack, createClip, addTrackToDoc, addClipToDoc } from '../src/shared/timeline/model'
 import { FPS_30 } from '../src/shared/timeline/time'
+import { readFileSync } from 'node:fs'
 import { baseTransformFilter, atempoChain } from '../src/main/ffmpeg'
+import { continuousMotionWindows, kenBurnsEase, kenBurnsScale } from '../src/renderer/src/kenBurns'
 import type { Project } from '../src/shared/types'
 
 let ok = true
@@ -94,14 +96,31 @@ check(
   shrink.chain === ',scale=iw*0.500000:ih*0.500000,pad=1920:1080:(ow-iw)*0.500000:(oh-ih)*0.500000:color=black'
 )
 
-// animated Ken Burns (100 -> 200% over 5s @30fps) => zoompan with ramped z + focal x/y
+// animated Ken Burns (100 -> 200% over 5s @30fps) => immediate linear ramp
 const kb = baseTransformFilter(1, 1, 2, 0, 0, W, H, 30, 5)
 check('animated zoom uses per-frame scale+crop (no zoompan)', !kb.chain.includes('zoompan') && kb.zoompan === false)
 check(
-  'animated zoom ramps z over 5s (t-based, ease-in-out)',
+  'animated zoom ramps z immediately over 5s (t-based, linear)',
   kb.chain.includes("scale=w='(trunc(") &&
-    kb.chain.includes('1.000000+(2.000000-1.000000)*(pow(min(t/5.000000,1),2)*(3-2*min(t/5.000000,1)))')
+    kb.chain.includes('1.000000+(2.000000-1.000000)*min(t/5.000000,1)')
 )
+check('shared browser zoom advances on the first progress step', Math.abs(kenBurnsEase(0.01) - 0.01) < 1e-12)
+check('shared browser zoom has constant per-frame velocity', Math.abs(kenBurnsScale({ zoomStart: 1, zoomEnd: 2, progress: 0.25 }) - 1.25) < 1e-12)
+const motionWindows = continuousMotionWindows(
+  [
+    { start: 0, len: 2, key: 'same' },
+    { start: 2, len: 3, key: 'same' },
+    { start: 5, len: 2, key: 'different' }
+  ],
+  (item) => item.key
+)
+check('matching cut pieces share one uninterrupted zoom clock', motionWindows[0].start === 0 && motionWindows[0].len === 5 && motionWindows[1].start === 0 && motionWindows[1].len === 5)
+check('a different transform starts its own zoom clock', motionWindows[2].start === 5 && motionWindows[2].len === 2)
+const localExportSource = readFileSync(new URL('../src/renderer/src/export/localExport.ts', import.meta.url), 'utf8')
+const docPreviewSource = readFileSync(new URL('../src/renderer/src/components/DocPreview.tsx', import.meta.url), 'utf8')
+check('on-device animated export is rendered at 60fps', /export const FPS = 60/.test(localExportSource))
+check('preview zoom uses a monotonic display-time clock', /motionTRef/.test(docPreviewSource) && /motionT \+ dt/.test(docPreviewSource))
+check('preview zoom runs on the browser compositor', /v\.animate\(/.test(docPreviewSource) && /easing: 'linear'/.test(docPreviewSource))
 // the crop offset is ANALYTIC (same trunc'd width expression), never in_w-based:
 // crop's in_w binds at init on variable-size streams (left-anchor bug).
 check(

@@ -25,9 +25,11 @@ export type Easing = (t: number) => number
 
 const clamp01 = (t: number): number => (t < 0 ? 0 : t > 1 ? 1 : t)
 
-// Easing library — each maps 0..1 → 0..1. Ken Burns defaults to easeInOutCubic:
-// a gentle acceleration, a glide through the middle, and a soft landing, which is
-// what CapCut / Premiere / Resolve use for "smooth" zoom.
+// Easing library — each maps 0..1 → 0..1. The applied-clip zoom deliberately
+// defaults to LINEAR: every output frame advances by the same amount, motion is
+// visible immediately on frame one, and there is no slow cubic "dead zone" at
+// either end. GPU composition supplies the visual smoothness; easing must not
+// hide the first part of the creator's clip.
 export const Easings = {
   linear: (t: number): number => clamp01(t),
   easeInQuad: (t: number): number => ((t = clamp01(t)), t * t),
@@ -46,8 +48,8 @@ export const Easings = {
 
 export type EasingName = keyof typeof Easings
 
-/** Default Ken Burns easing. Change here to restyle every zoom, preview + export. */
-export const kenBurnsEase: Easing = Easings.easeInOutCubic
+/** Shared applied-clip zoom timing for every browser preview/export path. */
+export const kenBurnsEase: Easing = Easings.linear
 
 export interface KenBurnsParams {
   /** base size (1 = fill the frame). */
@@ -57,8 +59,42 @@ export interface KenBurnsParams {
   zoomEnd?: number
   /** elapsed / duration, 0..1. */
   progress: number
-  /** easing (default easeInOutCubic). */
+  /** easing (default linear, for immediate motion). */
   ease?: Easing
+}
+
+export interface MotionWindowItem {
+  start: number
+  len: number
+}
+
+/**
+ * Build one animation clock across adjacent timeline pieces that carry the same
+ * transform. Silence/retake edits split a source clip into many kept pieces;
+ * restarting 0→1 on every piece makes the zoom snap backwards at every cut.
+ */
+export function continuousMotionWindows<T extends MotionWindowItem>(
+  items: readonly T[],
+  groupKey: (item: T) => string
+): Array<{ start: number; len: number }> {
+  const out = items.map((item) => ({ start: item.start, len: item.len }))
+  let i = 0
+  while (i < items.length) {
+    let j = i + 1
+    const key = groupKey(items[i])
+    while (
+      j < items.length &&
+      groupKey(items[j]) === key &&
+      Math.abs(items[j].start - (items[j - 1].start + items[j - 1].len)) < 0.05
+    ) {
+      j++
+    }
+    const start = items[i].start
+    const end = items[j - 1].start + items[j - 1].len
+    for (let k = i; k < j; k++) out[k] = { start, len: Math.max(0.02, end - start) }
+    i = j
+  }
+  return out
 }
 
 /** Interpolated Ken Burns scale at `progress` — a raw float, never rounded. */

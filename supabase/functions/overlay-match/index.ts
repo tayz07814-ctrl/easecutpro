@@ -73,6 +73,22 @@ async function requireUser(req: Request): Promise<boolean> {
   return !!data.user
 }
 
+// Gemma via OpenRouter (OpenAI-compatible chat completions) — the app-wide default.
+async function gemmaMatch(key: string, user: string): Promise<string> {
+  const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'google/gemma-4-31b-it',
+      max_tokens: 4000,
+      messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: user }]
+    })
+  })
+  if (!r.ok) throw new Error(`Gemma: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`)
+  const d = (await r.json()) as { choices?: { message?: { content?: string } }[] }
+  return d.choices?.[0]?.message?.content ?? ''
+}
+
 async function anthropicMatch(key: string, user: string): Promise<string> {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -119,8 +135,18 @@ Deno.serve(async (req) => {
     if (!sentences.length || !rules.length) return json({ error: 'missing sentences or rules' }, 400)
     const user = buildUserMessage(sentences, rules)
 
+    const orKey = Deno.env.get('OPEN_ROUTER_KEY') ?? Deno.env.get('ULTRACUT_JUDGE_KEY') ?? Deno.env.get('AUTOZOOM_KEY')
     const anthropic = Deno.env.get('ANTHROPIC_API_KEY')
     const openai = Deno.env.get('OPENAI_API_KEY')
+    // Gemma via OpenRouter FIRST (app-wide default); Claude Opus / gpt-4o-mini fallback.
+    if (orKey) {
+      try {
+        console.log('[overlay-match] via=gemma-openrouter')
+        return json({ raw: await gemmaMatch(orKey, user), judge: 'gemma:openrouter' })
+      } catch (e) {
+        console.warn('[overlay-match] gemma failed:', (e as Error).message)
+      }
+    }
     if (anthropic) {
       try {
         return json({ raw: await anthropicMatch(anthropic, user), judge: 'anthropic:claude-opus' })

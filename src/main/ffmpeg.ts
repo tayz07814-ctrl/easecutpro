@@ -453,12 +453,11 @@ function animatedZoomChain(zExpr: string, fx: number, fy: number, W: number, H: 
   return parts.join(',')
 }
 
-/** Smoothstep-eased progress over `spanSec` using stream time `t` (valid after
- *  the per-clip setpts=PTS-STARTPTS reset; fps-independent). Linear ramps read
- *  as mechanical — ease-in-out is what makes zooms feel like butter. */
-function easedProgressT(spanSec: number): string {
-  const P = `min(t/${Math.max(0.05, spanSec).toFixed(6)},1)`
-  return `(pow(${P},2)*(3-2*${P}))`
+/** Immediate, constant-velocity progress over `spanSec` using stream time `t`
+ *  (valid after the per-clip setpts=PTS-STARTPTS reset; fps-independent).
+ *  Supersampling below keeps motion smooth without an ease-in dead zone. */
+function linearProgressT(spanSec: number): string {
+  return `min(t/${Math.max(0.05, spanSec).toFixed(6)},1)`
 }
 
 /** Chain `atempo` filters to reach `speed` (each stage handles 0.5..2.0), for
@@ -532,7 +531,7 @@ export function baseTransformFilter(
   // (zoomStart/End are >=1). The exotic size<1 + Ken Burns case can't zoom out, so
   // fall back to a static render at the start scale.
   if (Math.min(s0, s1) >= 1 - eps) {
-    const zExpr = `${F(s0)}+(${F(s1)}-${F(s0)})*${easedProgressT(spanSec)}`
+    const zExpr = `${F(s0)}+(${F(s1)}-${F(s0)})*${linearProgressT(spanSec)}`
     // zoompan:false — this chain keeps source PTS/frame-rate (the caller's
     // normal speed/fps tail applies), unlike zoompan's resampled output.
     return { chain: ',' + animatedZoomChain(zExpr, fx, fy, W, H), zoompan: false }
@@ -584,7 +583,9 @@ async function concatSegmentsToFile(
 ): Promise<string> {
   const W = even(target.w || 1920)
   const H = even(target.h || 1080)
-  const FPS = 30
+  // Preserve smooth spatial motion in desktop exports too. At 30fps a slow
+  // 100→130% push moves several output pixels per frame and reads as jitter.
+  const FPS = 60
   const inArgs: string[] = []
   const seg: string[] = []
   const order: string[] = []
@@ -1022,7 +1023,7 @@ export async function exportProject(
           // sub-pixel smooth too; its internal scale-up replaces the plain
           // scale=ow:oh and establishes the ow:oh canvas at S× before zooming.
           scaleZoom = animatedZoomChain(
-            `${zs}+(${ze}-${zs})*${easedProgressT(len)}`,
+            `${zs}+(${ze}-${zs})*${linearProgressT(len)}`,
             0.5,
             0.5,
             ow,

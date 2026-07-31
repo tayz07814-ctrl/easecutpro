@@ -69,6 +69,22 @@ async function requireUser(req: Request): Promise<boolean> {
   return !!data.user
 }
 
+// Gemma via OpenRouter (OpenAI-compatible chat completions) — the app-wide default.
+async function gemmaSuggest(key: string, user: string): Promise<string> {
+  const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'google/gemma-4-31b-it',
+      max_tokens: 4000,
+      messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: user }]
+    })
+  })
+  if (!r.ok) throw new Error(`Gemma: HTTP ${r.status} ${(await r.text()).slice(0, 200)}`)
+  const d = (await r.json()) as { choices?: { message?: { content?: string } }[] }
+  return d.choices?.[0]?.message?.content ?? ''
+}
+
 async function anthropicSuggest(key: string, user: string): Promise<string> {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -105,8 +121,19 @@ Deno.serve(async (req) => {
     if (!sentences.length || !library.length) return json({ error: 'missing sentences or library' }, 400)
     const user = buildUserMessage(sentences, library)
 
+    const orKey = Deno.env.get('OPEN_ROUTER_KEY') ?? Deno.env.get('ULTRACUT_JUDGE_KEY') ?? Deno.env.get('AUTOZOOM_KEY')
     const anthropic = Deno.env.get('ANTHROPIC_API_KEY')
     const openai = Deno.env.get('OPENAI_API_KEY')
+    // Gemma via OpenRouter FIRST (app-wide default); Claude Opus then gpt-4o-mini
+    // remain as error-fallbacks so a provider hiccup never kills the feature.
+    if (orKey) {
+      try {
+        console.log('[overlay-suggest] via=gemma-openrouter')
+        return json({ raw: await gemmaSuggest(orKey, user), judge: 'gemma:openrouter' })
+      } catch (e) {
+        console.warn('[overlay-suggest] gemma failed:', (e as Error).message)
+      }
+    }
     if (anthropic) {
       try {
         return json({ raw: await anthropicSuggest(anthropic, user), judge: 'anthropic:claude-opus' })

@@ -111,3 +111,15 @@ export interface ProcutJudgeRes {
   raw: string | null
   judge: string
 }
+
+// --- Auto Zoom (auto-zoom-judge) — Gemma picks which cut clips deserve a punch-in.
+export interface AutoZoomJudgeReq {
+  /** compact JSON of ordered segments: [{ i, t, d }] (index, text, durSec). */
+  segments: string
+  /** optional per-request model (whitelisted server-side); omitted → Gemma default. */
+  model?: string
+}
+export interface AutoZoomJudgeRes {
+  raw: string | null
+  judge: string
+}

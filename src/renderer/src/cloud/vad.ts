@@ -135,7 +135,9 @@ export async function detectSilenceFloat32(
 
   // 3. invert SPEECH -> non-speech gaps over [0, duration] (same 0.02s epsilon
   //    as detectSilenceVad), keeping only gaps ≥ the min silence duration.
-  const minDur = Math.max(0.1, opts?.minDuration ?? 0.4)
+  //    Floor 0.03 (was 0.1): the old floor silently kept every pause under 100ms,
+  //    which made a true "zero pause" setting impossible no matter the sliders.
+  const minDur = Math.max(0.03, opts?.minDuration ?? 0.4)
   let regions: { start: number; end: number }[] = []
   let cursor = 0
   for (const s of padded) {
@@ -225,24 +227,129 @@ export function clampSilenceRegions(
   // TRAILING silence after the last word (dead air at the very start/end). The
   // first/last word stays protected by the padding above. Default off preserves
   // the old "keep head + tail" behavior for any other caller.
-  trimEdges = false
+  trimEdges = false,
+  // A carved piece must STILL satisfy the creator's "cut pauses longer than X".
+  // Word-carving a big raw region (breath sweep across a soft-spoken phrase) can
+  // leave 50-110ms slivers BETWEEN words of fluent speech — each one a video
+  // splice that shreds the phrase. Those are coarticulation gaps, not pauses.
+  minPieceS = 0.05,
+  // edgeGrowS ("trim cut edges"): tighten each SURVIVING cut by up to this on both
+  // sides for snappier pacing — it MAY bite INTO the adjacent word at the cut edge
+  // (see the capped, word-core-preserving logic below). It must run HERE, AFTER the
+  // word-carve + minPiece filter, never in the raw VAD pass: in the raw pass it
+  // grows every sub-minGap breath dip and MERGES the dips of a soft, fluent passage
+  // into one big region, which — where STT under-covers that soft speech — carved
+  // into multi-second cuts of real words. Post-carve it only extends cuts that are
+  // already real >= minGap pauses, so it can never cascade like that again.
+  edgeGrowS = 0
 ): SilenceRegion[] {
-  const clamp = (a: number, b: number): { start: number; end: number } => {
-    let cs = a
-    let ce = b
-    for (const w of keptWords) {
-      if (cs <= w.start && ce > w.start + 0.002 && ce < w.end) ce = Math.max(cs, w.start - guardBeforeS) // cut end reaches into a word → stop before it
-      if (ce >= w.end && cs < w.end - 0.002 && cs > w.start) cs = Math.min(ce, w.end + guardAfterS) // cut start reaches into a word → start after it
+  // TRUE interval subtraction: carve every guarded word span out of every region.
+  // The old two-condition edge-nudge only handled PARTIAL overlaps — a region that
+  // fully CONTAINED a quiet word (VAD scored the whole word below threshold, or the
+  // breath sweep swallowed it) matched neither condition and deleted the word. This
+  // handles every case uniformly: partial overlap → trimmed; word inside region →
+  // region SPLITS around it; region inside a word → dropped; several quiet words →
+  // split around each. Kept transcript words can no longer be cut by silence.
+  //
+  // NOTE: an earlier revision tried trimming STT word-end slop here ("tail trim")
+  // — reverted: STT/repaired word times are not reliable enough to cut against,
+  // and the trim clipped real speech. Words are protected at their FULL spans.
+  const wordsSorted = [...keptWords].sort((x, y) => x.start - y.start)
+  const subtractWords = (a: number, b: number): { start: number; end: number }[] => {
+    const out: { start: number; end: number }[] = []
+    let cursor = a
+    for (const w of wordsSorted) {
+      const gs = w.start - guardBeforeS
+      let ge = w.end + guardAfterS
+      // TRAILING-DRIFT GUARD. A word whose ONSET is at/before this region's acoustic
+      // start belongs to the PRECEDING speech: the VAD already ended speech at `a`
+      // (= tight speech end + padAfter; the redemption frame is subtracted out in the
+      // raw pass), so `a` is the reliable boundary. That word's STT END-time is not —
+      // and when it drifts LATE (a linear STT clock error, so the lag grows toward the
+      // end of a long video) its guarded tail reaches past `a` and holds the cut open,
+      // leaving a growing trail of dead air at the clip's end (the "1–1.5 s silent gap,
+      // worse toward the end, in every engine" report — every VAD shares this carve).
+      // Cap such a word's protected tail at `a` so a drifting word-end can never veto
+      // the VAD's cut. A word that onsets INSIDE the region (gs/ge fully past `a`) is
+      // one the VAD under-detected → protect it in full (ge unchanged) as before.
+      if (w.start <= a) ge = Math.min(ge, a)
+      if (ge <= cursor) continue
+      if (gs >= b) break
+      if (gs > cursor) out.push({ start: cursor, end: gs })
+      cursor = Math.max(cursor, ge)
     }
-    return { start: cs, end: ce }
+    if (cursor < b) out.push({ start: cursor, end: b })
+    return out
   }
-  return raw
+  const clampMin = Math.max(0.02, minPieceS)
+  let pieces = raw
     // Head/tail: trimEdges removes the leading intro + trailing outro silence too;
     // otherwise keep them and only trim silence BETWEEN speech.
     .filter((r) => trimEdges || (r.start > 0.15 && !(durationS > 0 && r.end >= durationS - 0.15)))
-    .map((r) => clamp(r.start, r.end))
-    .filter((r) => r.end - r.start > 0.05)
-    .map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
+    .flatMap((r) => subtractWords(r.start, r.end))
+    // Every surviving piece must be a REAL pause by the creator's own threshold
+    // (floor 0.02 keeps the zero-pause profile honest at its minGap of 0.05).
+    .filter((r) => r.end - r.start > clampMin)
+
+  // EDGE-SNAP TO WORDS. The interior clamp deliberately keeps STT times OUT of cut
+  // edges (mid-clip they're unreliable and would clip real speech). But at the very
+  // START and END there is no speech beyond the first/last word, so anchoring the
+  // leading + trailing cut to the word boundary is safe — and it makes the clip open
+  // and END exactly on the speech instead of leaving the last word's pad, or the
+  // trailing breath/room-tone the VAD kept as "speech", as a tail of dead air. Tiny
+  // LEAD/TAIL keep the first onset / last release from being clipped.
+  if (trimEdges && keptWords.length && durationS > 0) {
+    const ws = [...keptWords].sort((a, b) => a.start - b.start)
+    const firstStart = ws[0].start
+    const lastEnd = ws[ws.length - 1].end
+    const LEAD = 0.05
+    const TAIL = 0.06
+    pieces = pieces.filter((r) => r.end > firstStart && r.start < lastEnd) // drop outer-zone pieces
+    const head = Math.max(0, firstStart - LEAD)
+    if (head > clampMin) pieces.unshift({ start: 0, end: head })
+    const tail = Math.min(durationS, lastEnd + TAIL)
+    if (durationS - tail > clampMin) pieces.push({ start: tail, end: durationS })
+  }
+
+  // "Trim cut edges": grow each surviving pause up to edgeGrowS on each side. This
+  // MAY reach INTO the adjacent word at the cut edge — trimming a word's soft
+  // onset/tail is exactly what tightens a jump cut. It stays safe because:
+  //  (a) it runs POST-carve on cuts that are ALREADY real ≥ minGap pauses, so a
+  //      sub-minGap breath dip is long gone and this can never cascade into the
+  //      multi-second cut it used to (that bug was edgeTrim in the RAW pass);
+  //  (b) the intrusion into any ONE word is capped to KEEP_CORE of its length, so
+  //      a solid core always survives — a short word can't be eaten through, and
+  //      two cuts bracketing a word can never meet and delete it;
+  //  (c) only INTERIOR cuts (a real word on BOTH sides) trim into words; the
+  //      leading/trailing dead-air cut only snugs up to the first/last spoken
+  //      word, never clipping the open or the ending.
+  const KEEP_CORE = 0.35 // max fraction of a word the trim may eat from one side
+  if (edgeGrowS > 0 && pieces.length) {
+    const hiCap = durationS > 0 ? durationS : Infinity
+    const words = [...keptWords].sort((a, b) => a.start - b.start)
+    pieces = pieces.map((r) => {
+      let prevW: { start: number; end: number } | null = null
+      let nextW: { start: number; end: number } | null = null
+      for (const w of words) {
+        if (w.end <= r.start) prevW = w
+        else if (w.start >= r.end) { nextW = w; break }
+      }
+      let loLimit: number
+      let hiLimit: number
+      if (prevW && nextW) {
+        // interior cut — may bite into both neighboring words, capped per word.
+        loLimit = prevW.end - Math.min(edgeGrowS, KEEP_CORE * (prevW.end - prevW.start))
+        hiLimit = nextW.start + Math.min(edgeGrowS, KEEP_CORE * (nextW.end - nextW.start))
+      } else {
+        // head/tail cut — snug up to the lone adjacent word but never into it.
+        loLimit = prevW ? prevW.end : 0
+        hiLimit = nextW ? nextW.start : hiCap
+      }
+      return { start: Math.max(r.start - edgeGrowS, loLimit, 0), end: Math.min(r.end + edgeGrowS, hiLimit, hiCap) }
+    })
+  }
+
+  return pieces.map((r, i) => ({ id: `${idPrefix}-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
 }
 
 export async function vadSilenceRegions(
@@ -253,8 +360,95 @@ export async function vadSilenceRegions(
   keptWords: { start: number; end: number }[],
   idPrefix = 'vadsil'
 ): Promise<SilenceRegion[]> {
-  const raw = await detectSilenceFloat32(float32, sampleRate, vadSilenceToOpts(settings), durationS)
-  // Word-guard tied to the padding sliders (0 → crisp gapless cut), and trim the
-  // leading/trailing dead air of the whole clip too.
-  return clampSilenceRegions(raw, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true)
+  // edgeTrim is NOT applied in the raw VAD pass — it would grow+merge sub-minGap
+  // breath dips before word protection can drop them (the multi-second-cut bug).
+  // It is applied post-carve, word-clamped, inside clampSilenceRegions below.
+  const rawOpts = { ...vadSilenceToOpts(settings), edgeTrimMs: 0 }
+  const raw = await detectSilenceFloat32(float32, sampleRate, rawOpts, durationS)
+
+  // NOISE-ISLAND BRIDGING. Camera thuds / phone-handling noise inside a pause make
+  // Silero score "speech", so the VAD splits the pause into silence-NOISE-silence
+  // and the noise stays in the edit. But if the stretch between two detected
+  // silences contains NO transcript word, nobody is speaking — bridge across it so
+  // the whole pause (noise included) is one cuttable region. Boundaries stay pure
+  // AUDIO (VAD onsets); STT times are never used to place a cut edge — an earlier
+  // revision synthesized regions from transcript word gaps and clipped real speech
+  // where the STT/repaired times were off (reverted).
+  const MAX_ISLAND_S = 5 // a "speech" island longer than this is too risky to assume is noise
+  const bridgeWordlessIslands = (list: { start: number; end: number }[]): { start: number; end: number }[] => {
+    const out: { start: number; end: number }[] = []
+    for (const r of mergeIntervals(list)) {
+      const prev = out[out.length - 1]
+      if (prev) {
+        const a = prev.end
+        const b = r.start
+        const wordless = !keptWords.some((w) => w.start < b && w.end > a)
+        if (wordless && b - a > 0 && b - a <= MAX_ISLAND_S) {
+          prev.end = r.end // swallow the noise island + the following silence
+          continue
+        }
+      }
+      out.push({ ...r })
+    }
+    return out
+  }
+  let bridged = bridgeWordlessIslands(raw)
+
+  // STUBBORN-NOISE SECOND OPINION. Sustained handling/camera noise can make the VAD
+  // score an ENTIRE pause as "speech" — zero silence inside it, so island bridging
+  // has nothing to bridge and the noise survives whole (found in a real clip: a
+  // 2.3s pause fully classified as speech). For a wordless transcript gap that the
+  // VAD left mostly uncovered, re-run the VAD on JUST that span at a STRICTER
+  // threshold: real speech scores ~0.9+, transient noise ~0.5-0.8, so the strict
+  // pass sees through the noise. Cut edges still come from AUDIO onsets — the
+  // strict regions are clipped to the gap, and the word-carve + minGap filter
+  // below still bound everything. STT times gate WHERE we look, never where we cut.
+  const ws = [...keptWords].sort((a, b) => a.start - b.start)
+  const extra: { start: number; end: number }[] = []
+  for (let i = 1; i < ws.length; i++) {
+    const g0 = ws[i - 1].end
+    const g1 = ws[i].start
+    const len = g1 - g0
+    if (len < Math.max(0.5, settings.minGapS)) continue
+    const covered = bridged.reduce((n, r) => n + Math.max(0, Math.min(r.end, g1) - Math.max(r.start, g0)), 0)
+    if (covered / len >= 0.5) continue // the VAD already found this pause; nothing stubborn here
+    const margin = 0.5 // context so the strict pass sees the neighboring speech onsets
+    const i0 = Math.max(0, Math.floor((g0 - margin) * sampleRate))
+    const i1 = Math.min(float32.length, Math.ceil((g1 + margin) * sampleRate))
+    if (i1 - i0 < sampleRate * 0.2) continue
+    try {
+      const strictOpts = {
+        ...vadSilenceToOpts(settings),
+        edgeTrimMs: 0, // same reason as the main pass — no grow before word-carve
+        vadThreshold: Math.min(0.95, settings.speechThreshold + 0.15)
+      }
+      const sliceDur = (i1 - i0) / sampleRate
+      const sub = await detectSilenceFloat32(float32.subarray(i0, i1), sampleRate, strictOpts, sliceDur)
+      for (const r of sub) {
+        const s = Math.max(g0, r.start + i0 / sampleRate)
+        const e = Math.min(g1, r.end + i0 / sampleRate)
+        if (e - s >= Math.max(0.05, settings.minGapS)) extra.push({ start: s, end: e })
+      }
+    } catch {
+      /* the strict pass is best-effort — a failure just leaves this gap as-is */
+    }
+  }
+  if (extra.length) bridged = bridgeWordlessIslands([...bridged, ...extra])
+
+  // Word-guard tied to the padding sliders (0 → crisp gapless cut) and trim the
+  // leading/trailing dead air of the whole clip.
+  //
+  // The "is this a pause worth cutting? (>= minGap)" gate ALREADY ran in the raw
+  // VAD pass (detectSilenceFloat32's minDur filter above), so the post-carve floor
+  // here must be a small FIXED sliver floor — NOT minGap again. Passing minGap here
+  // double-counted it: because the pads are carved off BEFORE this check, the
+  // effective cut threshold became (minGap + padBefore + padAfter), so any pause
+  // shorter than that was kept WHOLE instead of trimmed down to the pads. That is
+  // the "leaves a lot of silence at sentence endings / behaves unpredictably on
+  // Custom & non-Balanced presets" bug: bigger pads pushed the cliff higher, and
+  // pauses either side of it flipped between kept-whole and trimmed. The 0.1s floor
+  // only drops the 50–110ms coarticulation slivers word-carving can leave between
+  // fluent words; real >= minGap pauses now always trim to the pads, predictably.
+  const SLIVER_FLOOR_S = 0.1
+  return clampSilenceRegions(bridged, keptWords, idPrefix, durationS, settings.padBeforeS, settings.padAfterS, true, SLIVER_FLOOR_S, settings.edgeTrimS)
 }

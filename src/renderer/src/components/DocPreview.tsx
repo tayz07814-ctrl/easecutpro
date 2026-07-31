@@ -30,7 +30,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { playClock, primePlayback } from '../clock'
-import { kenBurnsTransform, kenBurnsOrigin } from '../kenBurns'
+import { continuousMotionWindows, kenBurnsTransform, kenBurnsOrigin } from '../kenBurns'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -78,6 +78,8 @@ interface Seg {
   ovZoomEnd?: number
   ovX?: number
   ovY?: number
+  motionStart: number
+  motionLen: number
   gain?: number
   speed: number
 }
@@ -132,9 +134,19 @@ function docSegments(doc: TimelineDocument): { segs: Seg[]; missing: number } {
       ovZoomEnd: typeof c.metadata?.ovZoomEnd === 'number' ? c.metadata.ovZoomEnd : 1,
       ovX: typeof c.metadata?.ovX === 'number' ? c.metadata.ovX : 0,
       ovY: typeof c.metadata?.ovY === 'number' ? c.metadata.ovY : 0,
+      motionStart: 0,
+      motionLen: 0,
       gain: typeof c.gain === 'number' ? c.gain : 1,
       speed
     })
+  }
+  const windows = continuousMotionWindows(
+    segs,
+    (s) => `${s.src}|${s.ovScale}|${s.ovZoomStart}|${s.ovZoomEnd}|${s.ovX}|${s.ovY}`
+  )
+  for (let i = 0; i < segs.length; i++) {
+    segs[i].motionStart = windows[i].start
+    segs[i].motionLen = windows[i].len
   }
   return { segs, missing }
 }
@@ -248,6 +260,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // written FROM it (throttled) while playing; adopted INTO it when it changes
   // externally (scrub) or while paused.
   const tRef = useRef(playhead)
+  // Spatial motion gets its own monotonic display clock. HTMLVideoElement
+  // currentTime can update in coarse/uneven steps even while frames are playing;
+  // feeding those steps straight into scale+pan makes a slow zoom visibly jump.
+  const motionTRef = useRef(playhead)
   const lastWroteRef = useRef(playhead)
   const lastStoreWriteAt = useRef(0)
 
@@ -255,6 +271,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   useEffect(() => {
     if (Math.abs(playhead - lastWroteRef.current) > 0.0005) {
       tRef.current = playhead // adopt: the user moved the playhead
+      motionTRef.current = playhead
     }
   }, [playhead])
 
@@ -307,6 +324,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   useEffect(() => {
     let raf = 0
     let lastWall = performance.now()
+    let motionSegKey = ''
+    const motionAnimations = new Map<
+      HTMLVideoElement,
+      { animation: Animation; key: string; anchorT: number; anchorWall: number }
+    >()
     const loop = (): void => {
       const now = performance.now()
       const dt = Math.min(0.1, (now - lastWall) / 1000)
@@ -317,6 +339,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
 
       if (!ss.length) {
         playClock.t = tRef.current
+        motionTRef.current = tRef.current
         raf = requestAnimationFrame(loop)
         return
       }
@@ -431,6 +454,23 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       // ---- visibility + per-clip properties, every frame (cheap, idempotent) ----
       const di = displayIdxAt(t)
       const shown = di >= 0 ? ss[di] : undefined
+      let motionT = motionTRef.current
+      if (!shown) {
+        motionT = t
+        motionSegKey = ''
+      } else {
+        const key = `${shown.src}|${shown.sourceStart}|${shown.start}|${shown.len}`
+        if (!isPlaying || key !== motionSegKey) {
+          // Paused/scrubbed or entering a new clip: exact timeline position.
+          motionT = clamp(t, shown.start, shown.start + shown.len)
+        } else {
+          // Playing inside one clip: advance by display time, never by stepped
+          // media timestamps. Clamp only at the real clip boundary.
+          motionT = clamp(motionT + dt, shown.start, shown.start + shown.len)
+        }
+        motionSegKey = key
+      }
+      motionTRef.current = motionT
       // Creator-configured seam blend ("overlap"): 0 = hard cuts. Read live so the
       // preview reflects the Silence Settings toggle/slider immediately.
       const sf = useStore.getState().seamFade
@@ -443,24 +483,59 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           // Anti-click: dip the volume toward 0 across each real cut seam.
           v.volume = clamp((shown.gain ?? 1) * seamGain(t, di, ss, seamFadeS), 0, 1)
           v.playbackRate = clamp(shown.speed, 0.25, 4)
-          const prog = shown.len > 0 ? clamp((t - shown.start) / shown.len, 0, 1) : 0
+          const prog = shown.motionLen > 0 ? clamp((motionT - shown.motionStart) / shown.motionLen, 0, 1) : 0
           v.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
-          // ALWAYS a GPU-composited 3D transform (even at scale 1) so the layer
-          // never promotes/demotes mid-zoom — the source of the subtle-zoom hitch.
-          v.style.transform = kenBurnsTransform({
+          const frameTransform = kenBurnsTransform({
             size: shown.ovScale ?? 1,
             zoomStart: shown.ovZoomStart,
             zoomEnd: shown.ovZoomEnd,
             progress: prog
           })
+          const endTransform = kenBurnsTransform({
+            size: shown.ovScale ?? 1,
+            zoomStart: shown.ovZoomStart,
+            zoomEnd: shown.ovZoomEnd,
+            progress: 1
+          })
+          const animationKey = `${shown.src}|${shown.motionStart}|${shown.motionLen}|${shown.ovScale}|${shown.ovZoomStart}|${shown.ovZoomEnd}|${shown.ovX}|${shown.ovY}`
+          const running = motionAnimations.get(v)
+          const expectedT = running ? running.anchorT + (now - running.anchorWall) / 1000 : motionT
+          const needsSync = !running || running.key !== animationKey || Math.abs(expectedT - motionT) > 0.1
+          if (isPlaying && needsSync) {
+            running?.animation.cancel()
+            // Hand the entire remaining linear ramp to the compositor. Unlike
+            // assigning style.transform from JavaScript every rAF, this keeps
+            // moving even when React/layout/decoding briefly occupies the main
+            // thread, which removes the visible pan micro-stutter.
+            v.style.transform = frameTransform
+            const remainingMs = Math.max(1, (shown.motionStart + shown.motionLen - motionT) * 1000)
+            const animation = v.animate(
+              [{ transform: frameTransform }, { transform: endTransform }],
+              { duration: remainingMs, easing: 'linear', fill: 'forwards' }
+            )
+            motionAnimations.set(v, { animation, key: animationKey, anchorT: motionT, anchorWall: now })
+          } else if (!isPlaying) {
+            running?.animation.cancel()
+            motionAnimations.delete(v)
+            // Paused/scrubbed frames are exact, including the very first frame.
+            v.style.transform = frameTransform
+          }
         } else if (!isShown && !v.paused && isPlaying && shown?.src !== src) {
           v.pause() // never let a hidden element keep playing audio
+        }
+        if (!isShown) {
+          motionAnimations.get(v)?.animation.cancel()
+          motionAnimations.delete(v)
         }
       }
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
+    return () => {
+      cancelAnimationFrame(raf)
+      for (const { animation } of motionAnimations.values()) animation.cancel()
+      motionAnimations.clear()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -15,7 +15,7 @@
 // never the wall clock), so a slow device only makes the export take longer; it
 // can't change the file's duration or frame count.
 //
-// Compositing mirrors the encoder worker (base contain-fit + eased Ken Burns,
+// Compositing mirrors the encoder worker (base contain-fit + linear Ken Burns,
 // overlay boxes with crop + Ken Burns, baked text on top, z-ordering). This path
 // is used ONLY when probeEncodeCaps().audio === false; every other browser keeps
 // the untouched mp4-muxer exporter. Uses a plain per-frame seek (no play-harvest)
@@ -137,7 +137,7 @@ export async function exportOnDeviceMB(
     const s = Math.min(W / vw, H / vh)
     const dw = vw * s
     const dh = vh * s
-    const prog = seg.len > 0 ? Math.min(1, Math.max(0, (t - seg.start) / seg.len)) : 0
+    const prog = seg.motionLen > 0 ? Math.min(1, Math.max(0, (t - seg.motionStart) / seg.motionLen)) : 0
     return {
       dx: (W - dw) / 2,
       dy: (H - dh) / 2,

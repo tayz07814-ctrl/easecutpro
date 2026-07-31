@@ -496,6 +496,10 @@ export interface OverlayRule {
   animation: OverlayAnimation
   /** which matched mentions to keep (default 'every', capped per overlay). */
   occurrence?: OverlayOccurrence
+  /** on-screen SIZE as a percent of the position preset's default (100 = default).
+   *  Scales the placed overlay clip's ovScale so the creator can make a b-roll image
+   *  bigger/smaller without touching each placed clip. Clamped 40–160 at apply. */
+  sizePct?: number
 }
 
 /** A concrete placement the AI/keyword matcher produced (SOURCE-time seconds). */

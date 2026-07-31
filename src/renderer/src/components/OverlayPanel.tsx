@@ -14,6 +14,14 @@ const OCCURRENCES: { value: OverlayOccurrence; label: string }[] = [
   { value: 'first', label: 'first mention only' },
   { value: 'last', label: 'last mention only' }
 ]
+// On-screen size presets (percent of the position preset's default scale).
+const SIZES: { value: number; label: string }[] = [
+  { value: 60, label: 'Small' },
+  { value: 80, label: 'Medium' },
+  { value: 100, label: 'Default' },
+  { value: 130, label: 'Large' },
+  { value: 160, label: 'XL' }
+]
 
 function mmss(sec: number): string {
   const s = Math.max(0, Math.round(sec))
@@ -61,11 +69,37 @@ export default function OverlayPanel(): JSX.Element {
 
   return (
     <div className="overlay-panel">
+      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>🎬 Auto B-roll</div>
       <p className="muted small">
-        Import overlay images in the Media Library and add them here. A well-named overlay
-        (Bloating, CTA, Hairfall…) is enough — the AI matches its name to the transcript; add
-        an instruction only to say it differently. Placed on overlay track 1 — drag or delete after.
+        Import b-roll images in the Media Library, then press <b>Auto B-roll</b> — Gemma looks at
+        each image and the video and proposes where it fits. Tune each one's size and position
+        below. Placed on overlay track 1 — drag or delete after.
       </p>
+
+      {/* One-click entry: adds every imported image as an overlay, then runs Gemma
+          placement. Visible as soon as ANY image exists (added or not), so the
+          creator never has to hunt for a hidden button behind a two-step add. */}
+      {(images.length > 0 || assets.length > 0) && (
+        <button
+          className="primary"
+          style={{ width: '100%', marginBottom: 12, padding: '11px 0', fontSize: 13, fontWeight: 600 }}
+          disabled={job.active || !hasTranscript}
+          title={hasTranscript ? 'Add your images and let Gemma place each as b-roll where it fits' : 'Needs a transcript — run Find Retakes & Silence or Transcribe first'}
+          onClick={() => {
+            setRanOp(true)
+            // auto-add any imported images not yet added as overlays, then place
+            for (const img of images) addOverlayAsset(img.id)
+            void suggestOverlays()
+          }}
+        >
+          {job.active ? '⏳ Placing b-roll…' : '🎬 Auto B-roll'}
+        </button>
+      )}
+      {!hasTranscript && (images.length > 0 || assets.length > 0) && (
+        <p className="muted small" style={{ marginTop: -6 }}>
+          Run <b>Find Retakes &amp; Silence</b> (or Transcribe) first — Gemma reads the transcript to know where each image belongs.
+        </p>
+      )}
 
       {images.length > 0 && (
         <div className="ov-add-row">
@@ -132,6 +166,17 @@ export default function OverlayPanel(): JSX.Element {
                 </select>
               </label>
               <label>
+                Size
+                <select
+                  value={r.sizePct ?? 100}
+                  onChange={(e) => updateOverlayRule(a.id, { sizePct: Number(e.target.value) })}
+                >
+                  {SIZES.map((s) => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Duration
                 <input
                   type="number"
@@ -161,20 +206,12 @@ export default function OverlayPanel(): JSX.Element {
       {assets.length > 0 && (
         <div className="ov-actions">
           <button
-            className="primary"
-            disabled={job.active || !hasTranscript}
-            title={hasTranscript ? 'Match your rules to the transcript and place the overlays' : 'Needs a transcript — the AI reads it to find when you say things'}
-            onClick={() => { setRanOp(true); void generateOverlays() }}
-          >
-            ✨ Generate
-          </button>
-          <button
             className="ov-suggest-btn"
             disabled={job.active || !hasTranscript}
-            title={hasTranscript ? 'Let the AI read the whole video and propose what overlay goes where' : 'Needs a transcript first'}
-            onClick={() => { setRanOp(true); void suggestOverlays() }}
+            title={hasTranscript ? 'Match each overlay by its name/instruction to the transcript and place them directly (no vision)' : 'Needs a transcript first'}
+            onClick={() => { setRanOp(true); void generateOverlays() }}
           >
-            🪄 Suggest
+            ✨ Place by name
           </button>
           <button disabled={job.active} onClick={() => clearGeneratedOverlays()}>
             Clear placed
