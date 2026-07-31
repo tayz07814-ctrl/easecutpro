@@ -40,11 +40,14 @@ function presetBlurb(padBeforeS: number, padAfterS: number): string {
   return `Keeps a relaxed ${padBeforeS.toFixed(2)}s lead-in and ${padAfterS.toFixed(2)}s tail.`
 }
 
+const TAIL_NOTE = 'Also drops a trailing 200 ms wherever a clip ends on dead air.'
+
 export default function SilenceSettingsModal(): JSX.Element | null {
   const sil = useSilence()
   if (!sil.show) return null
 
-  const set = (k: keyof RetakeFinalBossSettings, v: number): void => sil.setField(k, v)
+  // Numeric fields only — tailTrim is a boolean and goes through sil.setTailTrim.
+  const set = (k: Exclude<keyof RetakeFinalBossSettings, 'tailTrim'>, v: number): void => sil.setField(k, v)
 
   return (
     <div onClick={sil.close} style={css('position:fixed;inset:0;background:rgba(8,8,10,.55);display:grid;place-items:center;z-index:1000')}>
@@ -70,10 +73,21 @@ export default function SilenceSettingsModal(): JSX.Element | null {
             <Slider label="Keep before speech" value={sil.s.padBeforeS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · tight" hi="0.5s · gentle lead-in" onChange={(v) => set('padBeforeS', v)} />
             <Slider label="Keep after speech" value={sil.s.padAfterS} min={0} max={0.5} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · tight" hi="0.5s · gentle tail" onChange={(v) => set('padAfterS', v)} />
             <Slider label="Tighten cut edges" value={sil.s.trimEdgesS} min={0} max={0.2} step={0.01} fmt={(v) => `${v.toFixed(2)} s`} lo="0s · safe" hi="0.2s · tighter" onChange={(v) => set('trimEdgesS', v)} />
+            {/* Quiet-tail trim — preset-driven elsewhere, tweakable here. */}
+            <div style={css('display:flex;align-items:flex-start;gap:11px')}>
+              <div onClick={() => sil.setTailTrim(!sil.s.tailTrim)} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${sil.s.tailTrim ? '#7c6bff' : '#2a2a34'}`)}>
+                <div style={css(sil.s.tailTrim ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
+              </div>
+              <div style={css('flex:1;min-width:0')}>
+                <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Trim dead-air tails</div>
+                <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>When a clip ends on a breath or room tone instead of a word, drop the last 200 ms. Only looks at clip endings — openings are never touched.</div>
+              </div>
+            </div>
           </div>
         ) : (
           <div style={css('font-size:12px;color:#71718a;margin-top:14px;line-height:1.5;min-height:34px')}>
-            {presetBlurb(sil.s.padBeforeS, sil.s.padAfterS)} <span style={css('color:#55556a')}>Pick <b style={css('color:#9a9aae')}>Mad Scientist</b> to fine-tune.</span>
+            {presetBlurb(sil.s.padBeforeS, sil.s.padAfterS)}
+            {sil.s.tailTrim ? ` ${TAIL_NOTE}` : ''} <span style={css('color:#55556a')}>Pick <b style={css('color:#9a9aae')}>Mad Scientist</b> to fine-tune.</span>
           </div>
         )}
 

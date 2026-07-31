@@ -62,8 +62,9 @@ export async function detectRetakeFinalBossSilences(
   // endpoint timestamp cushion before applying the user's seam geometry.
   const aligned = alignFinalBossFsmnGaps(raw, durationS)
   const planned = planFinalBossSilenceCuts(aligned, settings, durationS)
-  // Finally drop any dead-air tail the geometry left on a clip ending.
-  return trimQuietTails(planned, float32, sampleRate)
+  // Finally drop any dead-air tail the geometry left on a clip ending — only for
+  // the punchy presets, since the relaxed ones exist to KEEP that breathing room.
+  return settings.tailTrim ? trimQuietTails(planned, float32, sampleRate) : planned
 }
 
 /** Silence-only pass for the "Find Silences" button: the SAME FSMN engine and

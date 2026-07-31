@@ -11,17 +11,23 @@ export interface RetakeFinalBossSettings {
   padBeforeS: number
   /** Audio protected after the previous spoken word. */
   padAfterS: number
-  /** Tightens a cut by consuming some of the protected padding, never a word. */
+  /** Tightens a cut by consuming the protected padding, then cutting past the
+   *  VAD boundary once that padding is spent. */
   trimEdgesS: number
   /** Incoming audio overlap/crossfade used by preview and export. */
   audioOverlapMs: number
+  /** Drop a dead-air tail off a clip ENDING — see TAIL_TRIM_DB below. Only the
+   *  punchy presets (No Chill, Espresso Shot) turn this on; the relaxed ones
+   *  would have their own padding eaten by it. */
+  tailTrim: boolean
 }
 
 export const DEFAULT_RETAKE_FINAL_BOSS_SETTINGS: RetakeFinalBossSettings = {
   padBeforeS: 0.18,
   padAfterS: 0.12,
   trimEdgesS: 0.02,
-  audioOverlapMs: 20
+  audioOverlapMs: 20,
+  tailTrim: false
 }
 
 /** Silence presets. Non-editable presets apply fixed values (no sliders shown);
@@ -33,12 +39,15 @@ export interface SilencePreset {
   settings: RetakeFinalBossSettings
 }
 
+// `tailTrim` is ON for the two punchy presets only. The relaxed presets exist to
+// KEEP breathing room, so trimming their dead-air tails would undo the setting
+// the creator just picked.
 export const FSMN_SILENCE_PRESETS: SilencePreset[] = [
-  { id: 'chill-talker', label: 'Chill Talker', editable: false, settings: { padBeforeS: 0.4, padAfterS: 0.8, trimEdgesS: 0, audioOverlapMs: 50 } },
-  { id: 'just-right', label: 'Just Right', editable: false, settings: { padBeforeS: 0.1, padAfterS: 0.3, trimEdgesS: 0, audioOverlapMs: 50 } },
-  { id: 'no-chill', label: 'No Chill', editable: false, settings: { padBeforeS: 0.05, padAfterS: 0.1, trimEdgesS: 0, audioOverlapMs: 50 } },
-  { id: 'espresso-shot', label: 'Espresso Shot', editable: false, settings: { padBeforeS: 0, padAfterS: 0, trimEdgesS: 0.05, audioOverlapMs: 50 } },
-  { id: 'mad-scientist', label: 'Mad Scientist', editable: true, settings: { padBeforeS: 0.1, padAfterS: 0.3, trimEdgesS: 0, audioOverlapMs: 0 } }
+  { id: 'chill-talker', label: 'Chill Talker', editable: false, settings: { padBeforeS: 0.4, padAfterS: 0.8, trimEdgesS: 0, audioOverlapMs: 50, tailTrim: false } },
+  { id: 'just-right', label: 'Just Right', editable: false, settings: { padBeforeS: 0.1, padAfterS: 0.3, trimEdgesS: 0, audioOverlapMs: 50, tailTrim: false } },
+  { id: 'no-chill', label: 'No Chill', editable: false, settings: { padBeforeS: 0.05, padAfterS: 0.1, trimEdgesS: 0, audioOverlapMs: 50, tailTrim: true } },
+  { id: 'espresso-shot', label: 'Espresso Shot', editable: false, settings: { padBeforeS: 0, padAfterS: 0, trimEdgesS: 0.05, audioOverlapMs: 50, tailTrim: true } },
+  { id: 'mad-scientist', label: 'Mad Scientist', editable: true, settings: { padBeforeS: 0.1, padAfterS: 0.3, trimEdgesS: 0, audioOverlapMs: 0, tailTrim: false } }
 ]
 
 export const DEFAULT_FSMN_PRESET_ID = 'just-right'
@@ -58,7 +67,7 @@ export function getFsmnPreset(id: string | null | undefined): SilencePreset {
 export const FSMN_AFTER_SPEECH_CUSHION_S = 0.16
 export const FSMN_BEFORE_SPEECH_CUSHION_S = 0.26
 
-// Quiet-tail trim — ON BY DEFAULT, applied after the seam geometry above.
+// Quiet-tail trim — gated by `tailTrim`, on for No Chill + Espresso Shot.
 //
 // FSMN marks where speech stops, but a take rarely stops cleanly there: the clip
 // hangs on a breath, room tone, or a mic settling. That tail is inaudible as
@@ -98,7 +107,8 @@ export function normalizeRetakeFinalBossSettings(
     padBeforeS: Math.max(0, Math.min(0.5, number(value?.padBeforeS, d.padBeforeS))),
     padAfterS: Math.max(0, Math.min(0.5, number(value?.padAfterS, d.padAfterS))),
     trimEdgesS: Math.max(0, Math.min(0.2, number(value?.trimEdgesS, d.trimEdgesS))),
-    audioOverlapMs: Math.max(0, Math.min(60, number(value?.audioOverlapMs, d.audioOverlapMs)))
+    audioOverlapMs: Math.max(0, Math.min(60, number(value?.audioOverlapMs, d.audioOverlapMs))),
+    tailTrim: typeof value?.tailTrim === 'boolean' ? value.tailTrim : d.tailTrim
   }
 }
 

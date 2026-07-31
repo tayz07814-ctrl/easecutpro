@@ -16,13 +16,17 @@ import {
 export interface SilenceModel {
   show: boolean
   s: RetakeFinalBossSettings
-  setField: (k: keyof RetakeFinalBossSettings, v: number) => void
+  /** numeric fields only — `tailTrim` is a boolean, see setTailTrim. */
+  setField: (k: Exclude<keyof RetakeFinalBossSettings, 'tailTrim'>, v: number) => void
   /** Preset chips + the active id; the sliders only show when the active preset
    *  is editable (Mad Scientist). */
   presets: SilencePreset[]
   preset: string
   editable: boolean
   applyPreset: (id: string) => void
+  /** Quiet-tail trim — preset-driven (on for No Chill + Espresso Shot), and
+   *  toggleable in the editable preset. */
+  setTailTrim: (v: boolean) => void
   /** Seam blend ("overlap") at cuts — the FSMN audioOverlapMs, mirrored into the
    *  global render crossfade so preview + export match. */
   seamFade: SeamFadeSettings
@@ -51,6 +55,7 @@ export function useSilence(): SilenceModel {
     preset,
     editable: getFsmnPreset(preset).editable,
     applyPreset,
+    setTailTrim: (v) => setS({ tailTrim: v }),
     seamFade,
     setField: (k, v) => {
       if (k === 'audioOverlapMs') applyOverlap(v)
