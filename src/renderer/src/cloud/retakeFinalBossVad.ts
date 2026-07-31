@@ -6,7 +6,8 @@ import {
   alignFinalBossFsmnGaps,
   planFinalBossSilenceCuts,
   TAIL_TRIM_DB,
-  TAIL_TRIM_WINDOW_S,
+  TAIL_TRIM_MAX_S,
+  TAIL_TRIM_STEP_S,
   type RetakeFinalBossSettings
 } from '@shared/retakefinalboss'
 import { detectFsmnSilences } from './fsmnVad'
@@ -23,14 +24,21 @@ function windowDb(float32: Float32Array, sampleRate: number, t0: number, t1: num
   return rms > 0 ? 20 * Math.log10(rms) : -Infinity
 }
 
-/** Pull a cut earlier when the clip it ends is trailing off into dead air (see
- *  TAIL_TRIM_DB / TAIL_TRIM_WINDOW_S). A region's START is the END of the clip
- *  before it, so measuring there only ever trims clip endings — a clip's opening
- *  is a region's END and is never touched.
+/** Walk a cut backward while the audio it would keep is dead air.
  *
- *  Guards: the measured window must fit entirely inside the preceding clip, so
- *  the trim can never reach across the previous cut or before the media start,
- *  and can never swallow a clip whole. */
+ *  A region's START is the END of the clip before it, so this only ever trims
+ *  clip endings — a clip's opening is a region's END and is never touched.
+ *
+ *  Scanning (rather than testing one fixed window) is what makes this work at
+ *  all: on a tight preset the cut already sits at or inside the speech boundary,
+ *  so a window ending at the cut samples SPEECH and no trim is ever possible.
+ *  Stepping back measures the audio that is actually there, which also lets it
+ *  reclaim a tail FSMN mistakenly classified as speech — the usual reason a
+ *  "flush" cut still trails off.
+ *
+ *  Guards: it stops at the first non-quiet step (so a clip ending on a word is
+ *  untouched), never walks past TAIL_TRIM_MAX_S, and never crosses the previous
+ *  cut or the media start, so it cannot swallow a clip whole. */
 function trimQuietTails(
   regions: SilenceRegion[],
   float32: Float32Array,
@@ -39,10 +47,15 @@ function trimQuietTails(
   const out: SilenceRegion[] = []
   for (const region of regions) {
     const clipStart = out.length ? out[out.length - 1].end : 0
-    const tailStart = region.start - TAIL_TRIM_WINDOW_S
-    const trimmable =
-      tailStart >= clipStart && windowDb(float32, sampleRate, tailStart, region.start) < TAIL_TRIM_DB
-    out.push(trimmable ? { ...region, start: tailStart } : { ...region })
+    const floor = Math.max(clipStart, region.start - TAIL_TRIM_MAX_S)
+    let cut = region.start
+    while (
+      cut - TAIL_TRIM_STEP_S >= floor &&
+      windowDb(float32, sampleRate, cut - TAIL_TRIM_STEP_S, cut) < TAIL_TRIM_DB
+    ) {
+      cut -= TAIL_TRIM_STEP_S
+    }
+    out.push(cut < region.start ? { ...region, start: cut } : { ...region })
   }
   return out
 }

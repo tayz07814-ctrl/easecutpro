@@ -70,16 +70,27 @@ export const FSMN_BEFORE_SPEECH_CUSHION_S = 0.26
 // Quiet-tail trim — gated by `tailTrim`, on for No Chill + Espresso Shot.
 //
 // FSMN marks where speech stops, but a take rarely stops cleanly there: the clip
-// hangs on a breath, room tone, or a mic settling. That tail is inaudible as
-// speech yet audible as a lag before the cut. So we look at the last
-// TAIL_TRIM_WINDOW_S of every CLIP ENDING (never an opening) and, when it is
-// quieter than TAIL_TRIM_DB, pull the cut that much earlier — there is no speech
-// left in that window to protect.
+// hangs on a breath, room tone, or a mic settling, and FSMN often calls that tail
+// speech. It is inaudible as words yet plainly audible as a lag before the cut.
+//
+// So the cut walks BACKWARD from where it landed, in TAIL_TRIM_STEP_S hops, for
+// as long as the audio it is about to keep is quieter than TAIL_TRIM_DB — up to
+// TAIL_TRIM_MAX_S total. It stops the instant it meets real audio, so a clip that
+// ends on a word is never touched.
+//
+// This replaced a single fixed-offset measurement of "the last 200ms before the
+// cut", which could not work: on a tight preset the cut sits AT or INSIDE the
+// speech boundary, so that window sampled speech and the trim never fired on
+// either preset it was enabled for. Scanning measures the audio actually there
+// rather than trusting where the detector put the boundary.
 //
 // -22 dBFS sits below conversational speech but above a noise floor, so a real
 // trailing word keeps the clip and only dead air is caught.
 export const TAIL_TRIM_DB = -22
-export const TAIL_TRIM_WINDOW_S = 0.2
+/** Most a clip ending may lose to the tail trim. */
+export const TAIL_TRIM_MAX_S = 0.2
+/** Resolution of the backward scan. */
+export const TAIL_TRIM_STEP_S = 0.02
 
 export function alignFinalBossFsmnGaps(
   rawGaps: { start: number; end: number }[],
