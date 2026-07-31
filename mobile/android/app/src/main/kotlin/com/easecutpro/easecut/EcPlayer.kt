@@ -182,12 +182,21 @@ class EcPlayer(
         textureEntry?.surfaceTexture()?.setDefaultBufferSize(size.width, size.height)
         events?.success(mapOf("event" to "size", "width" to size.width, "height" to size.height))
 
+        // Build the composition BEFORE tearing down the current player, so a not-yet-
+        // playable timeline (e.g. every clip's duration still unknown right after import)
+        // leaves the current preview intact instead of crashing the import.
+        val built = buildPreviewComposition(segs)
+        if (built == null) {
+            result.success(null)
+            return
+        }
+        val (composition, totalMs) = built
+
         // Preserve position + play state across the mandatory player recreation.
         val prevPos = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
         val wasPlaying = player?.playWhenReady ?: false
         releasePlayer()
 
-        val (composition, totalMs) = buildPreviewComposition(segs)
         totalDurationMs = totalMs
         val cp = CompositionPlayer.Builder(context).build()
         cp.repeatMode = Player.REPEAT_MODE_OFF
@@ -234,23 +243,33 @@ class EcPlayer(
      * per-clip volume (channel-mix) and speed (SpeedChange + Sonic); crop / Ken Burns
      * are intentionally left to the Flutter-layer transform. [EditedMediaItem.durationUs]
      * is set to the clip's TIMELINE length so the composition timeline equals the editor
-     * timeline 1:1. Returns the composition and that summed timeline length (ms).
+     * timeline 1:1. Returns the composition and that summed timeline length (ms), or null
+     * if nothing is playable yet (so the caller keeps the current preview instead of
+     * feeding CompositionPlayer an empty sequence, which it rejects).
      */
-    private fun buildPreviewComposition(segs: List<Map<String, Any>>): Pair<Composition, Long> {
+    private fun buildPreviewComposition(segs: List<Map<String, Any>>): Pair<Composition, Long>? {
         val items = ArrayList<EditedMediaItem>()
         var totalMs = 0L
         for (seg in segs) {
             val uri = seg["uri"] as? String ?: continue
             val startMs = (seg["startMs"] as? Number)?.toLong() ?: 0L
-            val endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
+            var endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
+            // endMs <= startMs is the "to end" sentinel (duration not known yet, e.g. the
+            // full clip right after import). CompositionPlayer needs a concrete duration,
+            // so resolve it from the source.
+            if (endMs <= startMs) {
+                val d = probeDurationMs(uri)
+                if (d > startMs) endMs = d
+            }
             val speed = (seg["speed"] as? Number)?.toFloat()?.coerceIn(0.1f, 8f) ?: 1f
             val volume = (seg["volume"] as? Number)?.toFloat()?.coerceIn(0f, 4f) ?: 1f
             val spanMs = if (endMs > startMs) endMs - startMs else 0L
             if (spanMs <= 0L) continue
             val timelineMs = maxOf(1L, (spanMs / speed).toLong())
 
-            val clip = MediaItem.ClippingConfiguration.Builder().setStartPositionMs(startMs)
-            if (endMs > startMs) clip.setEndPositionMs(endMs)
+            val clip = MediaItem.ClippingConfiguration.Builder()
+                .setStartPositionMs(startMs)
+                .setEndPositionMs(endMs)
             val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
             val b = EditedMediaItem.Builder(mi).setDurationUs(timelineMs * 1000L)
 
@@ -276,8 +295,26 @@ class EcPlayer(
             items.add(b.build())
             totalMs += timelineMs
         }
+        if (items.isEmpty()) return null
         val seq = EditedMediaItemSequence(items)
         return Composition.Builder(listOf(seq)).build() to totalMs
+    }
+
+    /** Source duration (ms) via metadata, 0 if unknown. */
+    private fun probeDurationMs(uri: String): Long {
+        val mmr = MediaMetadataRetriever()
+        try {
+            val path = if (uri.startsWith("file://")) Uri.parse(uri).path ?: uri else uri
+            mmr.setDataSource(path)
+            return mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        } catch (_: Exception) {
+            return 0L
+        } finally {
+            try {
+                mmr.release()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /** Rotation-corrected display size of a video file; a sane default on failure. */
