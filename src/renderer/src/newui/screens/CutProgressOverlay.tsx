@@ -1,11 +1,14 @@
-// Centered blocking overlay for the Find Cuts → Polishing flow.
-//
-// Two phases, both lock the editor (a full-screen backdrop captures every
-// pointer/scroll event, so nothing can be edited while it's up):
-//   • Finding cuts   — the retake job is running (cutJobActive).
-//   • Polishing cuts — cuts are applied; the preview is decoding a landing
+// Centered blocking overlay for long jobs. All phases lock the editor (a
+// full-screen backdrop captures every pointer/scroll event, so nothing can be
+// edited while it's up):
+//   • Finding cuts    — the retake job is running (cutJobActive).
+//   • Polishing cuts  — cuts are applied; the preview is decoding a landing
 //     frame for every cut (seam cache) so the first playback is glitch-free.
 //     Presented as "polishing" so the wait reads as finishing touches.
+//   • Exporting video — an on-device render. It belongs here rather than inside
+//     a tool panel: the editor must not be touched mid-render, and an export
+//     reported from the Speech-cleaner panel read as "Finding cuts…" because
+//     that panel only checked whether SOME job was active.
 
 import { useStore } from '../../store'
 import { css } from '../css'
@@ -15,21 +18,32 @@ const ACCENT = '#7c6bff'
 
 export default function CutProgressOverlay(): JSX.Element | null {
   const cutJobActive = useStore((s) => s.cutJobActive)
+  const jobActive = useStore((s) => s.job.active)
+  const jobKind = useStore((s) => s.job.kind)
   const jobPct = useStore((s) => s.job.percent)
   const jobMsg = useStore((s) => s.job.message)
   const polishing = useStore((s) => s.polishing)
 
-  const phase: 'finding' | 'polishing' | null = cutJobActive ? 'finding' : polishing.active ? 'polishing' : null
+  const exporting = jobActive && jobKind === 'export'
+  const phase: 'finding' | 'polishing' | 'exporting' | null = exporting
+    ? 'exporting'
+    : cutJobActive
+      ? 'finding'
+      : polishing.active
+        ? 'polishing'
+        : null
   // Hooks must run unconditionally — compute the smoothed value, then bail below.
-  const findingPct = Math.round(useSmoothProgress(cutJobActive, jobPct))
+  const smoothPct = Math.round(useSmoothProgress(cutJobActive || exporting, jobPct))
   if (!phase) return null
 
-  const finding = phase === 'finding'
-  const pct = finding ? Math.max(2, findingPct) : Math.max(2, polishing.percent)
-  const title = finding ? 'Finding cuts…' : 'Polishing cuts…'
-  const sub = finding
-    ? jobMsg || 'Analyzing your speech for retakes and dead air.'
-    : 'Adding the finishing touches so playback stays perfectly smooth.'
+  const pct = phase === 'polishing' ? Math.max(2, polishing.percent) : Math.max(2, smoothPct)
+  const title = phase === 'exporting' ? 'Exporting video…' : phase === 'finding' ? 'Finding cuts…' : 'Polishing cuts…'
+  const sub =
+    phase === 'exporting'
+      ? 'Rendering your edit. Keep this tab open until it finishes.'
+      : phase === 'finding'
+        ? jobMsg || 'Analyzing your speech for retakes and dead air.'
+        : 'Adding the finishing touches so playback stays perfectly smooth.'
 
   return (
     <div

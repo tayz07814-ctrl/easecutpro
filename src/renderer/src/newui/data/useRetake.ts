@@ -115,8 +115,14 @@ export function useRetake(): RetakeModel {
   // re-opened project). Deriving this from the transcript itself (not a local
   // flag the wizard never sets) is what makes the applied cuts + the transcript
   // show up after an import / reopen instead of the empty "Find Retakes" screen.
+  // Only a CUT job puts this panel in "Finding cuts…". An export, upload or probe
+  // is also an active job, and claiming those made a render report itself here as
+  // "Finding cuts… / Rendering frames…"; those own their own UI (the centered
+  // CutProgressOverlay), so the panel keeps showing its results underneath.
+  const cutJob = job.active && (job.kind === 'transcribe' || job.kind === 'silence' || job.kind === undefined)
+
   let state: RetakeState
-  if (job.active) state = 'analyzing'
+  if (cutJob) state = 'analyzing'
   else if (failed && !transcript) state = 'error'
   else if (deletedIds.size > 0) state = 'executed'
   else if (hasResults) state = 'results'
