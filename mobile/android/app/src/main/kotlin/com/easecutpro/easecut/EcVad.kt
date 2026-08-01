@@ -7,12 +7,14 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.widget.Toast
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import kotlin.math.cos
@@ -76,6 +78,17 @@ class EcVad(
         session = null
     }
 
+    /** Surface a fault on-screen — the VAD runs on a background thread and any failure
+     *  otherwise silently falls back to word-gap silence, hiding the real cause. */
+    private fun toast(msg: String) {
+        main.post {
+            try {
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     // --- public entry -------------------------------------------------------
 
     private fun detectSilences(call: MethodCall, result: MethodChannel.Result) {
@@ -101,15 +114,26 @@ class EcVad(
                     val planned = planFinalBossSilenceCuts(aligned, padBefore, padAfter, trimEdges, durationS)
                     if (tailTrim) trimQuietTails(planned, mono, rate) else planned
                 }
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
+                // Never crash the app — surface the fault and let Dart fall back to
+                // word-gap silence (it treats an empty list as "VAD unavailable").
+                val top = e.stackTrace.firstOrNull()?.let {
+                    "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}"
+                } ?: "?"
+                toast("Silence VAD: ${e.javaClass.simpleName}: ${e.message} @ $top")
                 emptyList()
             }
-            val out = regions.map { listOf(it[0], it[1]) }
-            main.post { result.success(out) }
+            main.post { result.success(regions.map { listOf(it[0], it[1]) }) }
         }.start()
     }
 
     // --- ONNX runtime (lazy) ------------------------------------------------
+
+    // Resolved from the model at load — validated so a name mismatch bails cleanly
+    // instead of feeding run() wrong keys (which crashes native code).
+    @Volatile private var inCacheNames: List<String> = emptyList()
+    @Volatile private var outCacheNames: List<String> = emptyList()
+    @Volatile private var ioValid = false
 
     private fun ensureRuntime() {
         if (session != null && cmvnMeans != null) return
@@ -117,9 +141,20 @@ class EcVad(
             if (session == null) {
                 val e = OrtEnvironment.getEnvironment()
                 val bytes = context.assets.open("fsmn/model_quant.onnx").use { it.readBytes() }
-                val opts = OrtSession.SessionOptions()
+                val sess = e.createSession(bytes, OrtSession.SessionOptions())
                 env = e
-                session = e.createSession(bytes, opts)
+                session = sess
+                // Resolve the model's ACTUAL i/o so we never feed run() a wrong key
+                // (a name mismatch is a native crash, not a catchable exception).
+                val ins = sess.inputNames.toList()
+                val outs = sess.outputNames.toList()
+                inCacheNames = ins.filter { it != "speech" }.sorted()
+                outCacheNames = outs.filter { it != "logits" }.sorted()
+                ioValid = ins.contains("speech") && outs.contains("logits") &&
+                    inCacheNames.size == CACHE_LAYERS && outCacheNames.size == CACHE_LAYERS
+                if (!ioValid) {
+                    toast("Silence VAD model i/o unexpected: in=[${ins.joinToString(",")}] out=[${outs.joinToString(",")}]")
+                }
             }
             if (cmvnMeans == null) {
                 val text = context.assets.open("fsmn/vad.mvn").use { String(it.readBytes(), Charsets.UTF_8) }
@@ -128,6 +163,15 @@ class EcVad(
                 cmvnScales = scales
             }
         }
+    }
+
+    /** A DIRECT float buffer (native byte order) filled from [data]. onnxruntime can
+     *  crash on heap-backed (non-direct) buffers, so every tensor is built this way. */
+    private fun directBuffer(data: FloatArray, offset: Int, len: Int): FloatBuffer {
+        val fb = ByteBuffer.allocateDirect(len * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        fb.put(data, offset, len)
+        fb.rewind()
+        return fb
     }
 
     /** <AddShift> = per-dim negative mean, <Rescale> = per-dim inverse std. Both are
@@ -155,12 +199,15 @@ class EcVad(
         val means = cmvnMeans ?: return emptyList()
         val scales = cmvnScales ?: return emptyList()
 
+        if (!ioValid) return emptyList() // model i/o not what we expect — bail, don't crash
+
         val samples = resampleMono(input, sourceRate)
         val (features, frames) = fbankLfrCmvn(samples, means, scales)
         if (frames == 0) return emptyList()
 
         val ortEnv = env ?: return emptyList()
-        // Four FSMN caches, [1, 128, 19, 1], carried across chunks.
+        // Four FSMN caches, [1, 128, 19, 1], carried across chunks. Names resolved from
+        // the model (sorted in_cache*/out_cache*).
         val cacheData = Array(CACHE_LAYERS) { FloatArray(CACHE_PROJ * CACHE_ORDER) }
         val speechProb = FloatArray(frames)
         val cacheShape = longArrayOf(1, CACHE_PROJ.toLong(), CACHE_ORDER.toLong(), 1)
@@ -168,23 +215,23 @@ class EcVad(
         var offset = 0
         while (offset < frames) {
             val n = min(MAX_CHUNK_FRAMES, frames - offset)
-            val slice = features.copyOfRange(offset * FEATURE_DIM, (offset + n) * FEATURE_DIM)
             val feeds = HashMap<String, OnnxTensor>()
-            val speechTensor = OnnxTensor.createTensor(
-                ortEnv, FloatBuffer.wrap(slice), longArrayOf(1, n.toLong(), FEATURE_DIM.toLong())
+            feeds["speech"] = OnnxTensor.createTensor(
+                ortEnv, directBuffer(features, offset * FEATURE_DIM, n * FEATURE_DIM),
+                longArrayOf(1, n.toLong(), FEATURE_DIM.toLong())
             )
-            feeds["speech"] = speechTensor
             for (i in 0 until CACHE_LAYERS) {
-                feeds["in_cache$i"] = OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(cacheData[i]), cacheShape)
+                feeds[inCacheNames[i]] = OnnxTensor.createTensor(
+                    ortEnv, directBuffer(cacheData[i], 0, cacheData[i].size), cacheShape
+                )
             }
             val res = s.run(feeds)
             try {
                 val logits = (res.get("logits").get() as OnnxTensor).floatBuffer
                 for (i in 0 until n) speechProb[offset + i] = 1f - logits.get(i * LOGITS_STRIDE)
                 for (i in 0 until CACHE_LAYERS) {
-                    val outCache = (res.get("out_cache$i").get() as OnnxTensor).floatBuffer
-                    val dst = cacheData[i]
-                    outCache.get(dst, 0, min(dst.size, outCache.remaining()))
+                    val outCache = (res.get(outCacheNames[i]).get() as OnnxTensor).floatBuffer
+                    outCache.get(cacheData[i], 0, min(cacheData[i].size, outCache.remaining()))
                 }
             } finally {
                 res.close()

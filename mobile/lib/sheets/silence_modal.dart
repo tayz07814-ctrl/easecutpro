@@ -23,33 +23,46 @@ class _SilenceModalState extends State<SilenceModal> {
   bool _breaths = SilenceSettings.removeBreaths;
   double _overlap = SilenceSettings.seamOverlapMs.toDouble();
 
-  static const _presets = ['Conservative', 'Balanced', 'Aggressive'];
+  // The desktop Retake Final Boss FSMN presets (shared/retakefinalboss.ts). These map
+  // to the padding / edge-trim / tail-trim (remove breaths) / overlap the native VAD
+  // uses; the FSMN detector itself runs at fixed strictness, so the strictness + min-gap
+  // sliders below only tune the transcript word-gap FALLBACK.
+  static const _presets = ['Chill Talker', 'Just Right', 'No Chill', 'Espresso Shot', 'Mad Scientist'];
   static const _blurbs = {
-    'Conservative': 'Only trims longer pauses; keeps a natural, relaxed rhythm.',
-    'Balanced': 'Trims most dead air while keeping a little breathing room.',
-    'Aggressive': 'Gapless jump cuts — the next word starts the instant the last ends.',
-    'Custom': 'Your own mix of the settings below.',
+    'Chill Talker': 'Leaves generous breathing room — relaxed, natural pacing.',
+    'Just Right': 'Trims dead air but keeps a comfortable rhythm. (Default)',
+    'No Chill': 'Tight cuts with a quiet-tail trim — punchy without clipping words.',
+    'Espresso Shot': 'The tightest — gapless jump cuts, dead air removed.',
+    'Mad Scientist': 'Your own mix of the settings below.',
   };
 
   bool _eq(double a, double b) => (a - b).abs() < 1e-6;
   String get _preset {
-    if (_eq(_thr, 0.65) && _eq(_gap, 0.6) && _eq(_padBefore, 0.15) && _eq(_padAfter, 0.2) && _eq(_edge, 0) && !_breaths) return 'Conservative';
-    if (_eq(_thr, 0.75) && _eq(_gap, 0.05) && _eq(_padBefore, 0) && _eq(_padAfter, 0) && _eq(_edge, 0.05) && _breaths) return 'Aggressive';
-    if (_eq(_thr, 0.75) && _eq(_gap, 0.3) && _eq(_padBefore, 0.1) && _eq(_padAfter, 0.12) && _eq(_edge, 0) && !_breaths) return 'Balanced';
-    return 'Custom';
+    final o = _overlap;
+    if (_eq(_padBefore, 0.4) && _eq(_padAfter, 0.8) && _eq(_edge, 0) && !_breaths && _eq(o, 50)) return 'Chill Talker';
+    if (_eq(_padBefore, 0.1) && _eq(_padAfter, 0.3) && _eq(_edge, 0) && !_breaths && _eq(o, 50)) return 'Just Right';
+    if (_eq(_padBefore, 0.05) && _eq(_padAfter, 0.1) && _eq(_edge, 0) && _breaths && _eq(o, 50)) return 'No Chill';
+    if (_eq(_padBefore, 0) && _eq(_padAfter, 0) && _eq(_edge, 0.05) && _breaths && _eq(o, 50)) return 'Espresso Shot';
+    return 'Mad Scientist'; // the editable preset
   }
 
   void _applyPreset(String id) {
     setState(() {
       switch (id) {
-        case 'Conservative':
-          _thr = 0.65; _gap = 0.6; _padBefore = 0.15; _padAfter = 0.2; _edge = 0; _breaths = false;
+        case 'Chill Talker':
+          _padBefore = 0.4; _padAfter = 0.8; _edge = 0; _breaths = false; _overlap = 50;
           break;
-        case 'Aggressive':
-          _thr = 0.75; _gap = 0.05; _padBefore = 0; _padAfter = 0; _edge = 0.05; _breaths = true;
+        case 'No Chill':
+          _padBefore = 0.05; _padAfter = 0.1; _edge = 0; _breaths = true; _overlap = 50;
           break;
-        default: // Balanced
-          _thr = 0.75; _gap = 0.3; _padBefore = 0.1; _padAfter = 0.12; _edge = 0; _breaths = false;
+        case 'Espresso Shot':
+          _padBefore = 0; _padAfter = 0; _edge = 0.05; _breaths = true; _overlap = 50;
+          break;
+        case 'Mad Scientist':
+          _padBefore = 0.1; _padAfter = 0.3; _edge = 0; _breaths = false; _overlap = 0;
+          break;
+        default: // Just Right
+          _padBefore = 0.1; _padAfter = 0.3; _edge = 0; _breaths = false; _overlap = 50;
       }
     });
   }
@@ -90,7 +103,6 @@ class _SilenceModalState extends State<SilenceModal> {
                 runSpacing: 8,
                 children: [
                   for (final p in _presets) EcChip(label: p, active: cur == p, onTap: () => _applyPreset(p)),
-                  if (cur == 'Custom') EcChip(label: 'Custom', active: true, onTap: () {}),
                 ],
               ),
               const SizedBox(height: 8),
@@ -151,13 +163,13 @@ class _SilenceModalState extends State<SilenceModal> {
                   onChanged: (v) => setState(() => _overlap = v),
                 ),
               const SizedBox(height: 8),
-              const Text('Strictness, breaths and edge trim match the desktop app; the on-device cut uses the pause and pad values now, the rest when on-device voice detection lands.',
+              const Text('Presets, padding, edge trim, remove-breaths and overlap match the desktop Retake Final Boss and drive the on-device FSMN voice detection. Strictness and min-gap tune the word-gap fallback used if the VAD can’t run.',
                   style: TextStyle(color: Ec.textFaint, fontSize: 11, height: 1.4)),
               const SizedBox(height: 16),
               Row(
                 children: [
                   GestureDetector(
-                    onTap: () => _applyPreset('Balanced'),
+                    onTap: () => _applyPreset('Just Right'),
                     child: const Text('Reset to default', style: TextStyle(color: Color(0xFF9BA0AC), fontSize: 13)),
                   ),
                   const Spacer(),
