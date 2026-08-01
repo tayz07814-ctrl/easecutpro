@@ -234,8 +234,13 @@ class EcPlayer(
             if (prevPos in 1 until totalMs) cp.seekTo(prevPos)
             cp.playWhenReady = wasPlaying
             player = cp
-        } catch (e: Exception) {
-            toast("Preview setup failed: ${e.message}")
+        } catch (e: Throwable) {
+            // Show the exact throwing frame (release build is not minified, so class +
+            // method + line survive) — a null message alone is useless.
+            val top = e.stackTrace.take(3).joinToString("  <  ") {
+                "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}"
+            }
+            toast("Preview x: ${e.javaClass.simpleName}: ${e.message} @ $top")
             player = null
         }
 
