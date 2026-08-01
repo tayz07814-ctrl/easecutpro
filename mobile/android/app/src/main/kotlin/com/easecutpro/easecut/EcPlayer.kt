@@ -1,21 +1,29 @@
 package com.easecutpro.easecut
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.Surface
-import androidx.media3.common.C
+import android.widget.Toast
+import androidx.media3.common.util.Size
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
-import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.ChannelMixingAudioProcessor
+import androidx.media3.common.audio.ChannelMixingMatrix
+import androidx.media3.common.audio.SonicAudioProcessor
+import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.ClippingMediaSource
-import androidx.media3.exoplayer.source.ConcatenatingMediaSource
-import androidx.media3.exoplayer.source.MediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.transformer.Composition
+import androidx.media3.transformer.CompositionPlayer
+import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
+import androidx.media3.transformer.Effects
+import com.google.common.collect.ImmutableList
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -23,21 +31,32 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.view.TextureRegistry
 
 /**
- * Native preview PLAYER — hardware-decoded playback of the timeline's base track via
- * Media3 ExoPlayer, rendered straight into a Flutter [TextureRegistry] texture.
+ * Native preview PLAYER — hardware-decoded playback of the timeline's base track,
+ * rendered straight into a Flutter [TextureRegistry] texture.
  *
- * This is the whole reason for the Flutter rebuild: instead of a TextureView stacked
- * behind a transparent WebView (which never composited reliably on-device), ExoPlayer
- * draws into a SurfaceTexture that the Flutter engine composites like any other widget.
- * Dart shows it with `Texture(textureId: id)` — no WebView, no manual view stacking.
+ * This uses Media3 **CompositionPlayer** rather than a plain ExoPlayer playlist. The
+ * cut list is handed over as ONE [Composition] (the exact same shape the exporter
+ * builds), and CompositionPlayer plays it through the Transformer's continuous video
+ * graph. That is the point: the removed ranges are stepped over inside one continuous
+ * decode — like AVPlayer on an AVMutableComposition on iOS — so the play head no
+ * longer re-primes the decoder (seek-to-keyframe + decode-forward) at every cut. No
+ * proxy, no pre-warm.
+ *
+ * Crop and the Ken Burns pan are NOT baked here — they stay a Flutter-layer transform
+ * on the texture (see editor_screen `_cropped`), so the preview composition is just the
+ * cut clips + per-clip volume/speed. Extra audio tracks (music / voiceover) are still
+ * previewed with follow-the-leader ExoPlayers synced to the composition clock.
  *
  * Channels:
  *   MethodChannel  "ec/player"        create / load / play / pause / seek / release
- *   EventChannel   "ec/player/events" ~10 Hz {event:"state", timelineMs, playing, ended, ready}
- *                                     and {event:"size", width, height} on video-size change
+ *   EventChannel   "ec/player/events" ~30 Hz {event:"state", timelineMs, durationMs, playing, ended, ready}
+ *                                     and {event:"size", width, height} once probed
  *
- * A segment carries its own timeline offset so we report a GLOBAL timeline position
- * (segment start + in-clip position); Dart keeps the clock/overlays locked to it.
+ * CompositionPlayer position IS the composition timeline, which equals the editor's
+ * timeline 1:1 — so we report it verbatim (no per-item offset math).
+ *
+ * NOTE: [CompositionPlayer.setComposition] may be called only once per instance, so
+ * every [load] releases the current player and builds a fresh one.
  */
 class EcPlayer(
     private val context: Context,
@@ -48,112 +67,41 @@ class EcPlayer(
     private val methodChannel = MethodChannel(messenger, "ec/player")
     private val eventChannel = EventChannel(messenger, "ec/player/events")
 
-    private var player: ExoPlayer? = null
+    private var player: CompositionPlayer? = null
     private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
     private var surface: Surface? = null
     private var events: EventChannel.EventSink? = null
 
-    private var starts = LongArray(0)
-    private var ends = LongArray(0)
-    private var speeds = FloatArray(0)
-    private var vols = FloatArray(0)
+    private var totalDurationMs = 0L
+    private var outSize: Size? = null
 
     // Extra audio tracks (music / voiceover), previewed via follow-the-leader players.
     private val audioPlayers = ArrayList<ExoPlayer>()
     private var audioStarts = LongArray(0) // each track's timeline start (ms)
 
-    /** Clip index whose speed/volume are currently applied (avoids redundant re-sets). */
-    private var appliedParamsIdx = -1
-
-    /**
-     * Apply the current clip's speed + volume (per-item preview parity).
-     *
-     * No-ops when [idx] is already the applied clip (unless [force]), so the transition
-     * callback and the per-poll safety net converge without writing playbackParameters /
-     * volume on every tick — and, crucially, without touching the audio pipeline at a
-     * boundary where the speed did not actually change.
-     */
-    private fun applyItemParams(idx: Int, force: Boolean = false) {
-        val p = player ?: return
-        if (!force && idx == appliedParamsIdx) return
-        appliedParamsIdx = idx
-        val s = if (idx in speeds.indices) speeds[idx] else 1f
-        val v = if (idx in vols.indices) vols[idx] else 1f
-        try {
-            p.playbackParameters = PlaybackParameters(if (s <= 0f) 1f else s)
-            p.volume = v.coerceIn(0f, 4f)
-        } catch (_: Exception) {
-        }
-    }
-
-    /** Global timeline position (ms) from the video player. */
-    private fun currentTimelineMs(): Long {
-        val p = player ?: return 0L
-        val idx = p.currentMediaItemIndex
-        val pos = maxOf(0L, p.contentPosition)
-        val base = if (idx in starts.indices) starts[idx] else 0L
-        val sp = if (idx in speeds.indices && speeds[idx] > 0f) speeds[idx] else 1f
-        return base + (pos / sp).toLong()
-    }
-
-    /** Point every audio track at the given timeline position and match play state. */
-    private fun syncAudio(play: Boolean) {
-        val tl = currentTimelineMs()
-        for (i in audioPlayers.indices) {
-            val ap = audioPlayers[i]
-            val startAt = if (i in audioStarts.indices) audioStarts[i] else 0L
-            val local = tl - startAt
-            try {
-                if (local < 0) {
-                    ap.playWhenReady = false
-                } else {
-                    if (kotlin.math.abs(ap.currentPosition - local) > 120) ap.seekTo(local)
-                    ap.playWhenReady = play
-                }
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    private fun releaseAudio() {
-        for (ap in audioPlayers) {
-            try {
-                ap.release()
-            } catch (_: Exception) {
-            }
-        }
-        audioPlayers.clear()
-        audioStarts = LongArray(0)
-    }
-
     private val main = Handler(Looper.getMainLooper())
     private var polling = false
+    private var pollTick = 0
+
     private val poller = object : Runnable {
         override fun run() {
             val p = player
             val sink = events
             if (p != null && sink != null) {
                 try {
-                    val idx = p.currentMediaItemIndex
-                    // Safety net: keep per-clip speed/volume correct even if a transition
-                    // callback is ever missed for an internal concatenation window. No-op
-                    // while the clip is unchanged.
-                    applyItemParams(idx)
-                    val pos = maxOf(0L, p.contentPosition)
-                    val base = if (idx in starts.indices) starts[idx] else 0L
-                    val sp = if (idx in speeds.indices && speeds[idx] > 0f) speeds[idx] else 1f
-                    val dur = p.duration
+                    val pos = maxOf(0L, p.currentPosition)
+                    val dur = if (p.duration > 0) p.duration else totalDurationMs
                     sink.success(
                         mapOf(
                             "event" to "state",
-                            "timelineMs" to (base + (pos / sp).toLong()),
-                            "durationMs" to (if (dur > 0) dur else 0L),
+                            "timelineMs" to pos,
+                            "durationMs" to dur,
                             "playing" to p.isPlaying,
                             "ended" to (p.playbackState == Player.STATE_ENDED),
                             "ready" to (p.playbackState == Player.STATE_READY)
                         )
                     )
-                    // Keep audio tracks aligned (only corrects when drift > threshold).
+                    // Keep music tracks aligned to the composition clock (corrects drift).
                     if (audioPlayers.isNotEmpty()) {
                         pollTick++
                         if (p.isPlaying && pollTick % 30 == 0) syncAudio(true)
@@ -161,11 +109,9 @@ class EcPlayer(
                 } catch (_: Exception) {
                 }
             }
-            // ~30 Hz so the Dart playhead has fresh anchors to interpolate between.
             if (polling) main.postDelayed(this, 33)
         }
     }
-    private var pollTick = 0
 
     init {
         methodChannel.setMethodCallHandler(this)
@@ -178,6 +124,16 @@ class EcPlayer(
 
     override fun onCancel(arguments: Any?) {
         events = null
+    }
+
+    /** Show a native toast (main thread) — used to surface preview errors on-screen. */
+    private fun toast(msg: String) {
+        main.post {
+            try {
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -207,50 +163,10 @@ class EcPlayer(
         }
     }
 
+    /** Allocate the Flutter texture once; the player AND its Surface are built per [load]. */
     private fun create(result: MethodChannel.Result) {
-        if (player == null) {
-            val entry = textures.createSurfaceTexture()
-            textureEntry = entry
-            val st = entry.surfaceTexture()
-            val surf = Surface(st)
-            surface = surf
-            // Keep a healthy forward buffer so the NEXT clip in a cut sequence is already
-            // loaded before the play head reaches the boundary — no rebuffer at the cut.
-            // Media3's default already over-buffers for LOCAL files (auto target ~125 MB /
-            // 50 s), so the win here is a *predictable, bounded* window rather than "more":
-            // a 64 MB hard cap (setTargetBufferBytes) keeps 4K/HEVC previews from ballooning
-            // memory while still holding several seconds of read-ahead — plenty to span a
-            // cut on local media. (Deliberately NOT using prioritizeTimeOverSizeThresholds,
-            // which would drop this byte cap and risk OOM on high-bitrate footage.)
-            val loadControl = DefaultLoadControl.Builder()
-                .setBufferDurationsMs(
-                    15_000,
-                    30_000,
-                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                    DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
-                )
-                .setTargetBufferBytes(64 * 1024 * 1024)
-                .build()
-            val p = ExoPlayer.Builder(context).setLoadControl(loadControl).build()
-            p.repeatMode = Player.REPEAT_MODE_OFF
-            // Never stall the pipeline at a clip boundary — transitions must stay gapless.
-            p.setPauseAtEndOfMediaItems(false)
-            p.setVideoSurface(surf)
-            p.addListener(object : Player.Listener {
-                override fun onVideoSizeChanged(videoSize: VideoSize) {
-                    val w = videoSize.width
-                    val h = videoSize.height
-                    if (w > 0 && h > 0) {
-                        st.setDefaultBufferSize(w, h)
-                        events?.success(mapOf("event" to "size", "width" to w, "height" to h))
-                    }
-                }
-
-                override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
-                    applyItemParams(player?.currentMediaItemIndex ?: 0)
-                }
-            })
-            player = p
+        if (textureEntry == null) {
+            textureEntry = textures.createSurfaceTexture()
         }
         startPolling()
         result.success(mapOf("textureId" to (textureEntry?.id() ?: -1L)))
@@ -259,52 +175,69 @@ class EcPlayer(
     private fun load(call: MethodCall, result: MethodChannel.Result) {
         @Suppress("UNCHECKED_CAST")
         val segs = (call.argument<List<Map<String, Any>>>("segments")) ?: emptyList()
-        val p = player ?: run {
+        val entry = textureEntry ?: run {
             result.error("ec_player", "not created", null)
             return
         }
-        // One shared DataSource.Factory + ProgressiveMediaSource.Factory for every clip, so
-        // consecutive clips from the same file are read through the same pipeline.
-        val dataSourceFactory = DefaultDataSource.Factory(context)
-        val mediaSourceFactory = ProgressiveMediaSource.Factory(dataSourceFactory)
-        val sources = ArrayList<MediaSource>()
-        val s = LongArray(segs.size)
-        val e = LongArray(segs.size)
-        val sp = FloatArray(segs.size) { 1f }
-        val vl = FloatArray(segs.size) { 1f }
-        for (i in segs.indices) {
-            val seg = segs[i]
-            val uri = seg["uri"] as? String ?: continue
-            val startMs = (seg["startMs"] as? Number)?.toLong() ?: 0L
-            val endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
-            s[i] = (seg["timelineStartMs"] as? Number)?.toLong() ?: 0L
-            e[i] = (seg["timelineEndMs"] as? Number)?.toLong() ?: (s[i] + maxOf(0L, endMs - startMs))
-            sp[i] = (seg["speed"] as? Number)?.toFloat()?.coerceIn(0.1f, 8f) ?: 1f
-            vl[i] = (seg["volume"] as? Number)?.toFloat()?.coerceIn(0f, 4f) ?: 1f
-            // Clip each source with a ClippingMediaSource instead of a ClippingConfiguration
-            // MediaItem. Concatenated (below) these play as one continuous stream: because
-            // adjacent clips from the same file share a codec format, ExoPlayer keeps the
-            // video decoder warm across the cut (MediaCodec canKeepCodec) rather than tearing
-            // down and re-preparing a separate source at each boundary — the boundary micro-
-            // freeze. NOTE: ClippingMediaSource positions are in MICROSECONDS (not ms), and
-            // C.TIME_END_OF_SOURCE means "play to the end of the source".
-            val base = mediaSourceFactory.createMediaSource(MediaItem.fromUri(uri))
-            val startUs = startMs * 1000L
-            val endUs = if (endMs > startMs) endMs * 1000L else C.TIME_END_OF_SOURCE
-            sources.add(ClippingMediaSource(base, startUs, endUs))
+        if (segs.isEmpty()) {
+            result.success(null)
+            return
         }
-        starts = s
-        ends = e
-        speeds = sp
-        vols = vl
-        appliedParamsIdx = -1
-        // A single ConcatenatingMediaSource (children are prepared eagerly by default) rather
-        // than setMediaItems(): the next clip's extractor is ready ahead of the boundary. Each
-        // child still contributes one window, so currentMediaItemIndex / contentPosition /
-        // onMediaItemTransition / seekTo(index, pos) all keep working exactly as before.
-        p.setMediaSource(ConcatenatingMediaSource(*sources.toTypedArray()))
-        p.prepare()
-        applyItemParams(p.currentMediaItemIndex, force = true)
+
+        // Probe the first clip's display size (rotation-corrected) — CompositionPlayer
+        // does not report video size to the app, and setVideoSurface needs an output size.
+        val firstUri = segs.firstOrNull()?.get("uri") as? String
+        val size = firstUri?.let { probeSize(it) } ?: (outSize ?: Size(1920, 1080))
+        outSize = size
+
+        // Build the composition BEFORE tearing down the current player, so a not-yet-
+        // playable timeline (e.g. every clip's duration still unknown right after import)
+        // leaves the current preview intact instead of crashing the import.
+        val built = buildPreviewComposition(segs)
+        if (built == null) {
+            result.success(null)
+            return
+        }
+        val (composition, totalMs) = built
+
+        // Preserve position + play state across the mandatory player recreation.
+        val prevPos = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        val wasPlaying = player?.playWhenReady ?: false
+        releasePlayer()
+
+        // Fresh Surface from the persistent SurfaceTexture on EVERY (re)load: releasing a
+        // CompositionPlayer disconnects its output Surface, so reusing the same Surface
+        // object for the next player renders black (the import worked, the post-cut reload
+        // went black). The Flutter texture id is unchanged, so this is invisible to Dart.
+        surface?.release()
+        val st = entry.surfaceTexture()
+        st.setDefaultBufferSize(size.width, size.height)
+        val surf = Surface(st)
+        surface = surf
+        events?.success(mapOf("event" to "size", "width" to size.width, "height" to size.height))
+
+        totalDurationMs = totalMs
+        try {
+            val cp = CompositionPlayer.Builder(context).build()
+            cp.repeatMode = Player.REPEAT_MODE_OFF
+            // Surface the real reason a preview blanks (a playback/video-graph error is
+            // otherwise silent → black screen). This is the diagnostic that turns "black"
+            // into an actionable fault.
+            cp.addListener(object : Player.Listener {
+                override fun onPlayerError(error: PlaybackException) {
+                    toast("Preview error: ${error.errorCodeName} — ${error.message}")
+                }
+            })
+            cp.setVideoSurface(surf, size)
+            cp.setComposition(composition)
+            cp.prepare()
+            if (prevPos in 1 until totalMs) cp.seekTo(prevPos)
+            cp.playWhenReady = wasPlaying
+            player = cp
+        } catch (e: Exception) {
+            toast("Preview setup failed: ${e.message}")
+            player = null
+        }
 
         // Extra audio tracks (music / voiceover) — previewed via follow-the-leader players.
         releaseAudio()
@@ -337,28 +270,139 @@ class EcPlayer(
         result.success(null)
     }
 
+    /**
+     * Build the preview [Composition]: one sequence of the cut clips. Each keeps its
+     * per-clip volume (channel-mix) and speed (SpeedChange + Sonic); crop / Ken Burns
+     * are intentionally left to the Flutter-layer transform. [EditedMediaItem.durationUs]
+     * is set to the clip's TIMELINE length so the composition timeline equals the editor
+     * timeline 1:1. Returns the composition and that summed timeline length (ms), or null
+     * if nothing is playable yet (so the caller keeps the current preview instead of
+     * feeding CompositionPlayer an empty sequence, which it rejects).
+     */
+    private fun buildPreviewComposition(segs: List<Map<String, Any>>): Pair<Composition, Long>? {
+        val items = ArrayList<EditedMediaItem>()
+        var totalMs = 0L
+        for (seg in segs) {
+            val uri = seg["uri"] as? String ?: continue
+            val startMs = (seg["startMs"] as? Number)?.toLong() ?: 0L
+            var endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
+            // endMs <= startMs is the "to end" sentinel (duration not known yet, e.g. the
+            // full clip right after import). CompositionPlayer needs a concrete duration,
+            // so resolve it from the source.
+            if (endMs <= startMs) {
+                val d = probeDurationMs(uri)
+                if (d > startMs) endMs = d
+            }
+            val speed = (seg["speed"] as? Number)?.toFloat()?.coerceIn(0.1f, 8f) ?: 1f
+            val volume = (seg["volume"] as? Number)?.toFloat()?.coerceIn(0f, 4f) ?: 1f
+            val spanMs = if (endMs > startMs) endMs - startMs else 0L
+            if (spanMs <= 0L) continue
+            val timelineMs = maxOf(1L, (spanMs / speed).toLong())
+
+            val clip = MediaItem.ClippingConfiguration.Builder()
+                .setStartPositionMs(startMs)
+                .setEndPositionMs(endMs)
+            val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
+            val b = EditedMediaItem.Builder(mi).setDurationUs(timelineMs * 1000L)
+
+            val vfx = ArrayList<Effect>()
+            val afx = ArrayList<AudioProcessor>()
+            if (speed != 1f) {
+                vfx.add(SpeedChangeEffect(speed))
+                val sonic = SonicAudioProcessor()
+                sonic.setSpeed(speed)
+                afx.add(sonic)
+            }
+            if (volume <= 0.001f) {
+                b.setRemoveAudio(true)
+            } else if (volume != 1f) {
+                val mix = ChannelMixingAudioProcessor()
+                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
+                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
+                afx.add(mix)
+            }
+            if (vfx.isNotEmpty() || afx.isNotEmpty()) {
+                b.setEffects(Effects(ImmutableList.copyOf(afx), ImmutableList.copyOf(vfx)))
+            }
+            items.add(b.build())
+            totalMs += timelineMs
+        }
+        if (items.isEmpty()) return null
+        val seq = EditedMediaItemSequence(items)
+        return Composition.Builder(listOf(seq)).build() to totalMs
+    }
+
+    /** Source duration (ms) via metadata, 0 if unknown. */
+    private fun probeDurationMs(uri: String): Long {
+        val mmr = MediaMetadataRetriever()
+        try {
+            val path = if (uri.startsWith("file://")) Uri.parse(uri).path ?: uri else uri
+            mmr.setDataSource(path)
+            return mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        } catch (_: Exception) {
+            return 0L
+        } finally {
+            try {
+                mmr.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** Rotation-corrected display size of a video file; a sane default on failure. */
+    private fun probeSize(uri: String): Size {
+        val mmr = MediaMetadataRetriever()
+        try {
+            val path = if (uri.startsWith("file://")) Uri.parse(uri).path ?: uri else uri
+            mmr.setDataSource(path)
+            var w = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            var h = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val rot = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            if (rot == 90 || rot == 270) {
+                val t = w; w = h; h = t
+            }
+            if (w <= 0 || h <= 0) return Size(1920, 1080)
+            return Size(w, h)
+        } catch (_: Exception) {
+            return Size(1920, 1080)
+        } finally {
+            try {
+                mmr.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     private fun seek(call: MethodCall, result: MethodChannel.Result) {
         val ms = (call.argument<Number>("timelineMs"))?.toLong() ?: 0L
         val p = player
         if (p != null) {
-            var idx = 0
-            for (i in starts.indices) {
-                if (ms >= starts[i] && ms < ends[i]) {
-                    idx = i
-                    break
-                }
-                if (i == starts.size - 1) idx = i
-            }
-            val inClipTimeline = maxOf(0L, ms - (if (idx in starts.indices) starts[idx] else 0L))
-            val sp = if (idx in speeds.indices && speeds[idx] > 0f) speeds[idx] else 1f
-            val inClipSource = (inClipTimeline * sp).toLong()
             try {
-                p.seekTo(idx, inClipSource)
+                p.seekTo(ms.coerceIn(0L, if (totalDurationMs > 0) totalDurationMs else ms))
             } catch (_: Exception) {
             }
             syncAudio(p.playWhenReady)
         }
         result.success(null)
+    }
+
+    /** Point every music track at the composition clock and match play state. */
+    private fun syncAudio(play: Boolean) {
+        val tl = player?.currentPosition?.coerceAtLeast(0L) ?: return
+        for (i in audioPlayers.indices) {
+            val ap = audioPlayers[i]
+            val startAt = if (i in audioStarts.indices) audioStarts[i] else 0L
+            val local = tl - startAt
+            try {
+                if (local < 0) {
+                    ap.playWhenReady = false
+                } else {
+                    if (kotlin.math.abs(ap.currentPosition - local) > 120) ap.seekTo(local)
+                    ap.playWhenReady = play
+                }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun startPolling() {
@@ -373,9 +417,18 @@ class EcPlayer(
         main.removeCallbacks(poller)
     }
 
-    private fun releaseInternal() {
-        stopPolling()
-        releaseAudio()
+    private fun releaseAudio() {
+        for (ap in audioPlayers) {
+            try {
+                ap.release()
+            } catch (_: Exception) {
+            }
+        }
+        audioPlayers.clear()
+        audioStarts = LongArray(0)
+    }
+
+    private fun releasePlayer() {
         player?.let {
             try {
                 it.release()
@@ -383,6 +436,12 @@ class EcPlayer(
             }
         }
         player = null
+    }
+
+    private fun releaseInternal() {
+        stopPolling()
+        releaseAudio()
+        releasePlayer()
         surface?.release()
         surface = null
         textureEntry?.release()
