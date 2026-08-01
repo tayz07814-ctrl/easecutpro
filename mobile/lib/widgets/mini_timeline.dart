@@ -1113,12 +1113,16 @@ class _WavePainter extends CustomPainter {
       ..color = barColor.withValues(alpha: 0.9)
       ..strokeWidth = 1.5
       ..strokeCap = StrokeCap.round;
-    // ~2.0px pitch → ~1.5px bar + ~0.5px gap: a dense, continuous waveform.
-    final bars = (size.width / 2.0).floor().clamp(1, peaks.length);
+    // Fixed ~2.0px pitch at EVERY zoom (~1.5px bar + ~0.5px gap): the bar count follows
+    // the pixel width, NOT the peak count, so zooming in packs MORE bars — each sampling
+    // the nearest source peak — instead of stretching the same peaks apart. Capped so
+    // extreme zoom stays cheap.
+    final n = peaks.length;
+    final bars = (size.width / 2.0).floor().clamp(1, 5000);
     for (int b = 0; b < bars; b++) {
       final x = (b + 0.5) / bars * size.width;
-      final a = (b * peaks.length / bars).floor();
-      final e = (((b + 1) * peaks.length / bars).floor()).clamp(a + 1, peaks.length);
+      final a = (b * n / bars).floor().clamp(0, n - 1);
+      final e = (((b + 1) * n / bars).ceil()).clamp(a + 1, n);
       double m = 0;
       for (int j = a; j < e; j++) {
         if (peaks[j] > m) m = peaks[j];

@@ -151,12 +151,10 @@ class EcPlayer(
         }
     }
 
-    /** Allocate the Flutter texture + its Surface once; the player is built per [load]. */
+    /** Allocate the Flutter texture once; the player AND its Surface are built per [load]. */
     private fun create(result: MethodChannel.Result) {
         if (textureEntry == null) {
-            val entry = textures.createSurfaceTexture()
-            textureEntry = entry
-            surface = Surface(entry.surfaceTexture())
+            textureEntry = textures.createSurfaceTexture()
         }
         startPolling()
         result.success(mapOf("textureId" to (textureEntry?.id() ?: -1L)))
@@ -165,7 +163,7 @@ class EcPlayer(
     private fun load(call: MethodCall, result: MethodChannel.Result) {
         @Suppress("UNCHECKED_CAST")
         val segs = (call.argument<List<Map<String, Any>>>("segments")) ?: emptyList()
-        val surf = surface ?: run {
+        val entry = textureEntry ?: run {
             result.error("ec_player", "not created", null)
             return
         }
@@ -179,8 +177,6 @@ class EcPlayer(
         val firstUri = segs.firstOrNull()?.get("uri") as? String
         val size = firstUri?.let { probeSize(it) } ?: (outSize ?: Size(1920, 1080))
         outSize = size
-        textureEntry?.surfaceTexture()?.setDefaultBufferSize(size.width, size.height)
-        events?.success(mapOf("event" to "size", "width" to size.width, "height" to size.height))
 
         // Build the composition BEFORE tearing down the current player, so a not-yet-
         // playable timeline (e.g. every clip's duration still unknown right after import)
@@ -196,6 +192,17 @@ class EcPlayer(
         val prevPos = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
         val wasPlaying = player?.playWhenReady ?: false
         releasePlayer()
+
+        // Fresh Surface from the persistent SurfaceTexture on EVERY (re)load: releasing a
+        // CompositionPlayer disconnects its output Surface, so reusing the same Surface
+        // object for the next player renders black (the import worked, the post-cut reload
+        // went black). The Flutter texture id is unchanged, so this is invisible to Dart.
+        surface?.release()
+        val st = entry.surfaceTexture()
+        st.setDefaultBufferSize(size.width, size.height)
+        val surf = Surface(st)
+        surface = surf
+        events?.success(mapOf("event" to "size", "width" to size.width, "height" to size.height))
 
         totalDurationMs = totalMs
         val cp = CompositionPlayer.Builder(context).build()
