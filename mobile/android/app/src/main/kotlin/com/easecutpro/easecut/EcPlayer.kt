@@ -74,6 +74,7 @@ class EcPlayer(
 
     private var totalDurationMs = 0L
     private var outSize: Size? = null
+    private var surfaceSize: Size? = null // size the persistent Surface's buffer is sized for
 
     // Extra audio tracks (music / voiceover), previewed via follow-the-leader players.
     private val audioPlayers = ArrayList<ExoPlayer>()
@@ -205,15 +206,27 @@ class EcPlayer(
         val wasPlaying = player?.playWhenReady ?: false
         releasePlayer()
 
-        // Fresh Surface from the persistent SurfaceTexture on EVERY (re)load: releasing a
-        // CompositionPlayer disconnects its output Surface, so reusing the same Surface
-        // object for the next player renders black (the import worked, the post-cut reload
-        // went black). The Flutter texture id is unchanged, so this is invisible to Dart.
-        surface?.release()
+        // REUSE the Surface across reloads (that's what kills the black flicker on a
+        // cut/trim). CompositionPlayer.handleRelease() releases its players first so they
+        // stop rendering, then only detaches the video graph's output-surface INFO — it
+        // never pushes a black frame to our Surface. So the Flutter SurfaceTexture keeps
+        // its last decoded frame through the (mandatory) player swap, and the next player
+        // just resumes drawing onto it → a brief freeze on the last frame, not a black
+        // flash. Recreating the Surface — surface.release() + setDefaultBufferSize() +
+        // new Surface() — is what reallocated the texture buffer and blanked it to black
+        // on every edit; only do that when there's no Surface yet or the output size
+        // actually changed. (The earlier "reuse renders black" was the durationUs crash:
+        // the new player threw and never drew, so the surface stayed blank. That's fixed.)
         val st = entry.surfaceTexture()
-        st.setDefaultBufferSize(size.width, size.height)
-        val surf = Surface(st)
-        surface = surf
+        val surf: Surface = surface.let { existing ->
+            if (existing != null && size == surfaceSize) {
+                existing // reuse — keeps the last frame on the texture through the swap
+            } else {
+                existing?.release()
+                st.setDefaultBufferSize(size.width, size.height)
+                Surface(st).also { surface = it; surfaceSize = size }
+            }
+        }
         events?.success(mapOf("event" to "size", "width" to size.width, "height" to size.height))
 
         totalDurationMs = totalMs
@@ -456,6 +469,7 @@ class EcPlayer(
         releasePlayer()
         surface?.release()
         surface = null
+        surfaceSize = null
         textureEntry?.release()
         textureEntry = null
     }

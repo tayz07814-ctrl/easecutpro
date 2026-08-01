@@ -7,30 +7,110 @@ import '../cloud/stt.dart';
 /// words → AI payload → word-cut EDL → KEEP ranges, plus word-gap silence and
 /// caption grouping. All the AI ever sees are word indices + pause ids.
 
-const _fillers = {'uh', 'um', 'er', 'ah', 'erm', 'hmm', 'uhh', 'umm', 'mm', 'mhm'};
+// Single-word fillers tagged in the payload — the single-token subset of the web
+// DEFAULT_FILLERS (shared/fillers.ts); multi-word phrases can't match a per-word norm.
+const _fillers = {
+  'um', 'umm', 'uh', 'uhh', 'uhm', 'er', 'err', 'ah', 'hmm', 'mm', 'mhm', 'eh',
+  'like', 'basically', 'actually', 'literally', 'honestly',
+};
 
 String _norm(String s) => s.toLowerCase().replaceAll(RegExp(r"[^a-z0-9']"), '');
 
-/// Build the `payload` string sent to procut-judge/ultracut-judge. Pauses are
-/// inter-word gaps ≥ 250 ms (the ONNX-free silence signal); fillers are tagged.
-String buildPayload(List<Word> words) {
-  final byAfter = <int>{};
-  final sb = StringBuffer();
-  if (words.isNotEmpty && words[0].start >= 0.4) {
-    sb.writeln('-- lead: pause ${(words[0].start * 1000).round()}ms');
-  }
-  sb.writeln('WORDS (index|text, one per line; pauses marked between):');
+// A word that closes a sentence: sentence punctuation, optionally trailing quotes /
+// brackets. Mirrors shared/cutcutpro.ts ENDS_SENTENCE.
+final _endsSentence = RegExp(r'''[.!?…]["')\]]*$''');
+final _trailingDash = RegExp(r'[-–—]$');
+
+/// Deterministic signals the judge payload + refinement need — the portable subset
+/// of shared/cutcutpro.ts buildTimestampMap (no VAD, no diarization on mobile).
+class _JudgeMap {
+  final Set<int> fillers; // word indices that are vocal fillers
+  final Set<int> stutters; // immediate repeats / abandoned word fragments
+  final List<int> incompleteEndWords; // last word of a clause abandoned before a long pause
+  _JudgeMap(this.fillers, this.stutters, this.incompleteEndWords);
+}
+
+_JudgeMap _buildJudgeMap(List<Word> words) {
+  final fillers = <int>{};
   for (int i = 0; i < words.length; i++) {
-    final t = words[i].text;
-    final filler = _fillers.contains(_norm(t));
-    sb.writeln('$i|$t${filler ? ' <FILLER>' : ''}');
-    if (i < words.length - 1) {
-      final gap = words[i + 1].start - words[i].end;
-      if (gap * 1000 >= 250) {
-        sb.writeln('-- p$i: pause ${(gap * 1000).round()}ms');
-        byAfter.add(i);
-      }
+    if (_fillers.contains(_norm(words[i].text))) fillers.add(i);
+  }
+
+  // Stutters: immediate word repeats ("I I", "the the") and cut-off fragments
+  // ("th-", "pow—" / "pow" → "powerful") where the next word completes them.
+  final stutters = <int>{};
+  for (int i = 0; i < words.length - 1; i++) {
+    final a = _norm(words[i].text);
+    final b = _norm(words[i + 1].text);
+    if (a.isEmpty) continue;
+    if (a == b && a.length <= 8) {
+      stutters.add(i);
+    } else if (_trailingDash.hasMatch(words[i].text.trim()) &&
+        b.startsWith(a.substring(0, math.min(2, a.length)))) {
+      stutters.add(i);
+    } else if (a.length >= 2 && a.length < b.length && b.startsWith(a) && b.length - a.length >= 2) {
+      stutters.add(i);
     }
+  }
+
+  // Incomplete sentences: a chunk ending WITHOUT sentence punctuation right before a
+  // long pause (≥600 ms) — the speaker abandoned the thought. Pauses are word gaps.
+  final incomplete = <int>[];
+  for (int i = 0; i < words.length - 1; i++) {
+    final gapMs = (words[i + 1].start - words[i].end) * 1000;
+    if (gapMs < 600) continue;
+    if (!_endsSentence.hasMatch(words[i].text.trim())) incomplete.add(i);
+  }
+
+  return _JudgeMap(fillers, stutters, incomplete);
+}
+
+/// Build the `payload` string sent to procut-judge — the mobile twin of
+/// shared/cutcutpro.ts buildAiPayload: index|text lines with FILLER / STUTTER tags,
+/// inter-word pauses (≥250 ms) marked between words, and an INCOMPLETE SENTENCES
+/// section so the judge can dedupe retakes and drop abandoned false starts exactly
+/// like the desktop web. (No VAD / diarization on mobile → single-speaker header,
+/// no VAD-confirmed markers — the degraded-gracefully forms of the same payload.)
+String buildPayload(List<Word> words) {
+  final map = _buildJudgeMap(words);
+
+  // Pause ids in order (a leading-air pause reserves p0 like the web, even though it
+  // is not emitted inline); each inter-word gap ≥250 ms is marked after its word.
+  final pauseId = <int, String>{};
+  final pauseDurMs = <int, int>{};
+  int pid = 0;
+  if (words.isNotEmpty && words[0].start >= 0.4) pid++;
+  for (int i = 0; i < words.length - 1; i++) {
+    final gapMs = ((words[i + 1].start - words[i].end) * 1000).round();
+    if (gapMs >= 250) {
+      pauseId[i] = 'p$pid';
+      pauseDurMs[i] = gapMs;
+      pid++;
+    }
+  }
+
+  final lines = <String>[];
+  for (int i = 0; i < words.length; i++) {
+    final tags = <String>[];
+    if (map.fillers.contains(i)) tags.add('FILLER');
+    if (map.stutters.contains(i)) tags.add('STUTTER');
+    lines.add('$i|${words[i].text}${tags.isEmpty ? '' : ' <${tags.join(',')}>'}');
+    final id = pauseId[i];
+    if (id != null) lines.add('-- $id: pause ${pauseDurMs[i]}ms');
+  }
+
+  final inc = map.incompleteEndWords.map((e) {
+    final from = math.max(0, e - 6);
+    return 'word $e: "…${words.sublist(from, e + 1).map((w) => w.text).join(' ')}"';
+  }).join('\n');
+
+  final sb = StringBuffer();
+  sb.write('SPEAKERS: 1 (single on-camera speaker — every repeated line is the same person re-recording a take).\n\n');
+  sb.write('WORDS (index|text, one per line; pauses marked between):\n');
+  sb.write(lines.join('\n'));
+  sb.write('\n\n');
+  if (inc.isNotEmpty) {
+    sb.write('INCOMPLETE SENTENCES (left hanging before a pause):\n$inc\n');
   }
   return sb.toString();
 }
@@ -85,6 +165,114 @@ List<List<int>> parseWordCuts(String? raw, int n) {
   } catch (_) {
     return [];
   }
+}
+
+/// Merge overlapping / adjacent inclusive word-cut ranges (sorted, coalesced).
+List<List<int>> _mergeWordCuts(List<List<int>> cuts) {
+  final sorted = [for (final c in cuts) [c[0], c[1]]]..sort((a, b) => a[0].compareTo(b[0]));
+  final out = <List<int>>[];
+  for (final c in sorted) {
+    if (out.isNotEmpty && c[0] <= out.last[1] + 1) {
+      out.last[1] = math.max(out.last[1], c[1]);
+    } else {
+      out.add([c[0], c[1]]);
+    }
+  }
+  return out;
+}
+
+/// Deterministic post-EDL refinement — the mobile port of shared/cutcutpro.ts
+/// refineEdl. Two pure passes over the AI's word cuts fix the screenshot-verified
+/// failure family where the model cuts only the TAIL of an abandoned take:
+///   (1) boundary dedupe — if kept words BEFORE a cut re-say the opening of the kept
+///       words AFTER it (≥2-token prefix), extend the cut back over the doomed copy;
+///   (2) fragment sweep — if a mapped INCOMPLETE sentence lost its continuation to a
+///       cut, cut the whole broken clause (back to the previous sentence end).
+/// A runaway guard reverts everything if refinement would cut >85% of words.
+List<List<int>> refineWordCuts(List<Word> words, List<List<int>> wordCuts) {
+  if (words.isEmpty || wordCuts.isEmpty) return wordCuts;
+  final map = _buildJudgeMap(words);
+  final tok = [for (final w in words) _norm(w.text)];
+  bool endsSentence(int i) => _endsSentence.hasMatch(words[i].text.trim());
+
+  var cuts = _mergeWordCuts(wordCuts);
+  bool inCut(int i) {
+    for (final c in cuts) {
+      if (i >= c[0] && i <= c[1]) return true;
+    }
+    return false;
+  }
+
+  // ---- pass 1: boundary dedupe / backward extension --------------------------
+  for (int sweep = 0; sweep < 4; sweep++) {
+    var changed = false;
+    for (final c in cuts) {
+      final after = <int>[]; // kept tokens AFTER the cut (surviving take's opening)
+      for (int i = c[1] + 1; i < words.length && after.length < 6; i++) {
+        if (!inCut(i)) after.add(i);
+      }
+      final before = <int>[]; // kept tokens BEFORE the cut (potential doomed opening)
+      for (int i = c[0] - 1; i >= 0 && before.length < 10; i--) {
+        if (!inCut(i)) before.insert(0, i);
+      }
+      if (after.length < 2 || before.isEmpty) continue;
+      var bestS = -1, bestN = 0;
+      for (int s = 0; s < before.length; s++) {
+        var n = 0;
+        while (n < after.length &&
+            s + n < before.length &&
+            tok[before[s + n]] == tok[after[n]] &&
+            tok[after[n]].isNotEmpty) {
+          n++;
+        }
+        if (n >= 2 && n > bestN) {
+          bestN = n;
+          bestS = s;
+        }
+      }
+      if (bestS >= 0 && c[0] - before[bestS] <= 12) {
+        c[0] = before[bestS];
+        changed = true;
+      }
+    }
+    cuts = _mergeWordCuts(cuts);
+    if (!changed) break;
+  }
+
+  // ---- pass 2: incomplete-fragment sweep -------------------------------------
+  for (final e in map.incompleteEndWords) {
+    if (e < 0 || e >= words.length || inCut(e)) continue;
+    final next = [e + 1, e + 2].where((i) => i < words.length).toList();
+    if (!next.any(inCut)) continue;
+    List<int>? cut;
+    for (final c in cuts) {
+      if (next.any((i) => i >= c[0] && i <= c[1])) {
+        cut = c;
+        break;
+      }
+    }
+    if (cut == null) continue;
+    var start = -1;
+    for (int i = e - 1, steps = 0; i >= 0 && steps < 20; i--, steps++) {
+      if (inCut(i)) continue;
+      if (endsSentence(i)) {
+        start = i + 1;
+        break;
+      }
+      if (i == 0) start = 0;
+    }
+    if (start < 0 || start > e) continue;
+    if (cut[0] > start) cut[0] = math.min(cut[0], start);
+  }
+  cuts = _mergeWordCuts(cuts);
+
+  // ---- runaway guard ---------------------------------------------------------
+  var cutCount = 0;
+  for (final c in cuts) {
+    cutCount += c[1] - c[0] + 1;
+  }
+  if (words.length >= 20 && cutCount > words.length * 0.85) return wordCuts;
+  return cuts;
 }
 
 /// word-cut index ranges (+ optional word-gap silence) → KEEP ranges (ms) on the source.

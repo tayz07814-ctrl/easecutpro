@@ -60,7 +60,10 @@ Future<CutLordResult> judge(
     req['reasoning'] = model.reasoning ?? 'off';
   }
   final res = await invokeEdge(model.slug, req);
-  final wordCuts = parseWordCuts(res['raw'] as String?, words.length);
+  // Validate → deterministic refine (boundary dedupe + fragment sweep), same as the
+  // desktop web ProCut (validateEdl → refineEdl) so a tail-only cut can't leave a
+  // duplicated opening or a dangling fragment behind.
+  final wordCuts = refineWordCuts(words, parseWordCuts(res['raw'] as String?, words.length));
   onProgress?.call(92, 'Applying cuts…');
   final keeps = keepRanges(words, wordCuts, durS,
       cutSilence: cutSilence, minPauseS: minPauseS, padS: padS);
