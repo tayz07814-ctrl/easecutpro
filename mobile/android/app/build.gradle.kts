@@ -55,4 +55,7 @@ dependencies {
     implementation("androidx.media3:media3-common:$media3")
     // ImmutableList for OverlayEffect / Effects.
     implementation("com.google.guava:guava:33.0.0-android")
+    // On-device ONNX runtime for the FSMN (FunASR) VAD — the Retake Final Boss
+    // silence engine, run natively (no edge round-trip). Model + CMVN ship in assets/fsmn.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
 }

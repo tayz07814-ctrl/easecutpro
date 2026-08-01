@@ -177,6 +177,10 @@ List<List<int>> keepRanges(
   double padS = 0.1,
   double airAfterS = 0.3, // silence: air kept after the last word (padAfter)
   double leadBeforeS = 0.1, // silence: lead kept before the next word (padBefore)
+  // Silence regions (ms) already computed elsewhere — the FSMN (FunASR) native VAD
+  // (Retake Final Boss). When supplied these ARE the silence cuts; the caller passes
+  // cutSilence:false so the transcript word-gap fallback below is skipped.
+  List<List<int>> extraSilenceMs = const [],
 }) {
   final durMs = (durS * 1000).round();
   final cuts = <List<int>>[]; // [startMs, endMs]
@@ -190,6 +194,10 @@ List<List<int>> keepRanges(
     final padL = math.min(padS, math.max(0.0, (startS - prevEnd) / 2));
     final padR = math.min(padS, math.max(0.0, (nextStart - endS) / 2));
     cuts.add([((startS - padL) * 1000).round(), ((endS + padR) * 1000).round()]);
+  }
+
+  for (final s in extraSilenceMs) {
+    if (s.length == 2 && s[1] > s[0]) cuts.add([s[0], s[1]]);
   }
 
   if (cutSilence) {

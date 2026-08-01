@@ -16,6 +16,7 @@ import '../editor/silence_settings.dart';
 import '../editor/preview_proxy.dart';
 import '../native/exporter.dart';
 import '../native/player.dart';
+import '../native/vad.dart';
 import '../theme.dart';
 import '../widgets/tool_dock.dart';
 import '../widgets/selected_toolbar.dart';
@@ -1010,15 +1011,42 @@ class _EditorScreenState extends State<EditorScreen> {
   /// then apply to the timeline.
   Future<void> _applyCuts(List<List<int>> wordCuts, bool cutSilence, String label) async {
     if (_transcript == null) return;
+    final durS = _sourceDurationMs / 1000.0;
+
+    // Silence = the FSMN (FunASR) VAD run on-device via native ONNX — the desktop
+    // Retake Final Boss silence engine. Falls back to transcript word-gap silence
+    // only if the native VAD is unavailable or finds nothing.
+    List<List<int>> fsmn = const [];
+    if (cutSilence && _model.sourcePath != null) {
+      final prog = ValueNotifier<String>('Cleaning silence…');
+      _showProgress(prog);
+      try {
+        final regions = await NativeVad.detectSilences(
+          'file://${_model.sourcePath!}',
+          padBeforeS: SilenceSettings.padBeforeS,
+          padAfterS: SilenceSettings.padAfterS,
+          trimEdgesS: SilenceSettings.edgeTrimS,
+          tailTrim: SilenceSettings.removeBreaths,
+        ).timeout(const Duration(seconds: 90), onTimeout: () => const []);
+        fsmn = [for (final r in regions) [(r[0] * 1000).round(), (r[1] * 1000).round()]];
+      } catch (_) {
+        fsmn = const [];
+      } finally {
+        if (mounted) Navigator.of(context).pop();
+        prog.dispose();
+      }
+    }
+
     final keeps = keepRanges(
       _transcript!,
       wordCuts,
-      _sourceDurationMs / 1000.0,
-      cutSilence: cutSilence,
+      durS,
+      cutSilence: cutSilence && fsmn.isEmpty, // word-gap only as the VAD fallback
       minPauseS: SilenceSettings.minGapS,
       padS: SilenceSettings.padAfterS,
       airAfterS: SilenceSettings.padAfterS,
       leadBeforeS: SilenceSettings.padBeforeS,
+      extraSilenceMs: fsmn,
     );
     _pushHistory();
     _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
