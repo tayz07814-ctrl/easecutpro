@@ -14,9 +14,13 @@ class CutLordModel {
   const CutLordModel(this.label, this.slug, this.model, this.reasoning);
 }
 
-// One Retake, matching web 0.01: the Retake button runs procut-judge (Claude).
-// (Kept as a single named model so existing call sites don't churn.)
-const cutLordRetake = CutLordModel('Retake', 'procut-judge', null, null);
+// One Retake, matching the desktop web "Retake Final Boss" engine: the judge is the
+// ultracut-judge edge fn running OpenAI GPT-5.6 Luna (via OpenRouter), reasoning
+// 'medium', on the default word-list SYSTEM prompt. NO 'sharp' promptVariant is sent
+// — ultracut-judge's resolvePrompt() maps an absent/unknown variant to the SAME
+// SYSTEM prompt 'sharp' selects, so omitting it is byte-identical and can't pick the
+// wrong prompt. (Single named model so existing call sites don't churn.)
+const cutLordRetake = CutLordModel('Retake', 'ultracut-judge', 'openai/gpt-5.6-luna', 'medium');
 
 /// Extract the clip's audio and transcribe it (AssemblyAI → Deepgram).
 Future<List<Word>> extractAndTranscribe(
@@ -56,14 +60,16 @@ Future<CutLordResult> judge(
   };
   if (model.model != null) {
     req['model'] = model.model;
-    req['promptVariant'] = 'sharp';
-    req['reasoning'] = model.reasoning ?? 'off';
+    req['reasoning'] = model.reasoning ?? 'medium';
+    // Deliberately NO 'promptVariant': Retake Final Boss sends none, and
+    // ultracut-judge resolves an absent/unknown variant to the same word-list
+    // SYSTEM prompt 'sharp' would select — so this is byte-identical to the desktop.
   }
   final res = await invokeEdge(model.slug, req);
-  // Validate → deterministic refine (boundary dedupe + fragment sweep), same as the
-  // desktop web ProCut (validateEdl → refineEdl) so a tail-only cut can't leave a
-  // duplicated opening or a dangling fragment behind.
-  final wordCuts = refineWordCuts(words, parseWordCuts(res['raw'] as String?, words.length));
+  // Apply ONLY the model's validated word_cuts — the desktop Retake Final Boss does
+  // NOT run the deterministic refineEdl passes (they over-cut: swallowing a valid
+  // opening flagged as an "incomplete sentence"). parseWordCuts still clamps/guards.
+  final wordCuts = parseWordCuts(res['raw'] as String?, words.length);
   onProgress?.call(92, 'Applying cuts…');
   final keeps = keepRanges(words, wordCuts, durS,
       cutSilence: cutSilence, minPauseS: minPauseS, padS: padS);
