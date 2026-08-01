@@ -278,37 +278,44 @@ class EcPlayer(
     /**
      * Build the preview [Composition]: one sequence of the cut clips. Each keeps its
      * per-clip volume (channel-mix) and speed (SpeedChange + Sonic); crop / Ken Burns
-     * are intentionally left to the Flutter-layer transform. [EditedMediaItem.durationUs]
-     * is set to the clip's TIMELINE length so the composition timeline equals the editor
-     * timeline 1:1. Returns the composition and that summed timeline length (ms), or null
-     * if nothing is playable yet (so the caller keeps the current preview instead of
-     * feeding CompositionPlayer an empty sequence, which it rejects).
+     * are intentionally left to the Flutter-layer transform.
+     *
+     * [EditedMediaItem.durationUs] must be the WHOLE source media length — Media3 derives
+     * each clip's presentation length from the ClippingConfiguration and asserts
+     * `endPositionUs <= durationUs`. Setting it to the clipped span made every cut clip
+     * (startMs > 0) fail that check (import, startMs == 0, slipped through). So probe the
+     * real source duration (cached per file) and use it here.
+     *
+     * Returns the composition and the summed TIMELINE length (ms), or null if nothing is
+     * playable yet (so the caller keeps the current preview instead of feeding
+     * CompositionPlayer an empty sequence, which it rejects).
      */
     private fun buildPreviewComposition(segs: List<Map<String, Any>>): Pair<Composition, Long>? {
         val items = ArrayList<EditedMediaItem>()
         var totalMs = 0L
+        val srcDurCache = HashMap<String, Long>() // uri -> full source duration (ms)
         for (seg in segs) {
             val uri = seg["uri"] as? String ?: continue
             val startMs = (seg["startMs"] as? Number)?.toLong() ?: 0L
             var endMs = (seg["endMs"] as? Number)?.toLong() ?: 0L
-            // endMs <= startMs is the "to end" sentinel (duration not known yet, e.g. the
-            // full clip right after import). CompositionPlayer needs a concrete duration,
-            // so resolve it from the source.
-            if (endMs <= startMs) {
-                val d = probeDurationMs(uri)
-                if (d > startMs) endMs = d
-            }
+            val srcDurMs = srcDurCache.getOrPut(uri) { probeDurationMs(uri) }
+            // endMs <= startMs is the "to end" sentinel (unknown right after import).
+            if (endMs <= startMs) endMs = if (srcDurMs > startMs) srcDurMs else startMs
+            if (srcDurMs > 0 && endMs > srcDurMs) endMs = srcDurMs // keep the clip inside the source
             val speed = (seg["speed"] as? Number)?.toFloat()?.coerceIn(0.1f, 8f) ?: 1f
             val volume = (seg["volume"] as? Number)?.toFloat()?.coerceIn(0f, 4f) ?: 1f
             val spanMs = if (endMs > startMs) endMs - startMs else 0L
             if (spanMs <= 0L) continue
             val timelineMs = maxOf(1L, (spanMs / speed).toLong())
+            // Full-source duration for the item (fall back to the clip end when the probe
+            // fails — that still satisfies endPositionUs <= durationUs). Must be > 0.
+            val durationUs = (if (srcDurMs > 0) srcDurMs else endMs).coerceAtLeast(1L) * 1000L
 
             val clip = MediaItem.ClippingConfiguration.Builder()
                 .setStartPositionMs(startMs)
                 .setEndPositionMs(endMs)
             val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
-            val b = EditedMediaItem.Builder(mi).setDurationUs(timelineMs * 1000L)
+            val b = EditedMediaItem.Builder(mi).setDurationUs(durationUs)
 
             val vfx = ArrayList<Effect>()
             val afx = ArrayList<AudioProcessor>()
