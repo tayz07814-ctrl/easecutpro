@@ -5,10 +5,10 @@ import '../cloud/stt.dart' show Word;
 import '../theme.dart';
 import 'sheet_scaffold.dart';
 
-/// Cut Lord REVIEW pass. Opens the moment transcription finishes so the transcript
-/// is ALWAYS visible; the (slow) AI judge runs in the background and its proposed
-/// cuts stream in via [aiCuts]. Tap a word to keep/cut; "Execute" emits the final
-/// inclusive index ranges. The user can cut manually even if the AI is slow/fails.
+/// Cut Lord REVIEW pass. Opens AFTER the judge has found cuts (they arrive pre-applied
+/// via [aiCuts]); the transcript is rendered grouped into SENTENCES (not one paragraph)
+/// so it's readable. Tap a word to keep/cut; "Execute" emits the final inclusive index
+/// ranges. [judging] is kept for compatibility (normally false here).
 class CutReviewSheet extends StatefulWidget {
   final List<Word> words;
   final ValueListenable<List<List<int>>> aiCuts; // AI proposal (may arrive late / empty)
@@ -82,6 +82,23 @@ class _CutReviewSheetState extends State<CutReviewSheet> {
     return out;
   }
 
+  /// Group word indices into sentences (break after a word ending in . ? ! …) so the
+  /// transcript reads as sentences rather than one long paragraph.
+  List<List<int>> _sentences() {
+    final out = <List<int>>[];
+    var cur = <int>[];
+    for (int i = 0; i < widget.words.length; i++) {
+      cur.add(i);
+      final t = widget.words[i].text.trimRight();
+      if (t.isNotEmpty && (t.endsWith('.') || t.endsWith('?') || t.endsWith('!') || t.endsWith('…'))) {
+        out.add(cur);
+        cur = <int>[];
+      }
+    }
+    if (cur.isNotEmpty) out.add(cur);
+    return out;
+  }
+
   double get _savedS {
     double s = 0;
     for (final i in _cut) {
@@ -116,11 +133,20 @@ class _CutReviewSheetState extends State<CutReviewSheet> {
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(14, 4, 14, 8),
-              child: Wrap(
-                spacing: 3,
-                runSpacing: 2,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (int i = 0; i < widget.words.length; i++) _wordChip(i),
+                  // One Wrap per sentence, with a gap between them — reads as sentences
+                  // instead of one continuous paragraph.
+                  for (final sentence in _sentences())
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 9),
+                      child: Wrap(
+                        spacing: 3,
+                        runSpacing: 2,
+                        children: [for (final i in sentence) _wordChip(i)],
+                      ),
+                    ),
                 ],
               ),
             ),

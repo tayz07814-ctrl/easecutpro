@@ -942,12 +942,37 @@ class _EditorScreenState extends State<EditorScreen> {
       _toast('Import a clip first');
       return;
     }
-    // 1) Transcribe (the only blocking step — the transcript drives everything).
+    // Transcribe, then find cuts — BOTH under one progress overlay. The transcript
+    // review opens only AFTER the judge finishes, so it shows the proposed cuts (not a
+    // raw dump straight off AssemblyAI).
     final prog = ValueNotifier<String>('Starting…');
     _showProgress(prog);
+    List<List<int>> aiCuts = const [];
     try {
       _transcript ??=
           await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
+      if (_transcript!.isEmpty) {
+        if (mounted) Navigator.of(context).pop();
+        prog.dispose();
+        _toast('Couldn’t hear any speech to cut.');
+        return;
+      }
+      // Find cuts (blocking). Hard timeout so a slow/blocked model can't trap us; on
+      // failure the review still opens for manual cutting.
+      prog.value = 'Finding cuts…';
+      try {
+        final res = await judge(
+          _transcript!,
+          model,
+          _sourceDurationMs / 1000.0,
+          cutSilence: cutSilence,
+          minPauseS: SilenceSettings.trimS,
+          padS: SilenceSettings.keepS,
+        ).timeout(const Duration(seconds: 130));
+        aiCuts = res.wordCuts;
+      } catch (_) {
+        // slow / blocked / nothing found — fall through to a manual review
+      }
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       prog.dispose();
@@ -956,46 +981,20 @@ class _EditorScreenState extends State<EditorScreen> {
     }
     if (mounted) Navigator.of(context).pop();
     prog.dispose();
-    final words = _transcript!;
-    if (words.isEmpty) {
-      _toast('Couldn’t hear any speech to cut.');
-      return;
-    }
-
-    // 2) Open the transcript review immediately; the AI judge runs in the background.
-    final aiCuts = ValueNotifier<List<List<int>>>(const []);
-    final judging = ValueNotifier<bool>(true);
-    var closed = false;
-
-    // Background judge — a hard timeout so a slow/blocked model never traps the user
-    // on an empty proposal; the transcript stays fully usable for manual cuts.
-    Future(() async {
-      try {
-        final res = await judge(
-          words,
-          model,
-          _sourceDurationMs / 1000.0,
-          cutSilence: cutSilence,
-          minPauseS: SilenceSettings.trimS,
-          padS: SilenceSettings.keepS,
-        ).timeout(const Duration(seconds: 130));
-        if (!closed) aiCuts.value = res.wordCuts;
-      } catch (_) {
-        // leave the review manual — the model was slow, blocked, or found nothing
-      } finally {
-        if (!closed) judging.value = false;
-      }
-    });
-
     if (!mounted) return;
+
+    // Review the found cuts. The transcript renders grouped into sentences (see sheet).
+    final words = _transcript!;
+    final aiCutsN = ValueNotifier<List<List<int>>>(aiCuts);
+    final judgingN = ValueNotifier<bool>(false);
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => CutReviewSheet(
         words: words,
-        aiCuts: aiCuts,
-        judging: judging,
+        aiCuts: aiCutsN,
+        judging: judgingN,
         modelLabel: model.label,
         onExecute: (finalCuts) {
           Navigator.of(context).pop(); // close review sheet
@@ -1003,7 +1002,8 @@ class _EditorScreenState extends State<EditorScreen> {
         },
       ),
     );
-    closed = true;
+    aiCutsN.dispose();
+    judgingN.dispose();
   }
 
   /// Compute keep-ranges from (reviewed) word cuts + silence, snapshot for undo,
