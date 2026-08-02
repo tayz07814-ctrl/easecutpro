@@ -31,6 +31,8 @@ import '../sheets/settings_sheet.dart';
 import '../sheets/silence_modal.dart';
 import '../sheets/clip_tools_sheets.dart';
 import '../editor/autozoom.dart';
+import '../editor/variations.dart';
+import '../sheets/variations_sheet.dart';
 import '../sheets/cut_review_sheet.dart';
 import '../local/fonts_store.dart';
 
@@ -857,7 +859,35 @@ class _EditorScreenState extends State<EditorScreen> {
         onRun: _runCutLord,
         onAutoZoom: _autoZoom,
         onAutoBroll: _autoBroll,
+        onVariations: _openVariations,
       ));
+
+  // ---- Variations: recut the same footage into a different edit ----
+  void _openVariations() => _openSheet(VariationsSheet(
+        onGenerate: (count) async {
+          if (!_hasBase || _model.sourcePath == null) {
+            return const VariationParse([], warnings: ['Import a clip first.']);
+          }
+          _transcript ??= await extractAndTranscribe(_exporter, _model.sourcePath!);
+          return generateVariations(_transcript!, _sourceDurationMs / 1000.0, count);
+        },
+        onParse: (text, name) =>
+            parseVariation(text, _sourceDurationMs / 1000.0, fallbackName: name),
+        onApply: _applyVariation,
+      ));
+
+  /// Rebuild the base track from a variation's source ranges — IN ORDER, keeping
+  /// repeats and overlaps, since the order IS the edit.
+  Future<void> _applyVariation(Variation v) async {
+    if (!_hasBase || _model.sourcePath == null) return;
+    final ranges = v.rangesMs();
+    if (ranges.isEmpty) return;
+    _pushHistory();
+    _texts.removeWhere((t) => t.isCaption); // caption times are stale after a recut
+    _model.applyKeepRanges(ranges);
+    await _reload(seekTo: 0);
+    _toast('Applied “${v.name ?? 'variation'}” — ${ranges.length} clips');
+  }
 
   // ---- Auto Zoom: transcript → auto-zoom-judge → per-clip centred punch-in ----
   Future<void> _autoZoom() async {

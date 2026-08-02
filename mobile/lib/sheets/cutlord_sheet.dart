@@ -13,12 +13,14 @@ class CutLordSheet extends StatefulWidget {
   final void Function(CutLordModel model, bool cutSilence) onRun;
   final VoidCallback onAutoZoom;
   final VoidCallback onAutoBroll;
+  final VoidCallback onVariations;
   const CutLordSheet({
     super.key,
     required this.onOpenSilence,
     required this.onRun,
     required this.onAutoZoom,
     required this.onAutoBroll,
+    required this.onVariations,
   });
 
   @override
@@ -113,6 +115,11 @@ class _CutLordSheetState extends State<CutLordSheet> {
                       Expanded(child: _autoBtn(Icons.photo_library_outlined, 'Auto B-roll', () { Navigator.of(context).pop(); widget.onAutoBroll(); })),
                     ],
                   ),
+                  const SizedBox(height: 10),
+                  _autoBtn(Icons.shuffle, 'Variations — recut into a new edit', () {
+                    Navigator.of(context).pop();
+                    widget.onVariations();
+                  }),
                   const SizedBox(height: 16),
                   GestureDetector(
                     onTap: widget.onOpenSilence,

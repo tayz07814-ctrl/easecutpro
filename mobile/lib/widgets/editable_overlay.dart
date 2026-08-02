@@ -100,7 +100,7 @@ class _EditableOverlayState extends State<EditableOverlay> {
     final t = widget.t;
     // Text.rich(t.textSpan(...)) so the live preview honours t.fontFamily and the
     // karaoke word-highlight, matching the export rasterizer exactly.
-    final label = Text.rich(t.textSpan(widget.frame.height), textAlign: TextAlign.center);
+    final label = Text.rich(t.textSpan(widget.frame.height), textAlign: t.textAlign);
     final content = t.bg
         ? Container(
             padding: EdgeInsets.symmetric(

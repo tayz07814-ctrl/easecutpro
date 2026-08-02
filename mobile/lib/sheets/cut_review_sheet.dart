@@ -29,9 +29,53 @@ class CutReviewSheet extends StatefulWidget {
   State<CutReviewSheet> createState() => _CutReviewSheetState();
 }
 
+/// The same list the web editor strikes with its "Strike fillers" button
+/// (shared/fillers.ts DEFAULT_FILLERS), so both apps remove the same words.
+const _defaultFillers = [
+  'um', 'umm', 'uh', 'uhh', 'uhm', 'er', 'err', 'ah', 'hmm', 'mm', 'mhm', 'eh', //
+  'like', 'basically', 'actually', 'literally', 'honestly', //
+  'you know', 'i mean', 'sort of', 'kind of',
+];
+
+final _nonWord = RegExp(r"[^a-z']");
+String _norm(String s) => s.toLowerCase().replaceAll(_nonWord, '');
+
 class _CutReviewSheetState extends State<CutReviewSheet> {
   final Set<int> _cut = {};
   List<List<int>> _lastAi = const [];
+
+  /// Word indices that are filler words or filler PHRASES ("you know", "i mean").
+  Set<int> _fillerIds() {
+    final singles = {for (final f in _defaultFillers) if (!f.contains(' ')) _norm(f)}..remove('');
+    final phrases = [
+      for (final f in _defaultFillers)
+        if (f.contains(' ')) [for (final p in f.trim().toLowerCase().split(RegExp(r'\s+'))) _norm(p)]
+    ].where((p) => p.length > 1).toList();
+    final words = widget.words;
+    final ids = <int>{};
+    for (var i = 0; i < words.length; i++) {
+      if (singles.contains(_norm(words[i].text))) ids.add(i);
+    }
+    for (var i = 0; i < words.length; i++) {
+      for (final ph in phrases) {
+        if (i + ph.length <= words.length) {
+          var hit = true;
+          for (var k = 0; k < ph.length; k++) {
+            if (_norm(words[i + k].text) != ph[k]) {
+              hit = false;
+              break;
+            }
+          }
+          if (hit) {
+            for (var k = 0; k < ph.length; k++) {
+              ids.add(i + k);
+            }
+          }
+        }
+      }
+    }
+    return ids;
+  }
 
   @override
   void initState() {
@@ -107,6 +151,24 @@ class _CutReviewSheetState extends State<CutReviewSheet> {
     return s;
   }
 
+  Widget _bulkBtn(String label, VoidCallback? onTap) {
+    final on = onTap != null;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: Ec.chip,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Ec.border),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                color: on ? Ec.textDim : Ec.disabled, fontSize: 12, fontWeight: FontWeight.w600)),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final judging = widget.judging.value;
@@ -128,6 +190,17 @@ class _CutReviewSheetState extends State<CutReviewSheet> {
               alignment: Alignment.centerLeft,
               child: Text('Tap a word to keep or cut it. Struck-through words are removed.',
                   style: TextStyle(color: Ec.textMute, fontSize: 12.5)),
+            ),
+          ),
+          // Bulk passes, matching the web transcript editor.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+            child: Row(
+              children: [
+                _bulkBtn('Strike fillers', () => setState(() => _cut.addAll(_fillerIds()))),
+                const SizedBox(width: 8),
+                _bulkBtn('Restore all', _cut.isEmpty ? null : () => setState(() => _cut.clear())),
+              ],
             ),
           ),
           Expanded(

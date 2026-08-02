@@ -120,6 +120,8 @@ class _TextSheetState extends State<TextSheet> {
               fontSize: _size,
               color: _color,
               bold: _bold,
+              italic: _italic,
+              align: _align,
               bg: _bg,
               fontFamily: _fontFamily,
               startMs: 0,

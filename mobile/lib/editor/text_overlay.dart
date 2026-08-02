@@ -12,6 +12,9 @@ class TextOverlay {
   double fontSize; // fraction of frame height
   Color color;
   bool bold;
+  bool italic;
+  /// 'left' | 'center' | 'right' — how the lines sit within the text block.
+  String align;
   bool bg;
   Color bgColor;
   int startMs;
@@ -32,6 +35,8 @@ class TextOverlay {
     this.fontSize = 0.06,
     this.color = Colors.white,
     this.bold = true,
+    this.italic = false,
+    this.align = 'center',
     this.bg = false,
     this.bgColor = Colors.black,
     required this.startMs,
@@ -52,6 +57,8 @@ class TextOverlay {
         fontSize: fontSize,
         color: color,
         bold: bold,
+        italic: italic,
+        align: align,
         bg: bg,
         bgColor: bgColor,
         startMs: startMs,
@@ -70,6 +77,8 @@ class TextOverlay {
         'fs': fontSize,
         'c': color.toARGB32(),
         'b': bold,
+        'i': italic,
+        'al': align,
         'bg': bg,
         'bgc': bgColor.toARGB32(),
         's': startMs,
@@ -88,6 +97,8 @@ class TextOverlay {
         fontSize: (j['fs'] as num?)?.toDouble() ?? 0.06,
         color: Color((j['c'] as num?)?.toInt() ?? 0xFFFFFFFF),
         bold: (j['b'] as bool?) ?? true,
+        italic: (j['i'] as bool?) ?? false,
+        align: (j['al'] as String?) ?? 'center',
         bg: (j['bg'] as bool?) ?? false,
         bgColor: Color((j['bgc'] as num?)?.toInt() ?? 0xFF000000),
         startMs: (j['s'] as num?)?.toInt() ?? 0,
@@ -104,6 +115,7 @@ class TextOverlay {
         fontFamily: fontFamily,
         fontSize: fontSize * frameH,
         fontWeight: bold ? FontWeight.w800 : FontWeight.w500,
+        fontStyle: italic ? FontStyle.italic : FontStyle.normal,
         height: 1.15,
         shadows: bg
             ? null
@@ -112,6 +124,14 @@ class TextOverlay {
 
   /// Bright accent for the currently-spoken karaoke word.
   static const Color karaokeHi = Color(0xFFFFE14D);
+
+  /// [align] as a Flutter alignment — used by BOTH the preview and the export
+  /// bake, so a left-aligned block reads the same in each.
+  TextAlign get textAlign => switch (align) {
+        'left' => TextAlign.left,
+        'right' => TextAlign.right,
+        _ => TextAlign.center,
+      };
 
   /// The inline span(s) for this overlay's text — the single source of truth for
   /// BOTH the live preview (EditableOverlay) and the export rasterizer
@@ -143,7 +163,7 @@ class TextOverlay {
     final tp = TextPainter(
       text: textSpan(height.toDouble()),
       textDirection: TextDirection.ltr,
-      textAlign: TextAlign.center,
+      textAlign: textAlign,
     );
     tp.layout(maxWidth: width * 0.9);
     final cx = x * width;
@@ -246,7 +266,7 @@ class TextOverlayView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final child = Text.rich(t.textSpan(frame.height), textAlign: TextAlign.center);
+    final child = Text.rich(t.textSpan(frame.height), textAlign: t.textAlign);
     final wrapped = t.bg
         ? Container(
             padding: EdgeInsets.symmetric(horizontal: t.fontSize * frame.height * 0.25, vertical: t.fontSize * frame.height * 0.1),

@@ -34,26 +34,30 @@ class _ExportSheetState extends State<ExportSheet> {
   String? _done;
   String? _error;
 
-  String _res = 'Source'; // Source / 1080p / 720p / 480p
+  String _res = 'Source'; // Source / 4K / 2K / 1080p / 720p / 480p
   int _fps = 0; // 0 = source
   String _quality = 'High'; // Auto / High / Medium / Low
+  String _aspect = 'Source'; // Source / 16:9 / 9:16 / 1:1 / 4:5 / 4:3
 
-  /// Output (w,h) for the chosen resolution, preserving the source aspect (even).
+  /// Resolution stops name the SHORT side, so "4K" is 3840×2160 in 16:9 and
+  /// 2160×3840 in 9:16 — the reading a creator expects from either orientation.
+  static const _shortSide = {'4K': 2160, '2K': 1440, '1080p': 1080, '720p': 720, '480p': 480};
+  static const _aspects = {'16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1.0, '4:5': 4 / 5, '4:3': 4 / 3};
+
+  /// Output (w,h) for the chosen aspect + resolution, always even (encoders
+  /// require it). The native export letterboxes the source into these dimensions
+  /// (Presentation LAYOUT_SCALE_TO_FIT), so nothing is ever cropped away.
   (int, int) _outSize() {
     final sw = widget.videoSize.width.round().clamp(16, 8192);
     final sh = widget.videoSize.height.round().clamp(16, 8192);
-    if (_res == 'Source') return (_even(sw), _even(sh));
-    final target = _res == '1080p' ? 1080 : _res == '720p' ? 720 : 480;
-    if (sw <= sh) {
-      // portrait: short side is width
-      final w = target;
-      final h = (target * sh / sw).round();
-      return (_even(w.clamp(16, 8192)), _even(h.clamp(16, 8192)));
-    } else {
-      final h = target;
-      final w = (target * sw / sh).round();
-      return (_even(w.clamp(16, 8192)), _even(h.clamp(16, 8192)));
-    }
+    final ratio = _aspects[_aspect] ?? (sh > 0 ? sw / sh : 9 / 16);
+    // "Source" resolution keeps the source pixels when the aspect is untouched,
+    // otherwise falls back to the source's own short side at the new aspect.
+    if (_res == 'Source' && _aspect == 'Source') return (_even(sw), _even(sh));
+    final target = _shortSide[_res] ?? (sw <= sh ? sw : sh);
+    final w = ratio >= 1 ? (target * ratio).round() : target;
+    final h = ratio >= 1 ? target : (target / ratio).round();
+    return (_even(w.clamp(16, 8192)), _even(h.clamp(16, 8192)));
   }
 
   int _even(int v) => v.isEven ? v : v + 1;
@@ -132,13 +136,16 @@ class _ExportSheetState extends State<ExportSheet> {
     final (ow, oh) = _outSize();
     return SheetScaffold(
       title: 'Export',
-      heightFactor: 0.62,
+      heightFactor: 0.74,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _seg('Resolution', const ['Source', '1080p', '720p', '480p'], _res, (v) => setState(() => _res = v)),
+            _seg('Aspect ratio', const ['Source', '16:9', '9:16', '1:1', '4:5', '4:3'], _aspect,
+                (v) => setState(() => _aspect = v)),
+            _seg('Resolution', const ['Source', '4K', '2K', '1080p', '720p', '480p'], _res,
+                (v) => setState(() => _res = v)),
             _seg('Frame rate', const ['Source', '24', '30', '60'], _fps == 0 ? 'Source' : '$_fps',
                 (v) => setState(() => _fps = v == 'Source' ? 0 : int.parse(v))),
             _seg('Quality', const ['Auto', 'High', 'Medium', 'Low'], _quality, (v) => setState(() => _quality = v)),
@@ -226,8 +233,10 @@ class _ExportSheetState extends State<ExportSheet> {
   }
 
   Widget _seg(String label, List<String> options, String selected, ValueChanged<String> onSelect) {
+    // Six stops don't fit a phone row at the base size — tighten as the row grows.
+    final many = options.length >= 6;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -240,8 +249,8 @@ class _ExportSheetState extends State<ExportSheet> {
                   child: GestureDetector(
                     onTap: () => onSelect(o),
                     child: Container(
-                      margin: const EdgeInsets.only(right: 6),
-                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      margin: EdgeInsets.only(right: many ? 4 : 6),
+                      padding: EdgeInsets.symmetric(vertical: many ? 8 : 9, horizontal: 2),
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         color: selected == o ? Ec.indigoTint : Ec.chip,
@@ -249,11 +258,15 @@ class _ExportSheetState extends State<ExportSheet> {
                         border: Border.all(
                             color: selected == o ? Ec.indigo : Colors.white.withValues(alpha: 0.06)),
                       ),
-                      child: Text(o,
-                          style: TextStyle(
-                              color: selected == o ? Ec.indigoText : Ec.textDim,
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w600)),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(o,
+                            maxLines: 1,
+                            style: TextStyle(
+                                color: selected == o ? Ec.indigoText : Ec.textDim,
+                                fontSize: many ? 11 : 12.5,
+                                fontWeight: FontWeight.w600)),
+                      ),
                     ),
                   ),
                 ),
