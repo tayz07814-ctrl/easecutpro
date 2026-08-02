@@ -2,14 +2,15 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import 'enhance_options.dart';
 import 'sheet_scaffold.dart';
 
 /// New Project wizard (NewProjectWizard.tsx) — pick file(s) + choose enhancements.
 /// UI + navigation only for now; the actual import/processing wires in next.
 class NewProjectWizard extends StatefulWidget {
   /// Called with the first picked clip (path + name) plus the chosen "enhance on
-  /// import" toggles, so the editor can auto-load and clean/caption it.
-  final void Function(String? path, String? name, bool cutSilence, bool autoCaptions) onCreate;
+  /// import" toggles, so the editor can auto-load and clean/caption/zoom it.
+  final void Function(String? path, String? name, EnhanceOptions opts) onCreate;
   const NewProjectWizard({super.key, required this.onCreate});
 
   @override
@@ -18,8 +19,7 @@ class NewProjectWizard extends StatefulWidget {
 
 class _NewProjectWizardState extends State<NewProjectWizard> {
   final List<PlatformFile> _files = [];
-  bool _cutSilence = true;
-  bool _autoCaptions = false;
+  EnhanceOptions _opts = const EnhanceOptions();
 
   Future<void> _pick() async {
     final res = await FilePicker.pickFiles(type: FileType.video, allowMultiple: true);
@@ -92,13 +92,7 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
               style: TextStyle(
                   color: Ec.textMute, fontSize: 11.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
           const SizedBox(height: 10),
-          _option('✂️', 'Cut silences & bad takes', 'Trim dead air and retakes automatically.',
-              _cutSilence, () => setState(() => _cutSilence = !_cutSilence)),
-          const SizedBox(height: 8),
-          _option('💬', 'Auto captions', 'Add styled subtitles from your speech.', _autoCaptions,
-              () => setState(() => _autoCaptions = !_autoCaptions)),
-          const SizedBox(height: 8),
-          _option('🔍', 'Auto zoom', 'Punch-in on emphasis. Coming soon.', false, null, soon: true),
+          EnhanceOptionList(value: _opts, onChanged: (n) => setState(() => _opts = n)),
           const SizedBox(height: 22),
           Row(
             children: [
@@ -111,10 +105,7 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
               ),
               const Spacer(),
               GestureDetector(
-                onTap: ready
-                    ? () => widget.onCreate(
-                        _files.first.path, _files.first.name, _cutSilence, _autoCaptions)
-                    : null,
+                onTap: ready ? () => widget.onCreate(_files.first.path, _files.first.name, _opts) : null,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                   decoration: BoxDecoration(
@@ -122,7 +113,7 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    _cutSilence || _autoCaptions ? 'Enhance & open editor →' : 'Create project →',
+                    _opts.any ? 'Enhance & open editor →' : 'Create project →',
                     style: TextStyle(
                         color: ready ? Colors.white : const Color(0xFF6B6F79),
                         fontSize: 14,
@@ -137,67 +128,4 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
     );
   }
 
-  Widget _option(String emoji, String title, String sub, bool on, VoidCallback? onTap, {bool soon = false}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF191A20),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: on ? Ec.indigo : Ec.border,
-            width: on ? 1.5 : 1,
-          ),
-          boxShadow: on
-              ? [BoxShadow(color: Ec.indigo.withValues(alpha: 0.18), blurRadius: 0, spreadRadius: 3)]
-              : null,
-        ),
-        child: Row(
-          children: [
-            Text(emoji, style: const TextStyle(fontSize: 20)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(title,
-                          style: const TextStyle(color: Ec.text, fontSize: 13.5, fontWeight: FontWeight.w600)),
-                      if (soon) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: Ec.chip,
-                            borderRadius: BorderRadius.circular(5),
-                          ),
-                          child: const Text('Soon',
-                              style: TextStyle(color: Ec.textMute, fontSize: 9, fontWeight: FontWeight.w600)),
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(sub, style: const TextStyle(color: Color(0xFF9BA0AC), fontSize: 11.5)),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-            Container(
-              width: 22,
-              height: 22,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: on ? Ec.indigo : Colors.transparent,
-                border: Border.all(color: on ? Ec.indigo : Ec.textFaint, width: 1.5),
-              ),
-              child: on ? const Icon(Icons.check, size: 14, color: Colors.white) : null,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }

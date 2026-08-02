@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../cloud/backend.dart';
 import '../local/folders_store.dart';
 import '../theme.dart';
+import '../sheets/enhance_options.dart';
 import '../sheets/new_project_wizard.dart';
 import 'auth_screen.dart';
 import 'batch_screen.dart';
@@ -68,8 +69,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     String? clipPath,
     String? clipName,
     String? projectId,
-    bool enhanceCutSilence = false,
-    bool enhanceCaptions = false,
+    EnhanceOptions enhance = const EnhanceOptions(cutSilence: false),
   }) {
     Navigator.of(context)
         .push(MaterialPageRoute(
@@ -77,8 +77,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 initialClipPath: clipPath,
                 initialClipName: clipName,
                 projectId: projectId,
-                enhanceCutSilence: enhanceCutSilence,
-                enhanceCaptions: enhanceCaptions)))
+                enhanceCutSilence: enhance.cutSilence,
+                enhanceCaptions: enhance.autoCaptions,
+                enhanceAutoZoom: enhance.autoZoom)))
         .then((_) => _load());
   }
 
@@ -87,7 +88,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => NewProjectWizard(onCreate: (path, name, cutSilence, autoCaptions) async {
+      builder: (_) => NewProjectWizard(onCreate: (path, name, opts) async {
         Navigator.of(context).pop();
         String? id;
         try {
@@ -95,13 +96,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           id = meta.id;
         } catch (_) {}
         if (mounted) {
-          _openEditor(
-            clipPath: path,
-            clipName: name,
-            projectId: id,
-            enhanceCutSilence: cutSilence,
-            enhanceCaptions: autoCaptions,
-          );
+          _openEditor(clipPath: path, clipName: name, projectId: id, enhance: opts);
         }
       }),
     );

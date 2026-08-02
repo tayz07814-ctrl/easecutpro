@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../cloud/backend.dart';
+import '../sheets/enhance_options.dart';
 import '../theme.dart';
 import 'editor_screen.dart';
 
@@ -14,11 +15,13 @@ class _BatchItem {
   _BatchItem({required this.path, required this.name, this.status = _Status.queued});
 }
 
-/// Batch cleaning — pick several videos and run "cut silences" across all of
-/// them. Each item is driven through the editor's enhance pipeline: we create a
-/// Supabase project for it, then open the editor with `enhanceCutSilence: true`
-/// so the existing silence-cut runs. Items are processed one at a time; when you
-/// finish (export / back out of) an item, the next opens automatically.
+/// Batch cleaning — pick several videos and run the same enhancements across all
+/// of them. Adding videos asks which enhancements to run (cut silences / captions
+/// / auto zoom), exactly like the New Project wizard does. Each item is driven
+/// through the editor's enhance pipeline: we create a Supabase project for it,
+/// then open the editor with those flags so the existing passes run. Items are
+/// processed one at a time; when you finish (export / back out of) an item, the
+/// next opens automatically.
 ///
 /// Deferred: a fully-headless batch (running the cut pipeline with no editor UI)
 /// isn't wired up — the enhance/cut logic currently lives inside EditorScreen, so
@@ -35,15 +38,33 @@ class BatchScreen extends StatefulWidget {
 class _BatchScreenState extends State<BatchScreen> {
   final List<_BatchItem> _items = [];
   bool _running = false;
+  // What every queued clip gets. Asked for on each add (like the projects wizard)
+  // and re-editable from the summary row.
+  EnhanceOptions _opts = const EnhanceOptions();
 
   Future<void> _pick() async {
     final res = await FilePicker.pickFiles(type: FileType.video, allowMultiple: true);
-    if (res == null) return;
+    if (res == null || res.files.isEmpty) return;
     setState(() {
       for (final f in res.files) {
         _items.add(_BatchItem(path: f.path, name: f.name));
       }
     });
+    if (!mounted) return;
+    // Ask what to run on them — same question the New Project wizard asks.
+    await _editOptions(confirmLabel: 'Add to queue');
+  }
+
+  /// Open the shared enhance-options sheet. Backing out keeps the current choice.
+  Future<void> _editOptions({String confirmLabel = 'Save'}) async {
+    final next = await showEnhanceOptions(
+      context,
+      initial: _opts,
+      title: 'Enhance every clip',
+      subtitle: 'Runs automatically on each video in the queue.',
+      confirmLabel: confirmLabel,
+    );
+    if (next != null && mounted) setState(() => _opts = next);
   }
 
   void _remove(int i) {
@@ -74,7 +95,9 @@ class _BatchScreenState extends State<BatchScreen> {
           initialClipPath: item.path,
           initialClipName: item.name,
           projectId: projectId,
-          enhanceCutSilence: true,
+          enhanceCutSilence: _opts.cutSilence,
+          enhanceCaptions: _opts.autoCaptions,
+          enhanceAutoZoom: _opts.autoZoom,
         ),
       ));
       if (!mounted) return;
@@ -99,7 +122,7 @@ class _BatchScreenState extends State<BatchScreen> {
               const Text('Batch cleaning',
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600, color: Ec.text)),
               const SizedBox(height: 4),
-              const Text('Cut silences across many clips. Each opens in the editor and cleans automatically.',
+              const Text('Enhance many clips in one go. Each opens in the editor and runs automatically.',
                   style: TextStyle(color: Color(0xFF9BA0AC), fontSize: 13)),
               const SizedBox(height: 16),
               GestureDetector(
@@ -119,6 +142,10 @@ class _BatchScreenState extends State<BatchScreen> {
                   ),
                 ),
               ),
+              if (_items.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                _optionsRow(),
+              ],
               const SizedBox(height: 14),
               if (_items.isEmpty)
                 const Padding(
@@ -147,7 +174,7 @@ class _BatchScreenState extends State<BatchScreen> {
                       : null,
                 ),
                 child: Text(
-                  _running ? 'Cleaning…' : 'Clean all (cut silences) · $pending',
+                  _running ? 'Cleaning…' : 'Clean all · $pending',
                   style: TextStyle(
                       color: canRun ? Colors.white : const Color(0xFF6B6F79),
                       fontSize: 14.5,
@@ -157,6 +184,41 @@ class _BatchScreenState extends State<BatchScreen> {
             ),
           ),
       ],
+    );
+  }
+
+  /// What every queued clip will get, and a tap to change it.
+  Widget _optionsRow() {
+    return GestureDetector(
+      onTap: _running ? null : _editOptions,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(
+          color: Ec.indigo.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Ec.indigo.withValues(alpha: 0.28)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.auto_fix_high, size: 15, color: Ec.indigoText),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Runs on every clip',
+                      style: TextStyle(color: Ec.textMute, fontSize: 10.5, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 1),
+                  Text(_opts.summary,
+                      style: const TextStyle(color: Ec.text, fontSize: 12.5, fontWeight: FontWeight.w500)),
+                ],
+              ),
+            ),
+            if (!_running)
+              const Text('Change', style: TextStyle(color: Ec.indigoText, fontSize: 12, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
     );
   }
 

@@ -194,6 +194,28 @@ class ImageOverlay {
   ImageOverlay copy() =>
       ImageOverlay(bytes: bytes, x: x, y: y, scale: scale, startMs: startMs, endMs: endMs, lane: lane);
 
+  /// The pixels ride along base64 — an overlay is picked from the device gallery,
+  /// so there is no stable path to point at on reload.
+  Map<String, dynamic> toJson() => {
+        'img': base64Encode(bytes),
+        'x': x,
+        'y': y,
+        'scale': scale,
+        'start': startMs,
+        'end': endMs,
+        'lane': lane,
+      };
+
+  factory ImageOverlay.fromJson(Map j) => ImageOverlay(
+        bytes: base64Decode((j['img'] as String?) ?? ''),
+        x: (j['x'] as num?)?.toDouble() ?? 0.5,
+        y: (j['y'] as num?)?.toDouble() ?? 0.5,
+        scale: (j['scale'] as num?)?.toDouble() ?? 0.45,
+        startMs: (j['start'] as num?)?.toInt() ?? 0,
+        endMs: (j['end'] as num?)?.toInt() ?? 0,
+        lane: (j['lane'] as num?)?.toInt() ?? 0,
+      );
+
   /// Bake to a full-frame transparent PNG at the OUTPUT resolution (base64, no prefix).
   Future<String> bakePngBase64(int width, int height) async {
     final codec = await ui.instantiateImageCodec(bytes);

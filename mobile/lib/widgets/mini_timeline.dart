@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../editor/audio_track.dart';
 import '../editor/text_overlay.dart';
 import '../editor/timeline_model.dart';
-import '../native/exporter.dart' show ThumbFrame;
+import '../native/exporter.dart' show MediaPeaks, ThumbFrame;
 import '../theme.dart';
 
 /// CapCut / EaseCut-style timeline: a FIXED red playhead pinned at the centre,
@@ -14,9 +14,10 @@ class MiniTimeline extends StatefulWidget {
   final String clipName;
   final int positionMs;
   final int totalMs;
-  final List<ThumbFrame> thumbs;
-  final List<double> waveform; // whole-source amplitude peaks (0..1)
-  final int sourceDurationMs;
+  /// Filmstrip frames + amplitude peaks for EVERY source on the timeline, keyed by
+  /// the media's bare path — so appended clips and imported audio draw their own
+  /// art, not the base clip's (or nothing at all).
+  final Map<String, MediaPeaks> media;
   final List<AudioTrack> audios; // extra audio tracks (music / voiceover)
   final int selectedAudio; // -1 = none
   final List<TextOverlay> texts; // text + caption overlays
@@ -70,9 +71,7 @@ class MiniTimeline extends StatefulWidget {
     required this.clipName,
     required this.positionMs,
     required this.totalMs,
-    this.thumbs = const [],
-    this.waveform = const [],
-    this.sourceDurationMs = 0,
+    this.media = const {},
     this.audios = const [],
     this.selectedAudio = -1,
     this.texts = const [],
@@ -204,31 +203,37 @@ class _MiniTimelineState extends State<MiniTimeline> {
 
   int get _total => widget.totalMs > 0 ? widget.totalMs : 1;
 
+  /// This source's cached art ('file://…' and bare paths share one entry).
+  MediaPeaks? _art(String path) =>
+      widget.media[path.startsWith('file://') ? path.substring(7) : path];
+
   /// Frames whose source-time falls within a clip's [in,out] (nearest if none).
   List<ThumbFrame> _clipThumbs(EcClip c) {
-    if (c.sourcePath != widget.model.sourcePath) return const [];
-    final inR = widget.thumbs.where((t) => t.ms >= c.inMs && t.ms < c.outMs).toList();
+    final thumbs = _art(c.sourcePath)?.thumbs ?? const <ThumbFrame>[];
+    if (thumbs.isEmpty) return const [];
+    final inR = thumbs.where((t) => t.ms >= c.inMs && t.ms < c.outMs).toList();
     if (inR.isNotEmpty) return inR;
-    if (widget.thumbs.isEmpty) return const [];
     final mid = (c.inMs + c.outMs) ~/ 2;
-    ThumbFrame nearest = widget.thumbs.first;
-    for (final t in widget.thumbs) {
+    ThumbFrame nearest = thumbs.first;
+    for (final t in thumbs) {
       if ((t.ms - mid).abs() < (nearest.ms - mid).abs()) nearest = t;
     }
     return [nearest];
   }
 
-  List<double> _clipPeaks(EcClip c) {
-    if (c.sourcePath != widget.model.sourcePath) return const [];
-    final wf = widget.waveform;
-    final dur = widget.sourceDurationMs;
-    if (wf.isEmpty || dur <= 0) return const [];
-    final n = wf.length;
-    int a = (c.inMs / dur * n).floor().clamp(0, n);
-    int b = (c.outMs / dur * n).ceil().clamp(0, n);
+  /// The slice of a source's peaks covering [inMs,outMs] — works for any source
+  /// (base clip, appended video or an audio track), not just the base.
+  List<double> _peaksFor(String path, int inMs, int outMs) {
+    final art = _art(path);
+    if (art == null || art.peaks.isEmpty || art.durMs <= 0) return const [];
+    final n = art.peaks.length;
+    int a = (inMs / art.durMs * n).floor().clamp(0, n);
+    int b = (outMs / art.durMs * n).ceil().clamp(0, n);
     if (b <= a) b = (a + 1).clamp(0, n);
-    return wf.sublist(a, b);
+    return art.peaks.sublist(a, b);
   }
+
+  List<double> _clipPeaks(EcClip c) => _peaksFor(c.sourcePath, c.inMs, c.outMs);
 
   /// A row of fixed-width frame tiles filling [clipW] (a real filmstrip, not a
   /// few stretched frames). Each tile shows the source frame nearest its time.
@@ -501,10 +506,9 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 clipBehavior: Clip.none,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    alignment: Alignment.centerLeft,
+                    clipBehavior: Clip.hardEdge,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1F3326),
+                      color: const Color(0xFF12291A),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
                         color: (sel || grabbed) ? Ec.green : Ec.green.withValues(alpha: 0.35),
@@ -514,21 +518,36 @@ class _MiniTimelineState extends State<MiniTimeline> {
                           ? [BoxShadow(color: Ec.green.withValues(alpha: 0.5), blurRadius: 10, spreadRadius: 1)]
                           : null,
                     ),
-                    child: Row(
+                    child: Stack(
+                      fit: StackFit.expand,
                       children: [
-                        const Icon(Icons.music_note, size: 12, color: Ec.green),
-                        const SizedBox(width: 5),
-                        Expanded(
-                          child: Text(t.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: Color(0xFFBFE8C4),
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w500)),
+                        // The track's OWN waveform, sliced to its trimmed window —
+                        // same painter as the video clips, in the audio-lane green.
+                        CustomPaint(
+                          painter: _WavePainter(_peaksFor(t.uri, t.inMs, t.outMs),
+                              barColor: const Color(0xFF57C77A)),
                         ),
-                        if (t.volume < 0.999)
-                          const Icon(Icons.volume_down, size: 11, color: Color(0xFF8FCB9A)),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.music_note, size: 12, color: Ec.green),
+                              const SizedBox(width: 5),
+                              Expanded(
+                                child: Text(t.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        color: Color(0xFFD6F5DC),
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w500,
+                                        shadows: [Shadow(color: Colors.black87, blurRadius: 3)])),
+                              ),
+                              if (t.volume < 0.999)
+                                const Icon(Icons.volume_down, size: 11, color: Color(0xFF8FCB9A)),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),

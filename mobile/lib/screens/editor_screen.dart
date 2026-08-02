@@ -43,10 +43,12 @@ class EditorScreen extends StatefulWidget {
   final String? initialClipPath;
   final String? initialClipName;
   final String? projectId; // when set, edits autosave to this Supabase project
-  // "Enhance on import" (set from the dashboard): after the initial clip loads,
-  // auto-apply the silence/bad-take cuts and/or auto-generate captions.
+  // "Enhance on import" (set from the dashboard / batch queue): after the initial
+  // clip loads, auto-apply the silence/bad-take cuts, auto-generate captions
+  // and/or punch in on the moments Auto Zoom picks.
   final bool enhanceCutSilence;
   final bool enhanceCaptions;
+  final bool enhanceAutoZoom;
   const EditorScreen({
     super.key,
     this.initialClipPath,
@@ -54,6 +56,7 @@ class EditorScreen extends StatefulWidget {
     this.projectId,
     this.enhanceCutSilence = false,
     this.enhanceCaptions = false,
+    this.enhanceAutoZoom = false,
   });
 
   @override
@@ -93,8 +96,12 @@ class _EditorScreenState extends State<EditorScreen> {
   List<Word>? _transcript; // cached STT (reused by Cut Lord + Captions)
   final List<AudioTrack> _audios = []; // imported music/voiceover (mixed on export)
   int _selectedAudio = -1; // audio block selected on the timeline
-  List<ThumbFrame> _thumbs = []; // filmstrip frames for the timeline
-  List<double> _waveform = []; // whole-source amplitude peaks (0..1)
+  // Per-source timeline art (filmstrip + waveform + duration), keyed by the media's
+  // absolute path. EVERY video source on the timeline and EVERY imported audio
+  // track gets its own entry, so appended clips and music/voiceover tracks draw
+  // their own frames and waveform instead of falling back to a flat block.
+  final Map<String, MediaPeaks> _media = {};
+  final Set<String> _mediaPending = {}; // in-flight loads, so we probe each source once
   Map<String, dynamic> _projectDoc = {}; // full project jsonb (autosave target)
   Timer? _saveTimer;
 
@@ -164,6 +171,8 @@ class _EditorScreenState extends State<EditorScreen> {
         'clips': _model.clips.map((c) => c.toJson()).toList(),
         'texts': _texts.map((t) => t.toJson()).toList(),
         'audio': _audios.map((a) => a.toJson()).toList(),
+        // Stickers / PiP / Auto B-roll — base64 pixels, so they survive a reload.
+        'images': _images.map((o) => o.toJson()).toList(),
       };
 
   /// Audio tracks as native-player maps (previewed alongside the video, placed at
@@ -222,23 +231,71 @@ class _EditorScreenState extends State<EditorScreen> {
     for (final a in (m['audio'] as List?) ?? []) {
       _audios.add(AudioTrack.fromJson(a as Map));
     }
+    _images.clear();
+    _selectedImage = null;
+    for (final o in (m['images'] as List?) ?? []) {
+      try {
+        _images.add(ImageOverlay.fromJson(o as Map));
+      } catch (_) {} // a corrupt/oversized overlay must not sink the whole project
+    }
     _textureId ??= await _player.create();
     _stateSub ??= _player.states.listen(_onState);
     _sizeSub ??= _player.sizes.listen((_) {
       if (mounted) setState(() => _aspect = _player.aspectRatio);
     });
     await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
-    _exporter.thumbnails('file://$src', 40).then((t) {
-      if (mounted) setState(() => _thumbs = t);
-    });
-    _exporter.waveform('file://$src', buckets: 600).then((w) {
-      if (mounted) setState(() => _waveform = w);
-    });
+    // Art for the base AND every appended clip / audio track in the restored doc.
+    _ensureMedia(src, knownDurMs: _sourceDurationMs);
+    _ensureAllMedia();
     if (mounted) setState(() {});
   }
 
   bool get _hasBase => _model.hasBase && _textureId != null;
   int get _totalMs => _model.totalMs > 0 ? _model.totalMs : _sourceDurationMs;
+
+  /// Cache key for a media source — always the bare path, so 'file://…' and plain
+  /// paths (clips store one, audio tracks the other) land on the same entry.
+  static String _mediaKey(String p) => p.startsWith('file://') ? p.substring(7) : p;
+
+  /// Load this source's filmstrip + waveform ONCE, so the timeline can draw it.
+  /// Cheap to call on every import/restore: sources already loaded or in flight are
+  /// skipped, and each piece lands independently so a failed decode never blocks
+  /// the rest. [video] false skips the filmstrip (audio tracks have no frames).
+  Future<void> _ensureMedia(String path, {bool video = true, int knownDurMs = 0}) async {
+    if (path.isEmpty) return;
+    final key = _mediaKey(path);
+    if (_media.containsKey(key) || _mediaPending.contains(key)) return;
+    _mediaPending.add(key);
+    final uri = 'file://$key';
+    var dur = knownDurMs;
+    if (dur <= 0) dur = await _exporter.duration(uri);
+    if (!mounted) return;
+    // Seed the entry first: the peaks are sliced against this duration, and it also
+    // claims the key so a second caller can't start the same probe.
+    setState(() => _media[key] = MediaPeaks(durMs: dur));
+    _mediaPending.remove(key);
+    _exporter.waveform(uri, buckets: 600).then((w) {
+      if (!mounted || w.isEmpty) return;
+      setState(() => _media[key] = (_media[key] ?? const MediaPeaks()).copyWith(peaks: w));
+    });
+    if (video) {
+      _exporter.thumbnails(uri, 40).then((t) {
+        if (!mounted || t.isEmpty) return;
+        setState(() => _media[key] = (_media[key] ?? const MediaPeaks()).copyWith(thumbs: t));
+      });
+    }
+  }
+
+  /// Make sure every source currently on the timeline (base clips + audio tracks)
+  /// has its art loaded — used after a restore, an append or an audio import.
+  void _ensureAllMedia() {
+    for (final c in _model.clips) {
+      _ensureMedia(c.sourcePath);
+    }
+    for (final a in _audios) {
+      _ensureMedia(a.uri, video: false, knownDurMs: a.durMs);
+    }
+  }
 
   Future<void> _import() async {
     final res = await FilePicker.pickFiles(type: FileType.video, allowMultiple: true);
@@ -266,6 +323,7 @@ class _EditorScreenState extends State<EditorScreen> {
     }
     _pushHistory();
     _model.appendClip(path, durMs);
+    _ensureMedia(path, knownDurMs: durMs); // its own filmstrip + waveform
     await _reload(seekTo: _positionMs);
     _scheduleSave();
   }
@@ -279,8 +337,8 @@ class _EditorScreenState extends State<EditorScreen> {
         _playing = false;
         _transcript = null;
         _texts.clear();
-        _thumbs = [];
-        _waveform = [];
+        _media.clear();
+        _mediaPending.clear();
         _proxyActive = false;
         _proxyPath = null;
       });
@@ -293,13 +351,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _model.setBase(path, 0); // duration filled in when the player reports it
       await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
       if (mounted) setState(() {});
-      // Filmstrip + waveform (async, non-blocking).
-      _exporter.thumbnails('file://$path', 40).then((t) {
-        if (mounted) setState(() => _thumbs = t);
-      });
-      _exporter.waveform('file://$path', buckets: 600).then((w) {
-        if (mounted) setState(() => _waveform = w);
-      });
+      _ensureMedia(path); // filmstrip + waveform (async, non-blocking)
       _scheduleSave();
     } catch (e) {
       _toast('Import failed: $e');
@@ -448,11 +500,12 @@ class _EditorScreenState extends State<EditorScreen> {
     await _player.seek(ms);
   }
 
-  // ---- undo / redo (snapshots of clips + text overlays) ----
+  // ---- undo / redo (snapshots of clips + text/image overlays + audio) ----
   _EditSnap _snap() => _EditSnap(
         _model.clips.map((c) => c.copy()).toList(),
         _texts.map((t) => t.copy()).toList(),
         _audios.map((a) => a.copy()).toList(),
+        _images.map((o) => o.copy()).toList(),
       );
 
   /// Call BEFORE a structural edit so it can be undone.
@@ -470,7 +523,11 @@ class _EditorScreenState extends State<EditorScreen> {
     _audios
       ..clear()
       ..addAll(s.audios.map((a) => a.copy()));
+    _images
+      ..clear()
+      ..addAll(s.images.map((o) => o.copy()));
     _selectedText = null;
+    _selectedImage = null;
     _selectedAudio = -1;
   }
 
@@ -571,24 +628,24 @@ class _EditorScreenState extends State<EditorScreen> {
   List<List<int>> _imageLaneSpans() =>
       [for (final o in _images) [o.startMs, o.endMs, o.lane]];
 
-  /// Clamp a proposed start [ns] for an item of length [len] so it can't overlap a
-  /// neighbour on the same lane — it stops flush against the nearest neighbour edge.
-  /// Neighbours are classified by the item's CURRENT (pre-move, non-overlapping)
-  /// [curStart]/[curEnd] so even a fast drag is clamped to the correct edge.
-  int _clampNoOverlap(
-      List<List<int>> sameLaneSpans, int ns, int curStart, int curEnd, int len, int total) {
-    int lo = 0;
-    int hi = (total - len) < 0 ? 0 : (total - len);
-    for (final s in sameLaneSpans) {
-      final ss = s[0], se = s[1];
-      if (se <= curStart) {
-        if (se > lo) lo = se; // neighbour on the left
-      } else if (ss >= curEnd) {
-        if (ss - len < hi) hi = ss - len; // neighbour on the right
+  /// Hold-drag an overlay ANYWHERE on the time axis. The new start is bounded only
+  /// by the timeline itself; when it lands on top of a neighbour the block HOPS to
+  /// the lowest lane with room instead of stopping flush against it — so a block
+  /// can be dragged clean past its neighbours. [laneSpans] are `[start, end, lane]`
+  /// for the same track EXCLUDING the block being moved.
+  ({int start, int lane}) _freeMove(
+      List<List<int>> laneSpans, int proposedStart, int len, int curLane, int total) {
+    final maxStart = (total - len) < 0 ? 0 : (total - len);
+    final start = proposedStart.clamp(0, maxStart);
+    final end = start + len;
+    // Stay put when the current lane is still clear — a drag shouldn't reshuffle
+    // lanes for no reason.
+    for (final s in laneSpans) {
+      if (s[2] == curLane && start < s[1] && end > s[0]) {
+        return (start: start, lane: _freeLane(laneSpans, start, end));
       }
     }
-    if (hi < lo) hi = lo;
-    return ns.clamp(lo, hi);
+    return (start: start, lane: curLane);
   }
 
   /// Overlay tool: pick an image and drop it on the video as a PiP / sticker
@@ -680,14 +737,17 @@ class _EditorScreenState extends State<EditorScreen> {
   /// source position within clip [i] (falls back to null → the sheet shows a
   /// placeholder box, still fully usable).
   Uint8List? _cropFrame(int i) {
-    if (_thumbs.isEmpty || i < 0 || i >= _model.clips.length) return null;
+    if (i < 0 || i >= _model.clips.length) return null;
     final c = _model.clips[i];
+    // That clip's OWN filmstrip — an appended source has its own frames.
+    final thumbs = _media[_mediaKey(c.sourcePath)]?.thumbs ?? const <ThumbFrame>[];
+    if (thumbs.isEmpty) return null;
     final sp = c.speed <= 0 ? 1.0 : c.speed;
     final within = (_positionMs - _model.clipStartMs(i)).clamp(0, c.timelineLenMs);
     final srcMs = c.inMs + (within * sp).round();
     ThumbFrame? best;
     int bestD = 1 << 30;
-    for (final t in _thumbs) {
+    for (final t in thumbs) {
       final d = (t.ms - srcMs).abs();
       if (d < bestD) {
         bestD = d;
@@ -737,6 +797,7 @@ class _EditorScreenState extends State<EditorScreen> {
         ));
         _model.setVolume(i, 0);
       });
+      _ensureMedia(path, video: false, knownDurMs: _sourceDurationMs); // its waveform
       if (mounted) Navigator.of(context).pop();
       await _reload(seekTo: _model.clipStartMs(i));
       _toast('Audio detached to its own track');
@@ -1056,11 +1117,14 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   /// "Enhance on import": after the initial clip loads, optionally auto-apply the
-  /// silence/bad-take cuts and/or auto-generate captions — no review sheet, mirroring
-  /// the web "Enhance & open editor" flow. Runs cuts first (so captions land on the
-  /// cut timeline), reusing the cached transcript so it never transcribes twice.
+  /// silence/bad-take cuts, punch in with Auto Zoom and/or auto-generate captions —
+  /// no review sheet, mirroring the web "Enhance & open editor" flow. Runs cuts
+  /// first (so the zoom + captions land on the cut timeline), reusing the cached
+  /// transcript so it never transcribes twice.
   Future<void> _autoEnhanceOnImport() async {
-    if (!mounted || !(widget.enhanceCutSilence || widget.enhanceCaptions)) return;
+    if (!mounted || !(widget.enhanceCutSilence || widget.enhanceCaptions || widget.enhanceAutoZoom)) {
+      return;
+    }
     final src = _model.sourcePath;
     if (src == null || !_model.hasBase) return;
     // The judge + keep-range maths need the real source duration; the player may
@@ -1076,6 +1140,12 @@ class _EditorScreenState extends State<EditorScreen> {
     if (_sourceDurationMs <= 0) return; // can't safely enhance without a duration
     if (widget.enhanceCutSilence) {
       await _autoApplySilenceCuts();
+      if (!mounted) return;
+    }
+    // Zoom before captions: Auto Zoom splits the base at sentence groups, and the
+    // caption placement maps SOURCE→edited times, which splitting never changes.
+    if (widget.enhanceAutoZoom) {
+      await _autoZoom();
       if (!mounted) return;
     }
     if (widget.enhanceCaptions && mounted) {
@@ -1269,6 +1339,7 @@ class _EditorScreenState extends State<EditorScreen> {
               timelineStartMs: 0,
             ));
           });
+          _ensureMedia(path, video: false, knownDurMs: dur); // waveform for its block
           _scheduleSave();
           if (_hasBase) _reload(seekTo: _positionMs); // preview the new track
         },
@@ -1724,9 +1795,7 @@ class _EditorScreenState extends State<EditorScreen> {
         clipName: _clipName ?? '',
         positionMs: _positionMs,
         totalMs: _totalMs,
-        thumbs: _thumbs,
-        waveform: _waveform,
-        sourceDurationMs: _sourceDurationMs,
+        media: _media,
         audios: _audios,
         selectedAudio: _selectedAudio,
         texts: _texts,
@@ -1823,17 +1892,16 @@ class _EditorScreenState extends State<EditorScreen> {
         },
         onOverlayMove: (t, dMs) {
           setState(() {
-            final total = _totalMs;
             final len = t.endMs - t.startMs;
-            // Same-lane, same-track neighbours (excluding this block).
+            // Same-track neighbours (excluding this block), with their lanes.
             final spans = [
               for (final o in _texts)
-                if (o.isCaption == t.isCaption && o.lane == t.lane && !identical(o, t))
-                  [o.startMs, o.endMs]
+                if (o.isCaption == t.isCaption && !identical(o, t)) [o.startMs, o.endMs, o.lane]
             ];
-            final ns = _clampNoOverlap(spans, t.startMs + dMs, t.startMs, t.endMs, len, total);
-            t.startMs = ns;
-            t.endMs = ns + len;
+            final p = _freeMove(spans, t.startMs + dMs, len, t.lane, _totalMs);
+            t.startMs = p.start;
+            t.endMs = p.start + len;
+            t.lane = p.lane;
           });
         },
         onOverlayTrim: (t, {startDeltaMs, endDeltaMs}) {
@@ -1858,15 +1926,15 @@ class _EditorScreenState extends State<EditorScreen> {
         onImageMove: (o, dMs) {
           setState(() {
             _selectedImage = o;
-            final total = _totalMs;
             final len = o.endMs - o.startMs;
             final spans = [
               for (final x in _images)
-                if (x.lane == o.lane && !identical(x, o)) [x.startMs, x.endMs]
+                if (!identical(x, o)) [x.startMs, x.endMs, x.lane]
             ];
-            final ns = _clampNoOverlap(spans, o.startMs + dMs, o.startMs, o.endMs, len, total);
-            o.startMs = ns;
-            o.endMs = ns + len;
+            final p = _freeMove(spans, o.startMs + dMs, len, o.lane, _totalMs);
+            o.startMs = p.start;
+            o.endMs = p.start + len;
+            o.lane = p.lane;
           });
         },
         onImageTrim: (o, {startDeltaMs, endDeltaMs}) {
@@ -1899,10 +1967,12 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 }
 
-/// An immutable snapshot of the editable state (clips + text overlays) for undo/redo.
+/// An immutable snapshot of the editable state (clips + text/image overlays +
+/// audio tracks) for undo/redo.
 class _EditSnap {
   final List<EcClip> clips;
   final List<TextOverlay> texts;
   final List<AudioTrack> audios;
-  _EditSnap(this.clips, this.texts, this.audios);
+  final List<ImageOverlay> images;
+  _EditSnap(this.clips, this.texts, this.audios, this.images);
 }

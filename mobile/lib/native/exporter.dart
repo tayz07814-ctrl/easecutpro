@@ -10,6 +10,23 @@ class ThumbFrame {
   ThumbFrame(this.ms, this.jpeg);
 }
 
+/// Everything the timeline needs to DRAW one media source: its filmstrip frames,
+/// its amplitude peaks, and the duration those were sampled over (so a clip's
+/// [in,out] window can be sliced out of them). Cached per source — every appended
+/// video and every imported audio track gets its own, not just the base clip.
+class MediaPeaks {
+  final List<double> peaks; // normalized 0..1, spanning the whole source
+  final int durMs; // the source's real duration, 0 while unknown
+  final List<ThumbFrame> thumbs; // empty for audio-only sources
+  const MediaPeaks({this.peaks = const [], this.durMs = 0, this.thumbs = const []});
+
+  MediaPeaks copyWith({List<double>? peaks, int? durMs, List<ThumbFrame>? thumbs}) => MediaPeaks(
+        peaks: peaks ?? this.peaks,
+        durMs: durMs ?? this.durMs,
+        thumbs: thumbs ?? this.thumbs,
+      );
+}
+
 /// A timed full-frame overlay (caption / text / image) baked to a base64 PNG in Dart.
 class ExportOverlay {
   final String base64; // PNG, no data: prefix, baked at the OUTPUT resolution
