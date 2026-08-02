@@ -1447,6 +1447,22 @@ class _EditorScreenState extends State<EditorScreen> {
         ),
       );
 
+  /// The nearest common name for the source's aspect ratio (falls back to the
+  /// rounded ratio, e.g. "1.85"), shown in the top-bar badge.
+  String get _aspectLabel {
+    const named = {'9:16': 9 / 16, '3:4': 3 / 4, '4:5': 4 / 5, '1:1': 1.0, '4:3': 4 / 3, '16:9': 16 / 9};
+    var best = '';
+    var bestD = 0.06; // within ~6% counts as that ratio
+    named.forEach((name, r) {
+      final d = (_aspect - r).abs() / r;
+      if (d < bestD) {
+        bestD = d;
+        best = name;
+      }
+    });
+    return best.isNotEmpty ? best : _aspect.toStringAsFixed(2);
+  }
+
   Widget _topBar() {
     return Container(
       height: 52,
@@ -1481,16 +1497,22 @@ class _EditorScreenState extends State<EditorScreen> {
               GradientButton(label: 'Export', onTap: _openExport),
             ],
           ),
-          Container(
-            width: 16,
-            height: 25,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.white, width: 1.6),
-              borderRadius: BorderRadius.circular(5),
+          // The source's REAL aspect (this used to read "9:16" for every video,
+          // landscape included). Tapping opens Export, where the output aspect lives.
+          GestureDetector(
+            onTap: _hasBase ? _openExport : null,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              width: _aspect >= 1 ? 25 : 16,
+              height: _aspect >= 1 ? 16 : 25,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 1.6),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(_aspectLabel,
+                  style: const TextStyle(fontSize: 6.5, fontWeight: FontWeight.w700, color: Colors.white)),
             ),
-            child: const Text('9:16',
-                style: TextStyle(fontSize: 6.5, fontWeight: FontWeight.w700, color: Colors.white)),
           ),
         ],
       ),
