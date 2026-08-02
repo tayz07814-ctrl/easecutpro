@@ -11,22 +11,6 @@
 
 import type { Word } from './types'
 
-/** DORMANT SWITCH for this whole engine.
- *
- *  The transcript-gap Smart Silence cutter is retired: FSMN (FunASR) VAD is the
- *  only live silence engine, driven by the "Silence settings" modal. This module
- *  and its UI components are kept intact but unreferenced — no Find cuts stage,
- *  no "Find Silences" button, no settings modal mounted, and `runSmartSilence`
- *  no-ops in the store.
- *
- *  Flip this to `false` and restore the call sites to bring the engine back:
- *    - store.ts        runSmartSilence()  (drop the guard)
- *    - SpeechCleanerPanel.tsx             (re-add the two buttons)
- *    - Editor.tsx / MobileEditor.tsx      (re-mount SmartSilenceSettingsModal)
- *    - useRetake.ts                       (re-add findSilences/openSmartSilenceSettings)
- *    - main.tsx        SMART_SILENCE_DORMANT (the ?silence=1 preview route) */
-export const SMART_SILENCE_DORMANT = true
-
 // --------------------------------------------------------------------------- //
 // Filler words                                                                //
 // --------------------------------------------------------------------------- //

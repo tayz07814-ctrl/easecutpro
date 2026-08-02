@@ -21,7 +21,6 @@ import AdminDashboard from './newui/screens/AdminDashboard'
 import Editor from './newui/screens/Editor'
 import MobileEditor from './newui/screens/MobileEditor'
 import { SmartSilenceCleaner } from './smartSilence/ui/SmartSilenceCleaner'
-import { SMART_SILENCE_DORMANT } from './smartSilence/config'
 import { isNewUi } from './newui/flag'
 import { useIsMobile } from './useMobile'
 import './styles.css'
@@ -173,9 +172,10 @@ const IS_ADMIN_ROUTE =
     new URLSearchParams(window.location.search).has('admin'))
 
 // Smart Silence Cleaner (isolated preview): `?silence=1` USED to render the
-// transcript-gap silence page. DORMANT along with the rest of that engine — FSMN
-// VAD is the only live silence cutter — so this route is never mounted. The flag
-// is the engine's single canonical switch (smartSilence/config).
+// transcript-gap silence page. DORMANT — the Retake/Speech-cleaner silence path
+// now uses the FSMN engine, so this experimental route is disabled (code kept,
+// import retained, just never mounted). Flip DORMANT off to bring it back.
+const SMART_SILENCE_DORMANT = true
 const IS_SILENCE_ROUTE =
   !SMART_SILENCE_DORMANT &&
   typeof window !== 'undefined' &&

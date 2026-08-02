@@ -245,16 +245,18 @@ const cloudApi: Window['api'] & {
     }
   },
 
-  // Silence comes from the FSMN (FunASR) engine — the 0.07 engine ported to 0.01
-  // and the only live silence cutter. Its settings live in the store
-  // (retakeFinalBossSettings, the "Silence settings" modal). The transcript-gap
-  // Smart Silence engine is dormant and is not consulted here. The old Silero VAD
-  // args are ignored (ProCut / Ultracut / Premium below still pass and use them).
+  // Find Cuts drives the 3-stage pipeline: Smart Silence (transcript gaps) ->
+  // retake judge -> FSMN silence. Both silence stages read their own persisted
+  // settings, so each modal tunes exactly one stage: "Smart Silence settings" ->
+  // smartSilenceSettings (stage 1), "Silence settings" -> retakeFinalBossSettings
+  // (stage 3). The old Silero VAD args are ignored here (ProCut / Ultracut /
+  // Premium below still pass and use them).
   retakeAwareCut: (path) =>
     retakeAwareCutCloud(
       needLocal(path),
       (pct, msg) => emit('transcribe', pct, msg),
-      useStore.getState().retakeFinalBossSettings
+      useStore.getState().retakeFinalBossSettings,
+      useStore.getState().smartSilenceSettings
     ),
 
   // "Find Silences" — the same FSMN engine and the same "Silence settings"
