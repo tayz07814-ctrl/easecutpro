@@ -9,6 +9,12 @@ name: Desktop installers (cloud shell)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [easecut0.01]
+    paths:
+      - '.github/workflows/desktop-installers.yml'
+      - 'electron-builder.ci.json'
+      - 'desktop-cloud/**'
 
 permissions:
   contents: write
