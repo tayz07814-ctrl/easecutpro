@@ -1,0 +1,41 @@
+{
+  "$comment": "CI-only config for the cloud desktop SHELL (desktop-cloud/main.cjs → loads easecutpro.com). Builds an UNSIGNED macOS DMG + Windows NSIS installer on GitHub runners, with NO custom icon (icons/ is a local-only dev asset, absent in CI) so the build never fails on a missing icon. Nothing but desktop-cloud/ + package.json is packaged — no renderer bundle, no node_modules, no ffmpeg/models.",
+  "appId": "com.easecutpro.app",
+  "productName": "EaseCutPro",
+  "directories": {
+    "output": "release-cloud",
+    "buildResources": "desktop-cloud"
+  },
+  "extraMetadata": {
+    "main": "desktop-cloud/main.cjs"
+  },
+  "npmRebuild": false,
+  "buildDependenciesFromSource": false,
+  "files": [
+    "desktop-cloud/**/*",
+    "package.json",
+    "!node_modules/**/*",
+    "!src/**/*",
+    "!out/**/*",
+    "!resources/**/*",
+    "!mobile/**/*",
+    "!release/**/*",
+    "!release-cloud/**/*"
+  ],
+  "mac": {
+    "category": "public.app-category.video",
+    "target": ["dmg"],
+    "identity": null
+  },
+  "dmg": {
+    "title": "EaseCutPro ${version}"
+  },
+  "win": {
+    "target": ["nsis"]
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}

@@ -1,0 +1,81 @@
+name: Desktop installers (cloud shell)
+
+# Builds the EaseCutPro DESKTOP CLOUD SHELL — a thin native window (desktop-cloud/
+# main.cjs) that loads the hosted app at easecutpro.com. Produces an UNSIGNED macOS
+# DMG (on a macOS runner) and a Windows NSIS .exe installer (on a Windows runner),
+# then publishes both to one prerelease. No custom icon (icons/ is a local-only dev
+# asset), unsigned — installers will show the usual "unidentified developer" prompt.
+# Manual only: run it from the Actions tab (or via the API).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mac-dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install deps (no native postinstalls needed for the shell)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build unsigned DMG
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx --no-install electron-builder -c electron-builder.ci.json --mac dmg
+      - name: List output
+        run: ls -la release-cloud
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easecutpro-desktop-dmg
+          path: release-cloud/*.dmg
+          if-no-files-found: error
+      - name: Publish DMG to prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-cloud-0.01
+          name: EaseCutPro — Desktop (cloud shell)
+          prerelease: true
+          body: |
+            **EaseCutPro desktop — cloud shell.** A native window that loads the live
+            app at easecutpro.com (all compute is server-side; import/export use the
+            web app's own file dialogs). No local ffmpeg/models are bundled.
+
+            - **macOS:** download the `.dmg`, open it, drag EaseCutPro to Applications.
+              Unsigned → first launch: right-click the app → **Open** (or
+              System Settings → Privacy & Security → Open Anyway).
+            - **Windows:** download the `.exe`, run it. Unsigned → SmartScreen: click
+              **More info → Run anyway**.
+          files: release-cloud/*.dmg
+
+  win-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install deps (no native postinstalls needed for the shell)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build NSIS installer
+        run: npx --no-install electron-builder -c electron-builder.ci.json --win nsis
+      - name: List output
+        run: dir release-cloud
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easecutpro-desktop-exe
+          path: release-cloud/*.exe
+          if-no-files-found: error
+      - name: Publish EXE to prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-cloud-0.01
+          name: EaseCutPro — Desktop (cloud shell)
+          prerelease: true
+          files: release-cloud/*.exe
