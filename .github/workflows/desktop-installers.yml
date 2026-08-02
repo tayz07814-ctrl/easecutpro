@@ -33,7 +33,7 @@ jobs:
       - name: Build unsigned DMG
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx --no-install electron-builder -c electron-builder.ci.json --mac dmg
+        run: npx --no-install electron-builder -c electron-builder.ci.json --mac dmg --publish never
       - name: List output
         run: ls -la release-cloud
       - uses: actions/upload-artifact@v4
@@ -70,7 +70,7 @@ jobs:
       - name: Install deps (no native postinstalls needed for the shell)
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build NSIS installer
-        run: npx --no-install electron-builder -c electron-builder.ci.json --win nsis
+        run: npx --no-install electron-builder -c electron-builder.ci.json --win nsis --publish never
       - name: List output
         run: dir release-cloud
       - uses: actions/upload-artifact@v4

@@ -1,5 +1,4 @@
 {
-  "$comment": "CI-only config for the cloud desktop SHELL (desktop-cloud/main.cjs → loads easecutpro.com). Builds an UNSIGNED macOS DMG + Windows NSIS installer on GitHub runners, with NO custom icon (icons/ is a local-only dev asset, absent in CI) so the build never fails on a missing icon. Nothing but desktop-cloud/ + package.json is packaged — no renderer bundle, no node_modules, no ffmpeg/models.",
   "appId": "com.easecutpro.app",
   "productName": "EaseCutPro",
   "directories": {
