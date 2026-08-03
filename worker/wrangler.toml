@@ -6,7 +6,7 @@ compatibility_date = "2026-01-15"
 # presigned write URLs ever reach a browser.
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "easecutpro"          # set to your real bucket name
+bucket_name = "easecut-cowork"   # the live Cowork bucket
 
 # One Durable Object per user holds that user's daily counter. A DO is used
 # rather than KV because KV is eventually consistent — two uploads racing on KV
