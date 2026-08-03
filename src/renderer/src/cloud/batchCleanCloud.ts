@@ -16,18 +16,14 @@
 
 import type { Project, Word } from '@shared/types'
 import { createEmptyProject } from '@shared/project'
-import type { VadSilenceSettings } from '@shared/vadsilence'
 import { retakeAwareCutCloud } from './retakeEngine'
-import { useStore } from '../store'
 
 /** Clean one imported clip (a `webmedia:` id) into a Project + preview thumb,
- *  using the cloud retake+silence engine. Silence obeys the passed VAD profile
- *  (the store's vadSilenceSettings — the same presets the Silence Settings modal
- *  drives). */
+ *  using the cloud retake engine. Word cuts only — every silence-cutting
+ *  engine was removed from this branch. */
 export async function cleanVideoCloud(
   mediaId: string,
   name: string,
-  vadSettings: VadSilenceSettings,
   onStep: (step: string) => void
 ): Promise<{ project: Project; thumb?: string }> {
   onStep('Reading video…')
@@ -44,25 +40,19 @@ export async function cleanVideoCloud(
     hasVideo: info.hasVideo
   }
 
-  // Cloud Cut Lord: transcribe → LLM retake cut → VAD silence, all in the browser
-  // + the /edge judge. Progress messages ("Cleaning silence…", etc.) surface as
-  // the job step. This REPLACES the desktop fillers-list + /api/silence path.
-  // Batch Cut Lord reuses the Retake engine, so its silence follows the same
-  // FSMN path (the old Silero vadSettings is no longer read for this call).
-  void vadSettings
-  const res = await retakeAwareCutCloud(mediaId, (_pct, msg) => msg && onStep(msg), useStore.getState().retakeFinalBossSettings)
+  // Cloud Cut Lord: transcribe → LLM retake cut, all in the browser + the /edge
+  // judge. Word cuts only — no silence pass exists on this branch.
+  const res = await retakeAwareCutCloud(mediaId, (_pct, msg) => msg && onStep(msg))
 
-  // Bake the retake word-cuts into the transcript (deleted words) and the VAD
-  // silences into project.silences — the two fields computeKeepRanges reads.
+  // Bake the retake word-cuts into the transcript (deleted words) — the field
+  // computeKeepRanges reads.
   const del = new Set(res.deleteWordIds)
   const mark = (w: Word): Word => (del.has(w.id) ? { ...w, deleted: true } : w)
   project.transcript = {
     words: res.transcript.words.map(mark),
     segments: res.transcript.segments.map((seg) => ({ ...seg, words: seg.words.map(mark) }))
   }
-  // vadSilenceRegions already returns word-clamped { action:'remove', protect:true }
-  // regions, so they drop straight into the project.
-  project.silences = res.silenceRegions
+  project.silences = []
 
   // Best-effort preview thumbnail (local for webmedia ids).
   let thumb: string | undefined

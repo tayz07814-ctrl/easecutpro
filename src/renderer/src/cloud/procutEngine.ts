@@ -23,32 +23,26 @@ import {
   type CutCutProResult
 } from '@shared/cutcutpro'
 import { toAppTranscript } from '@shared/retakeaware/engine'
-import { DEFAULT_VAD_SILENCE_SETTINGS, vadSilenceToOpts, type VadSilenceSettings } from '@shared/vadsilence'
 import { invokeEdge } from './supabase'
 import { extractSttAudio, type SttAudio } from './audio'
 import { transcribeVerbatimCloud } from './stt'
-import { detectSilenceFloat32, clampSilenceRegions } from './vad'
 
 /**
- * Cloud twin of src/main/cutcutpro.ts cutCutPro. `runVad=false` (the VAD testing
- * switch is off) makes it do WORD cuts only — silence is handled at Execute —
- * exactly like the desktop path.
+ * Cloud twin of src/main/cutcutpro.ts cutCutPro — WORD cuts only. Every
+ * silence-cutting engine (including the Silero VAD pass this once ran) was
+ * removed from this branch.
  */
 export async function cutCutProCloud(
   mediaId: string,
   existing: Transcript | null,
-  runVad: boolean,
   script: string | undefined,
-  vadSettings: VadSilenceSettings = DEFAULT_VAD_SILENCE_SETTINGS,
   onProgress?: (pct: number, msg?: string) => void
 ): Promise<CutCutProResult> {
   const op = (pct: number, msg?: string): void => onProgress?.(pct, msg)
   const warnings: string[] = []
 
-  // ---- Phase 1: transcription (AssemblyAI) + pause mapping -------------------
-  // One decode feeds BOTH the transcript and the VAD (shared clock). Reused when
-  // the project already has a transcript, and skipped entirely when we need
-  // neither a transcript nor the VAD.
+  // ---- Phase 1: transcription (AssemblyAI) -----------------------------------
+  // Reused when the project already has a transcript.
   let transcript = existing
   let audio: SttAudio | null = null
   if (!transcript) {
@@ -58,24 +52,9 @@ export async function cutCutProCloud(
     warnings.push(...w)
     transcript = toAppTranscript(vt)
   }
+  void audio
 
-  let vad: { start: number; end: number }[] = []
-  if (runVad) {
-    try {
-      op(52, 'Cut Lord is mapping pauses (1/4)…')
-      if (!audio) audio = await extractSttAudio(mediaId)
-      // edgeTrim is applied post-carve (word-clamped) in clampSilenceRegions, not
-      // in the raw pass — see the note in vad.ts (it otherwise merges sub-minGap
-      // breath dips into multi-second cuts before word protection can drop them).
-      const rawOpts = { ...vadSilenceToOpts(vadSettings), edgeTrimMs: 0 }
-      const regions = await detectSilenceFloat32(audio.float32, audio.sampleRate, rawOpts, audio.durationS)
-      vad = regions.map((r) => ({ start: r.start, end: r.end }))
-    } catch (e) {
-      warnings.push(`VAD unavailable (${(e as Error).message}) — pauses from word gaps only.`)
-    }
-  }
-
-  const map: TimestampMap = buildTimestampMap(transcript.words, vad)
+  const map: TimestampMap = buildTimestampMap(transcript.words, [])
   let payload = buildAiPayload(map)
   if (script?.trim()) {
     payload += `\n\nCREATOR'S INTENDED SCRIPT (ground truth — this is what the final video should say):\n"""\n${script.trim()}\n"""\nUse it to decide the cuts: among repeated takes KEEP THE LAST take that matches the script; speech that deviates from the script (flubbed lines, asides, production talk, abandoned tangents) is cut material. Do NOT cut a line merely because the wording differs slightly — natural delivery beats verbatim — but content with no counterpart in the script does not belong in the final video.`
@@ -103,26 +82,18 @@ export async function cutCutProCloud(
     warnings.push(`ProCut finalizer failed (${(e as Error).message}).`)
   }
 
-  // ---- Phase 4: word cuts via the EDL + silence via the unified VAD pass ------
+  // ---- Phase 4: word cuts via the EDL (no silence — engines removed) ----------
   op(88, 'Cut Lord is cutting (4/4)…')
   const refined = refineEdl(finalEdl, map)
   const edits = edlToEdits(refined.edl, map, transcript.words) // pause_cuts empty → silenceAdds []
-  // SILENCE = the configurable VAD pass (replaces Opus pause cuts). Clamp the
-  // same VAD regions off the words the EDL keeps, so no kept word onset clips.
-  let silenceAdds = edits.silenceAdds
-  if (runVad && vad.length) {
-    const cut = new Set(edits.deleteWordIds)
-    const keptWords = transcript.words.filter((w) => !w.deleted && !cut.has(w.id))
-    silenceAdds = clampSilenceRegions(vad, keptWords, 'procutvad', audio?.durationS ?? 0, 0.03, 0.03, false, 0.05, vadSettings.edgeTrimS)
-  }
 
   op(100, 'Cut Lord finished')
   return {
     transcript: existing ? null : transcript,
     deleteWordIds: edits.deleteWordIds,
-    silenceAdds,
+    silenceAdds: [],
     debugPath: '',
     warnings,
-    summary: `ProCut flagged ${edits.deleteWordIds.length} word(s) + ${silenceAdds.length} pause(s).`
+    summary: `ProCut flagged ${edits.deleteWordIds.length} word(s).`
   }
 }

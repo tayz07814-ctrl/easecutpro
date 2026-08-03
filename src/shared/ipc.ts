@@ -8,8 +8,6 @@ export const IPC = {
   transcribe: 'media:transcribe',
   suggestCuts: 'media:suggestCuts',
   fastCut: 'media:fastCut',
-  cutJudge: 'media:cutJudge',
-  saveSmartCutDebug: 'media:saveSmartCutDebug',
   cutCutPro: 'media:cutCutPro',
   retakeAwareCut: 'media:retakeAwareCut', // Retake-Aware Cut Beta (cut_mode: retake_aware_beta)
   generateOverlays: 'media:generateOverlays',
@@ -18,7 +16,6 @@ export const IPC = {
   matchMoment: 'media:matchMoment',
   openaiStatus: 'tools:openaiStatus',
   whisperModels: 'tools:whisperModels',
-  detectSilence: 'media:detectSilence',
   waveform: 'media:waveform',
   thumbnails: 'media:thumbnails',
   export: 'project:export',

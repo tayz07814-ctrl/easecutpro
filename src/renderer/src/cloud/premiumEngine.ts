@@ -23,7 +23,6 @@ import type { SilenceRegion } from '@shared/types'
 import type { PremiumCutReq, ProcutJudgeRes, SttSignUploadRes } from '@shared/cloud'
 import { toAppTranscript, type ProgressFn } from '@shared/retakeaware/engine'
 import { spansToWordIds } from '@shared/retakeaware/analyze'
-import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
 import { getSupabase, invokeEdge } from './supabase'
 import { extractSttAudio } from './audio'
 
@@ -85,18 +84,9 @@ function parseGemini(raw: string): GeminiOut | null {
   }
 }
 
-// Smooth-seam margins for Premium's PAUSE cuts: a trimmed pause never slices flush
-// against speech. Anchored to the kept words below so the margin is exact even
-// though Gemini's audio timestamps aren't millisecond-precise.
-const LEAD_IN_S = 0.1 // keep 100 ms before the following kept sentence/word begins
-const TAIL_S = 0.3 // keep 300 ms after the preceding kept sentence/word ends
-
 export async function premiumCutCloud(
   mediaId: string,
-  onProgress?: (pct: number, msg?: string) => void,
-  // Premium Cut has NO VAD pass - Gemini proposes silence itself. Kept for the
-  // shared window.api.retakeAwareCut signature; unused here.
-  _vadSettings: VadSilenceSettings = DEFAULT_VAD_SILENCE_SETTINGS
+  onProgress?: (pct: number, msg?: string) => void
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
@@ -142,8 +132,9 @@ export async function premiumCutCloud(
   const transcript = toAppTranscript(verbatim)
 
   // A cut that covers words -> WORD cuts (highlighted in the transcript for review).
-  // A cut with no words under it (pure silence/pause) -> a protected silence region
-  // (removed verbatim on Execute). This replaces the ONNX VAD entirely.
+  // Cuts with no words under them (pure pauses) are DROPPED — every
+  // silence-cutting path was removed from this branch, so Premium is word-cuts
+  // only here.
   const rawCuts = (out?.cuts ?? []).filter((c) => c && Number(c.end) > Number(c.start))
   const hasWord = (c: GeminiCut): boolean =>
     verbatim.words.some((w) => {
@@ -157,33 +148,10 @@ export async function premiumCutCloud(
     source: 'retake_aware_beta',
     reason: (c.reason || 'gemini cut').slice(0, 200)
   })
-  const cutSpans: CutSpan[] = rawCuts.map(toSpan)
-  const deleteWordIds = spansToWordIds(rawCuts.filter(hasWord).map(toSpan), transcript)
-
-  // Pause cuts, with smooth-seam margins anchored to the neighbouring kept words:
-  // trim from (prev kept word end + TAIL_S) to (next kept word start - LEAD_IN_S),
-  // so 300 ms of tail survives after the preceding speech and 100 ms of lead-in
-  // survives before the following speech. Leading/trailing silence (no neighbour on
-  // one side) trims to the pause edge on that side. Cuts too short to keep both
-  // margins are dropped (a sub-~430 ms gap is a natural beat — leave it).
-  const words = verbatim.words
+  const wordCuts = rawCuts.filter(hasWord)
+  const cutSpans: CutSpan[] = wordCuts.map(toSpan)
+  const deleteWordIds = spansToWordIds(cutSpans, transcript)
   const silenceRegions: SilenceRegion[] = []
-  for (const c of rawCuts) {
-    if (hasWord(c)) continue
-    const cs = Number(c.start)
-    const ce = Number(c.end)
-    let prevEnd = -Infinity
-    let nextStart = Infinity
-    for (const w of words) {
-      if (w.end <= cs + 0.02 && w.end > prevEnd) prevEnd = w.end
-      if (w.start >= ce - 0.02 && w.start < nextStart) nextStart = w.start
-    }
-    const lo = Number.isFinite(prevEnd) ? prevEnd + TAIL_S : cs
-    const hi = Number.isFinite(nextStart) ? nextStart - LEAD_IN_S : ce
-    if (hi - lo >= 0.03) {
-      silenceRegions.push({ id: `pg${silenceRegions.length}`, start: lo, end: hi, action: 'remove', protect: true })
-    }
-  }
 
   if (!rawCuts.length && !warnings.length) warnings.push('Premium Cut found nothing to cut.')
 
@@ -200,6 +168,6 @@ export async function premiumCutCloud(
     fillerDecisions: [],
     debugPath: null,
     warnings,
-    summary: `Premium Cut (Gemini): ${deleteWordIds.length} word(s) flagged, ${silenceRegions.length} pause(s)`
+    summary: `Premium Cut (Gemini): ${deleteWordIds.length} word(s) flagged`
   }
 }

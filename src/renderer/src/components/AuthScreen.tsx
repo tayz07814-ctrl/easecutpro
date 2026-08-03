@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { authLogin, authSignup, authMe } from '../webapi'
-import { cloudLogin, cloudSignup } from '../cloud/auth'
+import { cloudLogin, cloudSignup, testAccountLogin } from '../cloud/auth'
 import { IS_CLOUD } from '../platform'
 import { safeErrMessage } from '../safeError'
 
@@ -21,6 +21,22 @@ export default function AuthScreen(): JSX.Element {
     if (IS_CLOUD) return
     authMe().then(({ signupGated }) => setGated(signupGated))
   }, [])
+
+  // TEST BRANCH: back into the shared no-login test account (re-arms the
+  // silent auto-login for future visits).
+  async function testerLogin(): Promise<void> {
+    setBusy(true)
+    setErr('')
+    try {
+      const user = await testAccountLogin()
+      setUser(user)
+      setView('home')
+    } catch (e) {
+      setErr(safeErrMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function submit(e: React.FormEvent): Promise<void> {
     e.preventDefault()
@@ -69,6 +85,15 @@ export default function AuthScreen(): JSX.Element {
             {mode === 'signup' ? 'Log in' : 'Create one'}
           </button>
         </div>
+
+        {IS_CLOUD && (
+          <div className="auth-switch">
+            Just testing?{' '}
+            <button type="button" className="link" onClick={() => void testerLogin()} disabled={busy}>
+              Continue as shared tester (no account)
+            </button>
+          </div>
+        )}
       </form>
     </div>
   )

@@ -8,10 +8,9 @@ import EditPanel from './EditPanel'
 import CropModal from './CropModal'
 import TranscriptDrawer from './TranscriptDrawer'
 import SpeechCleanerPanel from './SpeechCleanerPanel'
+import SilenceMasterySettingsModal from './SilenceMasterySettingsModal'
 import VariationsPanel from './VariationsPanel'
 import OverlayPanel from '../../components/OverlayPanel'
-import SilenceSettingsModal from './SilenceSettingsModal'
-import SmartSilenceSettingsModal from './SmartSilenceSettingsModal'
 import CutProgressOverlay from './CutProgressOverlay'
 import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
@@ -808,13 +807,12 @@ export default function Editor(): JSX.Element {
       <div className="ec-legacy ec-nu-tl timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative;overflow:hidden;border-top:1px solid ${HAIR}`)}>
         <TimelinePanel />
       </div>
-      <SilenceSettingsModal />
-      <SmartSilenceSettingsModal />
       {/* Legacy modals assume the app's global border-box — portal them out of
           the .ec-newui (content-box) subtree so they render correctly. */}
       {showExportModal && createPortal(<ExportModal />, document.body)}
       {showSettings && createPortal(<SettingsModal />, document.body)}
       {showCropModal && createPortal(<CropModal />, document.body)}
+      <SilenceMasterySettingsModal />
       {/* Centered blocking overlay: Finding cuts → Polishing (seam-cache build). */}
       {createPortal(<CutProgressOverlay />, document.body)}
     </div>

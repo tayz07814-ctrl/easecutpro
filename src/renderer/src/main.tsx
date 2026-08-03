@@ -12,7 +12,7 @@ import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
-import { cloudAuthMe } from './cloud/auth'
+import { cloudAuthMe, testAccountLogin, testAutoLoginEnabled } from './cloud/auth'
 import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
@@ -21,7 +21,6 @@ import MobileDashboard from './newui/screens/MobileDashboard'
 import AdminDashboard from './newui/screens/AdminDashboard'
 import Editor from './newui/screens/Editor'
 import MobileEditor from './newui/screens/MobileEditor'
-import { SmartSilenceCleaner } from './smartSilence/ui/SmartSilenceCleaner'
 import { isNewUi } from './newui/flag'
 import { useIsMobile } from './useMobile'
 import './styles.css'
@@ -33,7 +32,6 @@ import './design/shell.css'
 // P3: Retake Cleaner panel presentation (scoped; visual-only).
 import './design/panel.css'
 // P4: Silence Settings sheet (scoped; visual-only).
-import './design/silence.css'
 // P5: editor shell + top bar (scoped; visual-only).
 import './design/editor.css'
 // P6: media library (scoped; visual-only).
@@ -172,15 +170,15 @@ const IS_ADMIN_ROUTE =
   (window.location.pathname.replace(/\/+$/, '') === ADMIN_PATH ||
     new URLSearchParams(window.location.search).has('admin'))
 
-// Smart Silence Cleaner (isolated preview): `?silence=1` USED to render the
-// transcript-gap silence page. DORMANT — the Retake/Speech-cleaner silence path
-// now uses the FSMN engine, so this experimental route is disabled (code kept,
-// import retained, just never mounted). Flip DORMANT off to bring it back.
-const SMART_SILENCE_DORMANT = true
-const IS_SILENCE_ROUTE =
-  !SMART_SILENCE_DORMANT &&
-  typeof window !== 'undefined' &&
-  new URLSearchParams(window.location.search).has('silence')
+
+// TEST BRANCH ONLY (silence-mastery): this branch ships to its own public
+// preview URL purely for testing and never merges to main. No login by
+// DEFAULT — the cloud bootstrap below silently signs into a shared TEST
+// account (see cloud/auth.ts) so the full app works for anyone who opens the
+// URL. Signing in with a REAL account still works: `?login=1` (or Log out)
+// shows the normal auth screen, and an existing session of any account is
+// always reused instead of the test account.
+const TEST_BRANCH_NO_AUTH = true
 
 type RouteView = 'landing' | 'auth' | 'home' | 'terms' | 'privacy' | 'refund'
 
@@ -210,7 +208,6 @@ function Root(): JSX.Element {
   const view = useStore((s) => s.view)
   const isMobile = useIsMobile()
 
-  if (IS_SILENCE_ROUTE) return <SmartSilenceCleaner />
   if (IS_ADMIN_ROUTE) return <AdminDashboard />
 
   // The new UI (Dashboard/Editor) never mounts the legacy <App/>, which is the
@@ -257,7 +254,29 @@ function Root(): JSX.Element {
           })
           return
         }
-        const { user } = await cloudAuthMe()
+        let { user } = await cloudAuthMe()
+        // Test branch: reuse an existing session (any account), else silently
+        // sign into the shared test account — unless the user opted for a
+        // real sign-in (`?login=1` / Log out), in which case the normal auth
+        // screen shows. If the test login itself fails (e.g. the account was
+        // deleted), fall back to the offline local editor rather than
+        // dead-ending.
+        if (TEST_BRANCH_NO_AUTH && !user && testAutoLoginEnabled()) {
+          try {
+            user = await testAccountLogin()
+          } catch {
+            if (cancelled) return
+            useStore.getState().setServerAvailable(false)
+            useStore.setState({
+              user: null,
+              currentProjectId: null,
+              project: useStore.getState().freshProject(),
+              library: [],
+              view: 'editor'
+            })
+            return
+          }
+        }
         if (!cancelled) useStore.setState({ user, view: viewForPath(window.location.pathname, user) })
         return
       }

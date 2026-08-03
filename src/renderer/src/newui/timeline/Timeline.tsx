@@ -153,11 +153,28 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
       if (mod) {
         if (k === 'z') {
           e.preventDefault()
-          if (e.shiftKey) engine.redo()
-          else engine.undo()
+          if (e.shiftKey) {
+            if (engine.canRedo()) engine.redo()
+            else useStore.getState().redo()
+          } else {
+            // A cut apply (silence clean / retake Execute) spans BOTH undo
+            // stacks: project.silences + transcript flags live in the STORE,
+            // while the routed lane deletion ('Apply cuts') lives in the
+            // ENGINE. Undoing only the engine half restores the lane but
+            // leaves the cuts applied in the project — the next Apply routes
+            // them right back, so settings could never be A/B-tested. When
+            // the engine's top entry is that routed cut — or the engine has
+            // nothing — undo the PROJECT instead: its snapshot carries the
+            // pre-cut timeline document, and TimelinePanel re-hydrates the
+            // engine from it, so video, transcript and silences all revert
+            // together.
+            if (!engine.canUndo() || engine.historyLabels().undo === 'Apply cuts') useStore.getState().undo()
+            else engine.undo()
+          }
         } else if (k === 'y') {
           e.preventDefault()
-          engine.redo()
+          if (engine.canRedo()) engine.redo()
+          else useStore.getState().redo()
         } else if (k === 'c') {
           e.preventDefault()
           engine.copySelection()

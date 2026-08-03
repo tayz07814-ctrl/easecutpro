@@ -319,6 +319,12 @@ export function computeKeepRanges(
   // Only runs when Retake β protected silence exists (FastCut/ProCut unchanged).
   const ANTI_SLIVER_S = 0.5
   const tw = project.transcript?.words ?? []
+  // NO transcript words (a Silero-only clean of an untranscribed clip) gives
+  // this heuristic nothing to anchor on — every keep would read as "air" and
+  // the residue-drop ate the whole timeline (real bug: a 208s clip collapsed
+  // to 9s). The audio engine's own guards already shaped these regions; when
+  // there are no kept words to test against, keep every range verbatim.
+  if (!tw.some((w) => !w.deleted)) return protKeeps
   const holdsKeptWord = (a: number, b: number): boolean =>
     tw.some((w) => !w.deleted && (w.start + w.end) / 2 > a + 0.001 && (w.start + w.end) / 2 < b - 0.001)
   // A montage / base clip with NO transcript (b-roll, or a clip whose words were all

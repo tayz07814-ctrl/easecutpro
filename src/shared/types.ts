@@ -418,31 +418,6 @@ export interface AICutResult {
   cuts: AICut[]
 }
 
-export interface SilenceDetectOptions {
-  /** silence threshold in dB, e.g. -30 (Fast/dB mode). */
-  noiseDb: number
-  /** minimum silence duration in seconds to count. */
-  minDuration: number
-  /** 'vad' = Silero VAD (speech-aware, default when available); 'fast' = ffmpeg dB threshold. */
-  mode?: 'fast' | 'vad'
-  /** VAD speech-probability threshold 0..1 (higher = cut more). */
-  vadThreshold?: number
-  /** VAD: extend each speech segment by this many ms (avoids clipping word edges). */
-  speechPadMs?: number
-  /** VAD: silence kept BEFORE a word's onset (asymmetric lead-in). Falls back to speechPadMs. */
-  padBeforeMs?: number
-  /** VAD: silence kept AFTER a word's tail (asymmetric trailing guard). Falls back to speechPadMs. */
-  padAfterMs?: number
-  /** VAD: trim this many ms of EXTRA audio off both sides of every cut (tighter cuts). */
-  edgeTrimMs?: number
-  /** VAD: also remove breaths / quiet non-word fillers the VAD kept as speech
-   *  (a spot the VAD called speech but whose audio is actually quiet). */
-  removeBreaths?: boolean
-  /** energy threshold (dB) below which in-speech audio is treated as a breath/
-   *  quiet filler. Less negative = more aggressive. Default -32. */
-  breathDb?: number
-}
-
 // ---------------------------------------------------------------------------
 // AI-controlled overlay image placement
 // ---------------------------------------------------------------------------

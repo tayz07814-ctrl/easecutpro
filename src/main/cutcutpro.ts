@@ -29,7 +29,6 @@ import { randomUUID } from 'crypto'
 import { FFMPEG } from './binaries'
 import { transcribe } from './whisper'
 import { transcribeOpenAI } from './openai-transcribe'
-import { detectSilence } from './ffmpeg'
 import { claudeAvailable, getAnthropic } from './claude'
 import { openaiAvailable, getOpenAI } from './openai'
 import {
@@ -220,9 +219,6 @@ export async function cutCutPro(
   audioPath: string,
   existing: Transcript | null,
   modelName?: string,
-  /** run the Silero VAD pass for the pause map. false = the VAD testing switch is
-   *  off (silence is handled at Execute instead), so ProCut does word cuts only. */
-  runVad = true,
   /** the creator's INTENDED script: ground truth for what belongs in the final
    *  video. Both passes keep the delivery that matches it and cut deviations. */
   script?: string,
@@ -251,20 +247,8 @@ export async function cutCutPro(
     phases.push('whisper.cpp')
   }
 
-  // Silero VAD: corroborates pauses / catches non-speech noise floors. Skipped when
-  // the VAD testing switch is off (runVad=false) — silence is handled at Execute.
-  let vad: { start: number; end: number }[] = []
-  if (runVad) {
-    try {
-      onProgress?.(32, 'Cut Lord is mapping pauses (1/4)…')
-      vad = (await detectSilence(audioPath, { mode: 'vad', noiseDb: -35, minDuration: 0.25 })).map((r) => ({ start: r.start, end: r.end }))
-      phases.push(`vad(${vad.length} regions)`)
-    } catch (e) {
-      warnings.push(`VAD unavailable (${(e as Error).message.split('\n')[0]}) — pauses from word gaps only.`)
-    }
-  } else {
-    phases.push('vad(skipped: decoupled)')
-  }
+  // NO VAD pause map — every silence engine was removed from this branch.
+  const vad: { start: number; end: number }[] = []
 
   const map: TimestampMap = buildTimestampMap(transcript.words, vad)
   let payload = buildAiPayload(map)

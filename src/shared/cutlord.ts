@@ -1,18 +1,14 @@
 /**
  * Cut Lord — settings + pure helpers for the ClutterCleaner tab.
  *
- * FastCut / ProCut both run their word engines AND a VAD silence pass; nothing
- * is applied until the user presses "Execute cuts" (words + silence chips are
- * only HIGHLIGHTED in the transcript for review). The ⚙ dropdown picks the VAD
- * profile:
- *   smooth (default) : VAD 50% · trim 0.10s · pad 0.04s · min gap 0.15s
- *   aggressive       : VAD 70% · trim 0.25s · pad 0.02s · min gap 0.10s
- *                      + fast dB pass (-28 dB · min gap 0.1s · pad 0.01s)
- *   manual switch ON : the user's sliders replace the preset entirely.
+ * FastCut / ProCut run their word engines; nothing is applied until the user
+ * presses "Execute cuts" (flagged words are only HIGHLIGHTED for review).
+ * The silence-cutting engines that once read these settings were removed from
+ * this branch; the vad/db numbers remain only as persisted settings shape.
  *
  * PURE module — no IO — headless-testable.
  */
-import type { SilenceDetectOptions, SilenceRegion, Word } from './types'
+import type { SilenceRegion, Word } from './types'
 
 export type CutLordMode = 'smooth' | 'aggressive'
 
@@ -83,60 +79,9 @@ export function effectiveSettings(s: CutLordSettings): { vad: VadSettings; db: D
   return { vad: { ...p.vad }, db: { ...p.db }, useDb: s.mode === 'aggressive' && p.useDb }
 }
 
-/** SilenceDetectOptions for the VAD pass. */
-export function vadDetectOpts(s: CutLordSettings): SilenceDetectOptions {
-  const e = effectiveSettings(s)
-  return {
-    mode: 'vad',
-    noiseDb: -30, // unused in vad mode (fallback only)
-    minDuration: e.vad.minGap,
-    vadThreshold: e.vad.threshold,
-    speechPadMs: Math.round(e.vad.padding * 1000),
-    edgeTrimMs: Math.round(e.vad.trimCuts * 1000)
-  }
-}
-
-/** SilenceDetectOptions for the fast dB pass (aggressive / manual+useDb). */
-export function dbDetectOpts(s: CutLordSettings): SilenceDetectOptions {
-  const e = effectiveSettings(s)
-  return { mode: 'fast', noiseDb: e.db.noiseDb, minDuration: e.db.minGap }
-}
-
-/** Post-process dB-pass regions: apply the pass's own edge padding. */
-export function padDbRegions(regions: SilenceRegion[], s: CutLordSettings): SilenceRegion[] {
-  const pad = effectiveSettings(s).db.padding
-  return regions
-    .map((r) => ({ ...r, start: r.start + pad, end: r.end - pad }))
-    .filter((r) => r.end - r.start >= 0.05)
-}
-
 /** Word-cut splice trim (feeds computeKeepRanges' pad; "trim cuts" setting). */
 export function wordCutPad(s: CutLordSettings): number {
   return effectiveSettings(s).vad.trimCuts
-}
-
-/** Merge + dedupe staged silence regions (VAD ∪ dB ∪ engine), skipping any that
- *  overlap regions the user already owns. */
-export function mergeStagedSilences(
-  batches: SilenceRegion[][],
-  existing: SilenceRegion[]
-): SilenceRegion[] {
-  const all = batches
-    .flat()
-    .filter((r) => r.end - r.start >= 0.05)
-    .filter((r) => !existing.some((x) => x.action !== 'keep' && r.start < x.end && x.start < r.end))
-    .sort((a, b) => a.start - b.start)
-  const out: SilenceRegion[] = []
-  for (const r of all) {
-    const last = out[out.length - 1]
-    if (last && r.start <= last.end + 0.02) {
-      last.end = Math.max(last.end, r.end)
-      if (r.action === 'remove') last.action = 'remove'
-    } else {
-      out.push({ ...r })
-    }
-  }
-  return out
 }
 
 /** Inline transcript silence chips: the gap after each word (>= minShow s),

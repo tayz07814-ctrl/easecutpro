@@ -4,7 +4,7 @@
 // on-device WebCodecs path. Retake β + transcription run in-browser against
 // the Supabase edge functions; the other engines are desktop/self-host-only
 // and their UI is hidden by IS_CLOUD gates.
-import type { Project, ProgressEvent, SilenceRegion } from '@shared/types'
+import type { Project, ProgressEvent } from '@shared/types'
 import { generateOverlaysCloud, suggestOverlaysCloud } from './overlayMatch'
 import { invokeEdge } from './supabase'
 import {
@@ -19,13 +19,9 @@ import {
 } from '../webmedia'
 import { hasNativeMedia, pickNativeMedia, nativeFileUrl, type NativePickKind } from './nativeMedia'
 import { retakeAwareCutCloud, ultracutCutCloud, transcribeCloud } from './retakeEngine'
-import { fsmnSilenceOnly } from './retakeFinalBossVad'
-import { extractSttAudio } from './audio'
 import { premiumCutCloud } from './premiumEngine'
 import { cutCutProCloud } from './procutEngine'
-import { detectSilenceCloud } from './vad'
 import { cloudListProjects, cloudCreateProject, cloudGetProject, cloudSaveProject, cloudDeleteProject } from './projects'
-import { useStore } from '../store'
 import { initSettingsSync } from './settings'
 
 const progressListeners = new Set<(e: ProgressEvent) => void>()
@@ -150,8 +146,6 @@ function needLocal(path: string): string {
 const cloudApi: Window['api'] & {
   ultracutCut: Window['api']['retakeAwareCut']
   premiumCut: Window['api']['retakeAwareCut']
-  /** "Find Silences" — the FSMN silence pass on its own (no STT, no judge). */
-  fsmnSilence: (path: string, onProgress?: (pct: number, msg?: string) => void) => Promise<SilenceRegion[]>
   openAudioDialogMulti: () => Promise<{ path: string; name: string }[]>
 } = {
   // No PC binaries in the cloud — feature gating happens via IS_CLOUD in the
@@ -216,10 +210,8 @@ const cloudApi: Window['api'] & {
   fastCut: async () => desktopOnly('Fast Cut'),
   // ProCut in the cloud: AssemblyAI transcribes + Claude finalizes the cuts
   // (procut-judge edge fn). No GPT "listening" pass — that stays desktop-only.
-  cutCutPro: (path, transcript, _modelName, runVad, script, vadSilenceSettings) =>
-    cutCutProCloud(needLocal(path), transcript ?? null, runVad ?? true, script, vadSilenceSettings, (pct, msg) => emit('transcribe', pct, msg)),
-  cutJudge: async () => desktopOnly('Smart Smooth Cut'),
-  saveSmartCutDebug: async () => desktopOnly('Smart Smooth Cut'),
+  cutCutPro: (path, transcript, _modelName, script) =>
+    cutCutProCloud(needLocal(path), transcript ?? null, script, (pct, msg) => emit('transcribe', pct, msg)),
   // Cloud overlay placement: SEMANTIC matching via the overlay-match edge function
   // (Claude Opus), with deterministic keyword matching as the offline fallback.
   generateOverlays: async (transcript, assets, rules, opts) =>
@@ -245,61 +237,26 @@ const cloudApi: Window['api'] & {
     }
   },
 
-  // Find Cuts drives the 3-stage pipeline: Smart Silence (transcript gaps) ->
-  // retake judge -> FSMN silence. Both silence stages read their own persisted
-  // settings, so each modal tunes exactly one stage: "Smart Silence settings" ->
-  // smartSilenceSettings (stage 1), "Silence settings" -> retakeFinalBossSettings
-  // (stage 3). The old Silero VAD args are ignored here (ProCut / Ultracut /
-  // Premium below still pass and use them).
+  // Find Cuts — the retake judge over the full transcript. Word cuts only:
+  // every silence-cutting engine was removed from this branch.
   retakeAwareCut: (path) =>
-    retakeAwareCutCloud(
-      needLocal(path),
-      (pct, msg) => emit('transcribe', pct, msg),
-      useStore.getState().retakeFinalBossSettings,
-      useStore.getState().smartSilenceSettings
-    ),
-
-  // "Find Silences" — the same FSMN engine and the same "Silence settings"
-  // (retakeFinalBossSettings) Find cuts uses, minus transcription and the retake
-  // judge. Decodes the audio locally and runs the ONNX VAD in-browser, so there
-  // is no edge-function round trip and no STT cost.
-  fsmnSilence: async (path, onProgress) => {
-    const id = needLocal(path)
-    const op = (pct: number, msg?: string): void => {
-      onProgress?.(pct, msg)
-      emit('silence', pct, msg)
-    }
-    op(4, 'Getting your audio ready…')
-    const audio = await extractSttAudio(id, (p) => op(4 + Math.round(p * 0.36)))
-    op(45, 'Listening for pauses…')
-    const regions = await fsmnSilenceOnly(
-      audio.float32,
-      audio.sampleRate,
-      audio.durationS,
-      useStore.getState().retakeFinalBossSettings
-    )
-    op(100, `Found ${regions.length} silence${regions.length === 1 ? '' : 's'}`)
-    return regions
-  },
+    retakeAwareCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg)),
 
   // Ultracut (Beta) — a SEPARATE experimental engine (ultracut-judge, OpenRouter
   // GLM 5.2). Shares nothing with Retake Beta's Opus judge; exposed as its own
   // method so the Ultracut button routes independently. Cloud-only (easecut0.01).
-  ultracutCut: (path, _silenceSettings, vadSilenceSettings) =>
-    ultracutCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
+  ultracutCut: (path) =>
+    ultracutCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg)),
 
   // Premium Cut — a SEPARATE experimental engine (premium-cut, Gemini 3.5 Flash
-  // multimodal). Gemini LISTENS to the raw audio and returns the transcript + all
-  // cuts itself (no STT, no VAD). Its own method so the Premium button routes
+  // multimodal). Gemini LISTENS to the raw audio and returns the transcript + the
+  // word cuts itself (no STT). Its own method so the Premium button routes
   // independently. Cloud-only (easecut0.01).
-  premiumCut: (path, _silenceSettings, vadSilenceSettings) =>
-    premiumCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg), vadSilenceSettings),
+  premiumCut: (path) =>
+    premiumCutCloud(needLocal(path), (pct, msg) => emit('transcribe', pct, msg)),
 
   openaiStatus: async () => ({ available: false }),
   whisperModels: async () => [],
-
-  // Silero VAD (ONNX) in the browser.
-  detectSilence: (path, opts) => detectSilenceCloud(needLocal(path), opts),
 
   // Only the on-device WebCodecs export exists in the cloud; the UI hides the
   // server export button.

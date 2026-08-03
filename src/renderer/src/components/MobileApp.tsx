@@ -15,11 +15,10 @@ import MediaLibrary from './MediaLibrary'
 import TranscriptPanel from './TranscriptPanel'
 import TextPanel from './TextPanel'
 import OstPanel from './OstPanel'
-import SilencePanel from './SilencePanel'
 import BasicPanel from './BasicPanel'
 import SettingsModal from './SettingsModal'
 
-type Sheet = 'media' | 'music' | 'text' | 'silence' | 'transcript' | 'adjust' | 'export' | null
+type Sheet = 'media' | 'music' | 'text' | 'transcript' | 'adjust' | 'export' | null
 
 /** Phone layout — CapCut-style: preview, timeline, a scrollable action dock that
  *  swaps to a contextual toolbar when a clip/text is selected, and bottom sheets. */
@@ -253,11 +252,6 @@ export default function MobileApp(): JSX.Element {
       {sheet === 'text' && (
         <MobileSheet title="Text" onClose={() => setSheet(null)}>
           <TextPanel />
-        </MobileSheet>
-      )}
-      {sheet === 'silence' && (
-        <MobileSheet title="Silence" onClose={() => setSheet(null)}>
-          <SilencePanel />
         </MobileSheet>
       )}
       {sheet === 'adjust' && (

@@ -185,26 +185,16 @@ export default function RetakeCleanerPanel(): JSX.Element {
     </div>
   )
 
-  const smartRow = (
-    <div style={css('display:flex;align-items:center;gap:9px;margin-top:12px')}>
-      <Toggle on={r.smartSilence} onClick={() => r.setSmartSilence(!r.smartSilence)} />
-      <div style={css('font-size:12px;color:#c9c9da')}>Smart Silence Cutter</div>
-      <div style={css('flex:1')} />
-      <div style={css('font-size:11px;color:#6e6e85')}>{r.pauseCount} pauses</div>
-    </div>
-  )
 
   if (r.state === 'idle') {
     return shell(
       <>
         <div style={css('font-size:12.5px;line-height:1.5;color:#9a9aae;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
         {/* Single Retake Beta engine (retakeEngine.ts → ultracut-judge edge fn). */}
-        <button onClick={r.find} style={css('width:100%;margin-top:16px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;border-radius:12px;padding:14px 0;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.35)')}>Find Retakes &amp; Silence</button>
-        <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:10px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 0;cursor:pointer')}>Silence Settings</button>
-        <div style={css('display:flex;align-items:center;gap:9px;margin-top:14px')}>
-          <Toggle on={r.smartSilence} onClick={() => r.setSmartSilence(!r.smartSilence)} />
-          <div style={css('font-size:12px;color:#c9c9da')}>Smart Silence Cutter</div>
-        </div>
+        <button onClick={r.find} style={css('width:100%;margin-top:16px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;border-radius:12px;padding:14px 0;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.35)')}>Find Retakes</button>
+        {/* Silence Mastery — keep the words, cut everything else. Review-first. */}
+        <button onClick={r.findSilences} style={css('width:100%;margin-top:10px;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);color:#c4baff;font-family:inherit;font-size:13px;font-weight:600;border-radius:11px;padding:12px 0;cursor:pointer')}>Clean Silence</button>
+        <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 0;cursor:pointer')}>Silence settings</button>
         <button disabled style={css('width:100%;margin-top:14px;background:#141419;border:none;color:#55556a;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:not-allowed')}>Execute cuts</button>
         <div style={css('font-size:11px;color:#6e6e85;margin-top:12px;line-height:1.5')}>Beta — review proposed cuts before executing. Nothing is removed without you.</div>
       </>
@@ -236,12 +226,8 @@ export default function RetakeCleanerPanel(): JSX.Element {
           </span>
           <div style={css('flex:1')} />
           <button onClick={r.find} style={css('flex:none;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 16px;cursor:pointer;white-space:nowrap')}>Run again</button>
-          <button onClick={r.openSilenceSettings} title="Silence Settings" aria-label="Silence Settings" style={css('flex:none;width:36px;height:36px;background:none;border:1px solid rgba(255,255,255,.14);border-radius:9px;color:#c9c9da;display:grid;place-items:center;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none')}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
+          <button onClick={r.findSilences} title="Clean Silence" style={css('flex:none;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);color:#c4baff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 12px;cursor:pointer;white-space:nowrap')}>Silence</button>
+          <button onClick={r.openSilenceSettings} title="Silence settings" aria-label="Silence settings" style={css('flex:none;width:36px;height:36px;background:none;border:1px solid rgba(255,255,255,.14);border-radius:9px;color:#c9c9da;display:grid;place-items:center;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none')}>⚙</button>
         </div>
         {/* Auto Zoom — Gemma picks the key cut clips and punches in on them. */}
         <button
@@ -256,7 +242,6 @@ export default function RetakeCleanerPanel(): JSX.Element {
         >
           {r.autoZooming ? 'Adding zooms…' : '🔍 Auto Zoom the key moments'}
         </button>
-        {smartRow}
         <div style={css(`display:flex;align-items:center;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid ${HAIR};flex:none`)}>
           <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9a9aae')}>Review cuts</div>
           <div style={css('flex:1')} />
@@ -305,14 +290,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
       {/* compact action row: Execute (primary) + Silence Settings as a gear icon */}
       <div style={css('display:flex;gap:8px;margin-top:10px;flex:none')}>
         <button onClick={r.execute} disabled={!r.executable} style={css('flex:1;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12px;font-weight:600;border-radius:8px;padding:8px 0;cursor:pointer', !r.executable && 'opacity:.5;cursor:not-allowed;box-shadow:none')}>Execute {r.executable} cut{r.executable === 1 ? '' : 's'}</button>
-        <button onClick={r.openSilenceSettings} title="Silence Settings" aria-label="Silence Settings" style={css('flex:none;width:34px;height:34px;background:none;border:1px solid rgba(255,255,255,.12);border-radius:8px;color:#c9c9da;display:grid;place-items:center;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none')}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-        </button>
       </div>
-      {smartRow}
       <div style={css(`display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid ${HAIR};flex:none`)}>
         <div style={css('font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9a9aae')}>Review transcript</div>
         <div style={css('flex:1')} />
