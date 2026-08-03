@@ -42,6 +42,11 @@ export interface RetakeModel {
   // actions
   /** run Retake Beta — Claude Opus on our official Anthropic key. */
   find: () => void
+  /** Clean Silence — the Silence Mastery engine: keep the word timestamps,
+   *  stage everything else as review-first cuts (transcribes first if needed). */
+  findSilences: () => void
+  /** open the Silence settings modal (min silence / pads / trim edges). */
+  openSilenceSettings: () => void
   /** transcribe ONLY (the AssemblyAI step Retake β uses) — no judge/cuts. */
   transcribeOnly: () => void
   /** run Ultracut Beta — a SEPARATE OpenRouter test engine (GLM 5.2), for A/B. */
@@ -79,6 +84,8 @@ export function useRetake(): RetakeModel {
   // delta-judge was removed — its narrow whole-take prompt left intro/outro +
   // off-camera chatter behind and over-cut wide spans.)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
+  const runSilenceMastery = useStore((s) => s.runSilenceMastery)
+  const setShowSilenceMasterySettings = useStore((s) => s.setShowSilenceMasterySettings)
   const transcribeOnly = useStore((s) => s.transcribeOnly)
   // Ultracut Beta — a separate OpenRouter test engine, wired to its own button.
   const runUltracut = useStore((s) => s.runUltracut)
@@ -185,6 +192,8 @@ export function useRetake(): RetakeModel {
     stagedSilenceCuts: selStaged.map((r) => ({ id: r.id, startS: r.start, endS: r.end })),
     sourceDurationS: useStore.getState().project.media?.duration ?? 0,
     find: () => void runRetakeCutBeta(),
+    findSilences: () => void runSilenceMastery(),
+    openSilenceSettings: () => setShowSilenceMasterySettings(true),
     transcribeOnly: () => void transcribeOnly(),
     findUltracut: () => void runUltracut(),
     findPremium: () => void runPremiumCut(),

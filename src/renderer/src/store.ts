@@ -49,6 +49,15 @@ import {
   type CutLordSettings
 } from '@shared/cutlord'
 import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay'
+// Silence Mastery — the branch's ONE silence engine: keep the word timestamps,
+// cut everything else (leading / inter-word / trailing), tuned by min-silence,
+// pad left/right and trim-edges. Pure module; review-first staging here.
+import {
+  planSilenceMastery,
+  normalizeSilenceMastery,
+  DEFAULT_SILENCE_MASTERY_SETTINGS,
+  type SilenceMasterySettings
+} from '@shared/silenceMastery'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
@@ -742,9 +751,17 @@ interface AppState {
    *  layout state — no effect on media, projects, or any engine. */
   mediaCollapsed: boolean
   setMediaCollapsed: (v: boolean) => void
-  /** silence cuts staged for review (highlighted chips — NOT applied yet).
-   *  With every silence engine removed from this branch, nothing stages these
-   *  anymore; the machinery stays for the review/execute contract. */
+  // ---- Silence Mastery (this branch's one silence engine) ----
+  /** persisted engine settings: min silence, pad left/right, trim edges. */
+  silenceMasterySettings: SilenceMasterySettings
+  setSilenceMasterySettings: (patch: Partial<SilenceMasterySettings>) => void
+  /** "Silence settings" modal open? */
+  showSilenceMasterySettings: boolean
+  setShowSilenceMasterySettings: (v: boolean) => void
+  /** "Clean Silence": ensure a transcript, then stage every non-word region
+   *  (review-first — nothing is cut until Apply/Execute). */
+  runSilenceMastery: () => Promise<void>
+  /** silence cuts staged for review (highlighted chips — NOT applied yet). */
   stagedSilences: SilenceRegion[]
   /** staged silences currently enabled (chip highlighted). */
   stagedSilenceSel: Set<string>
@@ -2002,6 +2019,63 @@ export const useStore = create<AppState>((set, get) => ({
     }
     set({ mediaCollapsed: v })
   },
+  silenceMasterySettings: ((): SilenceMasterySettings => {
+    try {
+      const raw = localStorage.getItem('ec.silenceMastery')
+      if (raw) return normalizeSilenceMastery(JSON.parse(raw))
+    } catch {
+      /* ignore */
+    }
+    return { ...DEFAULT_SILENCE_MASTERY_SETTINGS }
+  })(),
+  setSilenceMasterySettings: (patch) => {
+    const next = normalizeSilenceMastery({ ...get().silenceMasterySettings, ...patch })
+    try {
+      localStorage.setItem('ec.silenceMastery', JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+    set({ silenceMasterySettings: next })
+  },
+  showSilenceMasterySettings: false,
+  setShowSilenceMasterySettings: (v) => set({ showSilenceMasterySettings: v }),
+
+  runSilenceMastery: async () => {
+    // 1. A transcript is the engine's only input. Reuse the project's (no
+    //    re-transcribe); otherwise run the same transcribe-only step the
+    //    Transcript tab uses (AssemblyAI via /edge — needs the backend).
+    if (!get().project.transcript?.words?.length) {
+      if (!get().requireServer('Clean Silence (needs a transcript)')) return
+      await get().transcribeOnly()
+      if (!get().project.transcript?.words?.length) return // transcribeOnly surfaced the error
+    }
+    // 2. Fold a doc-native base (clip dragged straight onto the timeline) so
+    //    media/baseSequence — and the duration below — see it. Same rationale
+    //    as runRetakeCutBeta.
+    const stored = get().project
+    const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+    const t = get().project.transcript!
+    const words = t.words.filter((w) => !w.deleted).map((w) => ({ start: w.start, end: w.end }))
+    // Media length bounds the trailing cut: the real duration when known, else
+    // the base timeline's length, else the last word (no trailing cut at all).
+    const durationS = p0.media?.duration || baseTimelineDuration(p0) || (words.length ? words[words.length - 1].end : 0)
+    const regions = planSilenceMastery(words, durationS, get().silenceMasterySettings)
+    // 3. Stage review-first: chips in the transcript + cards in the panel;
+    //    retakeSilenceStaged=true → Execute applies these exact spans verbatim.
+    set({
+      stagedSilences: regions,
+      stagedSilenceSel: new Set(regions.map((r) => r.id)),
+      retakeSilenceStaged: true,
+      job: {
+        active: false,
+        percent: 100,
+        message: regions.length
+          ? `Silence Mastery: ${regions.length} silent region${regions.length === 1 ? '' : 's'} found — review, then Apply`
+          : 'Silence Mastery: no silence over the threshold — nothing to cut'
+      }
+    })
+  },
+
   stagedSilences: [],
   stagedSilenceSel: new Set<string>(),
   retakeSilenceStaged: false,

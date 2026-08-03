@@ -68,12 +68,14 @@ function deriveCuts(r: ReturnType<typeof useRetake>, applied: boolean): Cut[] {
     }
   }
   flush()
-  // "Find Silences" runs WITHOUT transcribing, so on a project that has never
-  // been transcribed there are no words and no chips — the loop above produces
-  // nothing even though silences are staged. Fall back to the raw spans so the
-  // run is visible and reviewable.
-  if (!applied && !r.segments.length) {
+  // Chips only anchor to a word BEFORE the gap, so the leading silence (before
+  // the first word) and the trailing silence (after the last) never surface in
+  // the loop above — and a never-transcribed project has no chips at all.
+  // Surface every staged cut the loop missed as its own reviewable card.
+  if (!applied) {
+    const shown = new Set(cuts.filter((c) => c.id.startsWith('s:')).map((c) => c.id))
     for (const s of r.stagedSilenceCuts) {
+      if (shown.has('s:' + s.id)) continue
       cuts.push({
         id: 's:' + s.id,
         kind: 'Silence',
@@ -104,6 +106,10 @@ export default function SpeechCleanerPanel(): JSX.Element | null {
       <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 14px 18px')}>
         <div style={css('font-size:12px;color:#8b8ba0;line-height:1.5')}>Transcribe your video and find retakes, false starts, fillers and dead air — reviewable before anything is cut.</div>
         <button onClick={r.find} style={css('width:100%;margin-top:14px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;border-radius:10px;padding:12px;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.28)')}>Find cuts</button>
+        {/* Silence Mastery — keep the words, cut everything else. Review-first. */}
+        <button onClick={r.findSilences} style={css('width:100%;margin-top:10px;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);color:#c4baff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px;cursor:pointer')}>Clean Silence</button>
+        <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>Silence settings</button>
+        <div style={css('font-size:11px;color:#71718a;margin-top:12px;line-height:1.5')}>Clean Silence keeps your word timestamps and removes the quiet before, between and after them.</div>
       </div>
     )
   }
@@ -140,6 +146,12 @@ export default function SpeechCleanerPanel(): JSX.Element | null {
           )}
         </div>
         <div style={css('font-size:11.5px;color:#7a7a8c;margin-top:9px')}>{applied ? `${cuts.length} cut${cuts.length === 1 ? '' : 's'} applied · undo any below.` : `${cuts.length} cut${cuts.length === 1 ? '' : 's'} · nothing is removed until you apply.`}</div>
+        {!applied && (
+          <div style={css('display:flex;gap:8px;align-items:center;margin-top:11px')}>
+            <button onClick={r.findSilences} title="Re-run silence detection with the current settings" style={css('font-size:11.5px;color:#c4baff;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);padding:6px 11px;border-radius:8px;cursor:pointer;font-family:inherit;font-weight:600')}>Clean Silence</button>
+            <button onClick={r.openSilenceSettings} style={css('font-size:11.5px;color:#9a9aae;background:none;border:1px solid rgba(255,255,255,.1);padding:6px 11px;border-radius:8px;cursor:pointer;font-family:inherit')}>Silence settings</button>
+          </div>
+        )}
       </div>
 
       {/* cut cards */}
@@ -167,8 +179,14 @@ export default function SpeechCleanerPanel(): JSX.Element | null {
       {/* apply */}
       <div style={css(`flex:none;padding:12px 14px 14px;border-top:1px solid ${HAIR}`)}>
         {applied ? (
-          /* The real action after applying: find more cuts without leaving the tab. */
-          <button onClick={r.find} style={css('width:100%;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;padding:12px;border-radius:10px;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.28)')}>Find cuts</button>
+          /* After applying you can find more cuts or sweep silence again. */
+          <>
+            <button onClick={r.find} style={css('width:100%;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;padding:12px;border-radius:10px;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.28)')}>Find cuts</button>
+            <div style={css('display:flex;gap:8px;margin-top:8px')}>
+              <button onClick={r.findSilences} style={css('flex:1;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);color:#c4baff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:10px 0;cursor:pointer')}>Clean Silence</button>
+              <button onClick={r.openSilenceSettings} style={css('flex:1;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>Silence settings</button>
+            </div>
+          </>
         ) : (
           <button onClick={r.execute} disabled={!r.executable} style={css('width:100%;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:600;padding:12px;border-radius:10px;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.28)', !r.executable && 'opacity:.5;cursor:not-allowed;box-shadow:none')}>Apply {r.executable} cut{r.executable === 1 ? '' : 's'}</button>
         )}

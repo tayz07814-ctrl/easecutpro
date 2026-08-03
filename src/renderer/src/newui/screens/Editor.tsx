@@ -8,6 +8,7 @@ import EditPanel from './EditPanel'
 import CropModal from './CropModal'
 import TranscriptDrawer from './TranscriptDrawer'
 import SpeechCleanerPanel from './SpeechCleanerPanel'
+import SilenceMasterySettingsModal from './SilenceMasterySettingsModal'
 import VariationsPanel from './VariationsPanel'
 import OverlayPanel from '../../components/OverlayPanel'
 import CutProgressOverlay from './CutProgressOverlay'
@@ -811,6 +812,7 @@ export default function Editor(): JSX.Element {
       {showExportModal && createPortal(<ExportModal />, document.body)}
       {showSettings && createPortal(<SettingsModal />, document.body)}
       {showCropModal && createPortal(<CropModal />, document.body)}
+      <SilenceMasterySettingsModal />
       {/* Centered blocking overlay: Finding cuts → Polishing (seam-cache build). */}
       {createPortal(<CutProgressOverlay />, document.body)}
     </div>

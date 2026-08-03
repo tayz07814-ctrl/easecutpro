@@ -192,6 +192,9 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <div style={css('font-size:12.5px;line-height:1.5;color:#9a9aae;margin-top:6px')}>Find retakes, production chatter, false starts, and long pauses.</div>
         {/* Single Retake Beta engine (retakeEngine.ts → ultracut-judge edge fn). */}
         <button onClick={r.find} style={css('width:100%;margin-top:16px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;border-radius:12px;padding:14px 0;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.35)')}>Find Retakes</button>
+        {/* Silence Mastery — keep the words, cut everything else. Review-first. */}
+        <button onClick={r.findSilences} style={css('width:100%;margin-top:10px;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);color:#c4baff;font-family:inherit;font-size:13px;font-weight:600;border-radius:11px;padding:12px 0;cursor:pointer')}>Clean Silence</button>
+        <button onClick={r.openSilenceSettings} style={css('width:100%;margin-top:8px;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:10px;padding:10px 0;cursor:pointer')}>Silence settings</button>
         <button disabled style={css('width:100%;margin-top:14px;background:#141419;border:none;color:#55556a;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:10px;padding:10px 0;cursor:not-allowed')}>Execute cuts</button>
         <div style={css('font-size:11px;color:#6e6e85;margin-top:12px;line-height:1.5')}>Beta — review proposed cuts before executing. Nothing is removed without you.</div>
       </>
@@ -223,6 +226,8 @@ export default function RetakeCleanerPanel(): JSX.Element {
           </span>
           <div style={css('flex:1')} />
           <button onClick={r.find} style={css('flex:none;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 16px;cursor:pointer;white-space:nowrap')}>Run again</button>
+          <button onClick={r.findSilences} title="Clean Silence" style={css('flex:none;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);color:#c4baff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 12px;cursor:pointer;white-space:nowrap')}>Silence</button>
+          <button onClick={r.openSilenceSettings} title="Silence settings" aria-label="Silence settings" style={css('flex:none;width:36px;height:36px;background:none;border:1px solid rgba(255,255,255,.14);border-radius:9px;color:#c9c9da;display:grid;place-items:center;cursor:pointer;padding:0;appearance:none;-webkit-appearance:none')}>⚙</button>
         </div>
         {/* Auto Zoom — Gemma picks the key cut clips and punches in on them. */}
         <button

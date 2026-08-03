@@ -18,6 +18,7 @@
     "mcp": "tsx src/mcp/index.ts",
     "setup-parakeet": "node scripts/setup-parakeet.mjs",
     "verify-retake-aware": "tsx scripts/verify-retakeaware.ts",
+    "verify-silence-mastery": "tsx scripts/verify-silence-mastery.ts",
     "verify-retake-aware-fixtures": "tsx scripts/verify-retake-fixtures.ts",
     "web": "electron-vite build && tsx src/server/index.ts",
     "prepare:cloud": "node scripts/prepare-cloud-assets.mjs",

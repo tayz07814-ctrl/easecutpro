@@ -1,0 +1,101 @@
+// Silence settings — the Silence Mastery engine (this branch's only silence
+// cleaner). The engine keeps the transcript's word timestamps and removes
+// everything else; these four sliders are its complete parameter surface:
+//
+//   Min silence   — gaps shorter than this are natural beats; left alone.
+//   Pad left      — silence kept right AFTER the word before a removed gap.
+//   Pad right     — silence kept just BEFORE the word after a removed gap.
+//   Trim edges    — moves the cutter INTO the neighbouring word timestamps
+//                   by N ms (eats ASR dead air baked into word ends).
+//
+// Edits write straight to the persisted store settings, so the next
+// "Clean Silence" run uses them. Opened from SpeechCleanerPanel /
+// RetakeCleanerPanel; mounted in Editor + MobileEditor.
+
+import { css } from '../css'
+import { useStore } from '../../store'
+import { DEFAULT_SILENCE_MASTERY_SETTINGS } from '@shared/silenceMastery'
+
+const FOOT_RESET = 'font-size:12.5px;color:#9a9aae;cursor:pointer;padding:7px 10px;border-radius:8px'
+const FOOT_APPLY = 'background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 18px;cursor:pointer;margin-left:8px'
+
+function Slider({ label, hint, value, min, max, step, fmt, lo, hi, onChange }: {
+  label: string; hint: string; value: number; min: number; max: number; step: number; fmt: (v: number) => string; lo: string; hi: string; onChange: (v: number) => void
+}): JSX.Element {
+  const pct = `${Math.max(0, Math.min(1, (value - min) / (max - min))) * 100}%`
+  return (
+    <div>
+      <div style={css('display:flex;justify-content:space-between;font-size:12.5px')}>
+        <span style={css('color:#ededf2;font-weight:550')}>{label}</span>
+        <span style={css("font-family:'Geist Mono',monospace;font-size:11.5px;color:#a99bff")}>{fmt(value)}</span>
+      </div>
+      <div style={css('font-size:11px;color:#71718a;margin-top:3px;line-height:1.45')}>{hint}</div>
+      <div style={css('height:4px;border-radius:2px;background:#22222b;position:relative;margin-top:10px')}>
+        <div style={css(`width:${pct};height:100%;border-radius:2px;background:#7c6bff`)} />
+        <div style={css(`position:absolute;left:${pct};top:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#ededf2;box-shadow:0 1px 4px rgba(0,0,0,.4)`)} />
+        <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))}
+          style={css('position:absolute;left:0;right:0;top:-8px;bottom:-8px;width:100%;height:auto;margin:0;opacity:0;cursor:pointer')} />
+      </div>
+      <div style={css('display:flex;justify-content:space-between;font-size:10.5px;color:#55556a;margin-top:6px')}><span>{lo}</span><span>{hi}</span></div>
+    </div>
+  )
+}
+
+export default function SilenceMasterySettingsModal(): JSX.Element | null {
+  const show = useStore((s) => s.showSilenceMasterySettings)
+  const close = useStore((s) => s.setShowSilenceMasterySettings)
+  const st = useStore((s) => s.silenceMasterySettings)
+  const setSt = useStore((s) => s.setSilenceMasterySettings)
+  if (!show) return null
+
+  return (
+    <div onClick={() => close(false)} style={css('position:fixed;inset:0;background:rgba(8,8,10,.55);display:grid;place-items:center;z-index:1000')}>
+      <div onClick={(e) => e.stopPropagation()} style={css('width:440px;max-width:92vw;background:#101015;border:1px solid rgba(255,255,255,.1);border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.6);padding:22px;max-height:90vh;overflow-y:auto')}>
+        <div style={css('display:flex;align-items:flex-start;justify-content:space-between')}>
+          <div>
+            <div style={css('font-size:16px;font-weight:650')}>Silence settings</div>
+            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>Clean Silence keeps your words and removes everything else — the quiet before the first word, every long gap between words, and the dead air after the last one.</div>
+          </div>
+          <div onClick={() => close(false)} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
+        </div>
+
+        <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:18px')}>
+          <Slider
+            label="Min silence to remove"
+            hint="Gaps shorter than this are natural pauses — they stay."
+            value={st.minSilenceS} min={0.1} max={3} step={0.05}
+            fmt={(v) => `${v.toFixed(2)} s`} lo="0.1s · cuts more" hi="3s · cuts less"
+            onChange={(v) => setSt({ minSilenceS: v })}
+          />
+          <Slider
+            label="Pad left of the gap"
+            hint="Silence kept right after the word BEFORE the gap, so word tails can breathe."
+            value={st.padLeftMs} min={0} max={500} step={10}
+            fmt={(v) => `${Math.round(v)} ms`} lo="0 · flush" hi="500ms · roomy tail"
+            onChange={(v) => setSt({ padLeftMs: v })}
+          />
+          <Slider
+            label="Pad right of the gap"
+            hint="Silence kept just before the word AFTER the gap, protecting soft onsets."
+            value={st.padRightMs} min={0} max={500} step={10}
+            fmt={(v) => `${Math.round(v)} ms`} lo="0 · flush" hi="500ms · gentle lead-in"
+            onChange={(v) => setSt({ padRightMs: v })}
+          />
+          <Slider
+            label="Trim edges"
+            hint="Moves the cutter INTO the word timestamps on both sides — eats dead air the transcriber baked into word ends. Never crosses a word's midpoint."
+            value={st.trimEdgesMs} min={0} max={300} step={5}
+            fmt={(v) => `${Math.round(v)} ms`} lo="0 · safe" hi="300ms · aggressive"
+            onChange={(v) => setSt({ trimEdgesMs: v })}
+          />
+        </div>
+
+        <div style={css('display:flex;align-items:center;margin-top:20px')}>
+          <span onClick={() => setSt({ ...DEFAULT_SILENCE_MASTERY_SETTINGS })} style={css(FOOT_RESET)}>Reset to default</span>
+          <div style={css('flex:1')} />
+          <button onClick={() => close(false)} style={css(FOOT_APPLY)}>Done</button>
+        </div>
+      </div>
+    </div>
+  )
+}
