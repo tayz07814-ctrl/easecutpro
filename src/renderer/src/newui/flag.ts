@@ -26,10 +26,7 @@ export function isNewUi(): boolean {
     const stored = localStorage.getItem('ec.newui')
     if (stored === '1') return true
     if (stored === '0') return false
-    // TEST BRANCH (silence-mastery): default to the NEW UI everywhere — the
-    // branch's .vercel.app testing URL should match production (easecutpro.com
-    // shows the new UI). `?newui=0` remains the escape hatch to legacy.
-    return true
+    return onProductDomain()
   } catch {
     return onProductDomain()
   }

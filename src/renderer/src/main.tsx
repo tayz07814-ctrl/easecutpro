@@ -12,7 +12,7 @@ import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
-import { cloudAuthMe, testAccountLogin, testAutoLoginEnabled } from './cloud/auth'
+import { cloudAuthMe } from './cloud/auth'
 import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
@@ -170,16 +170,6 @@ const IS_ADMIN_ROUTE =
   (window.location.pathname.replace(/\/+$/, '') === ADMIN_PATH ||
     new URLSearchParams(window.location.search).has('admin'))
 
-
-// TEST BRANCH ONLY (silence-mastery): this branch ships to its own public
-// preview URL purely for testing and never merges to main. No login by
-// DEFAULT — the cloud bootstrap below silently signs into a shared TEST
-// account (see cloud/auth.ts) so the full app works for anyone who opens the
-// URL. Signing in with a REAL account still works: `?login=1` (or Log out)
-// shows the normal auth screen, and an existing session of any account is
-// always reused instead of the test account.
-const TEST_BRANCH_NO_AUTH = true
-
 type RouteView = 'landing' | 'auth' | 'home' | 'terms' | 'privacy' | 'refund'
 
 // Cloud routing on top of the view-state machine. It's all one SPA (Vercel
@@ -254,29 +244,7 @@ function Root(): JSX.Element {
           })
           return
         }
-        let { user } = await cloudAuthMe()
-        // Test branch: reuse an existing session (any account), else silently
-        // sign into the shared test account — unless the user opted for a
-        // real sign-in (`?login=1` / Log out), in which case the normal auth
-        // screen shows. If the test login itself fails (e.g. the account was
-        // deleted), fall back to the offline local editor rather than
-        // dead-ending.
-        if (TEST_BRANCH_NO_AUTH && !user && testAutoLoginEnabled()) {
-          try {
-            user = await testAccountLogin()
-          } catch {
-            if (cancelled) return
-            useStore.getState().setServerAvailable(false)
-            useStore.setState({
-              user: null,
-              currentProjectId: null,
-              project: useStore.getState().freshProject(),
-              library: [],
-              view: 'editor'
-            })
-            return
-          }
-        }
+        const { user } = await cloudAuthMe()
         if (!cancelled) useStore.setState({ user, view: viewForPath(window.location.pathname, user) })
         return
       }

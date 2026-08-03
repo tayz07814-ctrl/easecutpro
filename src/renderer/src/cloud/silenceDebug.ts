@@ -1,4 +1,4 @@
-// Silence Mastery debug telemetry (TEST BRANCH). Every Clean Silence run
+// Silence Mastery debug telemetry. Every Clean Silence / Find cuts run
 // writes what the engine SAW and what it DECIDED to public.silence_mastery_debugs
 // (insert-only for the client; reviewed via SQL server-side):
 //   mode 'stage' — the transcript words, every inter-word gap with its verdict,

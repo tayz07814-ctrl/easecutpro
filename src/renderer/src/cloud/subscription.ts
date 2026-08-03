@@ -9,7 +9,6 @@
 // ?checkout=success reopens the account panel and polls until the webhook flips
 // Pro on. Go-live steps (prices, secrets, webhook destination) live in PAYMENTS.md.
 import { getSupabase, invokeEdge } from './supabase'
-import { TEST_ACCOUNT_EMAIL } from './auth'
 import { IS_CLOUD } from '../platform'
 
 export interface Subscription {
@@ -183,19 +182,6 @@ export const PLANS: PlanMeta[] = [
 // before public launch.
 export const FREE_MINUTES = 20
 
-/** TEST BRANCH: the SHARED tester account is exempt from the free trial —
- *  everyone on the public test URL rides one account, so 20 minutes would
- *  paywall the whole branch after a couple of runs. 0 = unlimited at the
- *  stt gate AND in the account panel; real accounts keep the normal trial. */
-export async function effectiveFreeMinutes(): Promise<number> {
-  try {
-    const { data } = await getSupabase().auth.getSession()
-    return data.session?.user?.email === TEST_ACCOUNT_EMAIL ? 0 : FREE_MINUTES
-  } catch {
-    return FREE_MINUTES
-  }
-}
-
 export interface Billing {
   isPro: boolean
   status: string
@@ -215,12 +201,11 @@ export interface Billing {
 /** Everything the account panel needs — plan + free-trial usage — in one call. */
 export async function getBilling(): Promise<Billing> {
   const sb = getSupabase()
-  const freeMin = await effectiveFreeMinutes()
   const [subRes, usageRes, limitRes, minRes] = await Promise.all([
     sb.from('subscriptions').select('status, price_id, current_period_end, cancel_at_period_end').maybeSingle(),
     sb.from('usage').select('ai_runs').maybeSingle(),
     sb.rpc('ai_run_limit'),
-    sb.rpc('ai_usage_status', { p_free_min: freeMin })
+    sb.rpc('ai_usage_status', { p_free_min: FREE_MINUTES })
   ])
   const sub = (subRes.data ?? null) as Subscription | null
   const isPro = isProNow(sub)
