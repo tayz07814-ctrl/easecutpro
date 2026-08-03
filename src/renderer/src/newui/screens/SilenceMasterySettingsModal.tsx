@@ -100,6 +100,16 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
               <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>The transcriber sometimes stamps one word across a whole pause (a 2.5s “Okay.”), hiding silence inside the word. This clamps implausibly long words so that hidden dead air gets cut too.</div>
             </div>
           </div>
+          {/* Word-timestamp (transcript-gap) pass — the sliders above shape it. */}
+          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
+            <div onClick={() => setSt({ gapPass: !st.gapPass })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${st.gapPass ? '#7c6bff' : '#2a2a34'}`)}>
+              <div style={css(st.gapPass ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
+            </div>
+            <div style={css('flex:1;min-width:0')}>
+              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Word-timestamp pass</div>
+              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Cuts the gaps between transcript word stamps using the sliders above (transcribes first if needed). Off = Silero-only cleaning.</div>
+            </div>
+          </div>
           {/* Silero VAD — stage 1 of the hybrid; the neural ear cuts first. */}
           <div style={css('display:flex;align-items:flex-start;gap:11px')}>
             <div onClick={() => setSt({ sileroPass: !st.sileroPass })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${st.sileroPass ? '#7c6bff' : '#2a2a34'}`)}>

@@ -176,6 +176,12 @@ console.log('9) RMS energy pass — auto threshold + word guard')
   check('union merges overlapping cuts across passes', u.length === 2 && near(u[0].start, 0) && near(u[0].end, 2) && u[0].id === 'sm0' && u[1].id === 'sm1', fmt(u))
 }
 
+console.log('9b) defaults are Silero-only')
+{
+  const d = normalizeSilenceMastery(null)
+  check('silero on, gap off, rms off by default', d.sileroPass === true && d.gapPass === false && d.rmsPass === false)
+}
+
 console.log('10) Silero edge guard — regions clamp off word spans')
 {
   const words: SpeechSpan[] = [{ start: 2, end: 3, text: 'hello' }, { start: 8, end: 8.4, text: 'hi' }]

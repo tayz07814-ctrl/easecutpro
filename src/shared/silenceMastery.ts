@@ -47,6 +47,9 @@ export interface SilenceMasterySettings {
    *  every speech segment it heard, edges clamped off transcript word spans);
    *  the transcript-gap pass then sweeps only what Silero left. */
   sileroPass: boolean
+  /** Word-timestamp (transcript-gap) pass — cuts the gaps between word
+   *  stamps using minSilence/pads/trim. Off = Silero-only cleaning. */
+  gapPass: boolean
 }
 
 export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
@@ -55,8 +58,11 @@ export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
   padRightMs: 100,
   trimEdgesMs: 0,
   clampStretchedWords: true,
-  rmsPass: true,
-  sileroPass: true
+  // SILERO-ONLY by default (per testing direction): the neural ear does the
+  // cutting; the word-timestamp and RMS passes are opt-in extras.
+  rmsPass: false,
+  sileroPass: true,
+  gapPass: false
 }
 
 const clampN = (v: unknown, lo: number, hi: number, dflt: number): number => {
@@ -76,7 +82,8 @@ export function normalizeSilenceMastery(
     trimEdgesMs: clampN(v?.trimEdgesMs, 0, 300, d.trimEdgesMs),
     clampStretchedWords: typeof v?.clampStretchedWords === 'boolean' ? v.clampStretchedWords : d.clampStretchedWords,
     rmsPass: typeof v?.rmsPass === 'boolean' ? v.rmsPass : d.rmsPass,
-    sileroPass: typeof v?.sileroPass === 'boolean' ? v.sileroPass : d.sileroPass
+    sileroPass: typeof v?.sileroPass === 'boolean' ? v.sileroPass : d.sileroPass,
+    gapPass: typeof v?.gapPass === 'boolean' ? v.gapPass : d.gapPass
   }
 }
 

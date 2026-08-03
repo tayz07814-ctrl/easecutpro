@@ -2032,7 +2032,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
   silenceMasterySettings: ((): SilenceMasterySettings => {
     try {
-      const raw = localStorage.getItem('ec.silenceMastery')
+      const raw = localStorage.getItem('ec.silenceMastery2')
       if (raw) return normalizeSilenceMastery(JSON.parse(raw))
     } catch {
       /* ignore */
@@ -2042,7 +2042,7 @@ export const useStore = create<AppState>((set, get) => ({
   setSilenceMasterySettings: (patch) => {
     const next = normalizeSilenceMastery({ ...get().silenceMasterySettings, ...patch })
     try {
-      localStorage.setItem('ec.silenceMastery', JSON.stringify(next))
+      localStorage.setItem('ec.silenceMastery2', JSON.stringify(next))
     } catch {
       /* ignore */
     }
@@ -2055,7 +2055,12 @@ export const useStore = create<AppState>((set, get) => ({
     // 1. A transcript is the engine's only input. Reuse the project's (no
     //    re-transcribe); otherwise run the same transcribe-only step the
     //    Transcript tab uses (AssemblyAI via /edge — needs the backend).
-    if (!get().project.transcript?.words?.length) {
+    const settings = get().silenceMasterySettings
+    // 1. The WORD-TIMESTAMP pass needs a transcript; Silero-only runs don't —
+    //    the ear works straight off the audio. Transcribe only when the gap
+    //    pass is enabled and no transcript exists yet. When a transcript IS
+    //    present it still guards the audio passes' edges either way.
+    if (settings.gapPass && !get().project.transcript?.words?.length) {
       if (!get().requireServer('Clean Silence (needs a transcript)')) return
       await get().transcribeOnly()
       if (!get().project.transcript?.words?.length) return // transcribeOnly surfaced the error
@@ -2065,22 +2070,25 @@ export const useStore = create<AppState>((set, get) => ({
     //    as runRetakeCutBeta.
     const stored = get().project
     const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
-    const t = get().project.transcript!
-    const words = t.words.filter((w) => !w.deleted).map((w) => ({ start: w.start, end: w.end, text: w.text }))
+    const t = get().project.transcript ?? null
+    const words = (t?.words ?? []).filter((w) => !w.deleted).map((w) => ({ start: w.start, end: w.end, text: w.text }))
     // Media length bounds the trailing cut: the real duration when known, else
     // the base timeline's length, else the last word (no trailing cut at all).
     const durationS = p0.media?.duration || baseTimelineDuration(p0) || (words.length ? words[words.length - 1].end : 0)
-    const settings = get().silenceMasterySettings
 
-    // THE HYBRID, in order:
+    // THE HYBRID, in order (each stage independently toggleable — the current
+    // default is SILERO-ONLY):
     //   stage 1  Silero VAD      — the neural ear cuts what it heard as
     //                              non-speech (100ms preserved around every
     //                              speech segment; edges clamped off word spans)
-    //   stage 2  transcript gaps — sweeps what Silero left, using the word
-    //                              timestamps (min silence / pads / trim)
+    //   stage 2  transcript gaps — optional sweep of what Silero left, using
+    //                              the word timestamps (min silence/pads/trim)
     //   stage 3  RMS energy      — optional low-energy sweep (auto threshold)
     // All stages emit SOURCE-time regions; the union is staged for review.
-    const { regions: gapRegions, stretched } = planSilenceMasteryDetailed(words, durationS, settings)
+    const { regions: gapRegions, stretched } =
+      settings.gapPass && words.length
+        ? planSilenceMasteryDetailed(words, durationS, settings)
+        : { regions: [], stretched: [] }
     // The audio guards must agree with the gap pass about where speech is —
     // same stretched-word repair, same spans.
     const effWords = settings.clampStretchedWords ? clampStretchedWords(words).words : words
@@ -2095,7 +2103,7 @@ export const useStore = create<AppState>((set, get) => ({
           set({ job: { active: true, kind: 'silence', percent: 4 + Math.round(pct * 0.5), message: 'Listening to your audio…' } })
         )
       } catch (e) {
-        console.warn('[silence-mastery] audio decode failed — transcript pass only:', (e as Error).message)
+        console.warn('[silence-mastery] audio decode failed:', (e as Error).message)
       }
     }
 
@@ -2158,14 +2166,15 @@ export const useStore = create<AppState>((set, get) => ({
       duration_s: r2(durationS),
       media_path: p0.media?.path ?? null,
       doc_mode: !!stored.timeline,
-      word_count: t.words.length,
-      deleted_word_count: t.words.length - words.length,
-      words: t.words.map((w) => [r2(w.start), r2(w.end), w.text, w.deleted ? 1 : 0]),
+      word_count: t?.words.length ?? 0,
+      deleted_word_count: (t?.words.length ?? 0) - words.length,
+      words: (t?.words ?? []).map((w) => [r2(w.start), r2(w.end), w.text, w.deleted ? 1 : 0]),
       gaps,
       staged_regions: regions.map((r) => [r.id, r2(r.start), r2(r.end)]),
       staged_total_s: r2(regions.reduce((n, r) => n + (r.end - r.start), 0)),
       stretched_word_repairs: stretched,
       silero: { enabled: settings.sileroPass, ran: sileroOk, regions: sileroRegions.map((r) => [r2(r.start), r2(r.end)]) },
+      gap_pass_enabled: settings.gapPass,
       gap_regions: gapRegions.map((r) => [r2(r.start), r2(r.end)]),
       rms: rms
         ? {
