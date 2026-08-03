@@ -60,9 +60,6 @@ export default function NewToolbar(): JSX.Element {
               </button>
             )}
             <div className="nt-mi-sep" />
-            <button className="nt-mi" onClick={() => run(() => { s.setToolsTab('silence'); s.detectSilence() })} disabled={!hasBase || s.job.active}>Detect silence</button>
-            <button className="nt-mi" onClick={() => run(s.removeAllSilence)} disabled={!s.project.silences.length}>Remove all gaps</button>
-            <div className="nt-mi-sep" />
             <div className="nt-mi-zoom">
               <span>Timeline zoom</span>
               <input

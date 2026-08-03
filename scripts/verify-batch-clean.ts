@@ -1,10 +1,10 @@
 // Headless verification of the Batch Video Cleaner pipeline.
-// Runs the REAL backend (ffmpeg probe + GPU whisper + silence detect) on a video
+// Runs the REAL backend (ffmpeg probe + GPU whisper) on a video
 // and the SAME cleaning logic the UI uses, then prints a before/after summary.
 //
 //   npx tsx scripts/verify-batch-clean.ts "C:\vids1\some.mov"
 import path from 'path'
-import { probe, detectSilence } from '../src/main/ffmpeg'
+import { probe } from '../src/main/ffmpeg'
 import { transcribe } from '../src/main/whisper'
 import { detectFillerIds, detectRepeatIds, DEFAULT_FILLERS } from '../src/shared/fillers'
 import { createEmptyProject } from '../src/shared/project'
@@ -32,9 +32,6 @@ async function main(): Promise<void> {
   const fillers = new Set([...fillerIds, ...repeatIds])
   console.log(`    fillers: ${fillerIds.length}, repeats/retakes: ${repeatIds.length}  ->  ${fillers.size} words to remove`)
 
-  console.log('3/3 Detecting silence…')
-  const regions = await detectSilence(file, { noiseDb: -30, minDuration: 0.4 }, () => {})
-  console.log(`    ${regions.length} silence regions`)
 
   // Build the cleaned project exactly as cleanVideo() does.
   const project = createEmptyProject(path.basename(file))
@@ -51,7 +48,7 @@ async function main(): Promise<void> {
     words: t.words.map((w) => (fillers.has(w.id) ? { ...w, deleted: true } : w)),
     segments: t.segments.map((s) => ({ ...s, words: s.words.map((w) => (fillers.has(w.id) ? { ...w, deleted: true } : w)) }))
   }
-  project.silences = regions.map((r) => ({ ...r, action: 'remove' as const }))
+  project.silences = []
 
   const keeps = computeKeepRanges(project)
   const edited = editedDuration(project)
@@ -59,7 +56,7 @@ async function main(): Promise<void> {
   console.log(`\n--- RESULT ---`)
   console.log(`  original : ${fmt(info.duration)}  (${info.duration.toFixed(1)}s)`)
   console.log(`  cleaned  : ${fmt(edited)}  (${edited.toFixed(1)}s)  across ${keeps.length} kept range(s)`)
-  console.log(`  removed  : ${(info.duration - edited).toFixed(1)}s of fillers + silence`)
+  console.log(`  removed  : ${(info.duration - edited).toFixed(1)}s of fillers`)
   if (edited <= 0 || edited > info.duration + 0.1) {
     console.log('  ⚠ SANITY CHECK FAILED — edited duration out of range')
     process.exit(2)

@@ -15,15 +15,13 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { RetakeAwareResult } from '../../shared/retakeaware/types'
 import { runRetakeAwareCut, type RetakeEngineDeps, type ProgressFn } from '../../shared/retakeaware/engine'
-import { DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type RetakeBetaSilenceSettings } from '../../shared/retakeaware/silence'
 import { transcribeVerbatim } from './providers'
 import { reviewRetakeGroups } from './llm'
-import { extractAudioWav, detectSilence } from '../ffmpeg'
+import { extractAudioWav } from '../ffmpeg'
 
 export async function retakeAwareCut(
   mediaPath: string,
-  onProgress?: ProgressFn,
-  silenceSettings: RetakeBetaSilenceSettings = DEFAULT_RETAKE_BETA_SILENCE_SETTINGS
+  onProgress?: ProgressFn
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
@@ -38,11 +36,9 @@ export async function retakeAwareCut(
     warnings.push(`Audio extraction failed (${(e as Error).message}) — sending the original file to the provider.`)
   }
 
-  // Every dep is bound to the SAME audio the transcription reads — the VAD
-  // safety scan must see exactly what the providers timed their words against.
+  // Every dep is bound to the SAME audio the transcription reads.
   const deps: RetakeEngineDeps = {
     transcribeVerbatim: (p) => transcribeVerbatim(audioPath, p),
-    detectSilence: (opts) => detectSilence(audioPath, opts),
     reviewRetakeGroups,
     saveDebug: async (json) => {
       const dir = join(homedir(), '.easecutpro', 'retakeaware')
@@ -52,5 +48,5 @@ export async function retakeAwareCut(
       return debugPath
     }
   }
-  return runRetakeAwareCut(deps, onProgress, silenceSettings, warnings)
+  return runRetakeAwareCut(deps, onProgress, warnings)
 }

@@ -2,13 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { IS_CLOUD, IS_NEW_UI } from '../platform'
 import RetakeCleanerPanel from './RetakeCleanerPanel'
-import { buildSilenceChips, CUTLORD_PRESETS, type CutLordMode } from '@shared/cutlord'
+import { buildSilenceChips } from '@shared/cutlord'
 import type { Word } from '@shared/types'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { docEditedToSource, docSourceToEdited } from '../docTime'
 import OverlayPanel from './OverlayPanel'
-import SilenceSettingsModal from './SilenceSettingsModal'
-import VadSilenceSettingsModal from './VadSilenceSettingsModal'
 
 /**
  * Cut Lord — the all-in-one cleanup panel (formerly "Transcript").
@@ -58,9 +56,6 @@ function ClutterCleaner(): JSX.Element {
   const selectFillers = useStore((s) => s.selectFillers)
   const selectRepeats = useStore((s) => s.selectRepeats)
   const selectAICuts = useStore((s) => s.selectAICuts)
-  const smartSmoothCut = useStore((s) => s.smartSmoothCut)
-  const smartCutPreset = useStore((s) => s.smartCutPreset)
-  const setSmartCutPreset = useStore((s) => s.setSmartCutPreset)
   const runFastCutLord = useStore((s) => s.runFastCutLord)
   const runProCut = useStore((s) => s.runProCut)
   // "Find Retakes & Silence" runs the REAL Retake β (procut-judge, Opus): the
@@ -68,8 +63,6 @@ function ClutterCleaner(): JSX.Element {
   // chatter and cuts whole takes precisely. (Retake δ / delta-judge was removed —
   // its narrow prompt left that chatter behind and over-cut wide spans.)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
-  const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
-  const showSilenceSettings = useStore((s) => s.showSilenceSettings)
   const executeCuts = useStore((s) => s.executeCuts)
   const stagedSilences = useStore((s) => s.stagedSilences)
   const stagedSel = useStore((s) => s.stagedSilenceSel)
@@ -177,19 +170,12 @@ function ClutterCleaner(): JSX.Element {
         className={IS_CLOUD ? 'primary' : ''}
         onClick={() => void runRetakeCutBeta()}
         disabled={jobActive}
-        title="Cut Lord — verbatim transcript, whole-take retake removal (never splices takes), filler triage, AND conservative transcript-gap silence tightening. Highlights + silence chips only; nothing is cut until Execute."
+        title="Cut Lord — verbatim transcript, whole-take retake removal (never splices takes), filler triage. Highlights only; nothing is cut until Execute."
       >
-        🧪 Find Retakes &amp; Silence
-      </button>
-      <button
-        onClick={() => setShowSilenceSettings(true)}
-        disabled={jobActive}
-        title="Retake β silence-detection settings."
-      >
-        🔇 Silence Settings
+        🧪 Find Retakes
       </button>
       {!IS_CLOUD && (
-        <button className="cl-gear" onClick={() => setShowSettings((v) => !v)} title="FastCut / ProCut silence-cleaning profile">
+        <button className="cl-gear" onClick={() => setShowSettings((v) => !v)} title="FastCut / ProCut settings">
           ⚙
         </button>
       )}
@@ -202,7 +188,6 @@ function ClutterCleaner(): JSX.Element {
       >
         ▶ Execute cuts ({executable})
       </button>
-      {showSilenceSettings && (IS_CLOUD ? <VadSilenceSettingsModal /> : <SilenceSettingsModal />)}
     </div>
   )
 
@@ -264,23 +249,6 @@ function ClutterCleaner(): JSX.Element {
             <button onClick={selectRepeats} title="Highlight stutters & repeats">🔁 Repeats</button>
             {openaiAvailable && (
               <button onClick={() => void selectAICuts()} title="AI review (OpenAI)">✨ Smart cut (AI)</button>
-            )}
-            {/* Smart Smooth's judge runs on the PC server — desktop/self-host only. */}
-            {!IS_CLOUD && (
-              <>
-                <button onClick={() => void smartSmoothCut()} disabled={jobActive} title="Experimental pause editor">
-                  🪄 Smooth Cut β
-                </button>
-                <select
-                  value={smartCutPreset}
-                  onChange={(e) => setSmartCutPreset(e.target.value as 'natural' | 'tiktok_smooth' | 'aggressive')}
-                  title="Smooth Cut style"
-                >
-                  <option value="natural">natural</option>
-                  <option value="tiktok_smooth">tiktok smooth</option>
-                  <option value="aggressive">aggressive</option>
-                </select>
-              </>
             )}
           </div>
         )}
@@ -396,59 +364,8 @@ function CutLordSettingsDrop(): JSX.Element {
   const setFillerWords = useStore((s) => s.setFillerWords)
   const [fillerText, setFillerText] = useState(fillerWords.join(', '))
 
-  const mode = (m: CutLordMode): void => setCfg({ mode: m })
-  const p = CUTLORD_PRESETS
-
   return (
     <div className="cl-set-drop">
-      <label className="cl-switch">
-        <input
-          type="checkbox"
-          checked={cfg.vadDuringAnalysis}
-          onChange={(e) => setCfg({ vadDuringAnalysis: e.target.checked })}
-        />
-        <span>
-          Silero VAD during analysis <b>(test)</b> — ON: FastCut/ProCut stage silence chips for review ·
-          OFF: silence is skipped in the engines and runs only when you Execute cuts
-        </span>
-      </label>
-      <div className="cl-set-row">
-        <button className={'cl-mode' + (cfg.mode === 'smooth' && !cfg.manual ? ' on' : '')} onClick={() => mode('smooth')} disabled={cfg.manual}
-          title={`VAD ${p.smooth.vad.threshold * 100}% · trim ${p.smooth.vad.trimCuts}s · pad ${p.smooth.vad.padding}s · min gap ${p.smooth.vad.minGap}s`}>
-          🌊 Smooth
-        </button>
-        <button className={'cl-mode' + (cfg.mode === 'aggressive' && !cfg.manual ? ' on' : '')} onClick={() => mode('aggressive')} disabled={cfg.manual}
-          title={`VAD ${p.aggressive.vad.threshold * 100}% · trim ${p.aggressive.vad.trimCuts}s · pad ${p.aggressive.vad.padding}s · min gap ${p.aggressive.vad.minGap}s + dB pass ${p.aggressive.db.noiseDb}dB`}>
-          🔥 Aggressive
-        </button>
-      </div>
-      <label className="cl-switch">
-        <input type="checkbox" checked={cfg.manual} onChange={(e) => setCfg({ manual: e.target.checked })} />
-        <span>Manual settings (override Smooth/Aggressive)</span>
-      </label>
-      <div className={'cl-manual' + (cfg.manual ? '' : ' off')}>
-        <div className="cl-set-title">VAD silence</div>
-        <Slider label="Speech threshold" value={cfg.vad.threshold} min={0.2} max={0.95} step={0.05} fmt={(v) => `${Math.round(v * 100)}%`}
-          onChange={(v) => setCfg({ vad: { ...cfg.vad, threshold: v } })} disabled={!cfg.manual} />
-        <Slider label="Trim cuts" value={cfg.vad.trimCuts} min={0} max={0.4} step={0.01} fmt={(v) => `${v.toFixed(2)}s`}
-          onChange={(v) => setCfg({ vad: { ...cfg.vad, trimCuts: v } })} disabled={!cfg.manual} />
-        <Slider label="Padding" value={cfg.vad.padding} min={0} max={0.2} step={0.01} fmt={(v) => `${v.toFixed(2)}s`}
-          onChange={(v) => setCfg({ vad: { ...cfg.vad, padding: v } })} disabled={!cfg.manual} />
-        <Slider label="Min gap" value={cfg.vad.minGap} min={0.05} max={1} step={0.05} fmt={(v) => `${v.toFixed(2)}s`}
-          onChange={(v) => setCfg({ vad: { ...cfg.vad, minGap: v } })} disabled={!cfg.manual} />
-        <label className="cl-switch small">
-          <input type="checkbox" checked={cfg.useDb} onChange={(e) => setCfg({ useDb: e.target.checked })} disabled={!cfg.manual} />
-          <span>Fast dB pass</span>
-        </label>
-        <div className={'cl-db' + (cfg.useDb ? '' : ' off')}>
-          <Slider label="Threshold" value={cfg.db.noiseDb} min={-60} max={-10} step={1} fmt={(v) => `${v}dB`}
-            onChange={(v) => setCfg({ db: { ...cfg.db, noiseDb: v } })} disabled={!cfg.manual || !cfg.useDb} />
-          <Slider label="Min gap" value={cfg.db.minGap} min={0.05} max={1} step={0.05} fmt={(v) => `${v.toFixed(2)}s`}
-            onChange={(v) => setCfg({ db: { ...cfg.db, minGap: v } })} disabled={!cfg.manual || !cfg.useDb} />
-          <Slider label="Padding" value={cfg.db.padding} min={0} max={0.1} step={0.01} fmt={(v) => `${v.toFixed(2)}s`}
-            onChange={(v) => setCfg({ db: { ...cfg.db, padding: v } })} disabled={!cfg.manual || !cfg.useDb} />
-        </div>
-      </div>
       <div className="cl-set-title" style={{ marginTop: 4 }}>Fillers</div>
       <label className="cl-switch">
         <input
@@ -473,52 +390,6 @@ function CutLordSettingsDrop(): JSX.Element {
     </div>
   )
 }
-
-function Slider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  fmt,
-  onChange,
-  disabled
-}: {
-  label: string
-  value: number
-  min: number
-  max: number
-  step: number
-  fmt: (v: number) => string
-  onChange: (v: number) => void
-  disabled?: boolean
-}): JSX.Element {
-  return (
-    <label className="cl-slider">
-      <span className="cl-slider-lb">{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} disabled={disabled}
-        onChange={(e) => onChange(Number(e.target.value))} />
-      <input
-        type="number"
-        className="cl-slider-num"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => {
-          const v = Number(e.target.value)
-          if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v)))
-        }}
-      />
-      <span className="cl-slider-val">{fmt(value)}</span>
-    </label>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Tab 2 — Auto Zoom & B-roll
-// ---------------------------------------------------------------------------
 
 function ZoomBroll(): JSX.Element {
   return (

@@ -3,8 +3,6 @@ import { IPC } from '../shared/ipc'
 import type {
   MediaInfo,
   Transcript,
-  SilenceRegion,
-  SilenceDetectOptions,
   Project,
   ProgressEvent,
   Waveform,
@@ -27,8 +25,6 @@ import type {
 import type { ToolStatus } from '../main/binaries'
 import type { CutCutProResult } from '../shared/cutcutpro'
 import type { RetakeAwareResult } from '../shared/retakeaware/types'
-import type { RetakeBetaSilenceSettings } from '../shared/retakeaware/silence'
-import type { VadSilenceSettings } from '../shared/vadsilence'
 
 const api = {
   toolStatus: (): Promise<ToolStatus> => ipcRenderer.invoke(IPC.toolStatus),
@@ -46,28 +42,17 @@ const api = {
     ipcRenderer.invoke(IPC.suggestCuts, transcript),
   fastCut: (transcript: Transcript, audioPath?: string, script?: string): Promise<AICutResult> =>
     ipcRenderer.invoke(IPC.fastCut, transcript, audioPath, script),
-  /** CutCutPro: 4-phase pipeline (whisper+Parakeet+VAD -> Claude -> OpenAI listen -> EDL). */
+  /** CutCutPro: word-cut pipeline (whisper+Parakeet -> Claude -> OpenAI listen -> EDL). */
   cutCutPro: (
     path: string,
     transcript: Transcript | null,
     modelName?: string,
-    runVad?: boolean,
-    script?: string,
-    vadSilenceSettings?: VadSilenceSettings
+    script?: string
   ): Promise<CutCutProResult> =>
-    ipcRenderer.invoke(IPC.cutCutPro, path, transcript, modelName, runVad, script, vadSilenceSettings),
+    ipcRenderer.invoke(IPC.cutCutPro, path, transcript, modelName, script),
   /** Retake-Aware Cut Beta: separate experimental engine (cut_mode: retake_aware_beta). */
-  retakeAwareCut: (
-    path: string,
-    silenceSettings?: RetakeBetaSilenceSettings,
-    vadSilenceSettings?: VadSilenceSettings
-  ): Promise<RetakeAwareResult> =>
-    ipcRenderer.invoke(IPC.retakeAwareCut, path, silenceSettings, vadSilenceSettings),
-  /** Smart Smooth Cut (beta): AI pause judge — JSON in, raw JSON text out. */
-  cutJudge: (payload: unknown): Promise<string> => ipcRenderer.invoke(IPC.cutJudge, payload),
-  /** Smart Smooth Cut (beta): persist the per-run debug JSON; returns the path. */
-  saveSmartCutDebug: (json: string): Promise<string> =>
-    ipcRenderer.invoke(IPC.saveSmartCutDebug, json),
+  retakeAwareCut: (path: string): Promise<RetakeAwareResult> =>
+    ipcRenderer.invoke(IPC.retakeAwareCut, path),
   generateOverlays: (
     transcript: Transcript,
     assets: OverlayAsset[],
@@ -95,8 +80,6 @@ const api = {
     ipcRenderer.invoke(IPC.matchMoment, frames, line, overlays),
   openaiStatus: (): Promise<{ available: boolean }> => ipcRenderer.invoke(IPC.openaiStatus),
   whisperModels: (): Promise<WhisperModelInfo[]> => ipcRenderer.invoke(IPC.whisperModels),
-  detectSilence: (path: string, opts: SilenceDetectOptions): Promise<SilenceRegion[]> =>
-    ipcRenderer.invoke(IPC.detectSilence, path, opts),
   waveform: (path: string): Promise<Waveform> => ipcRenderer.invoke(IPC.waveform, path),
   // `onPartial` streams thumbnails as they generate on the web build; Electron
   // returns the whole strip over IPC at once (callbacks can't cross IPC), so it

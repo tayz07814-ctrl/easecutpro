@@ -19,7 +19,7 @@ import {
   getProjectRecord,
   saveProjectRecord
 } from '../main/projectStore'
-import { probe, detectSilence, exportProject } from '../main/ffmpeg'
+import { probe, exportProject } from '../main/ffmpeg'
 import { transcribe as runTranscribe } from '../main/whisper'
 import { computeKeepRanges, editedDuration } from '../shared/edit'
 import { detectCleanupIds, DEFAULT_FILLERS } from '../shared/fillers'
@@ -134,7 +134,7 @@ server.tool(
     activeProject = { ...createEmptyProject(activeName), media }
     await persist()
     return ok(
-      `Base media set: ${p}\n${media.duration.toFixed(1)}s · ${media.width}x${media.height} · ${media.hasAudio ? 'has audio' : 'no audio'}.\nNext: transcribe (to cut by words) and/or remove_silence.`
+      `Base media set: ${p}\n${media.duration.toFixed(1)}s · ${media.width}x${media.height} · ${media.hasAudio ? 'has audio' : 'no audio'}.\nNext: transcribe (to cut by words).`
     )
   }
 )
@@ -212,27 +212,6 @@ server.tool(
     markDeleted(t, ids)
     await persist()
     return ok(`Removed ${ids.size} filler/repeat word(s). Edited length now ${editedDuration(project).toFixed(1)}s.`)
-  }
-)
-
-server.tool(
-  'remove_silence',
-  'Detect and remove silent gaps from the video.',
-  {
-    thresholdDb: z.number().optional().describe('Silence threshold in dB (default -30; lower = stricter)'),
-    minDuration: z.number().optional().describe('Minimum gap length in seconds to remove (default 0.4)')
-  },
-  async ({ thresholdDb, minDuration }) => {
-    const project = requireActive()
-    if (!project.media?.path) throw new Error('No video set.')
-    const regions = await detectSilence(project.media.path, {
-      noiseDb: thresholdDb ?? -30,
-      minDuration: minDuration ?? 0.4
-    })
-    project.silences = regions.map((r) => ({ ...r, action: 'remove' as const }))
-    await persist()
-    const saved = regions.reduce((s, r) => s + (r.end - r.start), 0)
-    return ok(`Removed ${regions.length} silent gap(s) (~${saved.toFixed(1)}s). Edited length now ${editedDuration(project).toFixed(1)}s.`)
   }
 )
 

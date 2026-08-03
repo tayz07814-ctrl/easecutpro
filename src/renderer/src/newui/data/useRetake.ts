@@ -31,7 +31,6 @@ export interface RetakeModel {
   /** committed (already-executed) cut — word.deleted in the transcript. */
   isDeleted: (id: string) => boolean
   isChipSel: (stagedId?: string) => boolean
-  smartSilence: boolean
   /** Selected staged silences as plain spans. "Find Silences" needs NO transcript,
    *  so when there is none these are the only cuts there are to show — the chip
    *  path below is anchored to transcript words and yields nothing. */
@@ -43,14 +42,8 @@ export interface RetakeModel {
   // actions
   /** run Retake Beta — Claude Opus on our official Anthropic key. */
   find: () => void
-  /** run the additive Smart Silence (transcript-gap) pass — ensures a transcript,
-   *  then stages review-first protected silences (no retakes/word cuts). */
-  findSilences: () => void
-  /** transcribe ONLY (the AssemblyAI step Retake β uses) — no judge/cuts. The
-   *  Transcript-tab entry point + Smart Silence's transcript-ensure step. */
+  /** transcribe ONLY (the AssemblyAI step Retake β uses) — no judge/cuts. */
   transcribeOnly: () => void
-  /** open the compact Smart Silence settings modal. */
-  openSmartSilenceSettings: () => void
   /** run Ultracut Beta — a SEPARATE OpenRouter test engine (GLM 5.2), for A/B. */
   findUltracut: () => void
   /** run Premium Cut — Gemini 3.5 Flash LISTENS to the audio (transcript + cuts). */
@@ -66,8 +59,6 @@ export interface RetakeModel {
   toggleWord: (id: string) => void
   /** seek the preview to a word's SOURCE start time (double-click) and play. */
   seekWord: (sourceStartS: number) => void
-  openSilenceSettings: () => void
-  setSmartSilence: (v: boolean) => void
   /** Auto Zoom — ask Gemma which cut clips to punch-in, then apply the zooms. */
   autoZoom: () => void
   /** true while an Auto Zoom pass is running. */
@@ -81,8 +72,6 @@ export function useRetake(): RetakeModel {
   const selected = useStore((s) => s.selectedWordIds)
   const staged = useStore((s) => s.stagedSilences)
   const stagedSel = useStore((s) => s.stagedSilenceSel)
-  const smartSilence = useStore((s) => s.smartSilenceCutter)
-  const setSmartSilence = useStore((s) => s.setSmartSilenceCutter)
   // "Retake Beta" runs the REAL Retake β (runRetakeCutBeta → procut-judge, Opus on
   // our official Anthropic key): the production-artifact-aware prompt that removes
   // slates / count-ins / off-camera direction / intro-outro chatter and cuts whole
@@ -90,10 +79,7 @@ export function useRetake(): RetakeModel {
   // delta-judge was removed — its narrow whole-take prompt left intro/outro +
   // off-camera chatter behind and over-cut wide spans.)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
-  // Smart Silence (transcript-gap) — additive "Find Silences" path + transcribe-only.
-  const runSmartSilence = useStore((s) => s.runSmartSilence)
   const transcribeOnly = useStore((s) => s.transcribeOnly)
-  const setShowSmartSilenceSettings = useStore((s) => s.setShowSmartSilenceSettings)
   // Ultracut Beta — a separate OpenRouter test engine, wired to its own button.
   const runUltracut = useStore((s) => s.runUltracut)
   // Premium Cut — Gemini 3.5 Flash multimodal engine, wired to its own button.
@@ -106,7 +92,6 @@ export function useRetake(): RetakeModel {
   const clearSelection = useStore((s) => s.clearSelection)
   const selectWord = useStore((s) => s.selectWord)
   const toggleStagedSilence = useStore((s) => s.toggleStagedSilence)
-  const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
   const toggleWordDeleted = useStore((s) => s.toggleWordDeleted)
   const setPlayhead = useStore((s) => s.setPlayhead)
   const setPlaying = useStore((s) => s.setPlaying)
@@ -147,7 +132,7 @@ export function useRetake(): RetakeModel {
 
   const words = selected.size
   const selStaged = staged.filter((r) => stagedSel.has(r.id))
-  const pauses = smartSilence ? selStaged.length : 0
+  const pauses = selStaged.length
 
   // retakes-found proxy: contiguous runs of staged word cuts across the transcript.
   let retakes = 0
@@ -163,9 +148,9 @@ export function useRetake(): RetakeModel {
   // time saved (derived): staged word durations + selected silence durations.
   let timeSavedS = 0
   if (transcript) for (const w of transcript.words) if (selected.has(w.id)) timeSavedS += Math.max(0, w.end - w.start)
-  if (smartSilence) for (const r of selStaged) timeSavedS += Math.max(0, r.end - r.start)
+  for (const r of selStaged) timeSavedS += Math.max(0, r.end - r.start)
 
-  const chips = transcript ? buildSilenceChips(transcript.words, smartSilence ? staged : [], projSilences) : []
+  const chips = transcript ? buildSilenceChips(transcript.words, staged, projSilences) : []
   const chipAfter = new Map(chips.map((c) => [c.afterWordId, c]))
 
   // Per-video boundaries in montage seconds (cumulative trimmed source durations),
@@ -197,13 +182,10 @@ export function useRetake(): RetakeModel {
     isSelected: (id) => selected.has(id),
     isDeleted: (id) => deletedIds.has(id),
     isChipSel: (stagedId) => (stagedId ? stagedSel.has(stagedId) : false),
-    smartSilence,
     stagedSilenceCuts: selStaged.map((r) => ({ id: r.id, startS: r.start, endS: r.end })),
     sourceDurationS: useStore.getState().project.media?.duration ?? 0,
     find: () => void runRetakeCutBeta(),
-    findSilences: () => void runSmartSilence(),
     transcribeOnly: () => void transcribeOnly(),
-    openSmartSilenceSettings: () => setShowSmartSilenceSettings(true),
     findUltracut: () => void runUltracut(),
     findPremium: () => void runPremiumCut(),
     execute: () => void executeCuts(),
@@ -221,8 +203,6 @@ export function useRetake(): RetakeModel {
       setPlayhead(docSourceToEdited(doc, sourceStartS))
       setPlaying(true)
     },
-    openSilenceSettings: () => setShowSilenceSettings(true),
-    setSmartSilence,
     autoZoom: () => void runAutoZoom(),
     autoZooming: autoZoomBusy
   }

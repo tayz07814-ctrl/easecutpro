@@ -23,12 +23,11 @@ import multer from 'multer'
 import { WebSocketServer, WebSocket } from 'ws'
 
 import { checkTools, listWhisperModels } from '../main/binaries'
-import { probe, extractWaveform, extractThumbnails, detectSilence, exportProject, combineClips, extractAudioM4a } from '../main/ffmpeg'
+import { probe, extractWaveform, extractThumbnails, exportProject, combineClips, extractAudioM4a } from '../main/ffmpeg'
 import { transcribe } from '../main/whisper'
 import { transcribeOpenAI } from '../main/openai-transcribe'
 import { transcribeParakeet } from '../main/parakeet'
 import { suggestCutsAI } from '../main/ai-cut'
-import { judgeCuts } from '../main/ai-cut-judge'
 import { cutCutPro } from '../main/cutcutpro'
 import { retakeAwareCut } from '../main/retakeaware/engine'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from '../main/fast-cut'
@@ -381,18 +380,6 @@ app.post('/api/thumbnails', async (req, res) => {
     res.status(400).json({ error: String((e as Error).message) })
   }
 })
-app.post('/api/silence', async (req, res) => {
-  try {
-    const userId = uid(req)
-    const p = assertAllowed(userId, req.body?.path)
-    const regions = await detectSilence(p, req.body?.opts, (pct) =>
-      send(userId, { type: 'progress', jobId: 'silence', kind: 'silence', percent: pct })
-    )
-    res.json(regions)
-  } catch (e) {
-    res.status(400).json({ error: String((e as Error).message) })
-  }
-})
 app.post('/api/transcribe', (req, res) => {
   try {
     const userId = uid(req)
@@ -445,9 +432,8 @@ app.post('/api/cutcutpro', (req, res) => {
     assertAllowed(userId, p)
     const transcript = (req.body?.transcript ?? null) as Transcript | null
     const modelName = req.body?.modelName as string | undefined
-    const runVad = req.body?.runVad as boolean | undefined
     const script = typeof req.body?.script === 'string' ? req.body.script : undefined
-    const jobId = runJob('transcribe', userId, (op) => cutCutPro(p, transcript, modelName, runVad ?? true, script, (pct, msg) => op(pct, msg)))
+    const jobId = runJob('transcribe', userId, (op) => cutCutPro(p, transcript, modelName, script, (pct, msg) => op(pct, msg)))
     res.json({ jobId })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
@@ -459,31 +445,8 @@ app.post('/api/retake-cut', (req, res) => {
     const userId = uid(req)
     const p = assertAllowed(userId, String(req.body?.path || ''))
     console.log('[retake-aware-beta] job requested (cut_mode: retake_aware_beta)')
-    const silenceSettings = req.body?.silenceSettings
-    const jobId = runJob('transcribe', userId, (op) => retakeAwareCut(p, (pct, msg) => op(pct, msg), silenceSettings))
+    const jobId = runJob('transcribe', userId, (op) => retakeAwareCut(p, (pct, msg) => op(pct, msg)))
     res.json({ jobId, cut_mode: 'retake_aware_beta' })
-  } catch (e) {
-    res.status(400).json({ error: String((e as Error).message) })
-  }
-})
-// ---- Smart Smooth Cut (beta): AI pause judge + per-run debug dump ----
-app.post('/api/cut-judge', async (req, res) => {
-  try {
-    uid(req)
-    const raw = await judgeCuts(req.body?.payload ?? {})
-    res.json({ raw })
-  } catch (e) {
-    res.status(400).json({ error: String((e as Error).message) })
-  }
-})
-app.post('/api/smartcut-debug', (req, res) => {
-  try {
-    const userId = uid(req)
-    const dir = path.join(userUploads(userId), 'smartsmooth')
-    fs.mkdirSync(dir, { recursive: true })
-    const p = path.join(dir, `debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-    fs.writeFileSync(p, JSON.stringify(req.body?.debug ?? {}, null, 2), 'utf8')
-    res.json({ path: p })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }

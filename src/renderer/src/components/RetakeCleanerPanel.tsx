@@ -4,7 +4,6 @@ import { buildSilenceChips } from '@shared/cutlord'
 import type { Word } from '@shared/types'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { docEditedToSource, docSourceToEdited } from '../docTime'
-import SilenceSettingsSheet from './SilenceSettingsSheet'
 
 /**
  * Retake Cleaner — the redesigned right-panel view (VITE_NEW_EASECUT_UI only).
@@ -42,15 +41,11 @@ export default function RetakeCleanerPanel(): JSX.Element {
   // chatter and cuts whole takes precisely. (Retake δ / delta-judge was removed —
   // its narrow prompt left that chatter behind and over-cut wide spans.)
   const runRetakeCutBeta = useStore((s) => s.runRetakeCutBeta)
-  const setShowSilenceSettings = useStore((s) => s.setShowSilenceSettings)
-  const showSilenceSettings = useStore((s) => s.showSilenceSettings)
   const setPlayhead = useStore((s) => s.setPlayhead)
   const setPlaying = useStore((s) => s.setPlaying)
   const undo = useStore((s) => s.undo)
   const canUndo = useStore((s) => s.canUndo)
   const setShowExportModal = useStore((s) => s.setShowExportModal)
-  const smartSilence = useStore((s) => s.smartSilenceCutter)
-  const setSmartSilence = useStore((s) => s.setSmartSilenceCutter)
 
   const [lastClicked, setLastClicked] = useState<string | null>(null)
   const dragging = useRef(false)
@@ -95,7 +90,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
   // Silence is only surfaced when Smart Silence Cutter is ON. When OFF we neither
   // show nor count staged silence (staging + execution are already blocked in the
   // store); already-committed project.silences stay visible as applied chips.
-  const displayStaged = smartSilence ? stagedSilences : []
+  const displayStaged = stagedSilences
   const enabledStaged = displayStaged.filter((r) => stagedSel.has(r.id))
   const executable = selected.size + enabledStaged.length
 
@@ -156,7 +151,6 @@ export default function RetakeCleanerPanel(): JSX.Element {
     setPlaying(true)
   }
 
-  const modal = showSilenceSettings ? <SilenceSettingsSheet /> : null
 
   // ---- header (shared across states) ----
   const header = (
@@ -168,16 +162,6 @@ export default function RetakeCleanerPanel(): JSX.Element {
     </div>
   )
 
-  // Smart Silence toggle (shared control)
-  const silenceToggle = (
-    <label className="rc-toggle" title="Also trim long pauses. When off, only retakes/words are cut.">
-      <input type="checkbox" checked={smartSilence} onChange={(e) => setSmartSilence(e.target.checked)} />
-      <span className="rc-toggle-track" aria-hidden="true">
-        <span className="rc-toggle-knob" />
-      </span>
-      <span className="rc-toggle-label">Smart Silence Cutter</span>
-    </label>
-  )
 
   // -------------------------------------------------------------- ANALYZING
   if (phase === 'analyzing') {
@@ -232,7 +216,6 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <button className="rc-run-again" onClick={() => void runRetakeCutBeta()} disabled={jobActive}>
           🧪 Find Retakes &amp; Silence
         </button>
-        {modal}
       </div>
     )
   }
@@ -253,7 +236,6 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <button className="primary rc-hero" onClick={() => void runRetakeCutBeta()} disabled={jobActive}>
           Try again
         </button>
-        {modal}
       </div>
     )
   }
@@ -266,15 +248,10 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <button className="primary rc-hero" onClick={() => void runRetakeCutBeta()} disabled={jobActive}>
           🧪 Find Retakes &amp; Silence
         </button>
-        <button className="rc-secondary" onClick={() => setShowSilenceSettings(true)} disabled={jobActive}>
-          🔇 Silence Settings
-        </button>
-        {silenceToggle}
         <button className="rc-execute" disabled title="Nothing staged yet">
           ▶ Execute cuts
         </button>
         <div className="rc-note">Beta — review proposed cuts before executing. Nothing is removed without you.</div>
-        {modal}
       </div>
     )
   }
@@ -298,12 +275,10 @@ export default function RetakeCleanerPanel(): JSX.Element {
           <div className="rc-stat-n cut">{summary.regions}</div>
           <div className="rc-stat-l">cut regions</div>
         </div>
-        {smartSilence && (
-          <div className="rc-stat">
-            <div className="rc-stat-n sil">{summary.pauses}</div>
-            <div className="rc-stat-l">pauses to trim</div>
-          </div>
-        )}
+        <div className="rc-stat">
+          <div className="rc-stat-n sil">{summary.pauses}</div>
+          <div className="rc-stat-l">pauses to trim</div>
+        </div>
         <div className="rc-stat">
           <div className="rc-stat-n ok">~{fmtSaved(summary.timeSaved)}</div>
           <div className="rc-stat-l">time saved</div>
@@ -314,11 +289,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <button className="primary" onClick={executeCuts} disabled={!executable || jobActive}>
           ▶ Execute cuts ({executable})
         </button>
-        <button className="rc-secondary" onClick={() => setShowSilenceSettings(true)} disabled={jobActive}>
-          🔇 Silence Settings
-        </button>
       </div>
-      {silenceToggle}
 
       <div className="rc-review-head">
         <span className="rc-review-title">Review transcript</span>
@@ -327,7 +298,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
         <button className="rc-link" onClick={clearSelection} disabled={!selected.size}>Clear</button>
       </div>
       <div className="rc-review-hint">
-        Click a word to keep or cut it{smartSilence ? ' · click a silence chip to keep the pause' : ''} · double-click plays
+        Click a word to keep or cut it · double-click plays
       </div>
 
       <div className="rc-transcript">
@@ -373,7 +344,6 @@ export default function RetakeCleanerPanel(): JSX.Element {
           </p>
         ))}
       </div>
-      {modal}
     </div>
   )
 }

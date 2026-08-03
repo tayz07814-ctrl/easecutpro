@@ -79,20 +79,6 @@ export default function Toolbar(): JSX.Element {
 
       <div className="group">
         <button
-          onClick={() => { s.setToolsTab('silence'); s.detectSilence() }}
-          disabled={!hasBase || s.job.active}
-        >
-          🔇 Detect silence
-        </button>
-        <button onClick={s.removeAllSilence} disabled={!s.project.silences.length}>
-          Remove all gaps
-        </button>
-      </div>
-
-      <div className="sep" />
-
-      <div className="group">
-        <button
           className={s.project.magnet ? 'toggle on' : 'toggle'}
           onClick={s.toggleMagnet}
           title="Magnet snapping"

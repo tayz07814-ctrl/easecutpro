@@ -7,15 +7,13 @@ import { Readable } from 'stream'
 import { randomUUID } from 'crypto'
 import { IPC } from '../shared/ipc'
 import { checkTools, listWhisperModels } from './binaries'
-import { probe, detectSilence, exportProject, extractWaveform, extractThumbnails, combineClips } from './ffmpeg'
+import { probe, exportProject, extractWaveform, extractThumbnails, combineClips } from './ffmpeg'
 import { transcribe } from './whisper'
 import { transcribeOpenAI } from './openai-transcribe'
 import { transcribeParakeet } from './parakeet'
 import { suggestCutsAI } from './ai-cut'
-import { judgeCuts } from './ai-cut-judge'
 import { cutCutPro } from './cutcutpro'
 import { retakeAwareCut } from './retakeaware/engine'
-import type { RetakeBetaSilenceSettings } from '../shared/retakeaware/silence'
 import { fastCutSuggest, startFastcutSidecar, stopFastcutSidecar } from './fast-cut'
 import { generateOverlayTimeline, suggestOverlayTimeline, describeOverlayImage, matchMoment } from './overlay-rules'
 import { openaiAvailable } from './openai'
@@ -32,7 +30,6 @@ import {
 } from './projectStore'
 import type {
   Project,
-  SilenceDetectOptions,
   ExportSettings,
   TextOverlayImage,
   Transcript,
@@ -289,26 +286,16 @@ app.whenReady().then(() => {
     return fastCutSuggest(transcript, audioPath, script, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
   })
 
-  // ---- CutCutPro: 4-phase premium pipeline (whisper+Parakeet+VAD -> Claude -> OpenAI listen -> EDL) ----
-  ipcMain.handle(IPC.cutCutPro, async (_e, path: string, transcript: Transcript | null, modelName?: string, runVad?: boolean, script?: string) => {
+  // ---- CutCutPro: word-cut pipeline (whisper+Parakeet -> Claude -> OpenAI listen -> EDL) ----
+  ipcMain.handle(IPC.cutCutPro, async (_e, path: string, transcript: Transcript | null, modelName?: string, script?: string) => {
     const jobId = randomUUID()
-    return cutCutPro(path, transcript, modelName, runVad ?? true, script, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
+    return cutCutPro(path, transcript, modelName, script, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
   })
 
   // ---- Retake-Aware Cut Beta: separate experimental engine (cut_mode: retake_aware_beta) ----
-  ipcMain.handle(IPC.retakeAwareCut, async (_e, path: string, silenceSettings?: RetakeBetaSilenceSettings) => {
+  ipcMain.handle(IPC.retakeAwareCut, async (_e, path: string) => {
     const jobId = randomUUID()
-    return retakeAwareCut(path, (pct, msg) => emitProgress('transcribe', jobId, pct, msg), silenceSettings)
-  })
-
-  // ---- Smart Smooth Cut (beta): AI pause judge + debug dump ----
-  ipcMain.handle(IPC.cutJudge, async (_e, payload) => judgeCuts(payload))
-  ipcMain.handle(IPC.saveSmartCutDebug, async (_e, json: string) => {
-    const dir = join(homedir(), '.easecutpro', 'smartsmooth')
-    await mkdir(dir, { recursive: true })
-    const p = join(dir, `debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-    await writeFile(p, json, 'utf8')
-    return p
+    return retakeAwareCut(path, (pct, msg) => emitProgress('transcribe', jobId, pct, msg))
   })
 
   // ---- AI overlay placement: rules + transcript -> overlay events ----
@@ -356,12 +343,6 @@ app.whenReady().then(() => {
 
   // ---- OpenAI availability (is a key configured?) ----
   ipcMain.handle(IPC.openaiStatus, async () => ({ available: openaiAvailable() }))
-
-  // ---- Silence detect ----
-  ipcMain.handle(IPC.detectSilence, async (_e, path: string, opts: SilenceDetectOptions) => {
-    const jobId = randomUUID()
-    return detectSilence(path, opts, (pct) => emitProgress('silence', jobId, pct))
-  })
 
   // ---- Waveform peaks ----
   ipcMain.handle(IPC.waveform, async (_e, path: string) => extractWaveform(path))

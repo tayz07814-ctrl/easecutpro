@@ -13,7 +13,7 @@
 // tsconfig.node.json and tsconfig.web.json. It is not imported by (and does
 // not import) FastCut / ProCut / Smart Smooth Cut internals.
 
-import type { Transcript, Segment, SilenceRegion, SilenceDetectOptions } from '../types'
+import type { Transcript, Segment, SilenceRegion } from '../types'
 import type { RetakeAwareResult, RetakeAwareDebug, VerbatimTranscript, LlmDecisions, ReviewPayload } from './types'
 import {
   buildChunks,
@@ -32,21 +32,16 @@ import {
   spansToWordIds,
   findMissedCutoffs
 } from './analyze'
-import { detectBetaSilencesHybrid, retakeBetaVadSafetyOpts, retakeBetaVadHardCutOpts, DEFAULT_RETAKE_BETA_SILENCE_SETTINGS, type BetaSilenceResult, type RetakeBetaSilenceSettings } from './silence'
 import { detectArtifacts, type ArtifactResult } from './artifacts'
 
 export type ProgressFn = (pct: number, msg?: string) => void
 
 /** Platform services the core needs. Every dep is already BOUND to the run's
- *  audio: transcribeVerbatim and detectSilence must read the SAME audio (the
- *  VAD safety scan guards the transcript's word timings — a mismatched source
- *  would mis-clamp every silence cut). */
+ *  audio. */
 export interface RetakeEngineDeps {
   /** Verbatim transcription via the platform's provider chain (AssemblyAI ->
    *  Deepgram -> …). Returns provider warnings to surface in the result. */
   transcribeVerbatim(onProgress?: ProgressFn): Promise<{ vt: VerbatimTranscript; warnings: string[] }>
-  /** Silero VAD (or equivalent) over the SAME audio the transcription used. */
-  detectSilence(opts: SilenceDetectOptions): Promise<SilenceRegion[]>
   /** Optional LLM review; never throws — degrade to rules with judge 'none'. */
   reviewRetakeGroups(payload: ReviewPayload, warnings: string[]): Promise<{ decisions: LlmDecisions | null; judge: string }>
   /** Persist the debug JSON; returns its path, or null when the platform can't
@@ -100,7 +95,6 @@ export function parseLlmDecisions(raw: string, warnings: string[]): LlmDecisions
 export async function runRetakeAwareCut(
   deps: RetakeEngineDeps,
   onProgress?: ProgressFn,
-  silenceSettings: RetakeBetaSilenceSettings = DEFAULT_RETAKE_BETA_SILENCE_SETTINGS,
   initialWarnings: string[] = []
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = [...initialWarnings]
@@ -186,30 +180,16 @@ export async function runRetakeAwareCut(
   const orphanConnectors = detectOrphanConnectors(chunks, vt.words)
 
   // 11. cut spans (whole failed attempts + tails + corrections + fillers)
-  op(86, 'Cleaning silence…')
+  op(86, 'Building cut spans…')
   const baseCutSpans = buildCutSpans(vt, groups, fillerDecisions, allFalseStarts, selfCorrections, repeatedSetups, orphanConnectors, chatterCutTails)
-
-  // 12. Retake β HYBRID silence: the pause SPAN comes from the TRANSCRIPT word
-  // gaps (the full perceived pause), guarded off both words; VAD is only a safety
-  // check (drops a cut if real speech sits inside the centre), never the span —
-  // so VAD under-detection can't leave 1–3s of silence. Regions are protect:true
-  // so computeKeepRanges applies them verbatim. If the VAD scan fails we still
-  // trim from the transcript gaps (VAD safety is optional).
-  op(92, 'Reducing noise…')
-  let vadSil: { start: number; end: number }[] = []
-  try {
-    vadSil = (await deps.detectSilence(retakeBetaVadSafetyOpts())).map((r) => ({ start: r.start, end: r.end }))
-  } catch (e) {
-    warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
-  }
 
   // 11b. ASR ARTIFACT cleanup (Retake β only): transcript words are usually
   // protected, but an isolated fake word (a record-button click heard as "Do") is
   // ADDED to the delete set, and an impossibly-stretched short word (a 4s "it's"
   // that absorbed a pause) has its boundary REPAIRED — clamped to its real speech
-  // core — so the silence cutter can trim the dead-air tail instead of it hiding
-  // inside the word. Runs BEFORE final silence staging; feeds both stages.
-  const artifacts: ArtifactResult = detectArtifacts(vt.words, baseCutSpans, vadSil)
+  // core. Transcript-only now (no VAD scan on this branch — every silence engine
+  // was removed).
+  const artifacts: ArtifactResult = detectArtifacts(vt.words, baseCutSpans, [])
   // Build the transcript from the REPAIRED words so a stretched word's shortened
   // span is what the UI shows AND what computeKeepRanges sees — its midpoint then
   // lands in the kept speech core (not the removed dead air), so the core survives
@@ -218,48 +198,9 @@ export async function runRetakeAwareCut(
   const cutSpans = [...baseCutSpans, ...artifacts.orphanCutSpans].sort((a, b) => a.start - b.start)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
-  const lastWordEnd = vt.words.length ? vt.words[vt.words.length - 1].end : 0
-  // Media duration (for trailing-edge silence): the audio extends to the last VAD
-  // region or the last word, whichever is later.
-  const mediaDurS = Math.max(lastWordEnd, ...(vadSil.length ? vadSil.map((r) => r.end) : [0]))
-  // SILENCE ENGINE — toggle picks which one runs (word cuts above are unaffected):
-  //  • vadHardCut OFF (default): the transcript-gap HYBRID. repairedWords have their
-  //    stretched-word ends clamped so the dead air becomes a real gap it removes.
-  //  • vadHardCut ON: an aggressive raw VAD pass removes EVERY silence ≥ mingap
-  //    (threshold 0.6 / trim 0.08 / pad 0.02 / mingap 0.1). Time-only + still staged
-  //    as reviewable chips; the hybrid is bypassed.
-  let betaSilence: BetaSilenceResult | null = null
-  let silenceRegions: SilenceRegion[]
-  let vadHardCutDebug: { source: 'vad_hard_cut'; opts: ReturnType<typeof retakeBetaVadHardCutOpts>; regions_count: number; total_removed_s: number } | null = null
-  if (silenceSettings.vadHardCut) {
-    op(92, 'Cleaning silence…')
-    let hard: { start: number; end: number }[] = []
-    try {
-      hard = (await deps.detectSilence(retakeBetaVadHardCutOpts())).map((r) => ({ start: r.start, end: r.end }))
-    } catch (e) {
-      warnings.push(`VAD hard-cut scan failed (${(e as Error).message}) — no silence removed this run.`)
-    }
-    // WORD-ONSET GUARD: the raw VAD doesn't know where transcript words are, so it
-    // clips a word's low-energy onset/offset (the soft "m" of "My"). Clamp every
-    // region off the KEPT words (deleted/retake words aren't protected) so no word is
-    // eaten — keep a ~30ms lead-in. Regions are protect:true, so this is their only
-    // guard (computeKeepRanges applies protect regions verbatim).
-    const keptHardWords = artifacts.repairedWords.filter((w) => { const m = (w.start + w.end) / 2; return !cutSpans.some((s) => m >= s.start && m <= s.end) })
-    const clampOffWords = (a: number, b: number): { start: number; end: number } => {
-      let cs = a, ce = b
-      for (const w of keptHardWords) {
-        if (cs <= w.start && ce > w.start + 0.002 && ce < w.end) ce = Math.max(cs, w.start - 0.03) // end clipped the onset
-        if (ce >= w.end && cs < w.end - 0.002 && cs > w.start) cs = Math.min(ce, w.end + 0.03) // start clipped the tail
-      }
-      return { start: cs, end: ce }
-    }
-    silenceRegions = hard.map((r) => clampOffWords(r.start, r.end)).filter((r) => r.end - r.start > 0.05).map((r, i) => ({ id: `betasil-hardvad-${i}`, start: r.start, end: r.end, action: 'remove' as const, protect: true }))
-    const total = silenceRegions.reduce((n, r) => n + (r.end - r.start), 0)
-    vadHardCutDebug = { source: 'vad_hard_cut', opts: retakeBetaVadHardCutOpts(), regions_count: silenceRegions.length, total_removed_s: Number(total.toFixed(3)) }
-  } else {
-    betaSilence = detectBetaSilencesHybrid(artifacts.repairedWords, cutSpans, vadSil, silenceSettings, mediaDurS)
-    silenceRegions = betaSilence.regions
-  }
+  // NO SILENCE: every silence-cutting engine was removed from this branch.
+  // Word cuts stand alone; nothing stages pause removals.
+  const silenceRegions: SilenceRegion[] = []
 
   // cutoff-fragment debug buckets (E-spec): split the self-correction family by
   // detector kind, and surface any dash-terminated word NO span removed.
@@ -342,8 +283,6 @@ export async function runRetakeAwareCut(
       .filter((c) => !(c.decision === 'cut' || (c.decision === 'needs_review' && chatterApproved.has(c.candidate_id))))
       .map((c) => ({ candidate_id: c.candidate_id, text: c.text, decision: c.decision, reason: c.possible_reason })),
     final_production_chatter_cut_spans: cutSpans.filter((s) => s.type === 'production_chatter'),
-    retake_beta_silence: betaSilence?.debug ?? null,
-    retake_beta_vad_hardcut: vadHardCutDebug,
     retake_beta_artifacts: artifacts.debug,
     warnings,
     errors
@@ -357,7 +296,6 @@ export async function runRetakeAwareCut(
   if (selfCorrections.length) extras.push(`${selfCorrections.length} self-correction(s)`)
   const fillersFlagged = fillerDecisions.filter((f) => f.classification !== 'keep').length
   if (fillersFlagged) extras.push(`${fillersFlagged} filler(s)`)
-  if (silenceRegions.length) extras.push(`${silenceRegions.length} pause(s) trimmed`)
   return {
     cut_mode: 'retake_aware_beta',
     provider: vt.provider,

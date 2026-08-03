@@ -67,29 +67,6 @@ function resolveWhisper(): string | null {
 
 export const WHISPER_BIN = resolveWhisper()
 
-/** whisper.cpp's Silero-VAD speech-segments tool (for speech-aware silence removal). */
-function resolveVadBin(): string | null {
-  const bundled = join(resourcesBinDir(), exe('whisper-vad-speech-segments'))
-  return existsSync(bundled) ? bundled : null
-}
-export const WHISPER_VAD_BIN = resolveVadBin()
-
-/** Find the Silero VAD ggml model (ggml-silero-*.bin) in resources/models or resources/bin. */
-export function resolveVadModel(): string | null {
-  const dirs = [join(dirname(resourcesBinDir()), 'models'), resourcesBinDir()]
-  for (const d of dirs) {
-    if (!existsSync(d)) continue
-    let files: string[] = []
-    try {
-      files = readdirSync(d)
-    } catch {
-      continue
-    }
-    for (const f of files) if (/\.bin$/i.test(f) && /silero|vad/i.test(f)) return join(d, f)
-  }
-  return null
-}
-
 /** Rank a ggml model filename by accuracy (higher = better) to pick the best. */
 function modelRank(name: string): number {
   const n = name.toLowerCase()

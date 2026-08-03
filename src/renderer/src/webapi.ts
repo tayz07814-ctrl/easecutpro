@@ -255,27 +255,19 @@ const webApi: Window['api'] = {
       : undefined
     return runJob(() => call('/api/fast-cut', { transcript, path: sp, script }))
   },
-  cutCutPro: async (path, transcript, modelName, runVad, script) => {
+  cutCutPro: async (path, transcript, modelName, script) => {
     // Only audio is needed on the PC — upload the small extracted track.
     const sp = isWebMediaId(path)
       ? await ensureAudioUploaded(path, (p) => emitProgress(p, 'Cut Lord is working…', 'transcribe'))
       : path
-    return runJob(() => call('/api/cutcutpro', { path: sp, transcript, modelName, runVad, script }))
+    return runJob(() => call('/api/cutcutpro', { path: sp, transcript, modelName, script }))
   },
-  retakeAwareCut: async (path, silenceSettings) => {
+  retakeAwareCut: async (path) => {
     // Retake-Aware Cut Beta: separate job/mode; audio-only upload like ProCut.
     const sp = isWebMediaId(path)
       ? await ensureAudioUploaded(path, (p) => emitProgress(p, 'Retake β is working…', 'transcribe'))
       : path
-    return runJob(() => call('/api/retake-cut', { path: sp, cut_mode: 'retake_aware_beta', silenceSettings }))
-  },
-  cutJudge: async (payload) => {
-    const r = (await call('/api/cut-judge', { payload })) as { raw: string }
-    return r.raw
-  },
-  saveSmartCutDebug: async (json) => {
-    const r = (await call('/api/smartcut-debug', { debug: JSON.parse(json) })) as { path: string }
-    return r.path
+    return runJob(() => call('/api/retake-cut', { path: sp, cut_mode: 'retake_aware_beta' }))
   },
   generateOverlays: (transcript, assets, rules, opts) =>
     runJob(() => call('/api/generate-overlays', { transcript, assets, rules, opts })),
@@ -287,13 +279,6 @@ const webApi: Window['api'] = {
     call('/api/match-moment', { frames, line, overlays }),
   openaiStatus: () => call('/api/openai-status'),
   whisperModels: async () => (await call('/api/whisper-models')).models,
-  detectSilence: async (path, opts) => {
-    // Silence/VAD only needs the audio too — reuse the small audio upload.
-    const sp = isWebMediaId(path)
-      ? await ensureAudioUploaded(path, (p) => emitProgress(p, 'Cut Lord is working…', 'silence'))
-      : path
-    return call('/api/silence', { path: sp, opts })
-  },
   exportProject: async (project, settings, textOverlays) => {
     const proj = await uploadProjectMedia(project, (p) => emitProgress(p, 'Uploading to server — compiling your clips…', 'export'))
     const out = await runJob(() => call('/api/export', { project: proj, settings, textOverlays }))

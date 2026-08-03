@@ -10,8 +10,6 @@ import TranscriptDrawer from './TranscriptDrawer'
 import SpeechCleanerPanel from './SpeechCleanerPanel'
 import VariationsPanel from './VariationsPanel'
 import OverlayPanel from '../../components/OverlayPanel'
-import SilenceSettingsModal from './SilenceSettingsModal'
-import SmartSilenceSettingsModal from './SmartSilenceSettingsModal'
 import CutProgressOverlay from './CutProgressOverlay'
 import ExportModal from '../../components/ExportModal'
 import SettingsModal from '../../components/SettingsModal'
@@ -808,8 +806,6 @@ export default function Editor(): JSX.Element {
       <div className="ec-legacy ec-nu-tl timeline-host" style={css(`flex:none;height:${timelineH}px;min-height:0;position:relative;overflow:hidden;border-top:1px solid ${HAIR}`)}>
         <TimelinePanel />
       </div>
-      <SilenceSettingsModal />
-      <SmartSilenceSettingsModal />
       {/* Legacy modals assume the app's global border-box — portal them out of
           the .ec-newui (content-box) subtree so they render correctly. */}
       {showExportModal && createPortal(<ExportModal />, document.body)}

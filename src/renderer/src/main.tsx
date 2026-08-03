@@ -21,7 +21,6 @@ import MobileDashboard from './newui/screens/MobileDashboard'
 import AdminDashboard from './newui/screens/AdminDashboard'
 import Editor from './newui/screens/Editor'
 import MobileEditor from './newui/screens/MobileEditor'
-import { SmartSilenceCleaner } from './smartSilence/ui/SmartSilenceCleaner'
 import { isNewUi } from './newui/flag'
 import { useIsMobile } from './useMobile'
 import './styles.css'
@@ -33,7 +32,6 @@ import './design/shell.css'
 // P3: Retake Cleaner panel presentation (scoped; visual-only).
 import './design/panel.css'
 // P4: Silence Settings sheet (scoped; visual-only).
-import './design/silence.css'
 // P5: editor shell + top bar (scoped; visual-only).
 import './design/editor.css'
 // P6: media library (scoped; visual-only).
@@ -172,15 +170,6 @@ const IS_ADMIN_ROUTE =
   (window.location.pathname.replace(/\/+$/, '') === ADMIN_PATH ||
     new URLSearchParams(window.location.search).has('admin'))
 
-// Smart Silence Cleaner (isolated preview): `?silence=1` USED to render the
-// transcript-gap silence page. DORMANT — the Retake/Speech-cleaner silence path
-// now uses the FSMN engine, so this experimental route is disabled (code kept,
-// import retained, just never mounted). Flip DORMANT off to bring it back.
-const SMART_SILENCE_DORMANT = true
-const IS_SILENCE_ROUTE =
-  !SMART_SILENCE_DORMANT &&
-  typeof window !== 'undefined' &&
-  new URLSearchParams(window.location.search).has('silence')
 
 // TEST BRANCH ONLY (silence-mastery): this branch ships to its own public
 // preview URL purely for testing and never merges to main. No login of any
@@ -217,7 +206,6 @@ function Root(): JSX.Element {
   const view = useStore((s) => s.view)
   const isMobile = useIsMobile()
 
-  if (IS_SILENCE_ROUTE) return <SmartSilenceCleaner />
   if (IS_ADMIN_ROUTE) return <AdminDashboard />
 
   // The new UI (Dashboard/Editor) never mounts the legacy <App/>, which is the

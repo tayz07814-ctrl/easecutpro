@@ -1,29 +1,12 @@
 // Cloud build — Retake-Aware Cut Beta for the browser (no PC server).
 //
-// WORD CUTS are now LLM-first, "ProCut style": instead of the rules-first
-// detectors deciding the cuts and Opus only adjudicating the ambiguous ones, the
-// FULL index-anchored transcript (shared/cutcutpro buildAiPayload) goes to the
-// SAME Opus finalizer ProCut uses (the `procut-judge` edge fn, empty first pass)
-// and Opus scans everything and returns the cut EDL. This closes the recall gap
-// vs ProCut — Opus is the detector, not a downstream referee.
+// WORD CUTS are LLM-first, "ProCut style": the FULL index-anchored transcript
+// (shared/cutcutpro buildAiPayload) goes to the judge (the `ultracut-judge`
+// edge fn, empty first pass) which scans everything and returns the cut EDL.
 //
-// SILENCE runs as TWO stages bracketing the judge, so one Find Cuts press drives
-// the creator's whole 3-stage pipeline:
-//
-//   stage 1  Smart Silence  — transcript-gap engine (smartSilence/engine
-//                             planSilence, "Smart Silence settings" modal)
-//   stage 2  Retake judge   — Gemma over the FULL verbatim word list
-//   stage 3  FSMN VAD       — audio VAD + seam padding ("Silence settings" modal)
-//
-// Nothing is applied between stages: all three produce SOURCE-time spans that are
-// composed at the end, so the judge always sees the complete transcript. The two
-// silence stages are UNIONED (unionSilenceRegions), which means that wherever
-// they disagree about a pause the MORE AGGRESSIVE one wins — a gentle FSMN preset
-// will still be tightened wherever Smart Silence cut deeper. Both stages are
-// independently tunable and either can be neutralised from its own modal.
-//
-// The desktop path (src/main/retakeaware, runRetakeAwareCut) still uses the
-// hybrid, untouched.
+// NO SILENCE: every silence-cutting engine was removed from this branch
+// (Smart Silence transcript-gap, FSMN VAD, Silero VAD). The judge cuts words
+// only; silenceRegions is always empty.
 //
 // The result shape (RetakeAwareResult) and the store's review-first contract are
 // identical, so the transcript/highlight/Execute UX is unchanged. Debug JSON is
@@ -42,18 +25,10 @@ import {
 import { toAppTranscript, type ProgressFn } from '@shared/retakeaware/engine'
 import { spansToWordIds } from '@shared/retakeaware/analyze'
 import { detectArtifacts } from '@shared/retakeaware/artifacts'
-import { retakeBetaVadSafetyOpts } from '@shared/retakeaware/silence'
-import { DEFAULT_VAD_SILENCE_SETTINGS, type VadSilenceSettings } from '@shared/vadsilence'
-import { DEFAULT_RETAKE_FINAL_BOSS_SETTINGS, type RetakeFinalBossSettings } from '@shared/retakefinalboss'
-import { detectRetakeFinalBossSilences } from './retakeFinalBossVad'
-import { planSilence } from '../smartSilence/engine'
-import { BALANCED } from '../smartSilence/presets'
-import type { SilenceSettings as SmartSilenceSettings } from '../smartSilence/types'
 import { getSupabase, invokeEdge } from './supabase'
 import { extractSttAudio } from './audio'
 import { cachedTranscribe, getCachedTranscript, setCachedTranscript } from './transcriptCache'
 import { transcribeVerbatimCloud } from './stt'
-import { detectSilenceFloat32, vadSilenceRegions } from './vad'
 
 /** Opus EDL (inclusive word-index cuts) -> Retake β time-based CutSpans. The
  *  silence engine + spansToWordIds both work in time, so this is the only bridge
@@ -73,21 +48,6 @@ function edlToRetakeCutSpans(edl: Edl, map: TimestampMap): CutSpan[] {
     })
   }
   return spans
-}
-
-/** Union the two silence stages into one sorted, non-overlapping list. Both
- *  stages emit `protect: true` verbatim spans, so overlapping pauses collapse
- *  into the WIDER span — wherever Smart Silence (transcript gaps) and FSMN
- *  (audio VAD) disagree about a pause, the more aggressive one wins. */
-function unionSilenceRegions(regions: SilenceRegion[]): SilenceRegion[] {
-  const sorted = [...regions].sort((a, b) => a.start - b.start)
-  const out: SilenceRegion[] = []
-  for (const r of sorted) {
-    const last = out[out.length - 1]
-    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end)
-    else out.push({ ...r })
-  }
-  return out.map((r, i) => ({ ...r, id: `sil-${i}` }))
 }
 
 /** Persist every run's debug JSON (transcription + Opus payload/reply + the cuts
@@ -121,16 +81,13 @@ async function saveRetakeDebug(debug: Record<string, unknown>): Promise<string |
 
 export async function retakeAwareCutCloud(
   mediaId: string,
-  onProgress?: (pct: number, msg?: string) => void,
-  fsmnSettings: RetakeFinalBossSettings = DEFAULT_RETAKE_FINAL_BOSS_SETTINGS,
-  smartSettings: SmartSilenceSettings = BALANCED.settings
+  onProgress?: (pct: number, msg?: string) => void
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
   console.log('[retake-aware-beta] cloud job start (GPT-5.6 Luna + sharp judge):', mediaId)
 
-  // 1. audio — decoded ONCE; the transcription, the VAD safety scan and the
-  //    silence engine all read from this single decode (shared clock).
+  // 1. audio — decoded ONCE; the transcription reads from this single decode.
   op(3, 'Getting your audio ready…')
   const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
 
@@ -139,48 +96,11 @@ export async function retakeAwareCutCloud(
   const { vt, warnings: tw } = await cachedTranscribe(mediaId, audio, op)
   warnings.push(...tw)
 
-  // 3. SILENCE STAGE 1 — SMART SILENCE (transcript-gap engine, driven by the
-  //    "Smart Silence settings" modal). Reads word timestamps only, so it needs
-  //    nothing but the transcript and runs before the judge. Its spans are held
-  //    in SOURCE time and unioned with the FSMN pass (stage 3) at the end —
-  //    nothing is applied here, so the judge below still sees the full verbatim
-  //    word list. NOTE: with removeFillers on, a gap cut spans the filler word
-  //    sitting between two kept words, so this stage can delete filler words as
-  //    well as dead air.
-  op(52, 'Trimming dead air…')
-  let smartRegions: SilenceRegion[] = []
-  try {
-    const engineWords = toAppTranscript(vt).words.map((w) => ({
-      startMs: w.start * 1000,
-      endMs: w.end * 1000,
-      text: w.text
-    }))
-    smartRegions = planSilence(engineWords, smartSettings, audio.durationS * 1000).cuts.map((c, i) => ({
-      id: `smartsil-${i}`,
-      start: c.startMs / 1000,
-      end: c.endMs / 1000,
-      action: 'remove' as const,
-      protect: true
-    }))
-  } catch (e) {
-    warnings.push(`Smart Silence pass failed (${(e as Error).message}) — transcript-gap trimming skipped.`)
-  }
+  // NO SILENCE STAGES: every silence-cutting engine was removed from this
+  // branch. The judge below sees no pause markers and cuts words only.
+  const vadSil: { start: number; end: number }[] = []
 
-  // 4. VAD safety scan (Retake β's own profile) — ONE pass, reused for the Opus
-  //    payload's pause markers AND the silence engine below (same as the rules
-  //    path's safety scan). If it fails we fall back to transcript-gap pauses.
-  op(56, 'Listening for pauses…')
-  let vadSil: { start: number; end: number }[] = []
-  try {
-    vadSil = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadSafetyOpts(), audio.durationS)).map((r) => ({
-      start: r.start,
-      end: r.end
-    }))
-  } catch (e) {
-    warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
-  }
-
-  // 5. WORD-CUT BRAIN (stage 2) — 0.01 Retake Beta judge over the FULL transcript:
+  // 3. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript:
   //    OpenAI GPT-5.6 Luna via OpenRouter (ultracut-judge edge fn) on the 'sharp'
   //    word-list prompt, reasoning effort 'medium'. It replaces Gemma 4 31B, whose
   //    shared free provider was rate-limiting (HTTP 429) and returning empty
@@ -226,9 +146,9 @@ export async function retakeAwareCutCloud(
     warnings.push('Retake β couldn’t finish — please try again.')
   }
 
-  // 6. ASR-artifact repair (stretched-word clamp + orphan record-clicks) so the
-  //    transcript timings are truthful before the silence stages are composed.
-  op(90, 'Cleaning silence…')
+  // 4. ASR-artifact repair (stretched-word clamp) so the transcript timings are
+  //    truthful. Transcript-only (no VAD scan on this branch).
+  op(90, 'Finishing up…')
   const artifacts = detectArtifacts(vt.words, baseCutSpans, vadSil)
   const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
   // Only the LLM's cuts drive the retake removals — drop the artifact
@@ -237,52 +157,11 @@ export async function retakeAwareCutCloud(
   const cutSpans = [...baseCutSpans].sort((a, b) => a.start - b.start)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
-  const keptWords = artifacts.repairedWords.filter((w) => {
-    const m = (w.start + w.end) / 2
-    return !cutSpans.some((s) => m >= s.start && m <= s.end)
-  })
-  // 7. SILENCE STAGE 3 — FSMN (FunASR) engine, ported from 0.07. In-browser ONNX
-  //    VAD at the model's published defaults, endpoint cushions removed, then the
-  //    creator's seam padding (retakeFinalBossSettings, the "Silence settings"
-  //    modal). Reads the audio waveform, so it is independent of stages 1-2.
-  let fsmnRegions: SilenceRegion[] = []
-  try {
-    fsmnRegions = await detectRetakeFinalBossSilences(audio.float32, audio.sampleRate, audio.durationS, fsmnSettings)
-  } catch (e) {
-    warnings.push(`FSMN silence pass failed (${(e as Error).message}) — no silence removed this run.`)
-  }
+  // NO SILENCE on this branch — the engines are gone, nothing stages pauses.
+  const silenceRegions: SilenceRegion[] = []
+  const silenceDebug = { source: 'none — silence engines removed from this branch' }
 
-  // Compose stage 1 + stage 3 into the single protected silence list the review
-  // UI and Execute path consume. Overlapping pauses merge into the wider span.
-  const silenceRegions = unionSilenceRegions([...smartRegions, ...fsmnRegions])
-
-  const totalS = (rs: SilenceRegion[]): number => Number(rs.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3))
-  const silenceDebug = {
-    source: 'smart_silence+fsmn_vad',
-    // Stage 1 — transcript-gap engine (Smart Silence settings).
-    smart_silence: {
-      settings: smartSettings,
-      regions_count: smartRegions.length,
-      total_removed_s: totalS(smartRegions),
-      regions: smartRegions.map((r) => [Number(r.start.toFixed(2)), Number(r.end.toFixed(2))])
-    },
-    // Stage 3 — audio VAD engine (Silence settings).
-    fsmn: {
-      settings: fsmnSettings,
-      silence_detector: 'funasr_fsmn_vad_onnx',
-      regions_count: fsmnRegions.length,
-      total_removed_s: totalS(fsmnRegions),
-      regions: fsmnRegions.map((r) => [Number(r.start.toFixed(2)), Number(r.end.toFixed(2))])
-    },
-    // The union actually applied — compare against the two stages above to see
-    // which engine widened any given pause.
-    regions_count: silenceRegions.length,
-    total_removed_s: totalS(silenceRegions),
-    regions: silenceRegions.map((r) => [Number(r.start.toFixed(2)), Number(r.end.toFixed(2))]),
-    kept_words: keptWords.map((w) => [Number(w.start.toFixed(2)), Number(w.end.toFixed(2))])
-  }
-
-  // 8. debug JSON (best-effort, private bucket).
+  // 5. debug JSON (best-effort, private bucket).
   const debugPath = await saveRetakeDebug({
     provider: vt.provider,
     ai_payload: payload,
@@ -308,7 +187,7 @@ export async function retakeAwareCutCloud(
     fillerDecisions: [],
     debugPath,
     warnings,
-    summary: `Retake β: ${deleteWordIds.length} word(s) flagged, ${silenceRegions.length} pause(s)`
+    summary: `Retake β: ${deleteWordIds.length} word(s) flagged`
   }
 }
 
@@ -329,15 +208,13 @@ export async function retakeAwareCutCloud(
 const ULTRACUT_MODEL = 'deepseek/deepseek-v4-flash'
 export async function ultracutCutCloud(
   mediaId: string,
-  onProgress?: (pct: number, msg?: string) => void,
-  vadSettings: VadSilenceSettings = DEFAULT_VAD_SILENCE_SETTINGS
+  onProgress?: (pct: number, msg?: string) => void
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
   console.log('[ultracut] cloud job start (DeepSeek first-party judge):', mediaId, ULTRACUT_MODEL)
 
-  // 1. audio — decoded ONCE; transcription, VAD safety scan and the silence
-  //    engine all read from this single decode (shared clock).
+  // 1. audio — decoded ONCE; transcription reads from this single decode.
   op(3, 'Getting your audio ready…')
   const audio = await extractSttAudio(mediaId, (p) => op(3 + Math.round(p * 0.04)))
 
@@ -346,20 +223,10 @@ export async function ultracutCutCloud(
   const { vt, warnings: tw } = await cachedTranscribe(mediaId, audio, op)
   warnings.push(...tw)
 
-  // 3. VAD safety scan (same profile as Retake β) — reused for the payload's
-  //    pause markers AND the silence engine below.
-  op(56, 'Listening for pauses…')
-  let vadSil: { start: number; end: number }[] = []
-  try {
-    vadSil = (await detectSilenceFloat32(audio.float32, audio.sampleRate, retakeBetaVadSafetyOpts(), audio.durationS)).map((r) => ({
-      start: r.start,
-      end: r.end
-    }))
-  } catch (e) {
-    warnings.push(`VAD safety scan failed (${(e as Error).message}) — trimming from transcript gaps only.`)
-  }
+  // NO SILENCE: every silence-cutting engine was removed from this branch.
+  const vadSil: { start: number; end: number }[] = []
 
-  // 4. WORD-CUT BRAIN — the OpenRouter TEST model (ultracut-judge) over the FULL
+  // 3. WORD-CUT BRAIN — the OpenRouter TEST model (ultracut-judge) over the FULL
   //    transcript, empty first pass. Same index-anchored payload + validateEdl as
   //    Retake β; only the judge endpoint + provider differ.
   op(72, 'Ultracut is judging your takes…')
@@ -405,8 +272,8 @@ export async function ultracutCutCloud(
     warnings.push('Ultracut couldn’t finish — please try again.')
   }
 
-  // 5. SILENCE — the UNIFIED configurable VAD pass (identical to Retake β).
-  op(90, 'Cleaning silence…')
+  // 4. finish: transcript from repaired words; word cuts only.
+  op(90, 'Finishing up…')
   const artifacts = detectArtifacts(vt.words, baseCutSpans, vadSil)
   const transcript = toAppTranscript({ ...vt, words: artifacts.repairedWords })
   // Only the LLM's cuts drive the retake removals — drop the artifact
@@ -415,24 +282,11 @@ export async function ultracutCutCloud(
   const cutSpans = [...baseCutSpans].sort((a, b) => a.start - b.start)
   const deleteWordIds = spansToWordIds(cutSpans, transcript)
 
-  const keptWords = artifacts.repairedWords.filter((w) => {
-    const m = (w.start + w.end) / 2
-    return !cutSpans.some((s) => m >= s.start && m <= s.end)
-  })
-  let silenceRegions: SilenceRegion[] = []
-  try {
-    silenceRegions = await vadSilenceRegions(audio.float32, audio.sampleRate, audio.durationS, vadSettings, keptWords, 'betavad')
-  } catch (e) {
-    warnings.push(`Silence VAD pass failed (${(e as Error).message}) — no silence removed this run.`)
-  }
-  const silenceDebug = {
-    source: 'vad_pass',
-    settings: vadSettings,
-    regions_count: silenceRegions.length,
-    total_removed_s: Number(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0).toFixed(3))
-  }
+  // NO SILENCE on this branch — the engines are gone, nothing stages pauses.
+  const silenceRegions: SilenceRegion[] = []
+  const silenceDebug = { source: 'none — silence engines removed from this branch' }
 
-  // 6. debug JSON (best-effort, private bucket) — its own mode so ultracut runs
+  // 5. debug JSON (best-effort, private bucket) — its own mode so ultracut runs
   //    are distinguishable from retake runs.
   const debugPath = await saveRetakeDebug({
     mode: 'retake_ultracut',
@@ -460,7 +314,7 @@ export async function ultracutCutCloud(
     fillerDecisions: [],
     debugPath,
     warnings,
-    summary: `Ultracut: ${deleteWordIds.length} word(s) flagged, ${silenceRegions.length} pause(s)`
+    summary: `Ultracut: ${deleteWordIds.length} word(s) flagged`
   }
 }
 
