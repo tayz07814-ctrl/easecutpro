@@ -91,11 +91,12 @@ object VadEngine {
         tailTrim: Boolean
     ): List<DoubleArray> {
         stage(context, "audio decode")
+        // decodeMono16k THROWS with a named reason (no audio track / over the length
+        // cap / decoder failure) — a silent empty return here used to read as "VAD ran
+        // and found nothing", and the caller fell back to transcript gaps without
+        // anyone knowing why.
         val (pcm, count) = decodeMono16k(context, uri)
-        if (count <= 0) {
-            stage(context, "done")
-            return emptyList()
-        }
+        if (count <= 0) throw IllegalStateException("decoder produced no audio samples")
         val durationS = count.toDouble() / TARGET_RATE
         val raw = detectFsmnSilences(context, pcm, count, durationS)
         stage(context, "cut geometry")
@@ -535,14 +536,14 @@ object VadEngine {
                     trackIndex = i; format = f; break
                 }
             }
-            if (trackIndex < 0 || format == null) return ShortArray(0) to 0
+            if (trackIndex < 0 || format == null) throw IllegalStateException("no audio track in clip")
             extractor.selectTrack(trackIndex)
             if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L
             // Past this the PCM alone would dominate the heap; word-gap silence is the
             // better trade for feature-length audio.
-            if (durationUs > MAX_DURATION_US) return ShortArray(0) to 0
+            if (durationUs > MAX_DURATION_US) throw IllegalStateException("clip over 45 min — VAD skipped")
 
             // Pre-size from the container duration so the decode never reallocates.
             val estimate = if (durationUs > 0) (durationUs / 1_000_000.0 * TARGET_RATE).toInt() + TARGET_RATE
@@ -633,14 +634,16 @@ object VadEngine {
                     codec.releaseOutputBuffer(outIndex, false)
                 }
             }
-        } catch (_: Exception) {
-            return ShortArray(0) to 0
+        } catch (e: IllegalStateException) {
+            throw e // the named reasons above — pass through verbatim
+        } catch (e: Exception) {
+            throw IllegalStateException("audio decode failed: ${e.javaClass.simpleName}: ${e.message}")
         } finally {
             try { codec?.stop() } catch (_: Exception) {}
             try { codec?.release() } catch (_: Exception) {}
             try { extractor?.release() } catch (_: Exception) {}
         }
-        if (written == 0 || sampleRate <= 0) return ShortArray(0) to 0
+        if (written == 0 || sampleRate <= 0) throw IllegalStateException("decoder produced no audio samples")
         return out to written
     }
 

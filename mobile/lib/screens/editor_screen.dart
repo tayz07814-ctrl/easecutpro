@@ -1111,6 +1111,7 @@ class _EditorScreenState extends State<EditorScreen> {
     if (cutSilence && _model.sourcePath != null) {
       final prog = ValueNotifier<String>('Cleaning silence…');
       _showProgress(prog);
+      var timedOut = false;
       try {
         final regions = await NativeVad.detectSilences(
           'file://${_model.sourcePath!}',
@@ -1118,13 +1119,25 @@ class _EditorScreenState extends State<EditorScreen> {
           padAfterS: SilenceSettings.padAfterS,
           trimEdgesS: SilenceSettings.edgeTrimS,
           tailTrim: SilenceSettings.removeBreaths,
-        ).timeout(const Duration(minutes: 4), onTimeout: () => const []);
+        ).timeout(const Duration(minutes: 4), onTimeout: () {
+          timedOut = true;
+          return const [];
+        });
         fsmn = [for (final r in regions) [(r[0] * 1000).round(), (r[1] * 1000).round()]];
       } catch (_) {
         fsmn = const [];
       } finally {
         if (mounted) Navigator.of(context).pop();
         prog.dispose();
+      }
+      // Name the engine that produced the silence cuts — "did it really use the
+      // VAD?" must never be a feeling. Every fallback to transcript gaps says so.
+      if (fsmn.isNotEmpty) {
+        _toast('Silence: on-device VAD · ${fsmn.length} gaps');
+      } else {
+        _toast(timedOut
+            ? 'Silence: VAD timed out — using transcript gaps'
+            : 'Silence: transcript-gap fallback (VAD found nothing / unavailable)');
       }
     }
 
