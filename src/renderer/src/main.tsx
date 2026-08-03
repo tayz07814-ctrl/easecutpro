@@ -182,6 +182,13 @@ const IS_SILENCE_ROUTE =
   typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).has('silence')
 
+// TEST BRANCH ONLY (silence-mastery): this branch ships to its own public
+// preview URL purely for testing and never merges to main. No login of any
+// kind — the cloud bootstrap below skips Supabase auth and opens a local
+// editor session directly (the same path the app takes when offline: import /
+// edit / silence-clean / export all run on-device and need no backend).
+const TEST_BRANCH_NO_AUTH = true
+
 type RouteView = 'landing' | 'auth' | 'home' | 'terms' | 'privacy' | 'refund'
 
 // Cloud routing on top of the view-state machine. It's all one SPA (Vercel
@@ -244,7 +251,8 @@ function Root(): JSX.Element {
       // config + network. Unconfigured/offline still opens a local editor
       // session (manual editing + on-device export need no backend at all).
       if (IS_CLOUD) {
-        const online = supabaseConfigured() && navigator.onLine !== false
+        // Test branch: force the no-backend path so no auth screen ever shows.
+        const online = !TEST_BRANCH_NO_AUTH && supabaseConfigured() && navigator.onLine !== false
         if (cancelled) return
         useStore.getState().setServerAvailable(online)
         if (!online) {
