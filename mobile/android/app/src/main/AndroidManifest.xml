@@ -33,6 +33,14 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- The FSMN silence engine (MediaCodec decode + ONNX inference) lives in its
+             OWN process: a native fault there kills only :vadengine, never the app —
+             the binder call throws and EcVad falls back to word-gap silence. -->
+        <provider
+            android:name=".VadProvider"
+            android:authorities="com.easecutpro.easecut.vadengine"
+            android:exported="false"
+            android:process=":vadengine" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
