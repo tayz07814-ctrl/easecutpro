@@ -64,6 +64,7 @@ import { createProject, saveProject, serializeProject, serializeProjectLite } fr
 import { openSpaceProject, saveMyEdit, fmtBytes, type CoworkProject, type XferReporter } from './cloud/cowork'
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideoCloud } from './cloud/batchCleanCloud'
+import { saveSilenceDebug } from './cloud/silenceDebug'
 import { getFile } from './webmedia'
 
 function uid(): string {
@@ -2059,7 +2060,8 @@ export const useStore = create<AppState>((set, get) => ({
     // Media length bounds the trailing cut: the real duration when known, else
     // the base timeline's length, else the last word (no trailing cut at all).
     const durationS = p0.media?.duration || baseTimelineDuration(p0) || (words.length ? words[words.length - 1].end : 0)
-    const regions = planSilenceMastery(words, durationS, get().silenceMasterySettings)
+    const settings = get().silenceMasterySettings
+    const regions = planSilenceMastery(words, durationS, settings)
     // 3. Stage review-first: chips in the transcript + cards in the panel;
     //    retakeSilenceStaged=true → Execute applies these exact spans verbatim.
     set({
@@ -2073,6 +2075,31 @@ export const useStore = create<AppState>((set, get) => ({
           ? `Silence Mastery: ${regions.length} silent region${regions.length === 1 ? '' : 's'} found — review, then Apply`
           : 'Silence Mastery: no silence over the threshold — nothing to cut'
       }
+    })
+    // 4. Debug telemetry (best-effort, fire-and-forget): the exact inputs the
+    //    engine saw and each gap's verdict, for offline review of misses.
+    const r2 = (n: number): number => Math.round(n * 100) / 100
+    const gaps: unknown[] = []
+    if (words.length) {
+      if (words[0].start > 0.01) gaps.push({ kind: 'leading', from: 0, to: r2(words[0].start), len: r2(words[0].start), cut: words[0].start >= settings.minSilenceS })
+      for (let i = 0; i < words.length - 1; i++) {
+        const len = words[i + 1].start - words[i].end
+        if (len > 0.05) gaps.push({ kind: 'gap', from: r2(words[i].end), to: r2(words[i + 1].start), len: r2(len), cut: len >= settings.minSilenceS })
+      }
+      const tail = durationS - words[words.length - 1].end
+      if (tail > 0.05) gaps.push({ kind: 'trailing', from: r2(words[words.length - 1].end), to: r2(durationS), len: r2(tail), cut: tail >= settings.minSilenceS })
+    }
+    void saveSilenceDebug('stage', {
+      settings,
+      duration_s: r2(durationS),
+      media_path: p0.media?.path ?? null,
+      doc_mode: !!stored.timeline,
+      word_count: t.words.length,
+      deleted_word_count: t.words.length - words.length,
+      words: t.words.map((w) => [r2(w.start), r2(w.end), w.text, w.deleted ? 1 : 0]),
+      gaps,
+      staged_regions: regions.map((r) => [r.id, r2(r.start), r2(r.end)]),
+      staged_total_s: r2(regions.reduce((n, r) => n + (r.end - r.start), 0))
     })
   },
 
@@ -2705,6 +2732,23 @@ export const useStore = create<AppState>((set, get) => ({
       polishing: { active: true, percent: 0 },
       polishReq: st.polishReq + 1
     }))
+    // Debug telemetry (best-effort): what was actually COMMITTED — the applied
+    // regions, the project's silence set afterwards, and the resulting keep
+    // ranges — so a "cut didn't land" report can be diagnosed from data.
+    if (enabled.some((r) => String(r.id).startsWith('sm'))) {
+      const r2 = (n: number): number => Math.round(n * 100) / 100
+      const after = get().project
+      const keeps = computeKeepRanges(after)
+      void saveSilenceDebug('apply', {
+        applied_regions: enabled.map((r) => [r.id, r2(r.start), r2(r.end)]),
+        words_cut: hadWords,
+        doc_mode: !!after.timeline,
+        project_silences: after.silences.map((r) => [r.id, r2(r.start), r2(r.end), r.action, r.protect ? 1 : 0]),
+        keep_ranges: keeps.map((k) => [r2(k.start), r2(k.end)]),
+        edited_length_s: r2(keeps.reduce((n, k) => n + (k.end - k.start), 0)),
+        source_length_s: r2(after.media?.duration ?? baseTimelineDuration(after))
+      })
+    }
   },
 
   selectFastCuts: async () => {
