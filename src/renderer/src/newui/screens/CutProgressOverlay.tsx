@@ -24,26 +24,35 @@ export default function CutProgressOverlay(): JSX.Element | null {
   const jobMsg = useStore((s) => s.job.message)
   const polishing = useStore((s) => s.polishing)
 
-  const exporting = jobActive && jobKind === 'export'
-  const phase: 'finding' | 'polishing' | 'exporting' | null = exporting
-    ? 'exporting'
-    : cutJobActive
-      ? 'finding'
-      : polishing.active
-        ? 'polishing'
-        : null
+  // EVERY long job lands here, in the middle of the screen. Each tool used to
+  // draw its own bar wherever it happened to live, which meant a Variations or
+  // Transcribe run reported itself inside the Speech cleaner panel — the one
+  // place it had nothing to do with. One overlay, one bar, titled per tool.
+  const TITLES: Record<string, [string, string]> = {
+    export: ['Exporting video…', 'Rendering your edit. Keep this tab open until it finishes.'],
+    transcribe: ['Transcribing…', 'Reading the speech in your video.'],
+    silence: ['Finding silences…', 'Listening for dead air and long pauses.'],
+    variations: ['Casting variations…', 'Rebuilding your edit into alternate cuts.'],
+    zoom: ['Planning Auto Zoom…', 'Picking the moments worth punching in on.'],
+    broll: ['Placing b-roll…', 'Matching your overlay cards to what you talk about.'],
+    probe: ['Importing…', 'Reading your media.']
+  }
+  const busy = jobActive || cutJobActive || polishing.active
   // Hooks must run unconditionally — compute the smoothed value, then bail below.
-  const smoothPct = Math.round(useSmoothProgress(cutJobActive || exporting, jobPct))
-  if (!phase) return null
+  const smoothPct = Math.round(useSmoothProgress(busy && !polishing.active, jobPct))
+  if (!busy) return null
 
-  const pct = phase === 'polishing' ? Math.max(2, polishing.percent) : Math.max(2, smoothPct)
-  const title = phase === 'exporting' ? 'Exporting video…' : phase === 'finding' ? 'Finding cuts…' : 'Polishing cuts…'
-  const sub =
-    phase === 'exporting'
-      ? 'Rendering your edit. Keep this tab open until it finishes.'
-      : phase === 'finding'
-        ? jobMsg || 'Analyzing your speech for retakes and dead air.'
-        : 'Adding the finishing touches so playback stays perfectly smooth.'
+  const pct = polishing.active && !jobActive ? Math.max(2, polishing.percent) : Math.max(2, smoothPct)
+  // A cut run reports untagged, so cutJobActive is what names it.
+  const known = jobActive && jobKind ? TITLES[jobKind] : undefined
+  const [title, subFallback] = known
+    ? known
+    : cutJobActive
+      ? ['Finding cuts…', 'Analyzing your speech for retakes and dead air.']
+      : polishing.active
+        ? ['Polishing cuts…', 'Adding the finishing touches so playback stays perfectly smooth.']
+        : ['Working…', '']
+  const sub = polishing.active && !jobActive ? subFallback : jobMsg || subFallback
 
   return (
     <div

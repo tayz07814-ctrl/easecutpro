@@ -6,7 +6,6 @@
 
 import { css } from '../css'
 import { useRetake } from '../data/useRetake'
-import { useSmoothProgress } from '../../useSmoothProgress'
 
 const HAIR = 'rgba(255,255,255,.06)'
 
@@ -97,9 +96,8 @@ function originalRuntime(r: ReturnType<typeof useRetake>): number {
   return end || r.sourceDurationS
 }
 
-export default function SpeechCleanerPanel(): JSX.Element {
+export default function SpeechCleanerPanel(): JSX.Element | null {
   const r = useRetake()
-  const shownPct = Math.round(useSmoothProgress(r.job.active, r.job.percent))
 
   if (r.state === 'idle') {
     return (
@@ -119,17 +117,10 @@ export default function SpeechCleanerPanel(): JSX.Element {
     )
   }
 
-  if (r.state === 'analyzing') {
-    return (
-      <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px')}>
-        <div style={css('background:#111117;border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:14px')}>
-          <div style={css('display:flex;align-items:center;justify-content:space-between;font-size:12.5px')}><span style={css('color:#ededf2;font-weight:550')}>Finding cuts…</span><span style={css("font-family:'Geist Mono',monospace;font-size:11px;color:#9a9aae")}>{shownPct}%</span></div>
-          <div style={css('height:4px;border-radius:2px;background:#22222b;overflow:hidden;margin-top:12px')}><div style={css(`width:${Math.max(4, shownPct)}%;height:100%;border-radius:2px;background:#7c6bff`)} /></div>
-          <div style={css('font-size:12px;color:#9a9aae;margin-top:12px;line-height:1.5')}>{r.job.message || 'Working…'}</div>
-        </div>
-      </div>
-    )
-  }
+  // Progress lives in the centered CutProgressOverlay now — a bar in this panel
+  // is both the wrong place (other tools' runs showed up here) and a second
+  // source of truth for the same job.
+  if (r.state === 'analyzing') return null
 
   const applied = r.state === 'executed' && r.deletedCount > 0
   const cuts = deriveCuts(r, applied)

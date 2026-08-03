@@ -42,10 +42,6 @@ export default function VariationsPanel(): JSX.Element {
   const ai = useStore((s) => s.aiVariations)
   const aiWarnings = useStore((s) => s.aiVariationWarnings)
   const busy = useStore((s) => s.aiVariationsBusy)
-  const job = useStore((s) => s.job)
-  // Only this tab's own run drives the bar (the shared job is also used by cuts,
-  // b-roll and export).
-  const varPct = Math.round(job.kind === 'variations' && job.active ? job.percent : 0)
   const mediaDuration = useStore((s) => s.project.media?.duration ?? 0)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -116,19 +112,6 @@ export default function VariationsPanel(): JSX.Element {
             {busy ? 'Casting…' : 'Generate'}
           </button>
         </div>
-        {/* Own progress, in this tab. The run used to report as a generic job and
-            surfaced as "Finding cuts…" over in Speech cleaner. */}
-        {busy && (
-          <div style={css('margin-top:11px')}>
-            <div style={css('display:flex;align-items:center;justify-content:space-between;font-size:11.5px')}>
-              <span style={css('color:#c9c9da')}>{job.message || 'Casting variations…'}</span>
-              <span style={css("font-family:'Geist Mono',monospace;font-size:10.5px;color:#9a9aae")}>{varPct}%</span>
-            </div>
-            <div style={css('height:4px;border-radius:2px;background:#22222b;overflow:hidden;margin-top:8px')}>
-              <div style={css(`width:${Math.max(4, varPct)}%;height:100%;border-radius:2px;background:#7c6bff;transition:width .25s ease`)} />
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Generated set — pick one to load it into the preview below. */}

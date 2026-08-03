@@ -85,6 +85,11 @@ function createWindow() {
     minHeight: 600,
     title: 'EaseCutPro',
     backgroundColor: '#0b0b0f',
+    // The File/Edit/View/Window strip is a stock Electron menu bar and reads as a
+    // 1990s app bolted above the editor. Hidden on Windows/Linux (Alt still
+    // reveals it); macOS keeps its menu because the OS owns that bar and the
+    // standard shortcuts live there.
+    autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -180,7 +185,8 @@ app.whenReady().then(() => {
     cb(from.startsWith(APP_ORIGIN))
   })
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate()))
+  // Only macOS needs an application menu; elsewhere it is pure chrome we don't want.
+  Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate(menuTemplate()) : null)
   createWindow()
 
   app.on('activate', () => {

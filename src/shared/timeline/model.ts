@@ -635,13 +635,17 @@ export function moveClipInDoc(
     : resolveFreeStart(to.clips.filter((c) => c.id !== clipId), want, clip.duration)
   if (toTrackId === track.id && start === clip.start) return doc
   let moved: Clip = { ...clip, trackId: toTrackId, start, end: start + clip.duration }
-  // A MAIN clip promoted onto an overlay lane lands full-frame and centred: the
-  // overlay renderers (preview + export) default a missing ovScale to a small
-  // PiP (0.45), which silently SHRANK manually-moved clips. Stamp the identity
-  // placement on EVERY promotion — a stale ovScale/ovX/ovY left over from an
-  // earlier stint as an overlay used to survive the round-trip and drop the clip
-  // back in off-centre and half-size. B-roll flows add their own clips directly
-  // (addClip), so they never come through here and keep their framing.
+  // A MAIN clip promoted onto an overlay lane lands FULL FRAME. The overlay
+  // renderers default a missing ovScale to a 0.45 PiP, which silently shrank
+  // manually-moved clips, and a stale ovScale/ovX/ovY from an earlier stint as
+  // an overlay survived the round trip — so stamp the identity placement on
+  // EVERY promotion, not just when one happens to be absent.
+  //
+  // ovX/ovY are the box's TOP-LEFT as a fraction of the frame for overlay clips
+  // (`left: x * width`), NOT a centre offset — the main lane's identically-named
+  // fields are centre-based, which is an easy and expensive thing to mix up.
+  // At ovScale 1 the box is the whole frame, so 0,0 is exactly full-bleed.
+  // B-roll flows add their clips directly (addClip) and keep their own framing.
   if (track.isMain && !to.isMain && to.kind === 'video') {
     moved = { ...moved, metadata: { ...clip.metadata, ovScale: 1, ovX: 0, ovY: 0 } }
   }
