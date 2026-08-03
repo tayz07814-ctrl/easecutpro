@@ -2069,6 +2069,15 @@ export const useStore = create<AppState>((set, get) => ({
     //    as runRetakeCutBeta.
     const stored = get().project
     const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
+    // PERSIST the folded base when the stored project has none (doc-native
+    // drag, or an undo that restored a doc-only snapshot). Without this the
+    // Apply is a silent NO-OP: computeKeepRanges and the timeline routing
+    // both read the STORED project, see duration 0, and bail — regions stage
+    // fine but nothing ever gets cut (observed live: keeps=0, edited=0).
+    // Same base-persistence contract runRetakeCutBeta uses.
+    if (!stored.media && !(stored.baseSequence?.length ?? 0)) {
+      set((st) => ({ project: { ...st.project, media: p0.media, baseSequence: p0.baseSequence } }))
+    }
     const t = get().project.transcript ?? null
     const words = (t?.words ?? []).filter((w) => !w.deleted).map((w) => ({ start: w.start, end: w.end, text: w.text }))
     // Media length bounds the trailing cut: the real duration when known, else
