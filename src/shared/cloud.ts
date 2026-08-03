@@ -21,13 +21,10 @@ export interface SttStatusRes {
 }
 
 export interface SttSignUploadReq {
+  // Free and unmetered — it only mints an upload URL. The AI-minute charge
+  // happens at aai-start/deepgram, measured from the uploaded audio's own
+  // header, because a caller holding a path can skip this step entirely.
   action: 'sign-upload'
-  /** audio container extension: m4a | wav */
-  ext: string
-  /** audio duration in seconds — metered against the plan's AI-minute cap. */
-  seconds?: number
-  /** free-tier AI-minute cap for this build (0 = unlimited); only 0.01 sends > 0. */
-  freeMin?: number
 }
 export interface SttSignUploadRes {
   /** storage object path inside the stt-audio bucket */

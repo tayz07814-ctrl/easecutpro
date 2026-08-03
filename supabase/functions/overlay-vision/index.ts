@@ -12,7 +12,7 @@
 // Anthropic Claude Opus as a fallback if the OpenRouter key/model is unavailable.
 // Both keys live ONLY in edge-function secrets.
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { gate } from '../_shared/gate.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -28,15 +28,6 @@ function preflight(req: Request): Response | null {
 const SYSTEM = `You label overlay / b-roll graphics for a video editor. Describe what the image DEPICTS in ONE short phrase a matcher can use — the visible text, product, or subject (e.g. "a red '50% OFF' discount badge", "a smiling before/after skincare photo", "a diagram of a bloated stomach"). No preamble, just the phrase.`
 
 const GEMMA_VISION = 'google/gemma-3-27b-it'
-
-async function requireUser(req: Request): Promise<boolean> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return !!data.user
-}
 
 /** Gemma via OpenRouter (OpenAI-compatible, multimodal). '' on any problem. */
 async function gemmaDescribe(image: string, mediaType: string): Promise<string> {
@@ -104,8 +95,11 @@ Deno.serve(async (req) => {
   const pf = preflight(req)
   if (pf) return pf
   try {
-    if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const body = await req.json().catch(() => ({}))
+    // Vision costs more than a text judge. The cap is 10 MB rather than the 1 MB
+    // default because the caller sends a full-size overlay image, not a thumbnail.
+    const g = await gate(req, 2, 10_000_000)
+    if (!g.ok) return g.res
+    const body = g.ctx.body
     const image = String(body?.image ?? '')
     const mt = String(body?.mediaType ?? 'image/png')
     const mediaType = /^image\/(png|jpeg|gif|webp)$/.test(mt) ? mt : 'image/png'

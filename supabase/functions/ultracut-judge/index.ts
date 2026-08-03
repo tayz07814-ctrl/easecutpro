@@ -17,6 +17,7 @@
 //    the chain-of-thought.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { gate } from '../_shared/gate.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -336,15 +337,6 @@ function resolvePrompt(variant: unknown): string {
   return typeof variant === 'string' && PROMPT_VARIANTS[variant] ? PROMPT_VARIANTS[variant] : SYSTEM
 }
 
-async function requireUser(req: Request): Promise<boolean> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return !!data.user
-}
-
 async function logDebug(fields: Record<string, unknown>): Promise<void> {
   try {
     await admin().rpc('log_delta_debug', { payload: { judge: 'ultracut', ...fields } })
@@ -478,11 +470,11 @@ Deno.serve(async (req) => {
   if (pf) return pf
 
   try {
-    if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
+    // Auth + payload cap + one AI credit, charged BEFORE the model call.
+    const g = await gate(req, 1)
+    if (!g.ok) return g.res
 
-    const { payload, model: requestedModel, promptVariant, reasoning } = await req
-      .json()
-      .catch(() => ({ payload: null, model: null, promptVariant: null, reasoning: null }))
+    const { payload, model: requestedModel, promptVariant, reasoning } = g.ctx.body
 
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
 

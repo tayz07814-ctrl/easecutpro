@@ -15,7 +15,7 @@
 // SYSTEM is a MIRRORED copy of OVERLAY_SUGGEST_SYSTEM in src/shared/overlay.ts
 // (Deno can't import from src) — keep them in sync.
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { gate } from '../_shared/gate.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -58,15 +58,6 @@ function buildUserMessage(sentences: Sentence[], library: LibItem[]): string {
     .map((x) => `- overlayId=${x.overlayId} | "${x.name}"${x.description ? ` | shows: ${x.description}` : ''}`)
     .join('\n')
   return `SENTENCES:\n${s}\n\nOVERLAY LIBRARY:\n${l}\n\nReturn JSON only.`
-}
-
-async function requireUser(req: Request): Promise<boolean> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return !!data.user
 }
 
 // Gemma via OpenRouter (OpenAI-compatible chat completions) — the app-wide default.
@@ -114,8 +105,10 @@ Deno.serve(async (req) => {
   const pf = preflight(req)
   if (pf) return pf
   try {
-    if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const { payload } = await req.json().catch(() => ({ payload: null }))
+    // Auth + payload cap + one AI credit, charged BEFORE the model call.
+    const g = await gate(req, 1)
+    if (!g.ok) return g.res
+    const payload = g.ctx.body.payload as { sentences?: unknown; library?: unknown } | null
     const sentences: Sentence[] = Array.isArray(payload?.sentences) ? payload.sentences : []
     const library: LibItem[] = Array.isArray(payload?.library) ? payload.library : []
     if (!sentences.length || !library.length) return json({ error: 'missing sentences or library' }, 400)

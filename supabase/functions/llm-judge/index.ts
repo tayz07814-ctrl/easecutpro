@@ -14,7 +14,7 @@
 //
 // Secrets (supabase secrets set): ANTHROPIC_API_KEY, OPENAI_API_KEY (optional).
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { gate } from '../_shared/gate.ts'
 import { json, preflight } from '../_shared/http.ts'
 
 const SYSTEM = `You review video-editing candidates for a talking-head editor. You get retake groups (repeated attempts at the same line) and filler-word candidates.
@@ -30,15 +30,6 @@ Rules:
   • KEEP audience-directed content — spoken to the viewer/customer or carrying the product/testimonial message ("if you", "you need", "this helps", "I used this"), a complete sentence in the final narrative, OR natural two-person CONTENT dialogue (a testimonial Q&A or skit).
   • SAFETY — never cut natural two-person dialogue that is part of the content; do not cut merely because a second speaker exists; do not cut if removing it would break the surrounding sentence. When genuinely unsure, return "needs_review" (it will be kept).
 Reply with ONLY a JSON object: {"retake_group_decisions":[{"retake_group_id":"","keep_attempt":"","remove_attempts":[""],"reason":"","not_a_retake":false}],"filler_decisions":[{"filler_id":"","decision":"keep|remove|shorten|retake_marker","reason":""}],"production_chatter_decisions":[{"candidate_id":"","decision":"cut|keep|needs_review","confidence":0.0,"reason":""}]} — no prose, no markdown fences.`
-
-async function requireUser(req: Request): Promise<boolean> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return !!data.user
-}
 
 async function anthropicReview(key: string, payload: unknown): Promise<string> {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -79,8 +70,10 @@ Deno.serve(async (req) => {
   const pf = preflight(req)
   if (pf) return pf
   try {
-    if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const { payload } = await req.json().catch(() => ({ payload: null }))
+    // Auth + payload cap + one AI credit, charged BEFORE the model call.
+    const g = await gate(req, 1)
+    if (!g.ok) return g.res
+    const { payload } = g.ctx.body
     if (!payload) return json({ error: 'missing payload' }, 400)
 
     const anthropic = Deno.env.get('ANTHROPIC_API_KEY')

@@ -17,7 +17,7 @@
 // app-wide default — then Anthropic Claude Opus as an error-fallback. Keys live ONLY
 // in edge-function secrets.
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { gate } from '../_shared/gate.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -46,15 +46,6 @@ const SYSTEM =
 const GEMMA_VISION = 'google/gemma-3-27b-it'
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 const okType = (t: string): boolean => /^image\/(png|jpeg|gif|webp)$/.test(t)
-
-async function requireUser(req: Request): Promise<boolean> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return !!data.user
-}
 
 interface Thumb { id: string; name: string; image: string; mediaType: string }
 interface Frame { image: string; mediaType: string }
@@ -112,8 +103,12 @@ Deno.serve(async (req) => {
   const pf = preflight(req)
   if (pf) return pf
   try {
-    if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const body = await req.json().catch(() => ({}))
+    // Vision costs more than a text judge, so it charges more. The cap is 10 MB
+    // rather than the 1 MB default: this endpoint legitimately receives a few
+    // video frames plus up to 24 base64 overlay thumbnails.
+    const g = await gate(req, 3, 10_000_000)
+    if (!g.ok) return g.res
+    const body = g.ctx.body
     const line = String(body?.line ?? '').slice(0, 300)
     const framesIn: Frame[] = Array.isArray(body?.frames) ? body.frames : []
     const framePool = framesIn.filter((f) => f && typeof f.image === 'string' && f.image).slice(0, 3)

@@ -7,7 +7,7 @@
 // back to a deterministic zoom pass instead of erroring. The API key stays
 // server-side (OPEN_ROUTER_KEY) — it is NEVER sent to the browser.
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { gate } from '../_shared/gate.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -69,15 +69,6 @@ function extractJson(raw: string): string {
   return (m ? m[0] : t).trim()
 }
 
-async function requireUser(req: Request): Promise<boolean> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return !!data.user
-}
-
 function apiKey(): string {
   return Deno.env.get('AUTOZOOM_KEY') ?? Deno.env.get('OPEN_ROUTER_KEY') ?? Deno.env.get('ULTRACUT_JUDGE_KEY') ?? ''
 }
@@ -87,11 +78,11 @@ Deno.serve(async (req) => {
   if (pf) return pf
 
   try {
-    if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
+    // Auth + payload cap + one AI credit, charged BEFORE the model call.
+    const g = await gate(req, 1)
+    if (!g.ok) return g.res
 
-    const { segments, model: requestedModel } = await req
-      .json()
-      .catch(() => ({ segments: null, model: null }))
+    const { segments, model: requestedModel } = g.ctx.body
 
     if (typeof segments !== 'string' || !segments) return json({ error: 'missing segments' }, 400)
 

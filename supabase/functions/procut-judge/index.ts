@@ -14,7 +14,7 @@
 //
 // Secret (supabase secrets set): ANTHROPIC_API_KEY.
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { gate } from '../_shared/gate.ts'
 import { json, preflight } from '../_shared/http.ts'
 
 // Cloud ProCut finalizer model — Opus, matching the desktop pipeline. In the
@@ -45,15 +45,6 @@ Return the DEFINITIVE final EDL (same ids/indices; your reply FULLY REPLACES the
 
 ${EDL_SHAPE}`
 
-async function requireUser(req: Request): Promise<boolean> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return !!data.user
-}
-
 async function claudeFinalize(key: string, payload: string, proposal: unknown): Promise<string> {
   const userText =
     `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
@@ -80,8 +71,10 @@ Deno.serve(async (req) => {
   const pf = preflight(req)
   if (pf) return pf
   try {
-    if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const { payload, proposal } = await req.json().catch(() => ({ payload: null, proposal: null }))
+    // Auth + payload cap + one AI credit, charged BEFORE the model call.
+    const g = await gate(req, 1)
+    if (!g.ok) return g.res
+    const { payload, proposal } = g.ctx.body
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
 
     const anthropic = Deno.env.get('ANTHROPIC_API_KEY')

@@ -21,7 +21,7 @@ import type {
   SttDeepgramRes
 } from '@shared/cloud'
 import { getSupabase, invokeEdge } from './supabase'
-import { openAccountPanel, FREE_MINUTES } from './subscription'
+import { openAccountPanel } from './subscription'
 
 type ProgressFn = (pct: number, msg?: string) => void
 
@@ -117,6 +117,12 @@ async function deepgramTranscribe(path: string, onProgress?: ProgressFn): Promis
   return finish({ provider: 'deepgram', mode: 'verbatim', words, segments: utterances, utterances })
 }
 
+/** The server's ways of saying "you're out of allowance". Kept in one place so
+ *  the provider loop can tell a refusal apart from a provider failure. */
+function isQuotaError(msg: string): boolean {
+  return msg === 'minute_limit' || msg === 'trial_limit' || msg === 'credit_limit'
+}
+
 /** Transcribe the extracted STT audio with the best configured provider; on
  *  failure fall through to the next one. Throws a clean error only when
  *  NOTHING is configured/works. The temp audio object is ALWAYS cleaned up
@@ -135,25 +141,9 @@ export async function transcribeVerbatimCloud(
   }
   // ONE upload feeds both providers (they transcribe from a signed download URL).
   onProgress?.(8, 'Preparing your video…')
-  let signed: SttSignUploadRes
-  try {
-    signed = await sttEdge<SttSignUploadRes>({
-      action: 'sign-upload',
-      ext: audio.ext,
-      seconds: Math.round(audio.durationS ?? 0),
-      freeMin: FREE_MINUTES
-    })
-  } catch (e) {
-    // Plan AI-minute cap reached for this billing cycle (server-enforced): open
-    // the account panel and stop with a friendly, backend-agnostic message.
-    const msg = (e as Error).message
-    if (msg === 'minute_limit' || msg === 'trial_limit') {
-      openAccountPanel(null)
-      throw new Error('You’ve used all your AI minutes for this cycle — upgrade to keep editing.')
-    }
-    throw e
-  }
-  const { path, token } = signed
+  // sign-upload is free and unmetered; the AI-minute charge now lands on the
+  // provider calls below, measured from the uploaded audio itself.
+  const { path, token } = await sttEdge<SttSignUploadRes>({ action: 'sign-upload' })
   try {
     const up = await getSupabase().storage.from('stt-audio').uploadToSignedUrl(path, token, audio.blob)
     if (up.error) throw new Error(`Audio upload failed: ${up.error.message}`)
@@ -166,11 +156,26 @@ export async function transcribeVerbatimCloud(
         return { vt, warnings }
       } catch (e) {
         lastErr = e as Error
+        // A quota refusal is the server saying no, not a provider fault — the
+        // next provider would be charged for the same rejection. Stop here.
+        if (isQuotaError(lastErr.message)) throw lastErr
         warnings.push(`Provider ${name} failed: ${lastErr.message}`)
         console.warn(`[retake-aware-beta] provider ${name} failed: ${lastErr.message}`)
       }
     }
     throw new Error(`All transcription providers failed. Last error: ${lastErr?.message}`)
+  } catch (e) {
+    // Plan AI-minute cap reached for this cycle (server-enforced): open the
+    // account panel and stop with a friendly, backend-agnostic message.
+    const msg = (e as Error).message
+    if (isQuotaError(msg)) {
+      openAccountPanel(null)
+      throw new Error('You’ve used all your AI minutes for this cycle — upgrade to keep editing.')
+    }
+    if (msg === 'metering_unavailable') {
+      throw new Error('We couldn’t check your AI minutes just now — please try again in a moment.')
+    }
+    throw e
   } finally {
     // fire-and-forget: the run never waits on (or fails from) the temp delete.
     void sttEdge({ action: 'cleanup', path }).catch(() => undefined)

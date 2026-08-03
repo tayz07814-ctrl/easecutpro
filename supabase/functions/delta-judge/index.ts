@@ -29,6 +29,7 @@
 // Every allowed model is billed on our official ANTHROPIC_API_KEY.
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { gate } from '../_shared/gate.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -95,15 +96,6 @@ Return VALID JSON ONLY (no prose, no markdown fences), exactly:
 {"word_cuts":[{"from":11,"to":25,"reason":"earlier aborted takes; kept the final take"}],"pause_cuts":[{"pause_id":"p3","keep_ms":150,"reason":"dead air at a cut"}]}
 word_cuts use INCLUSIVE word indices. pause_cuts reference pause ids; keep_ms=0 removes the pause. If the first-pass EDL is empty, do the full analysis yourself.`
 
-async function requireUser(req: Request): Promise<boolean> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return !!data.user
-}
-
 // The single user turn — the transcript payload + first-pass proposal to verify.
 function buildUserText(payload: string, proposal: unknown): string {
   return `${payload}\nFIRST-PASS PROPOSED EDL:\n${JSON.stringify(proposal)}\n\nVerify it, guarantee ZERO repeats remain (keep the LAST take of every duplicate), keep the kept script coherent, and return the final EDL.`
@@ -164,10 +156,10 @@ Deno.serve(async (req) => {
   const pf = preflight(req)
   if (pf) return pf
   try {
-    if (!(await requireUser(req))) return json({ error: 'Not signed in' }, 401)
-    const { payload, proposal, model: requestedModel } = await req
-      .json()
-      .catch(() => ({ payload: null, proposal: null, model: null }))
+    // Auth + payload cap + one AI credit, charged BEFORE the model call.
+    const g = await gate(req, 1)
+    if (!g.ok) return g.res
+    const { payload, proposal, model: requestedModel } = g.ctx.body
     if (typeof payload !== 'string' || !payload) return json({ error: 'missing payload' }, 400)
     const model = resolveModel(requestedModel)
 

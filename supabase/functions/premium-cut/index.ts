@@ -21,6 +21,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { encodeBase64 } from 'jsr:@std/encoding/base64'
+import { chargeSttSeconds, readBody, requireUser, wavSeconds } from '../_shared/gate.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -92,16 +93,6 @@ function admin() {
   return createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 }
 
-// The signed-in user (or null). Also used to scope the bucket path to its owner.
-async function getUser(req: Request): Promise<{ id: string } | null> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return data.user ? { id: data.user.id } : null
-}
-
 // OpenRouter key. NEVER hardcoded. Prefer OPEN_ROUTER_KEY, then ULTRACUT_JUDGE_KEY,
 // then the Supabase Vault delta_judge_key() RPC (same key the other judges use).
 async function getApiKey(): Promise<string> {
@@ -138,16 +129,16 @@ Deno.serve(async (req) => {
   const pf = preflight(req)
   if (pf) return pf
   try {
-    const user = await getUser(req)
-    if (!user) return json({ error: 'Not signed in' }, 401)
-    const { path } = await req.json().catch(() => ({ path: null }))
+    const userId = await requireUser(req)
+    if (!userId) return json({ error: 'Not signed in' }, 401)
+    const { path } = await readBody(req, 10_000).catch(() => ({ path: null }))
     if (typeof path !== 'string' || !path) return json({ error: 'missing path' }, 400)
     // scope to the caller's own objects (paths are `${uid}/uuid.wav`). The `..`
     // guard matches stt's ownPath — the download runs as service role (bypasses
     // RLS) against the shared stt-audio bucket, so a `${uid}/../<other>/x.wav`
     // key must not be able to reach another user's upload if the key path is
     // normalized anywhere upstream.
-    if (!path.startsWith(`${user.id}/`) || path.includes('..')) return json({ error: 'forbidden' }, 403)
+    if (!path.startsWith(`${userId}/`) || path.includes('..')) return json({ error: 'forbidden' }, 403)
 
     // read the uploaded WAV server-side (service role) and base64 it.
     const dl = await admin().storage.from(BUCKET).download(path)
@@ -156,6 +147,15 @@ Deno.serve(async (req) => {
       return json({ raw: null, judge: 'premium' })
     }
     const bytes = new Uint8Array(await dl.data.arrayBuffer())
+
+    // Meter the audio BEFORE handing it to Gemini, and measure it from the WAV's
+    // own header rather than trusting anything the caller said. An object we
+    // can't measure doesn't get transcribed — the app only ever uploads WAV.
+    const seconds = wavSeconds(bytes, bytes.length)
+    if (seconds === null) return json({ error: 'unreadable audio' }, 400)
+    const charged = await chargeSttSeconds(admin(), userId, seconds)
+    if (!charged.ok) return charged.res
+
     const b64 = encodeBase64(bytes)
 
     const apiKey = await getApiKey()

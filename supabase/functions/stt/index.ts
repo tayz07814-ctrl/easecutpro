@@ -10,36 +10,35 @@
 //
 // Secrets (supabase secrets set): ASSEMBLYAI_API_KEY, DEEPGRAM_API_KEY.
 
-import { createClient } from 'npm:@supabase/supabase-js@2'
-
-// Inlined from _shared/http.ts so this function deploys as a single file.
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
-}
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-  })
-}
-function preflight(req: Request): Response | null {
-  return req.method === 'OPTIONS' ? new Response('ok', { headers: corsHeaders }) : null
-}
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
+import { json, preflight } from '../_shared/http.ts'
+import {
+  chargeSttSeconds,
+  readBody,
+  requireUser,
+  serviceClient,
+  wavSecondsFromUrl
+} from '../_shared/gate.ts'
 
 const BUCKET = 'stt-audio'
 
-function serviceClient() {
-  return createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-}
-
-async function requireUser(req: Request): Promise<{ id: string } | null> {
-  const auth = req.headers.get('Authorization') ?? ''
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: { headers: { Authorization: auth } }
-  })
-  const { data } = await anon.auth.getUser()
-  return data.user ? { id: data.user.id } : null
+/** Charge this run's audio against the caller's AI-minute allowance.
+ *
+ *  Called from the endpoints that actually spend provider money (aai-start,
+ *  deepgram) rather than from sign-upload, because nothing forces a caller
+ *  through sign-upload: with a path it already holds it can hit aai-start
+ *  directly, which is exactly how the old gate was bypassed.
+ *
+ *  The length comes from the stored object's own WAV header — never from the
+ *  request body, which used to supply both `seconds` and `freeMin`. */
+async function meterAudio(
+  service: SupabaseClient,
+  userId: string,
+  signedUrl: string
+): Promise<{ ok: true } | { ok: false; res: Response }> {
+  const seconds = await wavSecondsFromUrl(signedUrl)
+  if (seconds === null) return { ok: false, res: json({ error: 'unreadable audio' }, 400) }
+  return await chargeSttSeconds(service, userId, seconds)
 }
 
 /** A storage path is only ever touchable by its owner (uid prefix). */
@@ -53,9 +52,10 @@ Deno.serve(async (req) => {
   const pf = preflight(req)
   if (pf) return pf
   try {
-    const user = await requireUser(req)
-    if (!user) return json({ error: 'Not signed in' }, 401)
-    const body = await req.json().catch(() => ({}))
+    const userId = await requireUser(req)
+    if (!userId) return json({ error: 'Not signed in' }, 401)
+    const body = await readBody(req, 100_000).catch(() => null)
+    if (!body) return json({ error: 'payload_too_large' }, 413)
     const service = serviceClient()
 
     switch (body.action) {
@@ -66,20 +66,14 @@ Deno.serve(async (req) => {
         })
 
       case 'sign-upload': {
-        // Per-plan AI-minute gate (per billing cycle): charge this run's audio
-        // seconds against the user's plan cap. Fail-OPEN on any metering error so
-        // a hiccup never blocks the product; only bites subscribers over their cap
-        // (no-subscription users are unlimited).
-        const seconds = Math.max(0, Math.floor(Number(body.seconds) || 0))
-        // freeMin: the caller's free-tier cap (0 = unlimited). Only the 0.01 build
-        // sends a positive value, so production's beta users stay unlimited.
-        const freeMin = Math.max(0, Math.floor(Number(body.freeMin) || 0))
-        const gate = await service.rpc('consume_ai_seconds', { p_user: user.id, p_seconds: seconds, p_free_min: freeMin })
-        const g = gate.data as { allowed?: boolean } | null
-        if (!gate.error && g && g.allowed === false) return json({ error: 'minute_limit' }, 402)
-
-        const ext = (String(body.ext || 'wav').replace(/[^a-z0-9]/gi, '').slice(0, 5) || 'wav').toLowerCase()
-        const path = `${user.id}/${crypto.randomUUID()}.${ext}`
+        // No metering here. Handing out an upload URL costs nothing, and the
+        // caller's `seconds`/`freeMin` were never trustworthy anyway — the charge
+        // now happens at aai-start/deepgram against the object's real length.
+        //
+        // The extension is pinned to wav: it is the only thing the app uploads
+        // (src/renderer/src/cloud/audio.ts) and the only container the meter can
+        // measure, so anything else would be billable-but-unmeasurable.
+        const path = `${userId}/${crypto.randomUUID()}.wav`
         const { data, error } = await service.storage.from(BUCKET).createSignedUploadUrl(path)
         if (error) return json({ error: `sign-upload: ${error.message}` }, 500)
         return json({ path, token: data.token })
@@ -88,9 +82,14 @@ Deno.serve(async (req) => {
       case 'aai-start': {
         const key = Deno.env.get('ASSEMBLYAI_API_KEY')
         if (!key) return json({ error: 'AssemblyAI is not configured on the server' }, 400)
-        const path = ownPath(body.path, user.id)
+        const path = ownPath(body.path, userId)
         const { data: signed, error } = await service.storage.from(BUCKET).createSignedUrl(path, 3600)
         if (error || !signed) return json({ error: `audio not found: ${error?.message ?? path}` }, 404)
+
+        // This is the call that spends money, so this is where it gets charged.
+        const gate = await meterAudio(service, userId, signed.signedUrl)
+        if (!gate.ok) return gate.res
+
         const r = await fetch('https://api.assemblyai.com/v2/transcript', {
           method: 'POST',
           headers: { authorization: key, 'content-type': 'application/json' },
@@ -139,9 +138,15 @@ Deno.serve(async (req) => {
       case 'deepgram': {
         const key = Deno.env.get('DEEPGRAM_API_KEY')
         if (!key) return json({ error: 'Deepgram is not configured on the server' }, 400)
-        const path = ownPath(body.path, user.id)
+        const path = ownPath(body.path, userId)
         const { data: signed, error } = await service.storage.from(BUCKET).createSignedUrl(path, 3600)
         if (error || !signed) return json({ error: `audio not found: ${error?.message ?? path}` }, 404)
+
+        // Deepgram is the fallback provider but costs the same as the primary,
+        // so it is metered identically.
+        const gate = await meterAudio(service, userId, signed.signedUrl)
+        if (!gate.ok) return gate.res
+
         // smart_format stays OFF: it can normalize away the disfluencies we need.
         // diarize=true tags each word with a speaker number (parity with AAI).
         const qs = 'model=nova-3&punctuate=true&filler_words=true&utterances=true&smart_format=false&diarize=true'
@@ -164,7 +169,7 @@ Deno.serve(async (req) => {
       }
 
       case 'cleanup': {
-        const path = ownPath(body.path, user.id)
+        const path = ownPath(body.path, userId)
         await service.storage.from(BUCKET).remove([path])
         return json({ ok: true })
       }

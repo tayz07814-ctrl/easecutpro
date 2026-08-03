@@ -110,7 +110,7 @@ export async function premiumCutCloud(
   // 2. upload the WAV to the stt-audio bucket (reuse the STT sign-upload flow) so
   //    the edge fn can read it server-side and hand it to Gemini as base64 audio.
   op(24, 'Uploading your audio…')
-  const { path, token } = await invokeEdge<SttSignUploadRes>('stt', { action: 'sign-upload', ext: 'wav' })
+  const { path, token } = await invokeEdge<SttSignUploadRes>('stt', { action: 'sign-upload' })
   const up = await getSupabase().storage.from('stt-audio').uploadToSignedUrl(path, token, audio.blob)
   if (up.error) throw new Error(`Audio upload failed: ${up.error.message}`)
 
