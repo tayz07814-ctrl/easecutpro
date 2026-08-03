@@ -2,6 +2,7 @@
 // Run: npx tsx scripts/verify-silence-mastery.ts
 import {
   planSilenceMastery,
+  planSilenceMasteryDetailed,
   normalizeSilenceMastery,
   DEFAULT_SILENCE_MASTERY_SETTINGS,
   type SilenceMasterySettings,
@@ -102,6 +103,41 @@ console.log('7) ids are stable and ordered')
   const words: SpeechSpan[] = [{ start: 2, end: 3 }, { start: 6, end: 7 }]
   const cuts = planSilenceMastery(words, 10, S({ padLeftMs: 0, padRightMs: 0 }))
   check('ids sm0..smN in time order', cuts.map((c) => c.id).join(',') === 'sm0,sm1,sm2' && cuts.every((c, i) => i === 0 || c.start >= cuts[i - 1].end))
+}
+
+console.log('8) stretched-word clamp — the real Sova-script "Okay." case')
+{
+  // From production debug data: "again." ends 30.71, "Okay." stamped
+  // 33.28–35.79 (2.51s for one word — the pause hidden INSIDE it), "Yeah,"
+  // starts 35.84. Without the clamp only the 30.71→33.28 gap is cuttable.
+  const words: SpeechSpan[] = [
+    { start: 30.48, end: 30.71, text: 'again.' },
+    { start: 33.28, end: 35.79, text: 'Okay.' },
+    { start: 35.84, end: 36.03, text: 'Yeah,' },
+    { start: 36.26, end: 36.37, text: 'there' },
+    { start: 36.42, end: 36.55, text: 'is' },
+    { start: 36.75, end: 36.99, text: 'no' },
+    { start: 37.07, end: 37.41, text: 'shot.' }
+  ]
+  const on = planSilenceMastery(words, 38, S({ minSilenceS: 0.25, padLeftMs: 0, padRightMs: 0, trimEdgesMs: 0 }))
+  const hidden = on.find((c) => c.start > 33.5 && c.end >= 35.8)
+  check('hidden pause inside "Okay." exposed and cut', !!hidden, fmt(on))
+  check('spoken core of "Okay." survives (cut starts after ~0.65s of speech)', !!hidden && hidden.start >= 33.9 && hidden.start <= 34.0, hidden ? hidden.start.toFixed(2) : 'none')
+  const off = planSilenceMastery(words, 38, S({ minSilenceS: 0.25, padLeftMs: 0, padRightMs: 0, clampStretchedWords: false }))
+  check('toggle OFF keeps the old verbatim behavior', !off.some((c) => c.start > 33.5 && c.start < 35.8), fmt(off))
+  // A long word with a plausible duration is untouched.
+  const normal: SpeechSpan[] = [{ start: 0, end: 1.1, text: 'appreciate' }, { start: 1.2, end: 1.5, text: 'it' }]
+  check('plausible long word untouched', planSilenceMastery(normal, 1.5, S({ minSilenceS: 0.25, padLeftMs: 0, padRightMs: 0 })).length === 0)
+  // Overlapping ASR (a word starting inside the span) suppresses the clamp.
+  const overlapping: SpeechSpan[] = [
+    { start: 0, end: 3, text: 'hey' },
+    { start: 1.0, end: 1.4, text: 'there' },
+    { start: 3.2, end: 3.6, text: 'friend' }
+  ]
+  const oc = planSilenceMastery(overlapping, 4, S({ minSilenceS: 0.25, padLeftMs: 0, padRightMs: 0 }))
+  check('overlapped span not clamped', !oc.some((c) => c.start < 3 && c.end > 1.5), fmt(oc))
+  const det = planSilenceMasteryDetailed(words, 38, S({ minSilenceS: 0.25 }))
+  check('repairs reported for debug', det.stretched.length === 1 && det.stretched[0].text === 'Okay.' && det.stretched[0].exposedS > 1.5)
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall silence-mastery checks green')

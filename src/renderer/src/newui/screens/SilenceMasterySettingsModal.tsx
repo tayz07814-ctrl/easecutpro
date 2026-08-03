@@ -88,6 +88,18 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
             fmt={(v) => `${Math.round(v)} ms`} lo="0 · safe" hi="300ms · aggressive"
             onChange={(v) => setSt({ trimEdgesMs: v })}
           />
+          {/* Stretched-word repair — the transcriber sometimes stamps one word
+              across a whole pause (a 2.5s "Okay."), hiding silence where no gap
+              rule can see it. */}
+          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
+            <div onClick={() => setSt({ clampStretchedWords: !st.clampStretchedWords })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${st.clampStretchedWords ? '#7c6bff' : '#2a2a34'}`)}>
+              <div style={css(st.clampStretchedWords ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
+            </div>
+            <div style={css('flex:1;min-width:0')}>
+              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Fix stretched words</div>
+              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>The transcriber sometimes stamps one word across a whole pause (a 2.5s “Okay.”), hiding silence inside the word. This clamps implausibly long words so that hidden dead air gets cut too.</div>
+            </div>
+          </div>
         </div>
 
         <div style={css('display:flex;align-items:center;margin-top:20px')}>

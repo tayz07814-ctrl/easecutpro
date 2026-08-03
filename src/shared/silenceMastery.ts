@@ -30,13 +30,21 @@ export interface SilenceMasterySettings {
   padRightMs: number
   /** cut extended INTO the neighbouring word timestamps on both sides (ms). */
   trimEdgesMs: number
+  /** Repair STRETCHED word timestamps before planning: ASR often extends a
+   *  word's end straight through the pause that follows it (a real 2.5s
+   *  "Okay." span whose spoken part is 0.5s), hiding dead air INSIDE the word
+   *  where no gap rule can see it. When on, a word implausibly long for its
+   *  letter count is clamped and the exposed tail becomes a normal cuttable
+   *  gap. Verified against real data (the Sova script's 33.28–35.79 "Okay."). */
+  clampStretchedWords: boolean
 }
 
 export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
   minSilenceS: 0.5,
   padLeftMs: 100,
   padRightMs: 100,
-  trimEdgesMs: 0
+  trimEdgesMs: 0,
+  clampStretchedWords: true
 }
 
 const clampN = (v: unknown, lo: number, hi: number, dflt: number): number => {
@@ -53,7 +61,8 @@ export function normalizeSilenceMastery(
     minSilenceS: clampN(v?.minSilenceS, 0.05, 5, d.minSilenceS),
     padLeftMs: clampN(v?.padLeftMs, 0, 1000, d.padLeftMs),
     padRightMs: clampN(v?.padRightMs, 0, 1000, d.padRightMs),
-    trimEdgesMs: clampN(v?.trimEdgesMs, 0, 300, d.trimEdgesMs)
+    trimEdgesMs: clampN(v?.trimEdgesMs, 0, 300, d.trimEdgesMs),
+    clampStretchedWords: typeof v?.clampStretchedWords === 'boolean' ? v.clampStretchedWords : d.clampStretchedWords
   }
 }
 
@@ -61,6 +70,55 @@ export interface SpeechSpan {
   /** seconds, source time. */
   start: number
   end: number
+  /** the word's text — used only by the stretched-word clamp (optional). */
+  text?: string
+}
+
+/** One repaired word, for the debug record. */
+export interface StretchedWordRepair {
+  text: string
+  start: number
+  origEnd: number
+  clampedEnd: number
+  exposedS: number
+}
+
+// Stretched-word clamp tuning: a word's plausible max duration grows with its
+// letter count; anything past that (by a real margin) is ASR-absorbed dead air.
+const STRETCH_PER_CHAR_S = 0.09
+const STRETCH_BASE_S = 0.25
+const STRETCH_MIN_MAX_S = 0.65
+const STRETCH_MIN_EXPOSED_S = 0.35
+
+const plausibleMaxDurS = (text: string): number => {
+  const letters = text.replace(/[^\p{L}\p{N}]/gu, '').length
+  return Math.max(STRETCH_MIN_MAX_S, STRETCH_BASE_S + STRETCH_PER_CHAR_S * letters)
+}
+
+/** Clamp implausibly long word spans (dead air absorbed into the word's end).
+ *  Pure; returns the repaired spans + what was repaired. A word whose span
+ *  contains another word's start is left alone (overlapping ASR, not a stretch). */
+export function clampStretchedWords(words: SpeechSpan[]): { words: SpeechSpan[]; repairs: StretchedWordRepair[] } {
+  const repairs: StretchedWordRepair[] = []
+  const out = words.map((w, i) => {
+    const text = w.text ?? ''
+    if (!text) return w
+    const dur = w.end - w.start
+    const maxDur = plausibleMaxDurS(text)
+    if (dur - maxDur < STRETCH_MIN_EXPOSED_S) return w
+    const wordInside = words.some((o, j) => j !== i && o.start > w.start + 0.01 && o.start < w.end - 0.01)
+    if (wordInside) return w
+    const clampedEnd = w.start + maxDur
+    repairs.push({
+      text,
+      start: Math.round(w.start * 100) / 100,
+      origEnd: Math.round(w.end * 100) / 100,
+      clampedEnd: Math.round(clampedEnd * 100) / 100,
+      exposedS: Math.round((w.end - clampedEnd) * 100) / 100
+    })
+    return { ...w, end: clampedEnd }
+  })
+  return { words: out, repairs }
 }
 
 /** A word never loses more than half of itself to trim — the cutter may bite
@@ -82,15 +140,35 @@ export function planSilenceMastery(
   durationS: number,
   settings: SilenceMasterySettings
 ): SilenceRegion[] {
+  return planSilenceMasteryDetailed(words, durationS, settings).regions
+}
+
+/** Same as planSilenceMastery, additionally reporting the stretched-word
+ *  repairs it performed (for the debug record). */
+export function planSilenceMasteryDetailed(
+  words: SpeechSpan[],
+  durationS: number,
+  settings: SilenceMasterySettings
+): { regions: SilenceRegion[]; stretched: StretchedWordRepair[] } {
   const s = normalizeSilenceMastery(settings)
   const padL = s.padLeftMs / 1000
   const padR = s.padRightMs / 1000
   const trim = s.trimEdgesMs / 1000
   const MIN_CUT_S = 0.03 // a cut narrower than a frame is noise — drop it
 
-  const ws = words
+  let input = words
     .filter((w) => Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
     .sort((a, b) => a.start - b.start)
+  // Repair ASR-stretched word ends FIRST, so the dead air they hide becomes a
+  // normal gap the rules below can cut. All pad/trim/midpoint math then runs on
+  // the repaired spans (the cutter's midpoint guard uses the CLAMPED word).
+  let stretched: StretchedWordRepair[] = []
+  if (s.clampStretchedWords) {
+    const r = clampStretchedWords(input)
+    input = r.words
+    stretched = r.repairs
+  }
+  const ws = input
 
   const cuts: { start: number; end: number }[] = []
   // A cut's edges: pad pulls inward from the gap boundary, trim pushes outward
@@ -113,22 +191,25 @@ export function planSilenceMastery(
       const end = rightEdge(first, first.start)
       if (end - 0 >= MIN_CUT_S) cuts.push({ start: 0, end })
     }
-    // Inter-word gaps. Words can overlap or touch (ASR quirks) — only a raw
-    // gap ≥ minSilenceS becomes a cut.
-    for (let i = 0; i < ws.length - 1; i++) {
-      const prev = ws[i]
-      const next = ws[i + 1]
-      const gapStart = prev.end
+    // Inter-word gaps. Words can overlap, touch, or sit fully INSIDE a longer
+    // word's span (ASR quirks) — a gap only exists past the FURTHEST word end
+    // seen so far, never just past the previous word's own end (a short word
+    // contained in a long one must not open a phantom gap over speech).
+    let cover = ws[0] // the word whose end is the furthest so far
+    for (let i = 1; i < ws.length; i++) {
+      const next = ws[i]
+      const gapStart = cover.end
       const gapEnd = next.start
-      if (gapEnd - gapStart < s.minSilenceS) continue
-      const a = leftEdge(prev, gapStart)
-      const b = rightEdge(next, gapEnd)
-      if (b - a >= MIN_CUT_S) cuts.push({ start: a, end: b })
+      if (gapEnd - gapStart >= s.minSilenceS) {
+        const a = leftEdge(cover, gapStart)
+        const b = rightEdge(next, gapEnd)
+        if (b - a >= MIN_CUT_S) cuts.push({ start: a, end: b })
+      }
+      if (next.end > cover.end) cover = next
     }
-    // Trailing silence: last word → end of media. No pad on the right.
-    const last = ws[ws.length - 1]
-    if (durationS - last.end >= s.minSilenceS) {
-      const a = leftEdge(last, last.end)
+    // Trailing silence: furthest word end → end of media. No pad on the right.
+    if (durationS - cover.end >= s.minSilenceS) {
+      const a = leftEdge(cover, cover.end)
       if (durationS - a >= MIN_CUT_S) cuts.push({ start: a, end: Math.max(a, durationS) })
     }
   }
@@ -143,5 +224,5 @@ export function planSilenceMastery(
     if (lastR && start <= lastR.end) lastR.end = Math.max(lastR.end, end)
     else merged.push({ id: '', start, end, action: 'remove', protect: true })
   }
-  return merged.map((r, i) => ({ ...r, id: `sm${i}` }))
+  return { regions: merged.map((r, i) => ({ ...r, id: `sm${i}` })), stretched }
 }

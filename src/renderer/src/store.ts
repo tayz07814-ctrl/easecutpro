@@ -53,7 +53,7 @@ import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay
 // cut everything else (leading / inter-word / trailing), tuned by min-silence,
 // pad left/right and trim-edges. Pure module; review-first staging here.
 import {
-  planSilenceMastery,
+  planSilenceMasteryDetailed,
   normalizeSilenceMastery,
   DEFAULT_SILENCE_MASTERY_SETTINGS,
   type SilenceMasterySettings
@@ -2056,12 +2056,12 @@ export const useStore = create<AppState>((set, get) => ({
     const stored = get().project
     const p0 = stored.timeline ? documentToProject(stored.timeline, stored) : stored
     const t = get().project.transcript!
-    const words = t.words.filter((w) => !w.deleted).map((w) => ({ start: w.start, end: w.end }))
+    const words = t.words.filter((w) => !w.deleted).map((w) => ({ start: w.start, end: w.end, text: w.text }))
     // Media length bounds the trailing cut: the real duration when known, else
     // the base timeline's length, else the last word (no trailing cut at all).
     const durationS = p0.media?.duration || baseTimelineDuration(p0) || (words.length ? words[words.length - 1].end : 0)
     const settings = get().silenceMasterySettings
-    const regions = planSilenceMastery(words, durationS, settings)
+    const { regions, stretched } = planSilenceMasteryDetailed(words, durationS, settings)
     // 3. Stage review-first: chips in the transcript + cards in the panel;
     //    retakeSilenceStaged=true → Execute applies these exact spans verbatim.
     set({
@@ -2099,7 +2099,8 @@ export const useStore = create<AppState>((set, get) => ({
       words: t.words.map((w) => [r2(w.start), r2(w.end), w.text, w.deleted ? 1 : 0]),
       gaps,
       staged_regions: regions.map((r) => [r.id, r2(r.start), r2(r.end)]),
-      staged_total_s: r2(regions.reduce((n, r) => n + (r.end - r.start), 0))
+      staged_total_s: r2(regions.reduce((n, r) => n + (r.end - r.start), 0)),
+      stretched_word_repairs: stretched
     })
   },
 
