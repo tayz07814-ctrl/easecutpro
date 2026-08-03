@@ -129,10 +129,14 @@ export function normalizeSilenceMastery(
     // legacy symmetric trimEdgesMs (pre-preset) feeds both sides
     trimLeftMs: clampN(v?.trimLeftMs ?? (v as { trimEdgesMs?: number } | null | undefined)?.trimEdgesMs, 0, 500, d.trimLeftMs),
     trimRightMs: clampN(v?.trimRightMs ?? (v as { trimEdgesMs?: number } | null | undefined)?.trimEdgesMs, 0, 500, d.trimRightMs),
-    clampStretchedWords: typeof v?.clampStretchedWords === 'boolean' ? v.clampStretchedWords : d.clampStretchedWords,
-    rmsPass: typeof v?.rmsPass === 'boolean' ? v.rmsPass : d.rmsPass,
-    sileroPass: typeof v?.sileroPass === 'boolean' ? v.sileroPass : d.sileroPass,
-    gapPass: typeof v?.gapPass === 'boolean' ? v.gapPass : d.gapPass
+    // FINAL ENGINE LOCK — Silero VAD is this branch's one and only silence
+    // engine. The pass toggles are gone from the UI, so stale persisted
+    // values must not be able to turn Silero off or resurrect the
+    // transcript-gap / RMS passes.
+    clampStretchedWords: d.clampStretchedWords,
+    rmsPass: false,
+    sileroPass: true,
+    gapPass: false
   }
 }
 

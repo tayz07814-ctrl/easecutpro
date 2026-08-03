@@ -133,8 +133,16 @@ console.log('8) stretched-word clamp — the real Sova-script "Okay." case')
   const hidden = on.find((c) => c.start > 33.5 && c.end >= 35.8)
   check('hidden pause inside "Okay." exposed and cut', !!hidden, fmt(on))
   check('spoken core of "Okay." survives (cut starts after ~0.65s of speech)', !!hidden && hidden.start >= 33.9 && hidden.start <= 34.0, hidden ? hidden.start.toFixed(2) : 'none')
+  // FINAL ENGINE LOCK: the toggles left the UI, and normalize now forces the
+  // final values — a stale persisted `clampStretchedWords: false` cannot turn
+  // the stretched-word repair off (nor resurrect the gap/RMS passes).
   const off = planSilenceMastery(words, 38, S({ minSilenceS: 0.25, padLeftMs: 0, padRightMs: 0, clampStretchedWords: false }))
-  check('toggle OFF keeps the old verbatim behavior', !off.some((c) => c.start > 33.5 && c.start < 35.8), fmt(off))
+  check('engine lock: stale clampStretchedWords=false is overridden (repair still runs)', off.some((c) => c.start > 33.5 && c.start < 35.8), fmt(off))
+  const locked = normalizeSilenceMastery({ sileroPass: false, gapPass: true, rmsPass: true, clampStretchedWords: false })
+  check(
+    'engine lock: normalize forces silero on, gap/rms off',
+    locked.sileroPass && !locked.gapPass && !locked.rmsPass && locked.clampStretchedWords
+  )
   // A long word with a plausible duration is untouched.
   const normal: SpeechSpan[] = [{ start: 0, end: 1.1, text: 'appreciate' }, { start: 1.2, end: 1.5, text: 'it' }]
   check('plausible long word untouched', planSilenceMastery(normal, 1.5, S({ minSilenceS: 0.25, padLeftMs: 0, padRightMs: 0 })).length === 0)

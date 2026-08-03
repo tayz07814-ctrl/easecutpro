@@ -1,16 +1,18 @@
 // Silence settings — the Silence Mastery engine (this branch's only silence
-// cleaner). The engine keeps the transcript's word timestamps and removes
-// everything else; these four sliders are its complete parameter surface:
+// cleaner). FINAL configuration: Silero VAD is the sole detector — the pass
+// toggles are gone (locked in normalizeSilenceMastery). These sliders shape
+// what Silero detects and are the complete parameter surface:
 //
-//   Min silence   — gaps shorter than this are natural beats; left alone.
-//   Pad left      — silence kept right AFTER the word before a removed gap.
-//   Pad right     — silence kept just BEFORE the word after a removed gap.
-//   Trim edges    — moves the cutter INTO the neighbouring word timestamps
-//                   by N ms (eats ASR dead air baked into word ends).
+//   Min silence   — detected silences shorter than this are natural beats;
+//                   left alone.
+//   Pads          — silence kept at the detected edges (left = after the
+//                   speech before the gap, right = before the speech after).
+//   Trims         — cut PAST the detected edges into the neighbouring speech
+//                   (left = sentence ending, right = next sentence's onset).
 //
 // Edits write straight to the persisted store settings, so the next
-// "Clean Silence" run uses them. Opened from SpeechCleanerPanel /
-// RetakeCleanerPanel; mounted in Editor + MobileEditor.
+// "Clean Silence" / "Find cuts" run uses them. Opened from
+// SpeechCleanerPanel / RetakeCleanerPanel; mounted in Editor + MobileEditor.
 
 import { css } from '../css'
 import { useStore } from '../../store'
@@ -61,12 +63,12 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
         <div style={css('display:flex;align-items:flex-start;justify-content:space-between')}>
           <div>
             <div style={css('font-size:16px;font-weight:650')}>Silence settings</div>
-            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>Clean Silence keeps your words and removes everything else — the quiet before the first word, every long gap between words, and the dead air after the last one.</div>
+            <div style={css('font-size:12.5px;color:#9a9aae;margin-top:5px;line-height:1.5')}>A neural voice detector (Silero VAD) listens to your audio and removes everything that isn’t speech — the quiet before the first word, every long gap, and the dead air after the last one. Find cuts runs it too, as its final step.</div>
           </div>
           <div onClick={() => close(false)} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
         </div>
 
-        {/* Presets — numeric values only; the pass toggles below are orthogonal. */}
+        {/* Presets — the numeric values below are the whole surface. */}
         <div style={css('display:flex;gap:6px;margin-top:16px;flex-wrap:wrap')}>
           {SILENCE_MASTERY_PRESETS.map((p) => (
             <button key={p.id} onClick={() => setSt({ ...p.values })} style={css(matchSilenceMasteryPreset(st) === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
@@ -110,48 +112,6 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
             fmt={(v) => `${Math.round(v)} ms`} lo="0 · safe" hi="500ms · aggressive"
             onChange={(v) => setSt({ trimRightMs: v })}
           />
-          {/* Stretched-word repair — the transcriber sometimes stamps one word
-              across a whole pause (a 2.5s "Okay."), hiding silence where no gap
-              rule can see it. */}
-          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
-            <div onClick={() => setSt({ clampStretchedWords: !st.clampStretchedWords })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${st.clampStretchedWords ? '#7c6bff' : '#2a2a34'}`)}>
-              <div style={css(st.clampStretchedWords ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
-            </div>
-            <div style={css('flex:1;min-width:0')}>
-              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Fix stretched words</div>
-              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>The transcriber sometimes stamps one word across a whole pause (a 2.5s “Okay.”), hiding silence inside the word. This clamps implausibly long words so that hidden dead air gets cut too.</div>
-            </div>
-          </div>
-          {/* Word-timestamp (transcript-gap) pass — the sliders above shape it. */}
-          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
-            <div onClick={() => setSt({ gapPass: !st.gapPass })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${st.gapPass ? '#7c6bff' : '#2a2a34'}`)}>
-              <div style={css(st.gapPass ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
-            </div>
-            <div style={css('flex:1;min-width:0')}>
-              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Word-timestamp pass</div>
-              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Cuts the gaps between transcript word stamps using the sliders above (transcribes first if needed). Off = Silero-only cleaning.</div>
-            </div>
-          </div>
-          {/* Silero VAD — stage 1 of the hybrid; the neural ear cuts first. */}
-          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
-            <div onClick={() => setSt({ sileroPass: !st.sileroPass })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${st.sileroPass ? '#7c6bff' : '#2a2a34'}`)}>
-              <div style={css(st.sileroPass ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
-            </div>
-            <div style={css('flex:1;min-width:0')}>
-              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Silero VAD pass (runs first)</div>
-              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>A neural voice detector listens to the audio and cuts what it hears as non-speech, keeping 100ms around every speech segment. The word-timestamp pass then sweeps whatever it left.</div>
-            </div>
-          </div>
-          {/* RMS energy pass — the audio's own verdict, auto-thresholded. */}
-          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
-            <div onClick={() => setSt({ rmsPass: !st.rmsPass })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${st.rmsPass ? '#7c6bff' : '#2a2a34'}`)}>
-              <div style={css(st.rmsPass ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
-            </div>
-            <div style={css('flex:1;min-width:0')}>
-              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Energy pass (auto threshold)</div>
-              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Also listens to the actual audio: measures the clip’s own noise floor vs speech level and cuts every low-energy stretch the transcript missed — never within 100ms of a spoken word.</div>
-            </div>
-          </div>
         </div>
 
         <div style={css('display:flex;align-items:center;margin-top:20px')}>

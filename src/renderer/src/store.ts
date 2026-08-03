@@ -2333,14 +2333,46 @@ export const useStore = create<AppState>((set, get) => ({
       // (which already routes cuts fine) is left untouched; a legacy montage with no
       // doc yet folds to its own baseSequence, so this is a harmless self-assignment.
       const docBase = !cur.media && !!p0.baseSequence?.length
+      // The persisted base starts with a CLEAN silence set — same contract as
+      // runSilenceMastery: silences carried from before belong to the OLD
+      // domain, and persisting the base would make them routable and cut the
+      // timeline instantly at stage time, before the user pressed Execute.
       const nextProject: typeof cur = docBase
-        ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript: res.transcript }
+        ? { ...cur, media: undefined, baseSequence: p0.baseSequence, transcript: res.transcript, silences: [] }
         : { ...cur, transcript: res.transcript }
       const flagIds = res.deleteWordIds
       const wordsBefore = cur.transcript?.words.length ?? 0
-      // Silence engines are gone from this branch — res.silenceRegions is
-      // always empty; staging stays for the review/execute contract.
-      const silenceRegions = res.silenceRegions ?? []
+      // FINAL STEP — Silero VAD silence detection, wired into Find cuts: one
+      // click stages the word cuts AND the silences together; nothing is
+      // applied until Execute cuts. Same detector + pad/trim shaping as Clean
+      // Silence (this branch's sole, final silence engine). Never fatal: if
+      // the model can't run, Find cuts still stages its word cuts.
+      let silenceRegions: SilenceRegion[] = res.silenceRegions ?? []
+      if (IS_CLOUD) {
+        try {
+          set({ job: { active: true, kind: 'silence', percent: 88, message: 'Silero is listening for silence…' } })
+          const smSettings = get().silenceMasterySettings
+          const tw = res.transcript.words
+          const durationS = p0.media?.duration || baseTimelineDuration(p0) || (tw.length ? tw[tw.length - 1].end : 0)
+          const audio = await extractSttAudio(path)
+          const raw = await detectSileroSilences(audio.float32, audio.sampleRate, durationS, smSettings.minSilenceS)
+          silenceRegions = unionCutRegions([padTrimRegions(raw, smSettings, durationS)], durationS)
+          // Same stage telemetry Clean Silence writes, marked as the Find cuts
+          // path so the two entry points stay distinguishable in review.
+          const r2s = (n: number): number => Math.round(n * 100) / 100
+          void saveSilenceDebug('stage', {
+            source: 'find_cuts',
+            settings: smSettings,
+            duration_s: r2s(durationS),
+            word_count: tw.length,
+            silero: { enabled: true, ran: true, regions: raw.map((r) => [r2s(r.start), r2s(r.end)]) },
+            staged_regions: silenceRegions.map((r) => [r.id, r2s(r.start), r2s(r.end)]),
+            staged_total_s: r2s(silenceRegions.reduce((n, r) => n + (r.end - r.start), 0))
+          })
+        } catch (e) {
+          console.warn('[retake-aware-beta] Silero silence step skipped:', (e as Error).message)
+        }
+      }
       set({
         project: nextProject,
         selectedWordIds: new Set(flagIds),
