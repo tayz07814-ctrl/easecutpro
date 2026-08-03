@@ -128,8 +128,13 @@ export function useRetake(): RetakeModel {
   let state: RetakeState
   if (cutJob) state = 'analyzing'
   else if (failed && !transcript) state = 'error'
-  else if (deletedIds.size > 0) state = 'executed'
+  // A LIVE review (freshly staged words or silences) outranks the executed
+  // view. With 'executed' first, running Clean Silence (or a second Find
+  // cuts) on a project that ALREADY has committed cuts staged its regions
+  // into a state the panel never showed — no cards, no Apply button — so the
+  // run looked like it did nothing and the silences stayed in the video.
   else if (hasResults) state = 'results'
+  else if (deletedIds.size > 0) state = 'executed'
   // ALWAYS SHOW TRANSCRIPT: once a transcript exists (a run finished — even with 0
   // retakes, or a judge rate-limit where STT still succeeded), show it in the review
   // instead of falling back to the idle "Find Retakes & Silence" screen. A fresh
