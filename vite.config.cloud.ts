@@ -23,9 +23,15 @@ function cloudCsp(supabaseUrl: string | undefined): Plugin {
   // presigned URLs; without the R2 host in connect-src the browser blocks those
   // fetches and the app dies with "Failed to fetch" on share/open.
   const r2 = 'https://*.r2.cloudflarestorage.com'
+  // Uploads now go through the write-budget Worker instead of a presigned PUT,
+  // so its host has to be allowed too — a host missing from connect-src is
+  // blocked by the browser BEFORE the request is sent, and XHR reports that as
+  // a bare "network error" with no status, which looks nothing like a CSP
+  // problem. (Downloads are still presigned GETs straight from R2, hence both.)
+  const worker = 'https://*.workers.dev'
   const CSP = [
     "default-src 'self'",
-    `connect-src 'self' blob: data: ${https} ${wss} ${r2}`,
+    `connect-src 'self' blob: data: ${https} ${wss} ${r2} ${worker}`,
     "img-src 'self' data: blob:",
     "media-src 'self' blob: data:",
     // Custom fonts register as FontFaces from data:/blob: URLs (uploaded files +
