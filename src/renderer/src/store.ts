@@ -58,9 +58,8 @@ import {
   frameRmsDb,
   planRmsSilence,
   unionCutRegions,
-  guardRegionEdgesOffWords,
+  padTrimRegions,
   RMS_FRAME_MS,
-  RMS_WORD_GUARD_S,
   normalizeSilenceMastery,
   DEFAULT_SILENCE_MASTERY_SETTINGS,
   type SilenceMasterySettings,
@@ -2115,7 +2114,9 @@ export const useStore = create<AppState>((set, get) => ({
       try {
         set({ job: { active: true, kind: 'silence', percent: 58, message: 'Silero is listening for speech…' } })
         const raw = await detectSileroSilences(audio.float32, audio.sampleRate, durationS, settings.minSilenceS)
-        sileroRegions = guardRegionEdgesOffWords(raw, effWords, RMS_WORD_GUARD_S)
+        // Pads keep silence at the detected edges; trims cut PAST them into
+        // the sentence ending (left) / next sentence's onset (right).
+        sileroRegions = padTrimRegions(raw, settings, durationS)
         sileroOk = true
       } catch (e) {
         console.warn('[silence-mastery] Silero pass skipped:', (e as Error).message)

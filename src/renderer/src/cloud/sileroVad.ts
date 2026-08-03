@@ -3,9 +3,9 @@
 // The neural VAD listens to the actual audio and reports SPEECH segments; we
 // invert those to non-speech regions. It runs FIRST: whatever it hears as
 // silence is cut, and the transcript-gap pass then sweeps only what Silero
-// left behind. Spoken audio is preserved with a 100ms pad around every speech
-// segment Silero itself detected (the ear's own word guard), and the engine
-// additionally edge-clamps regions off the transcript's word spans.
+// left behind. The regions come out RAW at Silero's own speech edges — the
+// Silence settings' pads/trims (padTrimRegions) shape them afterwards, so the
+// presets fully control how flush or aggressive the cuts land.
 //
 // Slimmed from the pre-teardown cloud/vad.ts: same model, same asset layout
 // (prepare-cloud-assets stages /vad/ — the Silero ONNX + onnxruntime WASM),
@@ -21,9 +21,9 @@ const FRAME_MS = 96
 const REDEMPTION_S = FRAME_MS / 1000
 const MIN_SPEECH_MS = 250
 const SPEECH_THRESHOLD = 0.5
-/** silence kept on each side of every DETECTED speech segment (the "preserve
- *  spoken words by 100ms" guard, applied to what the ear actually heard). */
-const SPEECH_PAD_S = 0.1
+/** No built-in padding: the Silence settings' pad/trim values own the cut
+ *  edges (padTrimRegions shapes the raw regions after detection). */
+const SPEECH_PAD_S = 0
 
 // The Silero model (~1.7MB) is fetched once per session, not once per scan.
 let modelPromise: Promise<ArrayBuffer> | null = null

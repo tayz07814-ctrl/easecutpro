@@ -8,6 +8,9 @@ import {
   planRmsSilence,
   unionCutRegions,
   guardRegionEdgesOffWords,
+  padTrimRegions,
+  SILENCE_MASTERY_PRESETS,
+  matchSilenceMasteryPreset,
   normalizeSilenceMastery,
   DEFAULT_SILENCE_MASTERY_SETTINGS,
   type SilenceMasterySettings,
@@ -65,15 +68,15 @@ console.log('3) pads keep silence at the gap edges')
   check('pads ≥ gap → no cut', gone.length === 0, fmt(gone))
 }
 
-console.log('4) trim edges moves the cutter INTO the words')
+console.log('4) trim edges moves the cutter INTO the words (asymmetric)')
 {
   const words: SpeechSpan[] = [{ start: 0, end: 2 }, { start: 5, end: 7 }]
-  const cuts = planSilenceMastery(words, 7, S({ padLeftMs: 0, padRightMs: 0, trimEdgesMs: 150 }))
+  const cuts = planSilenceMastery(words, 7, S({ padLeftMs: 0, padRightMs: 0, trimLeftMs: 150, trimRightMs: 50 }))
   check('left edge bites 150ms into the ending word', cuts.length === 1 && near(cuts[0].start, 1.85), fmt(cuts))
-  check('right edge bites 150ms into the starting word', near(cuts[0].end, 5.15))
+  check('right edge bites 50ms into the starting word', near(cuts[0].end, 5.05))
   // Trim can never pass a word's midpoint, no matter the setting vs word size.
   const tiny: SpeechSpan[] = [{ start: 0, end: 0.2 }, { start: 3, end: 3.2 }]
-  const clamped = planSilenceMastery(tiny, 3.2, S({ padLeftMs: 0, padRightMs: 0, trimEdgesMs: 300 }))
+  const clamped = planSilenceMastery(tiny, 3.2, S({ padLeftMs: 0, padRightMs: 0, trimLeftMs: 300, trimRightMs: 300 }))
   check('trim clamped at word midpoints', clamped.length === 1 && near(clamped[0].start, 0.1) && near(clamped[0].end, 3.1), fmt(clamped))
 }
 
@@ -99,8 +102,10 @@ console.log('6) degenerate inputs stay sane')
   check('overlapping words → no phantom gap cut between them', !oCuts.some((c) => c.start >= 1 && c.end <= 4), fmt(oCuts))
   const junk = planSilenceMastery([{ start: NaN, end: 2 }, { start: 5, end: 5 }], 6, S({ padLeftMs: 0, padRightMs: 0 }))
   check('invalid words ignored (falls back to whole-runtime cut)', junk.length === 1 && near(junk[0].start, 0) && near(junk[0].end, 6), fmt(junk))
-  const n = normalizeSilenceMastery({ minSilenceS: -4, padLeftMs: 1e9, trimEdgesMs: NaN })
-  check('normalize clamps garbage', n.minSilenceS === 0.05 && n.padLeftMs === 1000 && n.trimEdgesMs === DEFAULT_SILENCE_MASTERY_SETTINGS.trimEdgesMs)
+  const n = normalizeSilenceMastery({ minSilenceS: -4, padLeftMs: 1e9, trimLeftMs: NaN })
+  check('normalize clamps garbage', n.minSilenceS === 0.05 && n.padLeftMs === 1000 && n.trimLeftMs === DEFAULT_SILENCE_MASTERY_SETTINGS.trimLeftMs)
+  const legacy = normalizeSilenceMastery({ trimEdgesMs: 120 } as never)
+  check('legacy symmetric trimEdgesMs feeds both sides', legacy.trimLeftMs === 120 && legacy.trimRightMs === 120)
 }
 
 console.log('7) ids are stable and ordered')
@@ -197,6 +202,32 @@ console.log('10) Silero edge guard — regions clamp off word spans')
   // a region fully INSIDE a word span collapses to nothing
   const d = guardRegionEdgesOffWords([{ start: 2.2, end: 2.8 }], words, 0.1)
   check('region inside a word span collapses', d.length === 0, fmt(d))
+}
+
+console.log('11) presets + Silero region shaping (padTrimRegions)')
+{
+  const byId = Object.fromEntries(SILENCE_MASTERY_PRESETS.map((p) => [p.id, p.values]))
+  check('Natural Rhythm = 0.25 / 100 / 100 / 0 / 0',
+    byId['natural-rhythm'].minSilenceS === 0.25 && byId['natural-rhythm'].padLeftMs === 100 && byId['natural-rhythm'].padRightMs === 100 && byId['natural-rhythm'].trimLeftMs === 0 && byId['natural-rhythm'].trimRightMs === 0)
+  check('No Chill = 0.15 / 0 / 0 / 0 / 0',
+    byId['no-chill'].minSilenceS === 0.15 && byId['no-chill'].padLeftMs === 0 && byId['no-chill'].padRightMs === 0 && byId['no-chill'].trimLeftMs === 0 && byId['no-chill'].trimRightMs === 0)
+  check('Cut Throat = 0.15 / 0 / 0 / trimL 150 / trimR 50',
+    byId['cut-throat'].minSilenceS === 0.15 && byId['cut-throat'].padLeftMs === 0 && byId['cut-throat'].padRightMs === 0 && byId['cut-throat'].trimLeftMs === 150 && byId['cut-throat'].trimRightMs === 50)
+  check('preset matcher round-trips', matchSilenceMasteryPreset(S(byId['cut-throat'])) === 'cut-throat' && matchSilenceMasteryPreset(S({ minSilenceS: 0.33 })) === null)
+
+  // Silero region shaping: [5,8] on a 20s clip.
+  const nr = padTrimRegions([{ start: 5, end: 8 }], S(byId['natural-rhythm']), 20)
+  check('Natural Rhythm keeps 100ms each side of the detected edges', nr.length === 1 && near(nr[0].start, 5.1) && near(nr[0].end, 7.9), fmt(nr))
+  const nc = padTrimRegions([{ start: 5, end: 8 }], S(byId['no-chill']), 20)
+  check('No Chill cuts flush to the detected edges', nc.length === 1 && near(nc[0].start, 5) && near(nc[0].end, 8), fmt(nc))
+  const ct = padTrimRegions([{ start: 5, end: 8 }], S(byId['cut-throat']), 20)
+  check('Cut Throat eats 150ms of the ending + 50ms of the next onset', ct.length === 1 && near(ct[0].start, 4.85) && near(ct[0].end, 8.05), fmt(ct))
+  // Media boundaries: leading keeps 0, trailing keeps the end.
+  const edges = padTrimRegions([{ start: 0, end: 3 }, { start: 18, end: 20 }], S(byId['natural-rhythm']), 20)
+  check('leading cut pinned at 0, trailing at media end', edges.length === 2 && near(edges[0].start, 0) && near(edges[0].end, 2.9) && near(edges[1].start, 18.1) && near(edges[1].end, 20), fmt(edges))
+  // Pads bigger than a small region swallow it.
+  const gone = padTrimRegions([{ start: 5, end: 5.15 }], S(byId['natural-rhythm']), 20)
+  check('pads ≥ region → dropped', gone.length === 0)
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall silence-mastery checks green')

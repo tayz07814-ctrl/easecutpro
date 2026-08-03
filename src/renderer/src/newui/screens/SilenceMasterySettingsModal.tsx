@@ -14,7 +14,14 @@
 
 import { css } from '../css'
 import { useStore } from '../../store'
-import { DEFAULT_SILENCE_MASTERY_SETTINGS } from '@shared/silenceMastery'
+import {
+  DEFAULT_SILENCE_MASTERY_SETTINGS,
+  SILENCE_MASTERY_PRESETS,
+  matchSilenceMasteryPreset
+} from '@shared/silenceMastery'
+
+const CHIP = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid rgba(255,255,255,.12);color:#9a9aae;background:transparent;font-family:inherit'
+const CHIP_ON = 'font-size:11.5px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid #7c6bff;color:#a99bff;background:rgba(124,107,255,.12);font-weight:600;font-family:inherit'
 
 const FOOT_RESET = 'font-size:12.5px;color:#9a9aae;cursor:pointer;padding:7px 10px;border-radius:8px'
 const FOOT_APPLY = 'background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 18px;cursor:pointer;margin-left:8px'
@@ -59,6 +66,14 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
           <div onClick={() => close(false)} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
         </div>
 
+        {/* Presets — numeric values only; the pass toggles below are orthogonal. */}
+        <div style={css('display:flex;gap:6px;margin-top:16px;flex-wrap:wrap')}>
+          {SILENCE_MASTERY_PRESETS.map((p) => (
+            <button key={p.id} onClick={() => setSt({ ...p.values })} style={css(matchSilenceMasteryPreset(st) === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
+          ))}
+          <span style={css(matchSilenceMasteryPreset(st) === null ? CHIP_ON + ';cursor:default' : CHIP + ';cursor:default;opacity:.55')}>Custom</span>
+        </div>
+
         <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:18px')}>
           <Slider
             label="Min silence to remove"
@@ -69,24 +84,31 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
           />
           <Slider
             label="Pad left of the gap"
-            hint="Silence kept right after the word BEFORE the gap, so word tails can breathe."
+            hint="Silence kept after the speech BEFORE a removed gap (applies to Silero\u2019s detected edges too), so tails can breathe."
             value={st.padLeftMs} min={0} max={500} step={10}
             fmt={(v) => `${Math.round(v)} ms`} lo="0 · flush" hi="500ms · roomy tail"
             onChange={(v) => setSt({ padLeftMs: v })}
           />
           <Slider
             label="Pad right of the gap"
-            hint="Silence kept just before the word AFTER the gap, protecting soft onsets."
+            hint="Silence kept just before the speech AFTER a removed gap (applies to Silero\u2019s detected edges too), protecting soft onsets."
             value={st.padRightMs} min={0} max={500} step={10}
             fmt={(v) => `${Math.round(v)} ms`} lo="0 · flush" hi="500ms · gentle lead-in"
             onChange={(v) => setSt({ padRightMs: v })}
           />
           <Slider
-            label="Trim edges"
-            hint="Moves the cutter INTO the word timestamps on both sides — eats dead air the transcriber baked into word ends. Never crosses a word's midpoint."
-            value={st.trimEdgesMs} min={0} max={300} step={5}
-            fmt={(v) => `${Math.round(v)} ms`} lo="0 · safe" hi="300ms · aggressive"
-            onChange={(v) => setSt({ trimEdgesMs: v })}
+            label="Trim left (sentence ending)"
+            hint="Cuts PAST the detected silence into the tail of the sentence BEFORE the gap — eats trailing breaths/dead air the detector kept."
+            value={st.trimLeftMs} min={0} max={500} step={5}
+            fmt={(v) => `${Math.round(v)} ms`} lo="0 · safe" hi="500ms · aggressive"
+            onChange={(v) => setSt({ trimLeftMs: v })}
+          />
+          <Slider
+            label="Trim right (next sentence start)"
+            hint="Cuts PAST the detected silence into the onset of the sentence AFTER the gap — snappier pickups."
+            value={st.trimRightMs} min={0} max={500} step={5}
+            fmt={(v) => `${Math.round(v)} ms`} lo="0 · safe" hi="500ms · aggressive"
+            onChange={(v) => setSt({ trimRightMs: v })}
           />
           {/* Stretched-word repair — the transcriber sometimes stamps one word
               across a whole pause (a 2.5s "Okay."), hiding silence where no gap

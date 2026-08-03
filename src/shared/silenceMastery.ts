@@ -28,8 +28,12 @@ export interface SilenceMasterySettings {
   padLeftMs: number
   /** silence kept BEFORE the word following a removed gap (ms). */
   padRightMs: number
-  /** cut extended INTO the neighbouring word timestamps on both sides (ms). */
-  trimEdgesMs: number
+  /** cut extended LEFT into the ENDING speech (the tail of the sentence
+   *  before the gap) beyond the detected edge (ms). */
+  trimLeftMs: number
+  /** cut extended RIGHT into the STARTING speech (the onset of the next
+   *  sentence) beyond the detected edge (ms). */
+  trimRightMs: number
   /** Repair STRETCHED word timestamps before planning: ASR often extends a
    *  word's end straight through the pause that follows it (a real 2.5s
    *  "Okay." span whose spoken part is 0.5s), hiding dead air INSIDE the word
@@ -53,16 +57,59 @@ export interface SilenceMasterySettings {
 }
 
 export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
-  minSilenceS: 0.5,
+  minSilenceS: 0.25,
   padLeftMs: 100,
   padRightMs: 100,
-  trimEdgesMs: 0,
+  trimLeftMs: 0,
+  trimRightMs: 0,
   clampStretchedWords: true,
   // SILERO-ONLY by default (per testing direction): the neural ear does the
   // cutting; the word-timestamp and RMS passes are opt-in extras.
   rmsPass: false,
   sileroPass: true,
   gapPass: false
+}
+
+/** The three creator presets (numeric fields only — the pass toggles are
+ *  orthogonal). Edited values flip the modal to "custom". */
+export interface SilenceMasteryPreset {
+  id: string
+  label: string
+  values: Pick<SilenceMasterySettings, 'minSilenceS' | 'padLeftMs' | 'padRightMs' | 'trimLeftMs' | 'trimRightMs'>
+}
+export const SILENCE_MASTERY_PRESETS: SilenceMasteryPreset[] = [
+  {
+    id: 'natural-rhythm',
+    label: 'Natural Rhythm',
+    values: { minSilenceS: 0.25, padLeftMs: 100, padRightMs: 100, trimLeftMs: 0, trimRightMs: 0 }
+  },
+  {
+    id: 'no-chill',
+    label: 'No Chill',
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 0, trimRightMs: 0 }
+  },
+  {
+    // Cuts PAST the detected silence: 150ms off the sentence ending (left of
+    // the gap) and 50ms off the next sentence's onset (right of the gap).
+    id: 'cut-throat',
+    label: 'Cut Throat',
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 150, trimRightMs: 50 }
+  }
+]
+/** The preset the current numeric values exactly match, else null (custom). */
+export function matchSilenceMasteryPreset(s: SilenceMasterySettings): string | null {
+  for (const p of SILENCE_MASTERY_PRESETS) {
+    const v = p.values
+    if (
+      Math.abs(v.minSilenceS - s.minSilenceS) < 1e-9 &&
+      v.padLeftMs === s.padLeftMs &&
+      v.padRightMs === s.padRightMs &&
+      v.trimLeftMs === s.trimLeftMs &&
+      v.trimRightMs === s.trimRightMs
+    )
+      return p.id
+  }
+  return null
 }
 
 const clampN = (v: unknown, lo: number, hi: number, dflt: number): number => {
@@ -79,7 +126,9 @@ export function normalizeSilenceMastery(
     minSilenceS: clampN(v?.minSilenceS, 0.05, 5, d.minSilenceS),
     padLeftMs: clampN(v?.padLeftMs, 0, 1000, d.padLeftMs),
     padRightMs: clampN(v?.padRightMs, 0, 1000, d.padRightMs),
-    trimEdgesMs: clampN(v?.trimEdgesMs, 0, 300, d.trimEdgesMs),
+    // legacy symmetric trimEdgesMs (pre-preset) feeds both sides
+    trimLeftMs: clampN(v?.trimLeftMs ?? (v as { trimEdgesMs?: number } | null | undefined)?.trimEdgesMs, 0, 500, d.trimLeftMs),
+    trimRightMs: clampN(v?.trimRightMs ?? (v as { trimEdgesMs?: number } | null | undefined)?.trimEdgesMs, 0, 500, d.trimRightMs),
     clampStretchedWords: typeof v?.clampStretchedWords === 'boolean' ? v.clampStretchedWords : d.clampStretchedWords,
     rmsPass: typeof v?.rmsPass === 'boolean' ? v.rmsPass : d.rmsPass,
     sileroPass: typeof v?.sileroPass === 'boolean' ? v.sileroPass : d.sileroPass,
@@ -174,7 +223,8 @@ export function planSilenceMasteryDetailed(
   const s = normalizeSilenceMastery(settings)
   const padL = s.padLeftMs / 1000
   const padR = s.padRightMs / 1000
-  const trim = s.trimEdgesMs / 1000
+  const trimL = s.trimLeftMs / 1000
+  const trimR = s.trimRightMs / 1000
   const MIN_CUT_S = 0.03 // a cut narrower than a frame is noise — drop it
 
   let input = words
@@ -196,9 +246,9 @@ export function planSilenceMasteryDetailed(
   // into the word — they oppose each other, so the effective offset is
   // (pad − trim), clamped so the cutter never passes a word's midpoint.
   const leftEdge = (prev: SpeechSpan | null, gapStart: number): number =>
-    prev ? Math.max(wordFloor(prev), gapStart + padL - trim) : Math.max(0, gapStart)
+    prev ? Math.max(wordFloor(prev), gapStart + padL - trimL) : Math.max(0, gapStart)
   const rightEdge = (next: SpeechSpan | null, gapEnd: number): number =>
-    next ? Math.min(wordFloor(next), gapEnd - padR + trim) : gapEnd
+    next ? Math.min(wordFloor(next), gapEnd - padR + trimR) : gapEnd
 
   if (ws.length === 0) {
     // No words at all: the whole runtime is silence. Cut it in one piece when
@@ -415,6 +465,37 @@ export function guardRegionEdgesOffWords(
         break
       }
     }
+    if (end - start >= 0.03) out.push({ start, end })
+  }
+  return out
+}
+
+/**
+ * Shape AUDIO-detected silence regions (Silero) with the user's pads/trims:
+ * pads KEEP silence at the region's edges (shrink the cut inward); trims cut
+ * PAST the detected edge into speech — trimLeft eats the tail of the sentence
+ * ending before the gap, trimRight the onset of the sentence after it. A
+ * region touching the media's start keeps its left edge at 0 (nothing speaks
+ * before it) and one touching the end keeps its right edge at the end.
+ */
+export function padTrimRegions(
+  regions: { start: number; end: number }[],
+  settings: SilenceMasterySettings,
+  durationS: number
+): { start: number; end: number }[] {
+  const s = normalizeSilenceMastery(settings)
+  const padL = s.padLeftMs / 1000
+  const padR = s.padRightMs / 1000
+  const trimL = s.trimLeftMs / 1000
+  const trimR = s.trimRightMs / 1000
+  const out: { start: number; end: number }[] = []
+  for (const r of regions) {
+    const atStart = r.start <= 0.01
+    const atEnd = durationS > 0 && r.end >= durationS - 0.01
+    const a = atStart ? 0 : r.start + padL - trimL
+    const b = atEnd ? r.end : r.end - padR + trimR
+    const start = Math.max(0, a)
+    const end = durationS > 0 ? Math.min(b, durationS) : b
     if (end - start >= 0.03) out.push({ start, end })
   }
   return out
