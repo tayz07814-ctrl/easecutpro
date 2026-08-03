@@ -410,7 +410,8 @@ class EcExport(
                         val item = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(tmp)))
                             .setEffects(Effects(ImmutableList.of<AudioProcessor>(), vEff))
                             .build()
-                        val comp2 = Composition.Builder(EditedMediaItemSequence(listOf(item))).build()
+                        @Suppress("DEPRECATION")
+                        val comp2 = Composition.Builder(EditedMediaItemSequence.Builder(listOf(item)).build()).build()
                         progBase = 60
                         progScale = 0.4f
                         runPass(comp2, finalOut, bitrate,
@@ -510,7 +511,8 @@ class EcExport(
             baseItems.add(builder.build())
         }
         val sequences = ArrayList<EditedMediaItemSequence>()
-        sequences.add(EditedMediaItemSequence(baseItems))
+        @Suppress("DEPRECATION")
+        sequences.add(EditedMediaItemSequence.Builder(baseItems).build())
 
         // --- extra audio sequences (music / voiceover) — audio only, mixed in.
         // A track placed later on the timeline gets a silent WAV lead-in so it
@@ -539,7 +541,8 @@ class EcExport(
                 }
             }
             seqItems.add(ab.build())
-            sequences.add(EditedMediaItemSequence(seqItems))
+            @Suppress("DEPRECATION")
+            sequences.add(EditedMediaItemSequence.Builder(seqItems).build())
         }
 
         return Composition.Builder(sequences).build()

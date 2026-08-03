@@ -48,7 +48,10 @@ flutter {
 }
 
 dependencies {
-    val media3 = "1.7.1"
+    // 1.9+: CompositionPlayer.setComposition is repeatable — the preview swaps cut
+    // lists inside ONE live player (EcPlayer), which is what kills the black flash
+    // on edits and the per-edit teardown that could ANR-kill the app.
+    val media3 = "1.9.1"
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-transformer:$media3")
     implementation("androidx.media3:media3-effect:$media3")

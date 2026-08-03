@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Surface
 import android.widget.Toast
+import androidx.media3.common.C
 import androidx.media3.common.util.Size
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
@@ -15,8 +16,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
-import androidx.media3.common.audio.SonicAudioProcessor
-import androidx.media3.effect.SpeedChangeEffect
+import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.CompositionPlayer
@@ -37,10 +37,24 @@ import io.flutter.view.TextureRegistry
  * This uses Media3 **CompositionPlayer** rather than a plain ExoPlayer playlist. The
  * cut list is handed over as ONE [Composition] (the exact same shape the exporter
  * builds), and CompositionPlayer plays it through the Transformer's continuous video
- * graph. That is the point: the removed ranges are stepped over inside one continuous
- * decode — like AVPlayer on an AVMutableComposition on iOS — so the play head no
- * longer re-primes the decoder (seek-to-keyframe + decode-forward) at every cut. No
- * proxy, no pre-warm.
+ * graph — the removed ranges are stepped over inside one continuous decode, so the
+ * play head never re-primes the decoder (seek-to-keyframe + decode-forward) at a cut.
+ *
+ * ONE PLAYER FOR THE WHOLE SESSION. Media3 1.9 lets [CompositionPlayer.setComposition]
+ * be called repeatedly, so an edit swaps the composition INSIDE the live player. The
+ * video graph — and its EGL producer on the Flutter Surface — survives the swap, which
+ * is what actually fixes the black flash on cuts/trims: the texture keeps the last
+ * rendered frame until the new cut list's first frame lands. (The old design rebuilt
+ * the player per edit because 1.7 allowed setComposition only once. Releasing a player
+ * destroys its EGL surface; the producer-side disconnect frees the BufferQueue's
+ * buffers, so the Flutter texture sampled freed memory → a ~250 ms black hole until
+ * the next player's first frame. Reusing the android.view.Surface OBJECT couldn't fix
+ * that — it's the EGL producer connection that matters.) It also removes the per-edit
+ * main-thread block: CompositionPlayerInternal.release() parks the caller on a
+ * ConditionVariable until the playback thread has torn down the GL pipeline and
+ * codecs; doing that on every edit (worst right after silence cleaning applies dozens
+ * of cuts) is an ANR → process kill when the teardown stalls. Now release happens
+ * once, when the editor screen goes away.
  *
  * Crop and the Ken Burns pan are NOT baked here — they stay a Flutter-layer transform
  * on the texture (see editor_screen `_cropped`), so the preview composition is just the
@@ -54,9 +68,6 @@ import io.flutter.view.TextureRegistry
  *
  * CompositionPlayer position IS the composition timeline, which equals the editor's
  * timeline 1:1 — so we report it verbatim (no per-item offset math).
- *
- * NOTE: [CompositionPlayer.setComposition] may be called only once per instance, so
- * every [load] releases the current player and builds a fresh one.
  */
 class EcPlayer(
     private val context: Context,
@@ -71,6 +82,10 @@ class EcPlayer(
     private var textureEntry: TextureRegistry.SurfaceTextureEntry? = null
     private var surface: Surface? = null
     private var events: EventChannel.EventSink? = null
+
+    // A playback/video-graph error can leave the GL pipeline dead; the next load then
+    // rebuilds the player from scratch instead of swapping into a corpse.
+    @Volatile private var playerBroken = false
 
     private var totalDurationMs = 0L
     private var outSize: Size? = null
@@ -164,7 +179,7 @@ class EcPlayer(
         }
     }
 
-    /** Allocate the Flutter texture once; the player AND its Surface are built per [load]. */
+    /** Allocate the Flutter texture once; the player + Surface are built on first [load]. */
     private fun create(result: MethodChannel.Result) {
         if (textureEntry == null) {
             textureEntry = textures.createSurfaceTexture()
@@ -191,7 +206,7 @@ class EcPlayer(
         val size = firstUri?.let { probeSize(it) } ?: (outSize ?: Size(1920, 1080))
         outSize = size
 
-        // Build the composition BEFORE tearing down the current player, so a not-yet-
+        // Build the composition BEFORE touching the current player, so a not-yet-
         // playable timeline (e.g. every clip's duration still unknown right after import)
         // leaves the current preview intact instead of crashing the import.
         val built = buildPreviewComposition(segs)
@@ -201,60 +216,55 @@ class EcPlayer(
         }
         val (composition, totalMs) = built
 
-        // Preserve position + play state across the mandatory player recreation.
         val prevPos = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
         val wasPlaying = player?.playWhenReady ?: false
-        releasePlayer()
+        val startPos = prevPos.coerceIn(0L, maxOf(0L, totalMs - 1L))
 
-        // REUSE the Surface across reloads (that's what kills the black flicker on a
-        // cut/trim). CompositionPlayer.handleRelease() releases its players first so they
-        // stop rendering, then only detaches the video graph's output-surface INFO — it
-        // never pushes a black frame to our Surface. So the Flutter SurfaceTexture keeps
-        // its last decoded frame through the (mandatory) player swap, and the next player
-        // just resumes drawing onto it → a brief freeze on the last frame, not a black
-        // flash. Recreating the Surface — surface.release() + setDefaultBufferSize() +
-        // new Surface() — is what reallocated the texture buffer and blanked it to black
-        // on every edit; only do that when there's no Surface yet or the output size
-        // actually changed. (The earlier "reuse renders black" was the durationUs crash:
-        // the new player threw and never drew, so the surface stayed blank. That's fixed.)
+        // The Surface is created ONCE and kept. Recreate it only when the output size
+        // truly changed (a different-resolution clip became first) — that reallocates
+        // the texture buffer, so the old player must go with it.
         val st = entry.surfaceTexture()
-        val surf: Surface = surface.let { existing ->
-            if (existing != null && size == surfaceSize) {
-                existing // reuse — keeps the last frame on the texture through the swap
-            } else {
-                existing?.release()
+        val sizeChanged = surface == null || size != surfaceSize
+        if (sizeChanged || playerBroken) {
+            releasePlayer()
+            if (sizeChanged) {
+                surface?.release()
                 st.setDefaultBufferSize(size.width, size.height)
-                Surface(st).also { surface = it; surfaceSize = size }
+                surface = Surface(st)
+                surfaceSize = size
             }
         }
+        val surf = surface!!
         events?.success(mapOf("event" to "size", "width" to size.width, "height" to size.height))
 
         totalDurationMs = totalMs
         try {
-            val cp = CompositionPlayer.Builder(context).build()
-            cp.repeatMode = Player.REPEAT_MODE_OFF
-            // Surface the real reason a preview blanks (a playback/video-graph error is
-            // otherwise silent → black screen). This is the diagnostic that turns "black"
-            // into an actionable fault.
-            cp.addListener(object : Player.Listener {
-                override fun onPlayerError(error: PlaybackException) {
-                    toast("Preview error: ${error.errorCodeName} — ${error.message}")
-                }
-            })
-            cp.setVideoSurface(surf, size)
-            cp.setComposition(composition)
-            cp.prepare()
-            if (prevPos in 1 until totalMs) cp.seekTo(prevPos)
-            cp.playWhenReady = wasPlaying
-            player = cp
-        } catch (e: Throwable) {
-            // Show the exact throwing frame (release build is not minified, so class +
-            // method + line survive) — a null message alone is useless.
-            val top = e.stackTrace.take(3).joinToString("  <  ") {
-                "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}"
+            val existing = player
+            if (existing == null) {
+                buildPlayer(surf, size, composition, startPos, wasPlaying)
+            } else {
+                // The heart of the fix: swap the cut list INSIDE the live player. The
+                // video graph and its surface connection survive, so the last frame
+                // stays up until the new composition's first frame replaces it.
+                existing.setComposition(composition, startPos)
+                // After stop() or a playback error the player parks in IDLE and needs
+                // an explicit prepare to pick the new composition up.
+                if (existing.playbackState == Player.STATE_IDLE) existing.prepare()
             }
-            toast("Preview x: ${e.javaClass.simpleName}: ${e.message} @ $top")
-            player = null
+        } catch (e: Throwable) {
+            // The in-place swap failed — fall back to a one-off full rebuild.
+            releasePlayer()
+            try {
+                buildPlayer(surf, size, composition, startPos, wasPlaying)
+            } catch (e2: Throwable) {
+                // Show the exact throwing frame (release build is not minified, so class +
+                // method + line survive) — a null message alone is useless.
+                val top = e2.stackTrace.take(3).joinToString("  <  ") {
+                    "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}"
+                }
+                toast("Preview x: ${e2.javaClass.simpleName}: ${e2.message} @ $top")
+                player = null
+            }
         }
 
         // Extra audio tracks (music / voiceover) — previewed via follow-the-leader players.
@@ -288,10 +298,42 @@ class EcPlayer(
         result.success(null)
     }
 
+    /** Build the persistent CompositionPlayer (first load, or recovery after an error /
+     *  output-size change). */
+    private fun buildPlayer(
+        surf: Surface,
+        size: Size,
+        composition: Composition,
+        startPos: Long,
+        playWhenReady: Boolean
+    ) {
+        val cp = CompositionPlayer.Builder(context).build()
+        cp.repeatMode = Player.REPEAT_MODE_OFF
+        // Surface the real reason a preview blanks (a playback/video-graph error is
+        // otherwise silent → black screen), and mark the pipeline for rebuild.
+        cp.addListener(object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                playerBroken = true
+                toast("Preview error: ${error.errorCodeName} — ${error.message}")
+            }
+        })
+        cp.setVideoSurface(surf, size)
+        cp.setComposition(composition, startPos)
+        cp.prepare()
+        cp.playWhenReady = playWhenReady
+        player = cp
+        playerBroken = false
+    }
+
     /**
      * Build the preview [Composition]: one sequence of the cut clips. Each keeps its
-     * per-clip volume (channel-mix) and speed (SpeedChange + Sonic); crop / Ken Burns
-     * are intentionally left to the Flutter-layer transform.
+     * per-clip volume (channel-mix) and speed; crop / Ken Burns are intentionally left
+     * to the Flutter-layer transform.
+     *
+     * Per-clip speed rides on [EditedMediaItem.Builder.setSpeed] (a constant
+     * [SpeedProvider]) — CompositionPlayer 1.9 rejects compositions carrying free-form
+     * SpeedChangeEffect video effects, and setSpeed wires the matched audio time-stretch
+     * itself.
      *
      * [EditedMediaItem.durationUs] must be the WHOLE source media length — Media3 derives
      * each clip's presentation length from the ClippingConfiguration and asserts
@@ -330,13 +372,11 @@ class EcPlayer(
             val mi = MediaItem.Builder().setUri(uri).setClippingConfiguration(clip.build()).build()
             val b = EditedMediaItem.Builder(mi).setDurationUs(durationUs)
 
-            val vfx = ArrayList<Effect>()
-            val afx = ArrayList<AudioProcessor>()
             if (speed != 1f) {
-                vfx.add(SpeedChangeEffect(speed))
-                val sonic = SonicAudioProcessor()
-                sonic.setSpeed(speed)
-                afx.add(sonic)
+                b.setSpeed(object : SpeedProvider {
+                    override fun getSpeed(timeUs: Long): Float = speed
+                    override fun getNextSpeedChangeTimeUs(timeUs: Long): Long = C.TIME_UNSET
+                })
             }
             if (volume <= 0.001f) {
                 b.setRemoveAudio(true)
@@ -344,16 +384,16 @@ class EcPlayer(
                 val mix = ChannelMixingAudioProcessor()
                 mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
                 mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
-                afx.add(mix)
-            }
-            if (vfx.isNotEmpty() || afx.isNotEmpty()) {
-                b.setEffects(Effects(ImmutableList.copyOf(afx), ImmutableList.copyOf(vfx)))
+                b.setEffects(
+                    Effects(ImmutableList.of<AudioProcessor>(mix), ImmutableList.of<Effect>())
+                )
             }
             items.add(b.build())
             totalMs += timelineMs
         }
         if (items.isEmpty()) return null
-        val seq = EditedMediaItemSequence(items)
+        @Suppress("DEPRECATION")
+        val seq = EditedMediaItemSequence.Builder(items).build()
         return Composition.Builder(listOf(seq)).build() to totalMs
     }
 
@@ -461,6 +501,7 @@ class EcPlayer(
             }
         }
         player = null
+        playerBroken = false
     }
 
     private fun releaseInternal() {

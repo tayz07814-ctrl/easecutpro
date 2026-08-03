@@ -144,6 +144,12 @@ class EcVad(
         val trimEdges = (call.argument<Number>("trimEdgesS"))?.toDouble() ?: 0.02
         val tailTrim = call.argument<Boolean>("tailTrim") ?: false
 
+        // One run at a time — a second concurrent run would double the decode + ONNX
+        // working set at exactly the moment memory is tightest.
+        if (!runningGate.compareAndSet(false, true)) {
+            result.success(emptyList<List<Double>>())
+            return
+        }
         Thread {
             val regions: List<DoubleArray> = try {
                 val strikes = guardStrikes()
@@ -174,10 +180,14 @@ class EcVad(
                 } ?: "?"
                 toast("Silence VAD: ${e.javaClass.simpleName}: ${e.message} @ $top")
                 emptyList()
+            } finally {
+                runningGate.set(false)
             }
             main.post { result.success(regions.map { listOf(it[0], it[1]) }) }
         }.start()
     }
+
+    private val runningGate = java.util.concurrent.atomic.AtomicBoolean(false)
 
     // --- ONNX runtime (lazy) ------------------------------------------------
 
@@ -220,15 +230,6 @@ class EcVad(
                 cmvnScales = scales
             }
         }
-    }
-
-    /** A DIRECT float buffer (native byte order) filled from [data]. onnxruntime can
-     *  crash on heap-backed (non-direct) buffers, so every tensor is built this way. */
-    private fun directBuffer(data: FloatArray, offset: Int, len: Int): FloatBuffer {
-        val fb = ByteBuffer.allocateDirect(len * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-        fb.put(data, offset, len)
-        fb.rewind()
-        return fb
     }
 
     /** <AddShift> = per-dim negative mean, <Rescale> = per-dim inverse std. Both are
@@ -277,9 +278,19 @@ class EcVad(
         val cacheShape = longArrayOf(1, CACHE_PROJ.toLong(), CACHE_ORDER.toLong(), 1)
         val speechProb = FloatArray(frames)
 
-        // Reused across windows — allocated once.
+        // Reused across windows — allocated once. The DIRECT buffers are reused too:
+        // allocating ~1.6 MB of fresh off-heap memory per 10 s window piled up faster
+        // than the GC felt pressure to reclaim it (direct memory barely registers on
+        // the Java heap), which on a phone already running the preview player is
+        // exactly the kind of native growth the low-memory killer answers with SIGKILL.
         val feature = FloatArray(CHUNK_FRAMES * FEATURE_DIM)
         val fbWindow = FloatArray((CHUNK_FRAMES + 2 * leftContext) * MEL_BINS)
+        val speechBuf = ByteBuffer.allocateDirect(CHUNK_FRAMES * FEATURE_DIM * 4)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val cacheBufs = Array(CACHE_LAYERS) {
+            ByteBuffer.allocateDirect(CACHE_PROJ * CACHE_ORDER * 4)
+                .order(ByteOrder.nativeOrder()).asFloatBuffer()
+        }
 
         var start = 0
         while (start < frames) {
@@ -308,17 +319,26 @@ class EcVad(
                 }
             }
 
+            speechBuf.clear()
+            speechBuf.put(feature, 0, n * FEATURE_DIM)
+            speechBuf.flip()
             val feeds = HashMap<String, OnnxTensor>()
             feeds["speech"] = OnnxTensor.createTensor(
-                ortEnv, directBuffer(feature, 0, n * FEATURE_DIM),
-                longArrayOf(1, n.toLong(), FEATURE_DIM.toLong())
+                ortEnv, speechBuf, longArrayOf(1, n.toLong(), FEATURE_DIM.toLong())
             )
             for (i in 0 until CACHE_LAYERS) {
-                feeds[inCacheNames[i]] = OnnxTensor.createTensor(
-                    ortEnv, directBuffer(cacheData[i], 0, cacheData[i].size), cacheShape
-                )
+                cacheBufs[i].clear()
+                cacheBufs[i].put(cacheData[i], 0, cacheData[i].size)
+                cacheBufs[i].flip()
+                feeds[inCacheNames[i]] = OnnxTensor.createTensor(ortEnv, cacheBufs[i], cacheShape)
             }
-            val res = s.run(feeds)
+            val res = try {
+                s.run(feeds)
+            } catch (t: Throwable) {
+                // run() never took ownership — close the inputs or they leak native memory.
+                feeds.values.forEach { runCatching { it.close() } }
+                throw t
+            }
             try {
                 val logits = (res.get("logits").get() as OnnxTensor).floatBuffer
                 for (i in 0 until n) speechProb[start + i] = 1f - logits.get(i * LOGITS_STRIDE)
