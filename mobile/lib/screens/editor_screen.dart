@@ -1118,7 +1118,7 @@ class _EditorScreenState extends State<EditorScreen> {
           padAfterS: SilenceSettings.padAfterS,
           trimEdgesS: SilenceSettings.edgeTrimS,
           tailTrim: SilenceSettings.removeBreaths,
-        ).timeout(const Duration(seconds: 90), onTimeout: () => const []);
+        ).timeout(const Duration(minutes: 4), onTimeout: () => const []);
         fsmn = [for (final r in regions) [(r[0] * 1000).round(), (r[1] * 1000).round()]];
       } catch (_) {
         fsmn = const [];

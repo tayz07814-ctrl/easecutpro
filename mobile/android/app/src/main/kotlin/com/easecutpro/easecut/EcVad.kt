@@ -14,6 +14,7 @@ import ai.onnxruntime.OrtSession
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -24,7 +25,6 @@ import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.round
 import kotlin.math.sqrt
 
 /**
@@ -40,6 +40,18 @@ import kotlin.math.sqrt
  *   args  {uri, padBeforeS, padAfterS, trimEdgesS, tailTrim}
  *   reply List<[startS, endS]>  — silence regions to REMOVE (seconds), or [] on any
  *         failure so the Dart caller can fall back to its transcript-gap silence.
+ *
+ * MEMORY IS THE CONTRACT HERE. The first cut of this engine materialised the whole
+ * decode (at source rate, as floats), the resampled copy AND the full [frames × 400]
+ * feature matrix at once — ~270 MB resident for a 10-minute clip, on top of ExoPlayer
+ * and the Flutter engine. That doesn't raise OutOfMemoryError you can catch; the
+ * kernel SIGKILLs the process, which is why it read as a bare crash with no
+ * diagnostic. So: the decode resamples to 16 kHz inline and keeps 16-bit PCM (never
+ * the source-rate float copy), and features are computed one CHUNK_FRAMES window at
+ * a time straight into the tensor. Peak is now ~20 MB of working set plus the PCM.
+ *
+ * The FSMN caches make windowing exact — chunked inference is bit-identical to one
+ * big pass, so the smaller window costs nothing but peak arena size.
  *
  * The model (model_quant.onnx) + CMVN (vad.mvn) ship in android assets/fsmn.
  */
@@ -89,6 +101,36 @@ class EcVad(
         }
     }
 
+    // --- crash guard --------------------------------------------------------
+    // A native fault (ONNX segfault, or the low-memory killer) takes the whole
+    // process down with no catchable exception, so the only way to stop a crash
+    // LOOP is to leave a mark on disk before we touch any of it and clear it once
+    // we're back. Two strikes — one lost run could just be the user swiping the app
+    // away mid-analysis — then the engine steps aside for word-gap silence instead
+    // of killing the app every time. Reinstalling/updating re-arms it.
+
+    private fun guardFile() = File(context.filesDir, "ec_vad_guard")
+
+    private fun appStamp(): String = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
+    } catch (_: Exception) {
+        "0"
+    }
+
+    private fun guardStrikes(): Int = try {
+        val parts = guardFile().readText().trim().split(":")
+        if (parts.size == 2 && parts[0] == appStamp()) parts[1].toInt() else 0
+    } catch (_: Exception) {
+        0
+    }
+
+    private fun setGuardStrikes(n: Int) {
+        try {
+            if (n <= 0) guardFile().delete() else guardFile().writeText("${appStamp()}:$n")
+        } catch (_: Exception) {
+        }
+    }
+
     // --- public entry -------------------------------------------------------
 
     private fun detectSilences(call: MethodCall, result: MethodChannel.Result) {
@@ -104,19 +146,29 @@ class EcVad(
 
         Thread {
             val regions: List<DoubleArray> = try {
-                val (mono, rate) = decodePcmMono(uri)
-                if (mono.isEmpty() || rate <= 0) {
+                val strikes = guardStrikes()
+                if (strikes >= MAX_STRIKES) {
+                    toast("On-device silence engine is off after repeated failures — using transcript gaps.")
                     emptyList()
                 } else {
-                    val durationS = mono.size.toDouble() / rate
-                    val raw = detectFsmnSilences(mono, rate, durationS)
-                    val aligned = alignFinalBossFsmnGaps(raw, durationS)
-                    val planned = planFinalBossSilenceCuts(aligned, padBefore, padAfter, trimEdges, durationS)
-                    if (tailTrim) trimQuietTails(planned, mono, rate) else planned
+                    setGuardStrikes(strikes + 1)
+                    val (pcm, count) = decodeMono16k(uri)
+                    val out = if (count <= 0) {
+                        emptyList()
+                    } else {
+                        val durationS = count.toDouble() / TARGET_RATE
+                        val raw = detectFsmnSilences(pcm, count, durationS)
+                        val aligned = alignFinalBossFsmnGaps(raw, durationS)
+                        val planned = planFinalBossSilenceCuts(aligned, padBefore, padAfter, trimEdges, durationS)
+                        if (tailTrim) trimQuietTails(planned, pcm, count) else planned
+                    }
+                    setGuardStrikes(0) // came back alive — re-arm for next time
+                    out
                 }
             } catch (e: Throwable) {
-                // Never crash the app — surface the fault and let Dart fall back to
-                // word-gap silence (it treats an empty list as "VAD unavailable").
+                // A CAUGHT failure already degrades gracefully, so it must not count
+                // as a strike — clear the guard and let Dart fall back to word gaps.
+                setGuardStrikes(0)
                 val top = e.stackTrace.firstOrNull()?.let {
                     "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}"
                 } ?: "?"
@@ -141,7 +193,12 @@ class EcVad(
             if (session == null) {
                 val e = OrtEnvironment.getEnvironment()
                 val bytes = context.assets.open("fsmn/model_quant.onnx").use { it.readBytes() }
-                val sess = e.createSession(bytes, OrtSession.SessionOptions())
+                // Single-threaded: this is a 0.5 MB model on a short window, so extra
+                // threads buy nothing and each one brings its own arena.
+                val opts = OrtSession.SessionOptions()
+                opts.setIntraOpNumThreads(1)
+                opts.setInterOpNumThreads(1)
+                val sess = e.createSession(bytes, opts)
                 env = e
                 session = sess
                 // Resolve the model's ACTUAL i/o so we never feed run() a wrong key
@@ -191,9 +248,14 @@ class EcVad(
         return means.copyOf(FEATURE_DIM) to scales.copyOf(FEATURE_DIM)
     }
 
-    // --- pipeline: PCM → silence gaps ---------------------------------------
+    // --- pipeline: 16 kHz PCM → silence gaps --------------------------------
 
-    private fun detectFsmnSilences(input: FloatArray, sourceRate: Int, durationS: Double): List<DoubleArray> {
+    /**
+     * Streams fbank → LFR+CMVN → FSMN over [CHUNK_FRAMES] windows, carrying the four
+     * caches between them. Only the current window's features exist at any moment
+     * (1.6 MB) instead of the whole [frames × 400] matrix (96 MB for 10 minutes).
+     */
+    private fun detectFsmnSilences(pcm: ShortArray, count: Int, durationS: Double): List<DoubleArray> {
         ensureRuntime()
         val s = session ?: return emptyList()
         val means = cmvnMeans ?: return emptyList()
@@ -201,23 +263,54 @@ class EcVad(
 
         if (!ioValid) return emptyList() // model i/o not what we expect — bail, don't crash
 
-        val samples = resampleMono(input, sourceRate)
-        val (features, frames) = fbankLfrCmvn(samples, means, scales)
+        val frames = if (count >= FRAME_LENGTH) 1 + (count - FRAME_LENGTH) / FRAME_SHIFT else 0
         if (frames == 0) return emptyList()
-
         val ortEnv = env ?: return emptyList()
+
+        val filters = melFilters()
+        val eps = Math.ulp(1.0).toFloat().coerceAtLeast(Float.MIN_VALUE) // ~Number.EPSILON floor
+        val leftContext = (LFR_M - 1) shr 1
+
         // Four FSMN caches, [1, 128, 19, 1], carried across chunks. Names resolved from
         // the model (sorted in_cache*/out_cache*).
         val cacheData = Array(CACHE_LAYERS) { FloatArray(CACHE_PROJ * CACHE_ORDER) }
-        val speechProb = FloatArray(frames)
         val cacheShape = longArrayOf(1, CACHE_PROJ.toLong(), CACHE_ORDER.toLong(), 1)
+        val speechProb = FloatArray(frames)
 
-        var offset = 0
-        while (offset < frames) {
-            val n = min(MAX_CHUNK_FRAMES, frames - offset)
+        // Reused across windows — allocated once.
+        val feature = FloatArray(CHUNK_FRAMES * FEATURE_DIM)
+        val fbWindow = FloatArray((CHUNK_FRAMES + 2 * leftContext) * MEL_BINS)
+
+        var start = 0
+        while (start < frames) {
+            val n = min(CHUNK_FRAMES, frames - start)
+            // fbank rows for this window PLUS the LFR context either side, so the
+            // stacked features are identical to the whole-signal computation.
+            val lo = max(0, start - leftContext)
+            val hi = min(frames - 1, start + n - 1 + leftContext)
+            for (r in 0..(hi - lo)) {
+                val power = fftPower(pcm, (lo + r) * FRAME_SHIFT)
+                for (m in 0 until MEL_BINS) {
+                    var energy = 0f
+                    val filter = filters[m]
+                    for (k in power.indices) energy += power[k] * filter[k]
+                    fbWindow[r * MEL_BINS + m] = ln(max(eps, energy).toDouble()).toFloat()
+                }
+            }
+            for (t in 0 until n) {
+                for (ctx in 0 until LFR_M) {
+                    val sourceFrame = max(0, min(frames - 1, start + t + ctx - leftContext))
+                    val row = sourceFrame - lo
+                    for (m in 0 until MEL_BINS) {
+                        val d = ctx * MEL_BINS + m
+                        feature[t * FEATURE_DIM + d] = (fbWindow[row * MEL_BINS + m] + means[d]) * scales[d]
+                    }
+                }
+            }
+
             val feeds = HashMap<String, OnnxTensor>()
             feeds["speech"] = OnnxTensor.createTensor(
-                ortEnv, directBuffer(features, offset * FEATURE_DIM, n * FEATURE_DIM),
+                ortEnv, directBuffer(feature, 0, n * FEATURE_DIM),
                 longArrayOf(1, n.toLong(), FEATURE_DIM.toLong())
             )
             for (i in 0 until CACHE_LAYERS) {
@@ -228,7 +321,7 @@ class EcVad(
             val res = s.run(feeds)
             try {
                 val logits = (res.get("logits").get() as OnnxTensor).floatBuffer
-                for (i in 0 until n) speechProb[offset + i] = 1f - logits.get(i * LOGITS_STRIDE)
+                for (i in 0 until n) speechProb[start + i] = 1f - logits.get(i * LOGITS_STRIDE)
                 for (i in 0 until CACHE_LAYERS) {
                     val outCache = (res.get(outCacheNames[i]).get() as OnnxTensor).floatBuffer
                     outCache.get(cacheData[i], 0, min(cacheData[i].size, outCache.remaining()))
@@ -237,25 +330,9 @@ class EcVad(
                 res.close()
                 feeds.values.forEach { it.close() }
             }
-            offset += n
+            start += n
         }
         return speechToSilence(speechProb, durationS)
-    }
-
-    /** Linear-interpolation resample to 16 kHz mono. */
-    private fun resampleMono(input: FloatArray, sourceRate: Int): FloatArray {
-        if (sourceRate == TARGET_RATE) return input
-        val length = max(1, round(input.size.toDouble() * TARGET_RATE / sourceRate).toInt())
-        val out = FloatArray(length)
-        val ratio = sourceRate.toDouble() / TARGET_RATE
-        for (i in 0 until length) {
-            val position = i * ratio
-            val left = min(input.size - 1, floor(position).toInt())
-            val right = min(input.size - 1, left + 1)
-            val mix = (position - left).toFloat()
-            out[i] = input[left] * (1 - mix) + input[right] * mix
-        }
-        return out
     }
 
     // --- Kaldi fbank + LFR + CMVN -------------------------------------------
@@ -285,16 +362,17 @@ class EcVad(
     }
 
     /** Power spectrum of one frame: DC-remove, pre-emphasis (0.97), Hamming, ×32768,
-     *  radix-2 FFT (512). Mirrors fsmnVad.ts fftPower exactly. */
-    private fun fftPower(frame: FloatArray, start: Int): FloatArray {
+     *  radix-2 FFT (512). Mirrors fsmnVad.ts fftPower exactly — the PCM is 16-bit here,
+     *  so the /32768 on the way in and the ×32768 on the way out cancel as before. */
+    private fun fftPower(pcm: ShortArray, start: Int): FloatArray {
         val real = FloatArray(FFT_SIZE)
         val imag = FloatArray(FFT_SIZE)
         var mean = 0f
-        for (i in 0 until FRAME_LENGTH) mean += frame[start + i]
+        for (i in 0 until FRAME_LENGTH) mean += pcm[start + i] / 32768f
         mean /= FRAME_LENGTH
-        var previous = frame[start] - mean
+        var previous = pcm[start] / 32768f - mean
         for (i in 0 until FRAME_LENGTH) {
-            val current = frame[start + i] - mean
+            val current = pcm[start + i] / 32768f - mean
             val emphasized = if (i == 0) current * 0.03f else current - 0.97f * previous
             previous = current
             val hamming = (0.54 - 0.46 * cos(2 * Math.PI * i / (FRAME_LENGTH - 1))).toFloat()
@@ -343,35 +421,6 @@ class EcVad(
         val power = FloatArray(FFT_SIZE / 2 + 1)
         for (i in power.indices) power[i] = real[i] * real[i] + imag[i] * imag[i]
         return power
-    }
-
-    private fun fbankLfrCmvn(samples: FloatArray, means: FloatArray, scales: FloatArray): Pair<FloatArray, Int> {
-        val frameCount = if (samples.size >= FRAME_LENGTH) 1 + (samples.size - FRAME_LENGTH) / FRAME_SHIFT else 0
-        if (frameCount == 0) return FloatArray(0) to 0
-        val filters = melFilters()
-        val fbanks = FloatArray(frameCount * MEL_BINS)
-        val eps = Math.ulp(1.0).toFloat().coerceAtLeast(Float.MIN_VALUE) // ~Number.EPSILON floor
-        for (t in 0 until frameCount) {
-            val power = fftPower(samples, t * FRAME_SHIFT)
-            for (m in 0 until MEL_BINS) {
-                var energy = 0f
-                val filter = filters[m]
-                for (k in power.indices) energy += power[k] * filter[k]
-                fbanks[t * MEL_BINS + m] = ln(max(eps, energy).toDouble()).toFloat()
-            }
-        }
-        val output = FloatArray(frameCount * FEATURE_DIM)
-        val leftContext = (LFR_M - 1) shr 1
-        for (t in 0 until frameCount) {
-            for (ctx in 0 until LFR_M) {
-                val sourceFrame = max(0, min(frameCount - 1, t + ctx - leftContext))
-                for (m in 0 until MEL_BINS) {
-                    val d = ctx * MEL_BINS + m
-                    output[t * FEATURE_DIM + d] = (fbanks[sourceFrame * MEL_BINS + m] + means[d]) * scales[d]
-                }
-            }
-        }
-        return output to frameCount
     }
 
     // --- FunASR offline endpoint state machine → silence gaps ---------------
@@ -483,27 +532,30 @@ class EcVad(
         return output
     }
 
-    /** dBFS of [t0, t1) over the ORIGINAL (unresampled) mono PCM. */
-    private fun windowDb(mono: FloatArray, sampleRate: Int, t0: Double, t1: Double): Double {
-        val a = max(0, floor(t0 * sampleRate).toInt())
-        val b = min(mono.size, kotlin.math.ceil(t1 * sampleRate).toInt())
+    /** dBFS of [t0, t1) over the 16 kHz mono PCM. */
+    private fun windowDb(pcm: ShortArray, count: Int, t0: Double, t1: Double): Double {
+        val a = max(0, floor(t0 * TARGET_RATE).toInt())
+        val b = min(count, kotlin.math.ceil(t1 * TARGET_RATE).toInt())
         if (b <= a) return Double.NEGATIVE_INFINITY
         var sum = 0.0
-        for (i in a until b) sum += mono[i].toDouble() * mono[i]
+        for (i in a until b) {
+            val v = pcm[i] / 32768.0
+            sum += v * v
+        }
         val rms = sqrt(sum / (b - a))
         return if (rms > 0) 20 * log10(rms) else Double.NEGATIVE_INFINITY
     }
 
     /** Walk a cut backward while the audio it would keep is dead air (only trims clip
      *  ENDINGS; bounded by TAIL_TRIM_MAX_S and never crosses the previous cut/start). */
-    private fun trimQuietTails(regions: List<DoubleArray>, mono: FloatArray, sampleRate: Int): List<DoubleArray> {
+    private fun trimQuietTails(regions: List<DoubleArray>, pcm: ShortArray, count: Int): List<DoubleArray> {
         val out = ArrayList<DoubleArray>()
         for (region in regions) {
             val clipStart = if (out.isNotEmpty()) out.last()[1] else 0.0
             val floorS = max(clipStart, region[0] - TAIL_TRIM_MAX_S)
             var cut = region[0]
             while (cut - TAIL_TRIM_STEP_S >= floorS &&
-                windowDb(mono, sampleRate, cut - TAIL_TRIM_STEP_S, cut) < TAIL_TRIM_DB
+                windowDb(pcm, count, cut - TAIL_TRIM_STEP_S, cut) < TAIL_TRIM_DB
             ) {
                 cut -= TAIL_TRIM_STEP_S
             }
@@ -512,15 +564,21 @@ class EcVad(
         return out
     }
 
-    // --- audio decode: any source → mono FloatArray + sampleRate ------------
+    // --- audio decode: any source → 16 kHz mono 16-bit PCM ------------------
 
-    private fun decodePcmMono(uri: String): Pair<FloatArray, Int> {
+    /**
+     * Decodes the first audio track, downmixing to mono and resampling to 16 kHz
+     * INLINE — the source-rate audio is never accumulated, so a 10-minute 48 kHz
+     * stereo clip costs ~19 MB of shorts instead of ~230 MB of floats. Returns the
+     * backing array plus the number of valid samples (the array may be longer).
+     */
+    private fun decodeMono16k(uri: String): Pair<ShortArray, Int> {
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
-        val chunks = ArrayList<FloatArray>()
-        var total = 0
         var sampleRate = 0
         var channels = 1
+        var out = ShortArray(0)
+        var written = 0
         try {
             extractor = MediaExtractor()
             extractor.setDataSource(context, Uri.parse(uri), null)
@@ -532,16 +590,59 @@ class EcVad(
                     trackIndex = i; format = f; break
                 }
             }
-            if (trackIndex < 0 || format == null) return FloatArray(0) to 0
+            if (trackIndex < 0 || format == null) return ShortArray(0) to 0
             extractor.selectTrack(trackIndex)
             if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L
+            // Past this the PCM alone would dominate the heap; word-gap silence is the
+            // better trade for feature-length audio.
+            if (durationUs > MAX_DURATION_US) return ShortArray(0) to 0
+
+            // Pre-size from the container duration so the decode never reallocates.
+            val estimate = if (durationUs > 0) (durationUs / 1_000_000.0 * TARGET_RATE).toInt() + TARGET_RATE
+            else 10 * 60 * TARGET_RATE
+            out = ShortArray(max(TARGET_RATE, estimate))
+
+            // Streaming linear-interpolation resample state (global sample indices, so
+            // interpolation is exact across decoder-buffer boundaries).
+            var ratio = if (sampleRate > 0) sampleRate.toDouble() / TARGET_RATE else 1.0
+            var outIdx = 0L
+            var base = 0L
+            var prev = 0f
+
+            fun ensure(need: Int) {
+                if (need <= out.size) return
+                out = out.copyOf(max(need, out.size * 2))
+            }
+
+            fun push(mono: FloatArray, len: Int) {
+                if (len <= 0) return
+                val last = base + len - 1
+                while (true) {
+                    val p = outIdx * ratio
+                    val left = floor(p).toLong()
+                    val right = left + 1
+                    if (right > last || left < base - 1) break
+                    val mix = (p - left).toFloat()
+                    val lv = if (left < base) prev else mono[(left - base).toInt()]
+                    val rv = mono[(right - base).toInt()]
+                    ensure(written + 1)
+                    val v = lv * (1 - mix) + rv * mix
+                    out[written++] = max(-32768, min(32767, (v * 32767f).toInt())).toShort()
+                    outIdx++
+                }
+                prev = mono[len - 1]
+                base += len
+            }
+
             codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!)
             codec.configure(format, null, null, 0)
             codec.start()
             val info = MediaCodec.BufferInfo()
             var sawInputEOS = false
             var sawOutputEOS = false
+            var scratch = FloatArray(0)
             while (!sawOutputEOS) {
                 if (!sawInputEOS) {
                     val inIndex = codec.dequeueInputBuffer(10000)
@@ -562,6 +663,7 @@ class EcVad(
                     val of = codec.outputFormat
                     if (of.containsKey(MediaFormat.KEY_SAMPLE_RATE)) sampleRate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                     if (of.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    if (sampleRate > 0) ratio = sampleRate.toDouble() / TARGET_RATE
                 } else if (outIndex >= 0) {
                     if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) sawOutputEOS = true
                     if (info.size > 0) {
@@ -573,35 +675,28 @@ class EcVad(
                         val ch = max(1, channels)
                         val frames = n / ch
                         if (frames > 0) {
-                            val mono = FloatArray(frames)
+                            if (scratch.size < frames) scratch = FloatArray(frames)
                             var idx = 0
                             for (fr in 0 until frames) {
                                 var acc = 0f
                                 for (c in 0 until ch) acc += sb.get(idx++).toInt() / 32768f
-                                mono[fr] = acc / ch
+                                scratch[fr] = acc / ch
                             }
-                            chunks.add(mono)
-                            total += frames
+                            push(scratch, frames)
                         }
                     }
                     codec.releaseOutputBuffer(outIndex, false)
                 }
             }
         } catch (_: Exception) {
-            return FloatArray(0) to 0
+            return ShortArray(0) to 0
         } finally {
             try { codec?.stop() } catch (_: Exception) {}
             try { codec?.release() } catch (_: Exception) {}
             try { extractor?.release() } catch (_: Exception) {}
         }
-        if (total == 0 || sampleRate <= 0) return FloatArray(0) to 0
-        val samples = FloatArray(total)
-        var pos = 0
-        for (c in chunks) {
-            System.arraycopy(c, 0, samples, pos, c.size)
-            pos += c.size
-        }
-        return samples to sampleRate
+        if (written == 0 || sampleRate <= 0) return ShortArray(0) to 0
+        return out to written
     }
 
     private fun sin(x: Double): Float = kotlin.math.sin(x).toFloat()
@@ -617,8 +712,12 @@ class EcVad(
         const val CACHE_LAYERS = 4
         const val CACHE_PROJ = 128
         const val CACHE_ORDER = 19
-        const val MAX_CHUNK_FRAMES = 6000
+        // 10 s per inference window. The FSMN caches make this exact, so the only
+        // thing a bigger window buys is a bigger native arena.
+        const val CHUNK_FRAMES = 1000
         const val LOGITS_STRIDE = 248                 // speechProb = 1 - logits[i*248]
+        const val MAX_DURATION_US = 45L * 60L * 1_000_000L
+        const val MAX_STRIKES = 2
         // Published FunASR vad.yaml defaults (fixed — Final Boss never tunes the VAD).
         const val SPEECH_THRESHOLD = 0.8f
         const val WINDOW_FRAMES = 20
