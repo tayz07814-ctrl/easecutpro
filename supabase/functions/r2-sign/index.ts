@@ -8,6 +8,8 @@
 //
 // Required secrets (supabase secrets set ...):
 //   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
+// Optional (enables the write-budget gateway):
+//   R2_UPLOAD_WORKER, R2_TICKET_SECRET
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { AwsClient } from 'https://esm.sh/aws4fetch@1.0.20'
@@ -34,6 +36,30 @@ interface Req {
   /** True for raw media that counts against the 100 GB space quota; false/omitted
    *  for tiny edit-JSON files. */
   countsToQuota?: boolean
+}
+
+/** Hard ceiling per object, independent of the space quota. */
+const MAX_OBJECT_BYTES = 5 * 1024 * 1024 * 1024
+
+function b64url(bytes: Uint8Array): string {
+  let s = ''
+  for (const b of bytes) s += String.fromCharCode(b)
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/** `<base64url(payload)>.<base64url(hmac)>` — verified by the Worker with the
+ *  same secret, so the hot upload path needs no database round-trip. */
+async function mintTicket(payload: Record<string, unknown>, secret: string): Promise<string> {
+  const p = b64url(new TextEncoder().encode(JSON.stringify(payload)))
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(p)))
+  return `${p}.${b64url(sig)}`
 }
 
 Deno.serve(async (req: Request) => {
@@ -94,19 +120,33 @@ Deno.serve(async (req: Request) => {
     )
   }
 
-  // Per-space quota on counted (media) uploads.
-  if (op === 'put' && body.countsToQuota) {
-    const add = Math.max(0, Number(body.contentLength) || 0)
-    const [{ data: sp }, { data: projs }] = await Promise.all([
-      svc.from('spaces').select('quota_bytes').eq('id', spaceId).maybeSingle(),
-      svc.from('space_projects').select('media_bytes').eq('space_id', spaceId)
-    ])
-    const quota = Number(sp?.quota_bytes ?? 0)
-    const used = (projs ?? []).reduce((n: number, r: { media_bytes: number }) => n + Number(r.media_bytes || 0), 0)
-    if (used + add > quota) return json({ error: 'quota_exceeded', used, quota, need: add }, 413)
-  }
-
   const fullKey = `spaces/${spaceId}/${clean}`
+
+  // Per-space storage quota, reserved in the SERVER-OWNED ledger.
+  //
+  // This used to sum space_projects.media_bytes — a column the client writes
+  // (cowork.ts updates it after each upload, and RLS lets any editor member do
+  // it). So the quota asked the uploader how much they'd uploaded. Upload 10 TB,
+  // skip the update, quota reads zero. space_objects has no client-facing RLS
+  // policy at all, so only this function can move the number, and the reserve is
+  // done inside a single SQL function so two concurrent uploads can't both read
+  // the same "used" value and both pass.
+  if (op === 'put' && body.countsToQuota) {
+    const add = Math.min(MAX_OBJECT_BYTES, Math.max(0, Number(body.contentLength) || 0))
+    const { error: qErr } = await svc.rpc('space_reserve_object', {
+      p_space: spaceId,
+      p_key: fullKey,
+      p_bytes: add
+    })
+    if (qErr) {
+      if ((qErr.message || '').includes('quota_exceeded')) {
+        const { data: used } = await svc.rpc('space_used_bytes', { p_space: spaceId })
+        const { data: sp } = await svc.from('spaces').select('quota_bytes').eq('id', spaceId).maybeSingle()
+        return json({ error: 'quota_exceeded', used: Number(used ?? 0), quota: Number(sp?.quota_bytes ?? 0), need: add }, 413)
+      }
+      return json({ error: 'could not reserve storage', detail: qErr.message }, 500)
+    }
+  }
 
   // WRITES go through the upload Worker when it is configured. A presigned PUT
   // cannot be made single-use, so one mint is an unlimited-replay licence for
@@ -137,27 +177,3 @@ Deno.serve(async (req: Request) => {
 
   return json({ mode: 'presigned', url: signed.url, key: fullKey }, 200)
 })
-
-/** Hard ceiling per object, independent of the space quota. */
-const MAX_OBJECT_BYTES = 5 * 1024 * 1024 * 1024
-
-function b64url(bytes: Uint8Array): string {
-  let s = ''
-  for (const b of bytes) s += String.fromCharCode(b)
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-/** `<base64url(payload)>.<base64url(hmac)>` — verified by the Worker with the
- *  same secret, so the hot upload path needs no database round-trip. */
-async function mintTicket(payload: Record<string, unknown>, secret: string): Promise<string> {
-  const p = b64url(new TextEncoder().encode(JSON.stringify(payload)))
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  )
-  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(p)))
-  return `${p}.${b64url(sig)}`
-}
