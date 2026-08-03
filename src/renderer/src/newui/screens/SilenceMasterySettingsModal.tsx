@@ -100,6 +100,16 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
               <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>The transcriber sometimes stamps one word across a whole pause (a 2.5s “Okay.”), hiding silence inside the word. This clamps implausibly long words so that hidden dead air gets cut too.</div>
             </div>
           </div>
+          {/* RMS energy pass — the audio's own verdict, auto-thresholded. */}
+          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
+            <div onClick={() => setSt({ rmsPass: !st.rmsPass })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${st.rmsPass ? '#7c6bff' : '#2a2a34'}`)}>
+              <div style={css(st.rmsPass ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
+            </div>
+            <div style={css('flex:1;min-width:0')}>
+              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Energy pass (auto threshold)</div>
+              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Also listens to the actual audio: measures the clip’s own noise floor vs speech level and cuts every low-energy stretch the transcript missed — never within 100ms of a spoken word.</div>
+            </div>
+          </div>
         </div>
 
         <div style={css('display:flex;align-items:center;margin-top:20px')}>

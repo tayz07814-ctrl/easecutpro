@@ -54,10 +54,17 @@ import { positionToBox, chunkTranscript, findShowMoments } from '@shared/overlay
 // pad left/right and trim-edges. Pure module; review-first staging here.
 import {
   planSilenceMasteryDetailed,
+  clampStretchedWords,
+  frameRmsDb,
+  planRmsSilence,
+  unionCutRegions,
+  RMS_FRAME_MS,
   normalizeSilenceMastery,
   DEFAULT_SILENCE_MASTERY_SETTINGS,
-  type SilenceMasterySettings
+  type SilenceMasterySettings,
+  type RmsPassResult
 } from '@shared/silenceMastery'
+import { extractSttAudio } from './cloud/audio'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
@@ -2061,8 +2068,33 @@ export const useStore = create<AppState>((set, get) => ({
     // the base timeline's length, else the last word (no trailing cut at all).
     const durationS = p0.media?.duration || baseTimelineDuration(p0) || (words.length ? words[words.length - 1].end : 0)
     const settings = get().silenceMasterySettings
-    const { regions, stretched } = planSilenceMasteryDetailed(words, durationS, settings)
-    // 3. Stage review-first: chips in the transcript + cards in the panel;
+    const { regions: gapRegions, stretched } = planSilenceMasteryDetailed(words, durationS, settings)
+
+    // 3. RMS energy pass (auto threshold) — the audio's own verdict on silence.
+    //    Decodes the same 16 kHz mono track STT uses, frames it to 20ms RMS,
+    //    derives the threshold from the clip's noise floor vs speech level, and
+    //    cuts sub-threshold runs — never within 100ms of a word span. Skipped
+    //    gracefully when the audio can't be decoded (regions fall back to the
+    //    transcript pass alone).
+    let rms: RmsPassResult | null = null
+    if (settings.rmsPass && IS_CLOUD) {
+      try {
+        set({ job: { active: true, kind: 'silence', percent: 5, message: 'Listening for low energy…' } })
+        const path = isMultiBase(p0) ? (await window.api.combineClips(p0.baseSequence!, true)).path : p0.media!.path
+        const audio = await extractSttAudio(path, (pct) =>
+          set({ job: { active: true, kind: 'silence', percent: 5 + Math.round(pct * 0.85), message: 'Listening for low energy…' } })
+        )
+        // The RMS guard must agree with the gap pass about where speech is —
+        // same stretched-word repair, same spans.
+        const effWords = settings.clampStretchedWords ? clampStretchedWords(words).words : words
+        rms = planRmsSilence(frameRmsDb(audio.float32, audio.sampleRate), RMS_FRAME_MS / 1000, effWords, durationS, settings.minSilenceS)
+      } catch (e) {
+        console.warn('[silence-mastery] RMS pass skipped:', (e as Error).message)
+      }
+    }
+    const regions = unionCutRegions([gapRegions, rms?.regions ?? []], durationS)
+
+    // 4. Stage review-first: chips in the transcript + cards in the panel;
     //    retakeSilenceStaged=true → Execute applies these exact spans verbatim.
     set({
       stagedSilences: regions,
@@ -2076,7 +2108,7 @@ export const useStore = create<AppState>((set, get) => ({
           : 'Silence Mastery: no silence over the threshold — nothing to cut'
       }
     })
-    // 4. Debug telemetry (best-effort, fire-and-forget): the exact inputs the
+    // 5. Debug telemetry (best-effort, fire-and-forget): the exact inputs the
     //    engine saw and each gap's verdict, for offline review of misses.
     const r2 = (n: number): number => Math.round(n * 100) / 100
     const gaps: unknown[] = []
@@ -2100,7 +2132,14 @@ export const useStore = create<AppState>((set, get) => ({
       gaps,
       staged_regions: regions.map((r) => [r.id, r2(r.start), r2(r.end)]),
       staged_total_s: r2(regions.reduce((n, r) => n + (r.end - r.start), 0)),
-      stretched_word_repairs: stretched
+      stretched_word_repairs: stretched,
+      gap_regions: gapRegions.map((r) => [r2(r.start), r2(r.end)]),
+      rms: rms
+        ? {
+            info: { ...rms.info, floorDb: r2(rms.info.floorDb), speechDb: r2(rms.info.speechDb), thresholdDb: r2(rms.info.thresholdDb) },
+            regions: rms.regions.map((r) => [r2(r.start), r2(r.end)])
+          }
+        : null
     })
   },
 

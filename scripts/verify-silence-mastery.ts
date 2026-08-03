@@ -3,6 +3,10 @@
 import {
   planSilenceMastery,
   planSilenceMasteryDetailed,
+  frameRmsDb,
+  rmsAutoThreshold,
+  planRmsSilence,
+  unionCutRegions,
   normalizeSilenceMastery,
   DEFAULT_SILENCE_MASTERY_SETTINGS,
   type SilenceMasterySettings,
@@ -138,6 +142,37 @@ console.log('8) stretched-word clamp — the real Sova-script "Okay." case')
   check('overlapped span not clamped', !oc.some((c) => c.start < 3 && c.end > 1.5), fmt(oc))
   const det = planSilenceMasteryDetailed(words, 38, S({ minSilenceS: 0.25 }))
   check('repairs reported for debug', det.stretched.length === 1 && det.stretched[0].text === 'Okay.' && det.stretched[0].exposedS > 1.5)
+}
+
+console.log('9) RMS energy pass — auto threshold + word guard')
+{
+  const F = 0.02 // 20ms frames
+  // 10s clip: speech -20dB at 1.0–2.0s and 6.0–7.0s, room tone -55dB elsewhere.
+  const frames: number[] = []
+  for (let t = 0; t < 10; t += F) frames.push((t >= 1 && t < 2) || (t >= 6 && t < 7) ? -20 : -55)
+  const th = rmsAutoThreshold(frames)
+  check('auto threshold sits between floor and speech', th.usable && th.thresholdDb > th.floorDb && th.thresholdDb < th.speechDb, `floor=${th.floorDb} speech=${th.speechDb} thr=${th.thresholdDb}`)
+  const words: SpeechSpan[] = [{ start: 1, end: 2, text: 'hello' }, { start: 6, end: 7, text: 'world' }]
+  const r = planRmsSilence(frames, F, words, 10, 0.5)
+  check('three silent stretches found (lead, middle, tail)', r.regions.length === 3, fmt(r.regions))
+  check('word guard: cuts stop 100ms from word spans',
+    r.regions.every((c) => words.every((w) => c.end <= w.start - 0.1 + 1e-6 || c.start >= w.end + 0.1 - 1e-6)), fmt(r.regions))
+  // A low-energy dip INSIDE a word span (soft consonant) is protected.
+  const dip = frames.slice()
+  for (let t = 1.3; t < 1.5; t += F) dip[Math.floor(t / F)] = -55
+  const rd = planRmsSilence(dip, F, words, 10, 0.15)
+  check('low-energy dip inside a word is protected', !rd.regions.some((c) => c.start >= 0.9 && c.end <= 2.1), fmt(rd.regions))
+  // Flat clip (no dynamic range) cuts nothing rather than everything.
+  const flat = new Array(500).fill(-50)
+  check('flat clip → unusable range → no cuts', planRmsSilence(flat, F, [], 10, 0.5).regions.length === 0)
+  // frameRmsDb: silence vs full-scale sine frames.
+  const sr = 16000
+  const sig = new Array(sr).fill(0).map((_, i) => (i < sr / 2 ? 0 : Math.sin((i / sr) * 2 * Math.PI * 440)))
+  const fdb = frameRmsDb(sig, sr)
+  check('frameRmsDb: quiet half ≪ loud half', fdb[0] < -100 && fdb[fdb.length - 1] > -6, `${fdb[0].toFixed(0)} vs ${fdb[fdb.length - 1].toFixed(1)}`)
+  // Union merges gap + rms lists and restamps ids.
+  const u = unionCutRegions([[{ start: 0, end: 1 }, { start: 5, end: 6 }], [{ start: 0.9, end: 2 }]], 10)
+  check('union merges overlapping cuts across passes', u.length === 2 && near(u[0].start, 0) && near(u[0].end, 2) && u[0].id === 'sm0' && u[1].id === 'sm1', fmt(u))
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall silence-mastery checks green')

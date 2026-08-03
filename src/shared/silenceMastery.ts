@@ -37,6 +37,11 @@ export interface SilenceMasterySettings {
    *  letter count is clamped and the exposed tail becomes a normal cuttable
    *  gap. Verified against real data (the Sova script's 33.28–35.79 "Okay."). */
   clampStretchedWords: boolean
+  /** RMS energy pass (auto threshold): frame the actual audio, derive the
+   *  silence threshold from its own noise floor / speech level, and cut every
+   *  low-energy run the transcript pass missed — never within 100ms of a
+   *  spoken word's timestamps. Catches dead air ASR hid entirely. */
+  rmsPass: boolean
 }
 
 export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
@@ -44,7 +49,8 @@ export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
   padLeftMs: 100,
   padRightMs: 100,
   trimEdgesMs: 0,
-  clampStretchedWords: true
+  clampStretchedWords: true,
+  rmsPass: true
 }
 
 const clampN = (v: unknown, lo: number, hi: number, dflt: number): number => {
@@ -62,7 +68,8 @@ export function normalizeSilenceMastery(
     padLeftMs: clampN(v?.padLeftMs, 0, 1000, d.padLeftMs),
     padRightMs: clampN(v?.padRightMs, 0, 1000, d.padRightMs),
     trimEdgesMs: clampN(v?.trimEdgesMs, 0, 300, d.trimEdgesMs),
-    clampStretchedWords: typeof v?.clampStretchedWords === 'boolean' ? v.clampStretchedWords : d.clampStretchedWords
+    clampStretchedWords: typeof v?.clampStretchedWords === 'boolean' ? v.clampStretchedWords : d.clampStretchedWords,
+    rmsPass: typeof v?.rmsPass === 'boolean' ? v.rmsPass : d.rmsPass
   }
 }
 
@@ -225,4 +232,141 @@ export function planSilenceMasteryDetailed(
     else merged.push({ id: '', start, end, action: 'remove', protect: true })
   }
   return { regions: merged.map((r, i) => ({ ...r, id: `sm${i}` })), stretched }
+}
+
+// ---------------------------------------------------------------------------
+// RMS energy pass — the audio's own word: an ADAPTIVE threshold derived from
+// the clip itself (noise floor vs speech level), applied to 20ms RMS frames.
+// Catches dead air the transcript hides completely (mis-stamped words, breaths
+// between stamps, room tone the ASR papered over). The transcript still rules
+// where it speaks: nothing is cut within RMS_WORD_GUARD_S of a word span.
+// ---------------------------------------------------------------------------
+
+export const RMS_FRAME_MS = 20
+/** spoken word timestamps are preserved with this margin on both sides. */
+export const RMS_WORD_GUARD_S = 0.1
+/** threshold sits this far above the measured noise floor… */
+const RMS_SENSITIVITY_DB = 12
+/** …but never closer than this below the measured speech level. */
+const RMS_SPEECH_HEADROOM_DB = 8
+/** if speech and floor are this close, the clip has no usable dynamic range
+ *  (music bed, constant noise) — cut nothing rather than everything. */
+const RMS_MIN_RANGE_DB = 6
+
+/** Per-frame RMS level in dBFS (non-overlapping frames of `frameMs`). */
+export function frameRmsDb(samples: ArrayLike<number>, sampleRate: number, frameMs = RMS_FRAME_MS): number[] {
+  const n = Math.max(1, Math.floor((frameMs / 1000) * sampleRate))
+  const frames = Math.floor(samples.length / n)
+  const out: number[] = new Array(frames)
+  for (let f = 0; f < frames; f++) {
+    let acc = 0
+    const base = f * n
+    for (let i = 0; i < n; i++) {
+      const s = samples[base + i] as number
+      acc += s * s
+    }
+    out[f] = 20 * Math.log10(Math.sqrt(acc / n) + 1e-9)
+  }
+  return out
+}
+
+const percentile = (sorted: number[], p: number): number =>
+  sorted.length ? sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1))))] : -100
+
+export interface RmsAutoThreshold {
+  floorDb: number
+  speechDb: number
+  thresholdDb: number
+  /** false when the clip has no usable dynamic range — the pass cuts nothing. */
+  usable: boolean
+}
+
+/** Auto threshold: noise floor = p10 of frame RMS, speech = p90; threshold =
+ *  floor + sensitivity, capped RMS_SPEECH_HEADROOM_DB under speech. */
+export function rmsAutoThreshold(framesDb: number[]): RmsAutoThreshold {
+  const sorted = [...framesDb].sort((a, b) => a - b)
+  const floorDb = percentile(sorted, 0.1)
+  const speechDb = percentile(sorted, 0.9)
+  const usable = speechDb - floorDb >= RMS_MIN_RANGE_DB
+  const thresholdDb = Math.min(floorDb + RMS_SENSITIVITY_DB, speechDb - RMS_SPEECH_HEADROOM_DB)
+  return { floorDb, speechDb, thresholdDb, usable }
+}
+
+export interface RmsPassResult {
+  regions: { start: number; end: number }[]
+  info: RmsAutoThreshold & { frameS: number; frames: number; raw_runs: number }
+}
+
+/**
+ * Plan RMS-silence cuts. `words` must be the SAME effective spans the gap pass
+ * used (post stretched-word clamp), so both passes agree on where speech is.
+ * A low-energy run is cut only where it clears every word guard and each
+ * surviving piece is ≥ minSilenceS.
+ */
+export function planRmsSilence(
+  framesDb: number[],
+  frameS: number,
+  words: SpeechSpan[],
+  durationS: number,
+  minSilenceS: number
+): RmsPassResult {
+  const t = rmsAutoThreshold(framesDb)
+  const info = { ...t, frameS, frames: framesDb.length, raw_runs: 0 }
+  if (!t.usable || !framesDb.length) return { regions: [], info }
+
+  // 1. consecutive sub-threshold frames -> raw low-energy runs (seconds).
+  const runs: { start: number; end: number }[] = []
+  let runStart = -1
+  for (let f = 0; f <= framesDb.length; f++) {
+    const low = f < framesDb.length && framesDb[f] < t.thresholdDb
+    if (low && runStart < 0) runStart = f
+    else if (!low && runStart >= 0) {
+      runs.push({ start: runStart * frameS, end: f * frameS })
+      runStart = -1
+    }
+  }
+  info.raw_runs = runs.length
+
+  // 2. protected zones: every word span, padded RMS_WORD_GUARD_S per side.
+  const guards: { start: number; end: number }[] = []
+  for (const w of [...words].sort((a, b) => a.start - b.start)) {
+    if (!Number.isFinite(w.start) || !Number.isFinite(w.end) || w.end <= w.start) continue
+    const a = Math.max(0, w.start - RMS_WORD_GUARD_S)
+    const b = w.end + RMS_WORD_GUARD_S
+    const last = guards[guards.length - 1]
+    if (last && a <= last.end) last.end = Math.max(last.end, b)
+    else guards.push({ start: a, end: b })
+  }
+
+  // 3. subtract the guards from each run; keep pieces long enough to matter.
+  const regions: { start: number; end: number }[] = []
+  for (const r of runs) {
+    let cursor = Math.max(0, r.start)
+    const end = Math.min(r.end, durationS || r.end)
+    for (const g of guards) {
+      if (g.end <= cursor) continue
+      if (g.start >= end) break
+      if (g.start > cursor && g.start - cursor >= minSilenceS) regions.push({ start: cursor, end: g.start })
+      cursor = Math.max(cursor, g.end)
+    }
+    if (end - cursor >= minSilenceS) regions.push({ start: cursor, end })
+  }
+  return { regions, info }
+}
+
+/** Merge any number of cut lists into one sorted, non-overlapping, sm-stamped
+ *  region set (the shape the staging/apply pipeline consumes). */
+export function unionCutRegions(lists: { start: number; end: number }[][], durationS: number): SilenceRegion[] {
+  const all = lists
+    .flat()
+    .map((c) => ({ start: Math.max(0, c.start), end: durationS > 0 ? Math.min(c.end, durationS) : c.end }))
+    .filter((c) => c.end - c.start >= 0.03)
+    .sort((a, b) => a.start - b.start)
+  const merged: SilenceRegion[] = []
+  for (const c of all) {
+    const last = merged[merged.length - 1]
+    if (last && c.start <= last.end + 0.02) last.end = Math.max(last.end, c.end)
+    else merged.push({ id: '', start: c.start, end: c.end, action: 'remove', protect: true })
+  }
+  return merged.map((r, i) => ({ ...r, id: `sm${i}` }))
 }
