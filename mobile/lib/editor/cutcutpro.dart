@@ -177,9 +177,10 @@ List<List<int>> keepRanges(
   double padS = 0.1,
   double airAfterS = 0.3, // silence: air kept after the last word (padAfter)
   double leadBeforeS = 0.1, // silence: lead kept before the next word (padBefore)
-  // Silence regions (ms) already computed elsewhere — the FSMN (FunASR) native VAD
-  // (Retake Final Boss). When supplied these ARE the silence cuts; the caller passes
-  // cutSilence:false so the transcript word-gap fallback below is skipped.
+  // Silence regions (ms) already computed elsewhere — the native two-pass engine
+  // (timestamps + RMS, SilenceEngine.kt). When supplied these ARE the silence cuts;
+  // the caller passes cutSilence:false so the transcript word-gap fallback below is
+  // skipped.
   List<List<int>> extraSilenceMs = const [],
 }) {
   final durMs = (durS * 1000).round();

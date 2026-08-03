@@ -13,20 +13,22 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * EcVad — the app-side client of the on-device FSMN (FunASR) silence engine.
+ * EcVad — the app-side client of the on-device two-pass silence engine. ("Vad" in
+ * the class/channel names is legacy — the FSMN VAD is retired; the engine is now
+ * transcript timestamps + RMS energy, see [SilenceEngine].)
  *
- * The engine itself ([VadEngine]) runs in a SEPARATE OS PROCESS behind
- * [VadProvider] (":vadengine"). That is the crash fix: the decoder and the ONNX
- * runtime are native code, and a native fault (SIGSEGV/SIGABRT) cannot be caught
- * from Kotlin — hosted in-process it killed the whole app at "Cleaning silence…",
- * silently, past every try/catch. Isolated, the same fault kills only the helper:
- * the binder call throws here, we read the stage the engine recorded before dying
- * (decode / model load / features / inference window k) and show it, then return []
- * so Dart falls back to transcript word-gap silence. The app can no longer die on
- * this path, by construction — and the toast finally names the real culprit.
+ * The engine runs in a SEPARATE OS PROCESS behind [VadProvider] (":vadengine").
+ * That is the crash fix: the media decoder is native code, and a native fault
+ * (SIGSEGV/SIGABRT) cannot be caught from Kotlin — hosted in-process it killed the
+ * whole app at "Cleaning silence…", silently, past every try/catch. Isolated, the
+ * same fault kills only the helper: the binder call throws here, we read the stage
+ * the engine recorded before dying and show it, then return [] so Dart falls back
+ * to transcript word-gap silence. The app can no longer die on this path, by
+ * construction — and the toast names the real culprit.
  *
  * Channel: MethodChannel "ec/vad" → "detectSilences"
- *   args  {uri, padBeforeS, padAfterS, trimEdgesS, tailTrim}
+ *   args  {uri, wordsS (flattened kept-word [start,end,…] seconds), minSilenceS,
+ *          padLeftS, padRightS, trimEdgeS, removeBreaths, sensitivityDb}
  *   reply List<[startS, endS]>  — silence regions to REMOVE (seconds), or [] on any
  *         failure so the Dart caller can fall back to its transcript-gap silence.
  */
@@ -111,10 +113,14 @@ class EcVad(
             return
         }
         val extras = Bundle()
-        extras.putDouble("padBeforeS", (call.argument<Number>("padBeforeS"))?.toDouble() ?: 0.18)
-        extras.putDouble("padAfterS", (call.argument<Number>("padAfterS"))?.toDouble() ?: 0.12)
-        extras.putDouble("trimEdgesS", (call.argument<Number>("trimEdgesS"))?.toDouble() ?: 0.02)
-        extras.putBoolean("tailTrim", call.argument<Boolean>("tailTrim") ?: false)
+        val words = call.argument<List<Number>>("wordsS") ?: emptyList()
+        extras.putDoubleArray("wordsS", DoubleArray(words.size) { words[it].toDouble() })
+        extras.putDouble("minSilenceS", (call.argument<Number>("minSilenceS"))?.toDouble() ?: 0.3)
+        extras.putDouble("padLeftS", (call.argument<Number>("padLeftS"))?.toDouble() ?: 0.12)
+        extras.putDouble("padRightS", (call.argument<Number>("padRightS"))?.toDouble() ?: 0.1)
+        extras.putDouble("trimEdgeS", (call.argument<Number>("trimEdgeS"))?.toDouble() ?: 0.0)
+        extras.putBoolean("removeBreaths", call.argument<Boolean>("removeBreaths") ?: false)
+        extras.putDouble("sensitivityDb", (call.argument<Number>("sensitivityDb"))?.toDouble() ?: 10.0)
 
         // One run at a time — a second concurrent run would double the decode + ONNX
         // working set at exactly the moment memory is tightest.

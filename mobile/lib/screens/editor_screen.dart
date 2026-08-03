@@ -1104,21 +1104,39 @@ class _EditorScreenState extends State<EditorScreen> {
     if (_transcript == null) return;
     final durS = _sourceDurationMs / 1000.0;
 
-    // Silence = the FSMN (FunASR) VAD run on-device via native ONNX — the desktop
-    // Retake Final Boss silence engine. Falls back to transcript word-gap silence
-    // only if the native VAD is unavailable or finds nothing.
+    // Silence = the native two-pass engine (SilenceEngine.kt): the KEPT words'
+    // timestamps are protected, an adaptive RMS pass protects real sound the
+    // transcript missed, and everything else becomes a cut. Falls back to the
+    // Dart transcript word-gap pass only if the engine fails.
     List<List<int>> fsmn = const [];
     if (cutSilence && _model.sourcePath != null) {
       final prog = ValueNotifier<String>('Cleaning silence…');
       _showProgress(prog);
       var timedOut = false;
+      // Kept words = the transcript minus the AI/reviewed word cuts — those spans
+      // are what the engine must never cut into (modulo the edge-trim setting).
+      final cutIdx = <int>{};
+      for (final r in wordCuts) {
+        for (var i = r[0]; i <= r[1] && i < _transcript!.length; i++) {
+          cutIdx.add(i);
+        }
+      }
+      final wordsS = <double>[];
+      for (var i = 0; i < _transcript!.length; i++) {
+        if (cutIdx.contains(i)) continue;
+        wordsS..add(_transcript![i].start)..add(_transcript![i].end);
+      }
       try {
         final regions = await NativeVad.detectSilences(
           'file://${_model.sourcePath!}',
-          padBeforeS: SilenceSettings.padBeforeS,
-          padAfterS: SilenceSettings.padAfterS,
-          trimEdgesS: SilenceSettings.edgeTrimS,
-          tailTrim: SilenceSettings.removeBreaths,
+          wordsS: wordsS,
+          minSilenceS: SilenceSettings.minGapS,
+          padLeftS: SilenceSettings.padAfterS, // air after speech ends
+          padRightS: SilenceSettings.padBeforeS, // lead before speech resumes
+          trimEdgeS: SilenceSettings.edgeTrimS,
+          removeBreaths: SilenceSettings.removeBreaths,
+          // speechThreshold (0..1, VAD-era strictness) → dB over the noise floor.
+          sensitivityDb: 4.0 + 9.0 * SilenceSettings.speechThreshold,
         ).timeout(const Duration(minutes: 4), onTimeout: () {
           timedOut = true;
           return const [];
@@ -1130,14 +1148,14 @@ class _EditorScreenState extends State<EditorScreen> {
         if (mounted) Navigator.of(context).pop();
         prog.dispose();
       }
-      // Name the engine that produced the silence cuts — "did it really use the
-      // VAD?" must never be a feeling. Every fallback to transcript gaps says so.
+      // Name the engine that produced the silence cuts — which pass ran must never
+      // be a feeling. Every fallback to plain transcript gaps says so.
       if (fsmn.isNotEmpty) {
-        _toast('Silence: on-device VAD · ${fsmn.length} gaps');
+        _toast('Silence: timestamps + energy scan · ${fsmn.length} cuts');
       } else {
         _toast(timedOut
-            ? 'Silence: VAD timed out — using transcript gaps'
-            : 'Silence: transcript-gap fallback (VAD found nothing / unavailable)');
+            ? 'Silence: engine timed out — using transcript gaps'
+            : 'Silence: transcript-gap fallback (engine found nothing / unavailable)');
       }
     }
 

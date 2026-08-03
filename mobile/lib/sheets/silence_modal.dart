@@ -23,10 +23,10 @@ class _SilenceModalState extends State<SilenceModal> {
   bool _breaths = SilenceSettings.removeBreaths;
   double _overlap = SilenceSettings.seamOverlapMs.toDouble();
 
-  // The desktop Retake Final Boss FSMN presets (shared/retakefinalboss.ts). These map
-  // to the padding / edge-trim / tail-trim (remove breaths) / overlap the native VAD
-  // uses; the FSMN detector itself runs at fixed strictness, so the strictness + min-gap
-  // sliders below only tune the transcript word-gap FALLBACK.
+  // Preset names carried over from the desktop Retake Final Boss. They map onto the
+  // native two-pass silence engine (SilenceEngine.kt): pads + edge-trim + remove-
+  // breaths shape the cuts, min-gap is the smallest silence worth removing, and
+  // strictness sets the energy pass's sensitivity over the clip's noise floor.
   static const _presets = ['Chill Talker', 'Just Right', 'No Chill', 'Espresso Shot', 'Mad Scientist'];
   static const _blurbs = {
     'Chill Talker': 'Leaves generous breathing room — relaxed, natural pacing.',
@@ -163,7 +163,7 @@ class _SilenceModalState extends State<SilenceModal> {
                   onChanged: (v) => setState(() => _overlap = v),
                 ),
               const SizedBox(height: 8),
-              const Text('Presets, padding, edge trim, remove-breaths and overlap match the desktop Retake Final Boss and drive the on-device FSMN voice detection. Strictness and min-gap tune the word-gap fallback used if the VAD can’t run.',
+              const Text('Cuts come from your transcript’s word timestamps plus an energy scan that protects any sound the transcript missed. Padding keeps air around speech, edge trim tightens into word boundaries, min-gap sets the smallest pause worth removing, and strictness sets how quiet counts as silence.',
                   style: TextStyle(color: Ec.textFaint, fontSize: 11, height: 1.4)),
               const SizedBox(height: 16),
               Row(
