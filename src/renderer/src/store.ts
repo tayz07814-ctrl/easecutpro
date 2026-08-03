@@ -58,13 +58,16 @@ import {
   frameRmsDb,
   planRmsSilence,
   unionCutRegions,
+  guardRegionEdgesOffWords,
   RMS_FRAME_MS,
+  RMS_WORD_GUARD_S,
   normalizeSilenceMastery,
   DEFAULT_SILENCE_MASTERY_SETTINGS,
   type SilenceMasterySettings,
   type RmsPassResult
 } from '@shared/silenceMastery'
 import { extractSttAudio } from './cloud/audio'
+import { detectSileroSilences } from './cloud/sileroVad'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
@@ -2068,31 +2071,60 @@ export const useStore = create<AppState>((set, get) => ({
     // the base timeline's length, else the last word (no trailing cut at all).
     const durationS = p0.media?.duration || baseTimelineDuration(p0) || (words.length ? words[words.length - 1].end : 0)
     const settings = get().silenceMasterySettings
-    const { regions: gapRegions, stretched } = planSilenceMasteryDetailed(words, durationS, settings)
 
-    // 3. RMS energy pass (auto threshold) — the audio's own verdict on silence.
-    //    Decodes the same 16 kHz mono track STT uses, frames it to 20ms RMS,
-    //    derives the threshold from the clip's noise floor vs speech level, and
-    //    cuts sub-threshold runs — never within 100ms of a word span. Skipped
-    //    gracefully when the audio can't be decoded (regions fall back to the
-    //    transcript pass alone).
-    let rms: RmsPassResult | null = null
-    if (settings.rmsPass && IS_CLOUD) {
+    // THE HYBRID, in order:
+    //   stage 1  Silero VAD      — the neural ear cuts what it heard as
+    //                              non-speech (100ms preserved around every
+    //                              speech segment; edges clamped off word spans)
+    //   stage 2  transcript gaps — sweeps what Silero left, using the word
+    //                              timestamps (min silence / pads / trim)
+    //   stage 3  RMS energy      — optional low-energy sweep (auto threshold)
+    // All stages emit SOURCE-time regions; the union is staged for review.
+    const { regions: gapRegions, stretched } = planSilenceMasteryDetailed(words, durationS, settings)
+    // The audio guards must agree with the gap pass about where speech is —
+    // same stretched-word repair, same spans.
+    const effWords = settings.clampStretchedWords ? clampStretchedWords(words).words : words
+
+    let audio: { float32: Float32Array; sampleRate: number } | null = null
+    const needAudio = (settings.sileroPass || settings.rmsPass) && IS_CLOUD
+    if (needAudio) {
       try {
-        set({ job: { active: true, kind: 'silence', percent: 5, message: 'Listening for low energy…' } })
+        set({ job: { active: true, kind: 'silence', percent: 4, message: 'Listening to your audio…' } })
         const path = isMultiBase(p0) ? (await window.api.combineClips(p0.baseSequence!, true)).path : p0.media!.path
-        const audio = await extractSttAudio(path, (pct) =>
-          set({ job: { active: true, kind: 'silence', percent: 5 + Math.round(pct * 0.85), message: 'Listening for low energy…' } })
+        audio = await extractSttAudio(path, (pct) =>
+          set({ job: { active: true, kind: 'silence', percent: 4 + Math.round(pct * 0.5), message: 'Listening to your audio…' } })
         )
-        // The RMS guard must agree with the gap pass about where speech is —
-        // same stretched-word repair, same spans.
-        const effWords = settings.clampStretchedWords ? clampStretchedWords(words).words : words
+      } catch (e) {
+        console.warn('[silence-mastery] audio decode failed — transcript pass only:', (e as Error).message)
+      }
+    }
+
+    // Stage 1 — Silero VAD (never fatal: a model/WASM failure degrades to the
+    // transcript pass, which still stands on its own).
+    let sileroRegions: { start: number; end: number }[] = []
+    let sileroOk = false
+    if (settings.sileroPass && audio) {
+      try {
+        set({ job: { active: true, kind: 'silence', percent: 58, message: 'Silero is listening for speech…' } })
+        const raw = await detectSileroSilences(audio.float32, audio.sampleRate, durationS, settings.minSilenceS)
+        sileroRegions = guardRegionEdgesOffWords(raw, effWords, RMS_WORD_GUARD_S)
+        sileroOk = true
+      } catch (e) {
+        console.warn('[silence-mastery] Silero pass skipped:', (e as Error).message)
+      }
+    }
+
+    // Stage 3 — RMS energy sweep.
+    let rms: RmsPassResult | null = null
+    if (settings.rmsPass && audio) {
+      try {
+        set({ job: { active: true, kind: 'silence', percent: 90, message: 'Measuring energy…' } })
         rms = planRmsSilence(frameRmsDb(audio.float32, audio.sampleRate), RMS_FRAME_MS / 1000, effWords, durationS, settings.minSilenceS)
       } catch (e) {
         console.warn('[silence-mastery] RMS pass skipped:', (e as Error).message)
       }
     }
-    const regions = unionCutRegions([gapRegions, rms?.regions ?? []], durationS)
+    const regions = unionCutRegions([sileroRegions, gapRegions, rms?.regions ?? []], durationS)
 
     // 4. Stage review-first: chips in the transcript + cards in the panel;
     //    retakeSilenceStaged=true → Execute applies these exact spans verbatim.
@@ -2133,6 +2165,7 @@ export const useStore = create<AppState>((set, get) => ({
       staged_regions: regions.map((r) => [r.id, r2(r.start), r2(r.end)]),
       staged_total_s: r2(regions.reduce((n, r) => n + (r.end - r.start), 0)),
       stretched_word_repairs: stretched,
+      silero: { enabled: settings.sileroPass, ran: sileroOk, regions: sileroRegions.map((r) => [r2(r.start), r2(r.end)]) },
       gap_regions: gapRegions.map((r) => [r2(r.start), r2(r.end)]),
       rms: rms
         ? {

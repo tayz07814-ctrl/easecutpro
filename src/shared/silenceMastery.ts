@@ -42,6 +42,11 @@ export interface SilenceMasterySettings {
    *  low-energy run the transcript pass missed — never within 100ms of a
    *  spoken word's timestamps. Catches dead air ASR hid entirely. */
   rmsPass: boolean
+  /** Silero VAD pass — STAGE 1 of the hybrid: the neural VAD listens to the
+   *  audio and its non-speech regions are cut first (100ms preserved around
+   *  every speech segment it heard, edges clamped off transcript word spans);
+   *  the transcript-gap pass then sweeps only what Silero left. */
+  sileroPass: boolean
 }
 
 export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
@@ -50,7 +55,8 @@ export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
   padRightMs: 100,
   trimEdgesMs: 0,
   clampStretchedWords: true,
-  rmsPass: true
+  rmsPass: true,
+  sileroPass: true
 }
 
 const clampN = (v: unknown, lo: number, hi: number, dflt: number): number => {
@@ -69,7 +75,8 @@ export function normalizeSilenceMastery(
     padRightMs: clampN(v?.padRightMs, 0, 1000, d.padRightMs),
     trimEdgesMs: clampN(v?.trimEdgesMs, 0, 300, d.trimEdgesMs),
     clampStretchedWords: typeof v?.clampStretchedWords === 'boolean' ? v.clampStretchedWords : d.clampStretchedWords,
-    rmsPass: typeof v?.rmsPass === 'boolean' ? v.rmsPass : d.rmsPass
+    rmsPass: typeof v?.rmsPass === 'boolean' ? v.rmsPass : d.rmsPass,
+    sileroPass: typeof v?.sileroPass === 'boolean' ? v.sileroPass : d.sileroPass
   }
 }
 
@@ -369,4 +376,39 @@ export function unionCutRegions(lists: { start: number; end: number }[][], durat
     else merged.push({ id: '', start: c.start, end: c.end, action: 'remove', protect: true })
   }
   return merged.map((r, i) => ({ ...r, id: `sm${i}` }))
+}
+
+/**
+ * Edge-clamp audio-detected silence regions off transcript word spans: a
+ * region EDGE that intrudes into a word is pulled back to guardS outside it,
+ * but a word whose span lies ENTIRELY inside a silence region is trusted to
+ * the detector (the stamp is an ASR lie — the ear heard nothing there).
+ * Regions that vanish (< 0.03s) are dropped. Pure; words need not be sorted.
+ */
+export function guardRegionEdgesOffWords(
+  regions: { start: number; end: number }[],
+  words: SpeechSpan[],
+  guardS: number
+): { start: number; end: number }[] {
+  const ws = words.filter((w) => Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
+  const out: { start: number; end: number }[] = []
+  for (const r0 of regions) {
+    let start = r0.start
+    let end = r0.end
+    for (const w of ws) {
+      const covered = w.start >= start - 1e-6 && w.end <= end + 1e-6
+      if (covered) continue // whole word inside silence — trust the detector
+      // region end cuts into the word's onset -> stop guardS before the word
+      if (end > w.start + 1e-6 && end < w.end && start < w.start) end = Math.max(start, w.start - guardS)
+      // region start cuts into the word's tail -> resume guardS after the word
+      if (start < w.end - 1e-6 && start > w.start && end > w.end) start = Math.min(end, w.end + guardS)
+      // region fully inside a word span -> nothing cuttable here
+      if (start >= w.start && end <= w.end && !covered) {
+        start = end // collapse
+        break
+      }
+    }
+    if (end - start >= 0.03) out.push({ start, end })
+  }
+  return out
 }

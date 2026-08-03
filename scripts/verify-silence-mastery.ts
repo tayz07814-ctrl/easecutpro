@@ -7,6 +7,7 @@ import {
   rmsAutoThreshold,
   planRmsSilence,
   unionCutRegions,
+  guardRegionEdgesOffWords,
   normalizeSilenceMastery,
   DEFAULT_SILENCE_MASTERY_SETTINGS,
   type SilenceMasterySettings,
@@ -173,6 +174,23 @@ console.log('9) RMS energy pass — auto threshold + word guard')
   // Union merges gap + rms lists and restamps ids.
   const u = unionCutRegions([[{ start: 0, end: 1 }, { start: 5, end: 6 }], [{ start: 0.9, end: 2 }]], 10)
   check('union merges overlapping cuts across passes', u.length === 2 && near(u[0].start, 0) && near(u[0].end, 2) && u[0].id === 'sm0' && u[1].id === 'sm1', fmt(u))
+}
+
+console.log('10) Silero edge guard — regions clamp off word spans')
+{
+  const words: SpeechSpan[] = [{ start: 2, end: 3, text: 'hello' }, { start: 8, end: 8.4, text: 'hi' }]
+  // region end intrudes into a word's onset -> pulled back 100ms before it
+  const a = guardRegionEdgesOffWords([{ start: 0, end: 2.4 }], words, 0.1)
+  check('end clamped 100ms before the word onset', a.length === 1 && near(a[0].end, 1.9), fmt(a))
+  // region start intrudes into a word's tail -> resumes 100ms after it
+  const b = guardRegionEdgesOffWords([{ start: 2.6, end: 6 }], words, 0.1)
+  check('start clamped 100ms after the word tail', b.length === 1 && near(b[0].start, 3.1), fmt(b))
+  // a word ENTIRELY inside a silence region is trusted to the detector
+  const c = guardRegionEdgesOffWords([{ start: 6, end: 10 }], words, 0.1)
+  check('fully-covered word trusted to the ear (region intact)', c.length === 1 && near(c[0].start, 6) && near(c[0].end, 10), fmt(c))
+  // a region fully INSIDE a word span collapses to nothing
+  const d = guardRegionEdgesOffWords([{ start: 2.2, end: 2.8 }], words, 0.1)
+  check('region inside a word span collapses', d.length === 0, fmt(d))
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall silence-mastery checks green')
