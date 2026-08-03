@@ -24,3 +24,37 @@ verify_jwt = true
 # signature check. The function verifies STRIPE_WEBHOOK_SECRET itself.
 [functions.stripe-webhook]
 verify_jwt = false
+
+# Every paid AI function requires a signed-in caller: the gateway rejects
+# anonymous requests before our code runs, and the code then charges the caller's
+# allowance before touching a provider (supabase/functions/_shared/gate.ts).
+#
+# overlay-match, overlay-suggest, overlay-vision, moment-vision and premium-cut
+# shipped with verify_jwt = false, so anonymous requests reached their bodies.
+# They are all true now — do not flip any of these back.
+[functions.procut-judge]
+verify_jwt = true
+
+[functions.ultracut-judge]
+verify_jwt = true
+
+[functions.delta-judge]
+verify_jwt = true
+
+[functions.auto-zoom-judge]
+verify_jwt = true
+
+[functions.premium-cut]
+verify_jwt = true
+
+[functions.overlay-match]
+verify_jwt = true
+
+[functions.overlay-suggest]
+verify_jwt = true
+
+[functions.overlay-vision]
+verify_jwt = true
+
+[functions.moment-vision]
+verify_jwt = true
