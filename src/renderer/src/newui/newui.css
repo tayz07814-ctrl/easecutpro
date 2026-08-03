@@ -356,20 +356,37 @@
 }
 .ec-nu-tl .ec-tl-clip.sel .ec-tl-clip-title { color: #c4baff; }
 
-/* Held clip: lifts off the lane while it follows the cursor — a touch larger,
-   translucent so you can read the lane underneath it, and above every neighbour
-   so it never slides behind one mid-drag. Drops back flush on release. */
+/* A held clip is CARRIED: it lifts out of its lane and follows the pointer on
+   both axes — over other lanes, the ruler, the empty space below the tracks —
+   instead of staying pinned to a row. The real clip stays in the lane preview
+   underneath at its prospective drop slot, dimmed, so you can see where it will
+   actually land while the one under your cursor is the one you're holding. */
 .ec-nu-tl .ec-tl.dragging { cursor: grabbing; }
 .ec-nu-tl .ec-tl.dragging .ec-tl-clip { transition: none; }
-.ec-nu-tl .ec-tl.dragging .ec-tl-clip.sel {
-  transform: scale(1.035);
-  opacity: 0.6;
-  z-index: 20;
-  cursor: grabbing;
-  box-shadow: inset 0 0 0 1.5px #a99bff, 0 10px 26px rgba(0, 0, 0, 0.6);
-}
+.ec-nu-tl .ec-tl.dragging .ec-tl-clip.sel { opacity: 0.28; }
 /* the handles would otherwise show a resize cursor on a clip that's in flight */
 .ec-nu-tl .ec-tl.dragging .ec-tl-clip-handle { pointer-events: none; opacity: 0; }
+
+/* The carried copy. Fixed to the viewport so no lane, scroll container or
+   overflow can clip it; never takes the pointer, or it would swallow its own
+   pointermove stream and the drag would stall the moment it lifted. */
+.ec-nu-tl .ec-tl-float {
+  position: fixed;
+  z-index: 4000;
+  pointer-events: none;
+  transform: scale(1.04);
+  opacity: 0.6;
+  filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.65));
+  will-change: transform;
+}
+.ec-nu-tl .ec-tl-float .ec-tl-clip {
+  top: 0;
+  bottom: 0;
+  left: 0 !important;
+  width: 100% !important;
+  cursor: grabbing;
+  box-shadow: inset 0 0 0 1.5px #a99bff;
+}
 
 /* Zoom band — how much Ken Burns punch-in this clip carries. Sits along the
    bottom edge in the app accent so it reads as "ours" rather than a warning,

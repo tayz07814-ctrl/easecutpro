@@ -26,8 +26,9 @@ import { useStore } from '../../store'
 import { Ruler } from './Ruler'
 import { TrackHeader } from './TrackHeader'
 import { TrackLane } from './TrackLane'
+import { ClipView } from './ClipView'
 import { Playhead } from './Playhead'
-import { HEADER_W, RULER_H, MIN_ZOOM, MAX_ZOOM, frameToPx, pxToFrame, clamp, laneHeight } from './geometry'
+import { HEADER_W, RULER_H, MIN_ZOOM, MAX_ZOOM, TRACK_COLOR, frameToPx, pxToFrame, clamp, laneHeight } from './geometry'
 import { secondsToFrames, formatTimecode } from '@shared/timeline/time'
 
 /** Clip ids whose [start,end] × lane-Y overlaps the frame×content-Y rectangle. */
@@ -59,6 +60,9 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [dropActive, setDropActive] = useState(false)
+  /** The clip currently carried by the pointer, in VIEWPORT coords (fixed-positioned
+   *  so it can float over any lane, the ruler, or empty space below the tracks). */
+  const [float, setFloat] = useState<{ id: string; x: number; y: number; w: number; h: number; grabX: number; grabY: number } | null>(null)
   const [viewW, setViewW] = useState(1400)
 
   // Measure the scroll viewport so the lanes always fill it — otherwise zooming out
@@ -238,9 +242,24 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
       // multi-selection keeps the selection so the whole group drags together.
       if (!engine.isSelected(clipId)) engine.select([clipId])
       engine.beginDrag('move', clipId, frameFromClientX(e.clientX))
-      const move = (ev: PointerEvent): void =>
+      // A held clip LIFTS OUT of its lane and follows the pointer on both axes,
+      // free of the row it came from — the lane preview underneath still shows
+      // where it will actually land, and the drop is unchanged. Snapping the
+      // rendered clip to a lane row mid-drag is what made this feel like the
+      // clip was being nudged rather than carried.
+      const el = (e.target as HTMLElement).closest('.ec-tl-clip') as HTMLElement | null
+      if (el) {
+        const r = el.getBoundingClientRect()
+        const grabX = e.clientX - r.left
+        const grabY = e.clientY - r.top
+        setFloat({ id: clipId, x: r.left, y: r.top, w: r.width, h: r.height, grabX, grabY })
+      }
+      const move = (ev: PointerEvent): void => {
+        setFloat((f) => (f ? { ...f, x: ev.clientX - f.grabX, y: ev.clientY - f.grabY } : f))
         engine.updateDrag(frameFromClientX(ev.clientX), dropTargetFromClientY(ev.clientY))
+      }
       const up = (): void => {
+        setFloat(null)
         engine.endDrag()
         window.removeEventListener('pointermove', move)
         window.removeEventListener('pointerup', up)
@@ -495,6 +514,17 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
     [engine, frameFromClientX, dropTargetFromClientY]
   )
 
+  // The ghost renders the clip as it was PICKED UP (the live doc keeps moving it
+  // to the prospective drop slot underneath).
+  let floatClip: { clip: (typeof doc.tracks)[number]['clips'][number]; kind: (typeof doc.tracks)[number]['kind'] } | null = null
+  if (float) {
+    for (const t of doc.tracks) {
+      const c = t.clips.find((x) => x.id === float.id)
+      if (c) { floatClip = { clip: c, kind: t.kind }; break }
+    }
+  }
+  const noop = (): void => undefined
+
   const snapLine = interaction.drag?.snapLine ?? null
 
   return (
@@ -556,6 +586,24 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
           <Playhead zoom={zoom} tb={tb} height={gridHeight} />
         </div>
       </div>
+      {float && floatClip && (
+        <div
+          className="ec-tl-float"
+          style={{ left: float.x, top: float.y, width: float.w, height: float.h }}
+        >
+          <ClipView
+            clip={floatClip.clip}
+            zoom={zoom}
+            tb={tb}
+            color={TRACK_COLOR[floatClip.kind]}
+            selected
+            waveSize={session.settings.waveformSize}
+            onClipPointerDown={noop}
+            onHandlePointerDown={noop}
+            onClipContextMenu={noop}
+          />
+        </div>
+      )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
     </div>
   )
