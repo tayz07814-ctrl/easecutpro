@@ -4,6 +4,7 @@
 // search filter (no existing search action). No new project/persistence state.
 
 import { useEffect, useMemo, useState } from 'react'
+import { ecPrompt } from '../../ui/ecPrompt'
 import { useStore } from '../../store'
 import { IS_CLOUD } from '../../platform'
 import { authLogout } from '../../webapi'
@@ -175,14 +176,14 @@ export function useProjects(): DashboardModel {
 
   // ---- local folders --------------------------------------------------------
   async function createFolder(): Promise<void> {
-    const name = window.prompt('New folder name')
+    const name = await ecPrompt('New folder name', '', 'Create')
     if (name == null || !name.trim()) return
     const f = await localCreateFolder(name)
     setFolders(await localListFolders())
     setSelectedFolder(f.id)
   }
   async function renameFolder(id: string, curName: string): Promise<void> {
-    const name = window.prompt('Rename folder', curName)
+    const name = await ecPrompt('Rename folder', curName, 'Rename')
     if (name == null || !name.trim()) return
     await localRenameFolder(id, name)
     setFolders(await localListFolders())

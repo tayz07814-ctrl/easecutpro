@@ -4,6 +4,7 @@ import App from './App'
 import AuthScreen from './components/AuthScreen'
 import HomeScreen from './components/HomeScreen'
 import LandingScreen from './landing/LandingScreen'
+import { EcPromptHost } from './ui/ecPrompt'
 import LegalPage from './landing/LegalPage'
 import AccountPanelHost from './newui/screens/AccountPanelHost'
 import { useStore, firstVideoSourcePath } from './store'
@@ -375,5 +376,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <Root />
     <AccountPanelHost />
+    {/* window.prompt() doesn't exist in Electron, so every naming flow asks here. */}
+    <EcPromptHost />
   </React.StrictMode>
 )

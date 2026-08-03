@@ -35,6 +35,7 @@ import {
   type CoworkProject
 } from '../../cloud/cowork'
 import FolderRail, { projectDragType } from './FolderRail'
+import { ecPrompt } from '../../ui/ecPrompt'
 
 // Screen — Cloud Cowork. Shown in the Dashboard when the "Cloud cowork" nav is
 // selected. Spaces (100 GB free each) hold shared projects; every member can
@@ -160,7 +161,7 @@ export default function CoworkPanel(): JSX.Element {
 
   // ---- actions ---------------------------------------------------------------
   const onNewSpace = async (): Promise<void> => {
-    const name = window.prompt('Name your new space')
+    const name = await ecPrompt('Name your new space', '', 'Create')
     if (name == null) return
     setBusy('Creating space…')
     try {
@@ -191,7 +192,7 @@ export default function CoworkPanel(): JSX.Element {
 
   const onRenameSpace = async (): Promise<void> => {
     if (!space || !isOwner) return
-    const next = window.prompt('Rename this space', space.name)
+    const next = await ecPrompt('Rename this space', space.name, 'Rename')
     if (next == null) return
     const name = next.trim()
     if (!name || name === space.name) return
@@ -278,7 +279,7 @@ export default function CoworkPanel(): JSX.Element {
   }
 
   const onEditUsername = async (): Promise<void> => {
-    const next = window.prompt('Choose your username (3–24 chars: letters, numbers, _ or .)', myUsername)
+    const next = await ecPrompt('Choose your username (3–24 chars: letters, numbers, _ or .)', myUsername, 'Save')
     if (next == null) return
     setBusy('Saving username…')
     setErr('')
@@ -381,7 +382,7 @@ export default function CoworkPanel(): JSX.Element {
   // ---- folders ---------------------------------------------------------------
   const onCreateFolder = async (): Promise<void> => {
     if (!spaceId) return
-    const name = window.prompt('New folder name')
+    const name = await ecPrompt('New folder name', '', 'Create')
     if (name == null || !name.trim()) return
     try {
       const f = await createSpaceFolder(spaceId, name)
@@ -392,7 +393,7 @@ export default function CoworkPanel(): JSX.Element {
     }
   }
   const onRenameFolder = async (id: string, curName: string): Promise<void> => {
-    const name = window.prompt('Rename folder', curName)
+    const name = await ecPrompt('Rename folder', curName, 'Rename')
     if (name == null || !name.trim()) return
     try {
       await renameSpaceFolder(id, name)

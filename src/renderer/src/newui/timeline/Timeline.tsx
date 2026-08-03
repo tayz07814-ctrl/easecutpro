@@ -21,6 +21,7 @@ import type { Command } from '@shared/timeline/commands'
 import type { TimelineDocument } from '@shared/timeline/types'
 import { createClip, mainTrackId } from '@shared/timeline/model'
 import { uid } from '@shared/timeline/ids'
+import { ecPrompt } from '../../ui/ecPrompt'
 import { useStore } from '../../store'
 import { Ruler } from './Ruler'
 import { TrackHeader } from './TrackHeader'
@@ -379,8 +380,9 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
         {
           label: 'Rename…',
           onClick: () => {
-            const name = window.prompt('Track name', track.name)
-            if (name != null) engine.dispatch(C.renameTrack(trackId, name))
+            void ecPrompt('Track name', track.name, 'Rename').then((name) => {
+              if (name != null) engine.dispatch(C.renameTrack(trackId, name))
+            })
           }
         },
         { label: track.locked ? 'Unlock' : 'Lock', onClick: () => engine.dispatch(C.setTrackFlags(trackId, { locked: !track.locked })) },
