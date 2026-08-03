@@ -150,7 +150,12 @@ export class TimelineEngine {
   // --- non-undoable session state ---
 
   setPlayhead(frame: number): void {
-    const f = Math.max(0, Math.round(frame))
+    // Pinned to real content on BOTH ends. The lane is drawn with 30 s of empty
+    // scroll padding past the edit, and the playhead used to follow the pointer
+    // out into it — scrubbing into a stretch of nothing the preview can't show.
+    // `duration` is the max end across every lane, so an overlay that outlasts
+    // the base track still counts as somewhere you can go.
+    const f = Math.min(Math.max(0, Math.round(frame)), Math.max(0, this.doc.duration))
     if (f === this.session.playhead) return
     this.session = { ...this.session, playhead: f }
     this.commit()

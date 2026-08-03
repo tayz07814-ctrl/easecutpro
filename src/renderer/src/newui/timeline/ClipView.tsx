@@ -73,11 +73,21 @@ export function ClipView({
       ) : (
         <>
           <div className="ec-tl-clip-title">
-            <span>
-              {clip.name || clip.kind}
-              {zoomPct ? ` · zoom ${zoomPct}%` : ''}
-            </span>
+            <span>{clip.name || clip.kind}</span>
           </div>
+          {/* Applied zoom (Auto Zoom or manual Ken Burns), as a band you can read at
+              a glance instead of squinting at the title: the fill tracks how far
+              past 1.0× the punch-in goes, saturating at 2×. */}
+          {zoomPct > 0 && (
+            <div
+              className="ec-tl-clip-zoom"
+              title={`Punch-in ${zoomPct}% of the frame`}
+              style={{ bottom: showWave && !isAudio ? `${wavePct}%` : 0 }}
+            >
+              <div className="ec-tl-clip-zoom-fill" style={{ width: `${Math.min(100, (zPeak - 1) * 100)}%` }} />
+              <span className="ec-tl-clip-zoom-label">{zoomPct}%</span>
+            </div>
+          )}
           {(isVideo || isImage) && (
             <div
               className={`ec-tl-clip-film ${frames && frames.length > 0 ? 'has-frames' : ''}`}

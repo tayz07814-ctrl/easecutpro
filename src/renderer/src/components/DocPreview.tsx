@@ -34,7 +34,7 @@ import { kenBurnsOrigin, kenBurnsTransform, cropToKenBurns } from '../kenBurns'
 import { SeamlessAudio } from '../previewAudio'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { framesToSeconds } from '@shared/timeline/time'
-import { mainTrackId } from '@shared/timeline/model'
+import { mainTrackId, documentDuration } from '@shared/timeline/model'
 import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
 import { WcPlayer, wcSupported } from '../preview/wcPlayer'
@@ -279,7 +279,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     [segs.filter((s) => !s.isImage).map((s) => s.src).join('|')]
   )
   const urlOf = new Map(segs.map((s) => [s.src, s.url]))
-  const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0
+  // Runtime spans EVERY lane. Measuring only the main-lane segments stopped the
+  // transport at the last base clip, so an overlay (or text/music) running past
+  // it was unreachable — and equally, the playhead could wander into dead space
+  // past the real end of the edit.
+  const total = framesToSeconds(documentDuration(doc), doc.timebase)
 
   // Android native player: takes over PLAYBACK of a plain cut (natively-imported base
   // video, no speed/mute/gain/KenBurns/crop/gaps) for CapCut-smooth playback with the

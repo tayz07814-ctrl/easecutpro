@@ -635,11 +635,14 @@ export function moveClipInDoc(
     : resolveFreeStart(to.clips.filter((c) => c.id !== clipId), want, clip.duration)
   if (toTrackId === track.id && start === clip.start) return doc
   let moved: Clip = { ...clip, trackId: toTrackId, start, end: start + clip.duration }
-  // A MAIN clip promoted onto an overlay lane keeps its full-frame size: the
+  // A MAIN clip promoted onto an overlay lane lands full-frame and centred: the
   // overlay renderers (preview + export) default a missing ovScale to a small
-  // PiP (0.45), which silently SHRANK manually-moved clips. Stamp an explicit
-  // full-size placement once at promotion — b-roll flows set their own.
-  if (track.isMain && !to.isMain && to.kind === 'video' && typeof clip.metadata?.ovScale !== 'number') {
+  // PiP (0.45), which silently SHRANK manually-moved clips. Stamp the identity
+  // placement on EVERY promotion — a stale ovScale/ovX/ovY left over from an
+  // earlier stint as an overlay used to survive the round-trip and drop the clip
+  // back in off-centre and half-size. B-roll flows add their own clips directly
+  // (addClip), so they never come through here and keep their framing.
+  if (track.isMain && !to.isMain && to.kind === 'video') {
     moved = { ...moved, metadata: { ...clip.metadata, ovScale: 1, ovX: 0, ovY: 0 } }
   }
   const tracks = doc.tracks.map((t) => {

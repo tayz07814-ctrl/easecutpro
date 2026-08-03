@@ -17,7 +17,7 @@
 
 import { getSharedEngine } from '../timelineEngine'
 import { useStore } from '../store'
-import { mainTrackId } from '@shared/timeline/model'
+import { mainTrackId, documentDuration } from '@shared/timeline/model'
 import { framesToSeconds } from '@shared/timeline/time'
 import { resolveMedia } from '../media/resolver'
 import { isWebMediaId, getFile, mp4AudioStartOffset } from '../webmedia'
@@ -244,13 +244,22 @@ export function planFromDoc(doc: TimelineDocument, project: Project): { segs: Se
       oy: num(c.metadata?.ovY, 0) + cbc.ovY
     })
   }
-  const total = segs.length ? segs[segs.length - 1].start + segs[segs.length - 1].len : 0
+  // Runtime spans EVERY lane, not just the main one. An overlay (or a text or
+  // music clip) that runs past the last base clip used to be silently truncated
+  // here, because `total` drove both the frame count and the audio mix.
+  const total = framesToSeconds(documentDuration(doc), tb)
 
   const audio: AudioClipSched[] = []
   for (const t of doc.tracks) {
-    if (t.kind !== 'audio' || t.muted || t.hidden) continue
+    if (t.hidden || t.muted) continue
+    // Audio lanes (music / detached voice) AND overlay video lanes: a video moved
+    // off the main lane keeps its sound, so it has to reach the mix too — the
+    // preview already plays it, only the export was dropping it.
+    const isOverlayVideo = t.kind === 'video' && !t.isMain && t.id !== main?.id
+    if (t.kind !== 'audio' && !isOverlayVideo) continue
     for (const c of t.clips) {
       if (!c.sourcePath) continue
+      if (isOverlayVideo && (c.kind === 'image' || c.muted === true || c.audioDetached === true || c.hasAudio === false)) continue
       const r = resolveMedia(c.sourcePath)
       if (!r.url) continue
       audio.push({
@@ -679,8 +688,30 @@ export async function exportOnDevice(
   let minSpacing = 0
   let prevPresentedT = -1
   const grabTolerance = (): number => Math.max(frameDur, minSpacing || frameDur) * 1.3
-  let fallbacks = 0 // per-segment; too many → the harvest is thrash, go pure seek
+  let fallbacks = 0 // per-segment; too many → step the rate down, then pure seek
   let segHarvesting = false
+  // HARVEST RATE. Segments used to stream at exactly the clip's own speed, so a
+  // 10-minute timeline spent 10 minutes of wall clock just playing the source
+  // past the capture — the export was pinned to realtime no matter how fast the
+  // machine could decode. Nothing requires that: `want` is derived from the
+  // OUTPUT frame index, so playbackRate only controls how fast frames arrive,
+  // never which frame a given output lands on. The harvest is already
+  // self-regulating (it pauses once it runs 0.5 s ahead of the consumer and the
+  // buffer holds 5 frames), so running it fast just moves the bottleneck to the
+  // encoder, where it belongs. Elements are muted, so browsers allow the rate.
+  // Devices that can't keep up DROP presented frames, so step down a gear at a
+  // time — a slow machine ends up back at realtime instead of thrashing between
+  // a too-fast harvest and per-frame seeking. The ladder persists across
+  // segments: a device that struggled once will struggle again.
+  const HARVEST_RATES = [8, 4, 2, 1]
+  let rateIdx = 0
+  const harvestRate = (speed: number): number => Math.min(16, Math.max(0.25, speed * HARVEST_RATES[rateIdx]))
+  // Lookahead depth. Held VideoFrames are full uncompressed surfaces (~3 MB at
+  // 1080p, ~12 MB at 4K), so the window shrinks as the frame gets bigger — and
+  // the buffer always holds MORE frames than the lookahead can produce, or the
+  // safety valve would start evicting frames that are still wanted.
+  const MAX_BUF = W * H > 2_500_000 ? 10 : 24
+  const LOOKAHEAD_S = (MAX_BUF * 0.6) / FPS
   const closeBuf = (): void => {
     for (const g of buf) g.frame.close()
     buf = []
@@ -702,10 +733,17 @@ export async function exportOnDevice(
       } catch {
         /* decoder hiccup — the consumer's seek fallback covers it */
       }
-      while (buf.length > 4) buf.shift()!.frame.close()
+      // Evict by TIME, not by count. A fixed 5-deep buffer was fine only while
+      // the harvest ran at 1x and the consumer kept pace with it; the moment the
+      // harvest is allowed to run ahead, a count cap throws away frames the
+      // consumer has NOT reached yet — every one of those becomes a seek, which
+      // is exactly the cost the harvest exists to avoid. Frames behind the
+      // consumer are dead; frames ahead of it are the whole point of a lookahead.
+      while (buf.length && buf[0].t < lastWant - grabTolerance()) buf.shift()!.frame.close()
+      while (buf.length > MAX_BUF) buf.shift()!.frame.close() // safety valve
       // Don't decode ahead of consumption (the encoder may be the slow side);
       // the consumer resumes playback when it needs more.
-      if (meta.mediaTime > lastWant + 0.5) {
+      if (meta.mediaTime > lastWant + LOOKAHEAD_S) {
         try {
           v.pause()
         } catch {
@@ -898,7 +936,7 @@ export async function exportOnDevice(
           if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
           if (segHarvesting) {
             try {
-              v.playbackRate = Math.min(4, Math.max(0.25, seg.speed))
+              v.playbackRate = harvestRate(seg.speed)
             } catch {
               /* rate unsupported — plays at 1x; exactness check still holds */
             }
@@ -937,14 +975,33 @@ export async function exportOnDevice(
           }
           frame = new VideoFrame(v, { timestamp: 0 })
           if (segHarvesting) {
-            // A device dropping frames this often gains nothing from the
-            // harvest — stop fighting it and stay in seek mode for the rest of
-            // this segment.
+            // Dropping this often means the harvest is outrunning the device.
+            // Drop a gear first — only a device that still can't keep up at 1x
+            // gains nothing from the harvest, and THAT one falls back to seeking
+            // for the rest of the segment.
             if (++fallbacks > 10) {
-              harvest.stop?.()
-              closeBuf()
-              segHarvesting = false
-              dbg('harvest off for segment (frame drops)', { fallbacks })
+              if (rateIdx < HARVEST_RATES.length - 1) {
+                rateIdx++
+                fallbacks = 0
+                try {
+                  v.playbackRate = harvestRate(seg.speed)
+                } catch {
+                  /* rate unsupported — the next drop batch retires the harvest */
+                }
+                dbg('harvest rate down', { rate: HARVEST_RATES[rateIdx] })
+                if (!document.hidden) {
+                  try {
+                    await v.play()
+                  } catch {
+                    segHarvesting = false
+                  }
+                }
+              } else {
+                harvest.stop?.()
+                closeBuf()
+                segHarvesting = false
+                dbg('harvest off for segment (frame drops)', { fallbacks })
+              }
             } else if (!document.hidden) {
               try {
                 await v.play() // resume the harvest for the next frames

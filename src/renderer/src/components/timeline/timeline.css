@@ -366,6 +366,10 @@
   top: 0;
   bottom: 0;
   width: 11px;
+  /* Above EVERY clip layer. The title bar (z 2) and the retake cut bands (z 4/5)
+     are full-width and used to paint over the edges, so the resize cursor only
+     survived on the strip of clip body they left uncovered. */
+  z-index: 7;
   opacity: 0.6; /* always visible so trimming is discoverable */
   transition: opacity 0.1s ease;
   display: flex;

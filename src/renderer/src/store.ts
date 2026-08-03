@@ -489,9 +489,15 @@ function newProject(): Project {
   }
 }
 
+/** Which tool owns the shared progress bar. The AI tools each carry their own tag
+ *  so a panel only renders the run it started — everything used to report as an
+ *  untagged (or 'transcribe') job, so Variations and Auto b-roll drew their
+ *  progress inside the Speech cleaner tab. */
+export type JobKind = ProgressEvent['kind'] | 'variations' | 'zoom' | 'broll'
+
 export interface Job {
   active: boolean
-  kind?: ProgressEvent['kind']
+  kind?: JobKind
   percent: number
   message?: string
 }
@@ -2636,13 +2642,13 @@ export const useStore = create<AppState>((set, get) => ({
       stored.media?.duration ??
       (p0.baseSequence ?? []).reduce((n, c) => n + Math.max(0, c.sourceOut - c.sourceIn), 0)
 
-    set({ aiVariationsBusy: true, job: { active: true, kind: 'transcribe', percent: 20, message: 'Casting variations…' } })
+    set({ aiVariationsBusy: true, job: { active: true, kind: 'variations', percent: 20, message: 'Casting variations…' } })
     try {
       const res = await generateVariationsCloud(
         get().project.transcript!,
         durationS,
         count,
-        (percent, message) => set({ job: { active: true, kind: 'transcribe', percent, message } })
+        (percent, message) => set({ job: { active: true, kind: 'variations', percent, message } })
       )
       set({
         aiVariations: res.variations,
@@ -3407,7 +3413,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Add overlay images or load a video first' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Suggesting overlays…' }, overlaySuggestions: [] })
+    set({ job: { active: true, kind: 'broll', percent: 0, message: 'Suggesting overlays…' }, overlaySuggestions: [] })
     try {
       const log: string[] = []
       let suggestions: OverlaySuggestion[] = []

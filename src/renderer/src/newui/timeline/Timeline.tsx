@@ -464,9 +464,14 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
       }
       if (!trackId) return
 
+      // Dropping straight onto an overlay lane lands full-frame and centred too —
+      // without this the renderers' missing-ovScale default (0.45) made every
+      // library drop show up as a small off-centre PiP.
+      const isOverlayLane = trackId !== mainId && !isAudio
       const clip = createClip({
         kind,
         trackId,
+        ...(isOverlayLane ? { metadata: { ovScale: 1, ovX: 0, ovY: 0 } } : {}),
         start: dropFrame,
         duration: secondsToFrames(durSec, tb),
         sourcePath: item.path,

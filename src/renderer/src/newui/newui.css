@@ -355,6 +355,57 @@
   text-shadow: none;
 }
 .ec-nu-tl .ec-tl-clip.sel .ec-tl-clip-title { color: #c4baff; }
+
+/* Held clip: lifts off the lane while it follows the cursor — a touch larger,
+   translucent so you can read the lane underneath it, and above every neighbour
+   so it never slides behind one mid-drag. Drops back flush on release. */
+.ec-nu-tl .ec-tl.dragging { cursor: grabbing; }
+.ec-nu-tl .ec-tl.dragging .ec-tl-clip { transition: none; }
+.ec-nu-tl .ec-tl.dragging .ec-tl-clip.sel {
+  transform: scale(1.035);
+  opacity: 0.6;
+  z-index: 20;
+  cursor: grabbing;
+  box-shadow: inset 0 0 0 1.5px #a99bff, 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+/* the handles would otherwise show a resize cursor on a clip that's in flight */
+.ec-nu-tl .ec-tl.dragging .ec-tl-clip-handle { pointer-events: none; opacity: 0; }
+
+/* Zoom band — how much Ken Burns punch-in this clip carries. Sits along the
+   bottom edge in the app accent so it reads as "ours" rather than a warning,
+   and stays under the trim handles (z 7) so it never eats an edge drag. */
+.ec-nu-tl .ec-tl-clip-zoom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 11px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  background: rgba(124, 107, 255, 0.14);
+  border-top: 1px solid rgba(124, 107, 255, 0.28);
+  pointer-events: none;
+  overflow: hidden;
+}
+.ec-nu-tl .ec-tl-clip-zoom-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, rgba(124, 107, 255, 0.5), rgba(169, 155, 255, 0.72));
+}
+.ec-nu-tl .ec-tl-clip-zoom-label {
+  position: relative;
+  margin-left: 5px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 8.5px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: #d7d0ff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
 .ec-nu-tl .ec-tl-clip-text {
   font-family: 'Geist Mono', ui-monospace, monospace;
   font-size: 9.5px;

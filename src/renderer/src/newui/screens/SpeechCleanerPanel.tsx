@@ -193,7 +193,17 @@ export default function SpeechCleanerPanel(): JSX.Element {
       {/* apply */}
       <div style={css(`flex:none;padding:12px 14px 14px;border-top:1px solid ${HAIR}`)}>
         {applied ? (
-          <button onClick={r.find} style={css('width:100%;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:600;padding:12px;border-radius:10px;cursor:pointer')}>Run again</button>
+          /* The real actions, not a bare "Run again" — after applying you still
+             want to find more cuts, sweep silences again, or open either stage's
+             settings without leaving the tab. Same set as the idle screen. */
+          <>
+            <button onClick={r.find} style={css('width:100%;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:650;padding:12px;border-radius:10px;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.28)')}>Find cuts</button>
+            <button onClick={r.findSilences} style={css('width:100%;margin-top:8px;background:rgba(124,107,255,.12);border:1px solid rgba(124,107,255,.4);color:#c4baff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px;cursor:pointer')}>Find Silences</button>
+            <div style={css('display:flex;gap:8px;margin-top:8px')}>
+              <button onClick={r.openSmartSilenceSettings} style={css('flex:1;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>1 · Smart Silence</button>
+              <button onClick={r.openSilenceSettings} style={css('flex:1;background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12px;font-weight:500;border-radius:9px;padding:10px 0;cursor:pointer')}>3 · Silence</button>
+            </div>
+          </>
         ) : (
           <button onClick={r.execute} disabled={!r.executable} style={css('width:100%;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13.5px;font-weight:600;padding:12px;border-radius:10px;cursor:pointer;box-shadow:0 6px 20px rgba(124,107,255,.28)', !r.executable && 'opacity:.5;cursor:not-allowed;box-shadow:none')}>Apply {r.executable} cut{r.executable === 1 ? '' : 's'}</button>
         )}
