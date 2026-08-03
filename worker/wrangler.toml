@@ -23,6 +23,9 @@ new_sqlite_classes = ["DailyQuota"]
 [vars]
 DAILY_WRITE_LIMIT = "200"
 ALLOWED_ORIGINS = "https://easecutpro.com,https://www.easecutpro.com"
+# Marks the ledger row 'committed' once R2 has the bytes. Without it a completed
+# upload would stop counting against storage after 24 h.
+COMMIT_URL = "https://zlqxrdlognjvwqpmnfjq.supabase.co/functions/v1/r2-commit"
 
 # Secret — NOT set here. Must match the edge function's R2_TICKET_SECRET:
 #   npx wrangler secret put TICKET_SECRET

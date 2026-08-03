@@ -32,6 +32,29 @@ export interface Env {
   DAILY_WRITE_LIMIT: string
   /** Comma-separated allowed browser origins. */
   ALLOWED_ORIGINS: string
+  /** r2-commit edge function URL; unset = ledger rows stay 'reserved'. */
+  COMMIT_URL?: string
+}
+
+/**
+ * Tell the ledger the bytes really landed. Fire-and-forget via waitUntil so the
+ * upload response isn't held up by it, and never fatal: a lost commit leaves the
+ * row 'reserved', which still counts against the quota for 24 h. Over-counting
+ * for a day beats under-counting instantly.
+ *
+ * This lives in the WORKER, not the client, on purpose. If the browser owned it,
+ * an attacker would simply never call it — their rows would age out and their
+ * storage would stop counting, which is the hole the ledger exists to close.
+ */
+function commitLedger(env: Env, ctx: ExecutionContext, ticket: string): void {
+  if (!env.COMMIT_URL) return
+  ctx.waitUntil(
+    fetch(env.COMMIT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticket })
+    }).catch(() => undefined)
+  )
 }
 
 /** Multipart parts are capped well under the Workers request-body limit (100 MB
@@ -173,7 +196,7 @@ async function charge(env: Env, req: Request, uid: string, cost: number): Promis
 // --- routes -----------------------------------------------------------------
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (req.method === 'OPTIONS') return new Response(null, { headers: cors(env, req) })
 
     const url = new URL(req.url)
@@ -193,6 +216,7 @@ export default {
       await env.BUCKET.put(t.k, req.body, {
         httpMetadata: { contentType: req.headers.get('x-ec-content-type') || 'application/octet-stream' }
       })
+      commitLedger(env, ctx, raw)
       return json(env, req, { ok: true, key: t.k })
     }
 
@@ -225,6 +249,7 @@ export default {
       const { parts } = (await req.json()) as { parts: R2UploadedPart[] }
       const mpu = env.BUCKET.resumeMultipartUpload(t.k, uploadId)
       await mpu.complete(parts)
+      commitLedger(env, ctx, raw)
       return json(env, req, { ok: true, key: t.k })
     }
 
