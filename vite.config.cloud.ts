@@ -87,9 +87,12 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: resolve(__dirname, 'dist-cloud'),
       emptyOutDir: true,
-      // Emit source maps so a minified on-device stack (mobile Safari) can be
-      // decoded back to the real source line while we stabilize the iOS path.
-      sourcemap: true,
+      // Source maps are published alongside the bundle, so shipping them hands
+      // every visitor the full readable client source — including the shape of
+      // the edge-function calls and which checks run where. Set
+      // EC_SOURCEMAPS=1 for a debugging build when an on-device stack (mobile
+      // Safari) needs decoding; production ships without them.
+      sourcemap: process.env.EC_SOURCEMAPS === '1',
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/renderer/index.html') }
       }
