@@ -30,6 +30,7 @@ import type { Command } from '@shared/timeline/commands'
 import { createClip, mainTrackId, findTrack } from '@shared/timeline/model'
 import { secondsToFrames } from '@shared/timeline/time'
 import { variationDuration, type Variation } from '@shared/variations'
+import { DEFAULT_VARIATION_LENGTH } from '@shared/aiVariations'
 import { generateVariationsCloud } from './cloud/variationEngine'
 import { getSharedEngine } from './timelineEngine'
 import { docSourceToEdited } from './docTime'
@@ -801,7 +802,9 @@ interface AppState {
   /** AI Variations: transcribe if needed, then ask the judge to cast the
    *  transcript into `count` short-form arrangements. Returns them for review —
    *  nothing is applied until the creator picks one. */
-  generateVariations: (count: number) => Promise<Variation[]>
+  /** targetSeconds: roughly how long each variation's speech should run — the
+   *  creator picks it in the panel, and it reaches the model in the payload. */
+  generateVariations: (count: number, targetSeconds?: number) => Promise<Variation[]>
   /** Last AI-generated set, kept in the store so the panel survives a re-render. */
   aiVariations: Variation[]
   aiVariationWarnings: string[]
@@ -2494,7 +2497,7 @@ export const useStore = create<AppState>((set, get) => ({
   //
   // Review-first, like every other engine here: the results are held in the store
   // and nothing touches the timeline until the creator applies one.
-  generateVariations: async (count: number) => {
+  generateVariations: async (count: number, targetSeconds: number = DEFAULT_VARIATION_LENGTH) => {
     if (get().aiVariationsBusy) return []
     // Needs words, not audio — reuse the transcript when the project already has
     // one (Find cuts, or a previous run) instead of paying for STT again.
@@ -2514,6 +2517,7 @@ export const useStore = create<AppState>((set, get) => ({
         get().project.transcript!,
         durationS,
         count,
+        targetSeconds,
         (percent, message) => set({ job: { active: true, kind: 'variations', percent, message } })
       )
       set({

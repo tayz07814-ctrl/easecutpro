@@ -12,6 +12,7 @@ import { getSharedEngine } from '../../timelineEngine'
 import { mainTrackId, findTrack } from '@shared/timeline/model'
 import { framesToSeconds } from '@shared/timeline/time'
 import { parseVariation, variationDuration, VARIATION_EXAMPLE, type Variation } from '@shared/variations'
+import { VARIATION_LENGTHS, DEFAULT_VARIATION_LENGTH } from '@shared/aiVariations'
 
 /** Source length used to clamp ranges. `project.media` is empty on doc-native
  *  projects, so fall back to the main lane's own source duration; 0 disables
@@ -46,6 +47,7 @@ export default function VariationsPanel(): JSX.Element {
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [count, setCount] = useState(3)
+  const [lengthS, setLengthS] = useState<number>(DEFAULT_VARIATION_LENGTH)
   const [variation, setVariation] = useState<Variation | null>(null)
   const [error, setError] = useState<string>('')
   const [warnings, setWarnings] = useState<string[]>([])
@@ -95,14 +97,29 @@ export default function VariationsPanel(): JSX.Element {
             value={count}
             onChange={(e) => setCount(Number(e.target.value))}
             disabled={busy}
-            style={css("flex:none;background:#0a0a0e;border:1px solid rgba(255,255,255,.12);color:#c9c9da;font-family:inherit;font-size:12px;border-radius:8px;padding:9px 8px;cursor:pointer;outline:none")}
+            style={css("flex:1;min-width:0;background:#0a0a0e;border:1px solid rgba(255,255,255,.12);color:#c9c9da;font-family:inherit;font-size:12px;border-radius:8px;padding:9px 8px;cursor:pointer;outline:none")}
           >
             {[1, 2, 3, 4, 5].map((n) => (
               <option key={n} value={n}>{n} variation{n === 1 ? '' : 's'}</option>
             ))}
           </select>
+          {/* How long each variation should run. Seconds of SPEECH, which is what
+              the model actually controls by picking more or fewer sections. */}
+          <select
+            value={lengthS}
+            onChange={(e) => setLengthS(Number(e.target.value))}
+            disabled={busy}
+            title="Roughly how long each variation should run"
+            style={css("flex:1;min-width:0;background:#0a0a0e;border:1px solid rgba(255,255,255,.12);color:#c9c9da;font-family:inherit;font-size:12px;border-radius:8px;padding:9px 8px;cursor:pointer;outline:none")}
+          >
+            {VARIATION_LENGTHS.map((s) => (
+              <option key={s} value={s}>~{s}s each</option>
+            ))}
+          </select>
+        </div>
+        <div style={css('display:flex;margin-top:8px')}>
           <button
-            onClick={() => void generate(count)}
+            onClick={() => void generate(count, lengthS)}
             disabled={busy}
             style={css(
               'flex:1;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:650;border-radius:9px;padding:10px;cursor:pointer',

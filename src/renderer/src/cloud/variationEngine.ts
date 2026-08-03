@@ -24,6 +24,7 @@ export async function generateVariationsCloud(
   transcript: Transcript,
   durationS: number,
   count: number,
+  targetSeconds: number,
   onProgress?: (pct: number, msg?: string) => void
 ): Promise<GenerateVariationsResult> {
   const op = (pct: number, msg?: string): void => onProgress?.(pct, msg)
@@ -38,9 +39,9 @@ export async function generateVariationsCloud(
   }
 
   op(35, 'Reading your transcript…')
-  const payload = buildVariationPayload(words, durationS, count)
+  const payload = buildVariationPayload(words, durationS, count, targetSeconds)
 
-  op(55, `Casting ${count} variation${count === 1 ? '' : 's'}…`)
+  op(55, `Casting ${count} ${targetSeconds}s variation${count === 1 ? '' : 's'}…`)
   let res: ProcutJudgeRes
   try {
     res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {

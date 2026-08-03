@@ -29,13 +29,32 @@ export interface AiVariationWord {
   end: number
 }
 
+/** Variation lengths offered in the panel, in seconds of SPEECH (the sections the
+ *  model picks), which is what the creator is really choosing between: a 15s hook
+ *  reel versus a 90s explainer. */
+export const VARIATION_LENGTHS = [15, 30, 45, 60, 90] as const
+export type VariationLength = (typeof VARIATION_LENGTHS)[number]
+export const DEFAULT_VARIATION_LENGTH: VariationLength = 30
+
 /** The complete user message: index-anchored words, nothing else. No timings, so
  *  the model cannot anchor on (or fabricate) them. */
-export function buildVariationPayload(words: AiVariationWord[], durationS: number, count: number): string {
+export function buildVariationPayload(
+  words: AiVariationWord[],
+  durationS: number,
+  count: number,
+  targetSeconds: number
+): string {
   const lines = words.map((w, i) => `${i}|${w.text}`).join('\n')
+  // The creator picked this length explicitly, so the payload says it overrides
+  // the default range in the system prompt — left implicit, the model splits the
+  // difference between the two and ignores the choice.
+  const lo = Math.max(5, Math.round(targetSeconds * 0.75))
+  const hi = Math.round(targetSeconds * 1.25)
   return (
     `SOURCE: ${durationS.toFixed(1)}s, ${words.length} words.\n` +
-    `PRODUCE: ${count} distinct variation${count === 1 ? '' : 's'}.\n\n` +
+    `PRODUCE: ${count} distinct variation${count === 1 ? '' : 's'}.\n` +
+    `TARGET LENGTH: about ${targetSeconds}s of speech per variation (${lo}-${hi}s acceptable). ` +
+    `This is the creator's explicit choice and REPLACES the default length range in your instructions.\n\n` +
     `VERBATIM TRANSCRIPT (immutable index|word):\n${lines}`
   )
 }
