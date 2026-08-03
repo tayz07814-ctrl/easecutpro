@@ -2675,7 +2675,15 @@ export const useStore = create<AppState>((set, get) => ({
     set((st) => ({
       project: {
         ...st.project,
-        silences: [...st.project.silences, ...enabled].sort((a, b) => a.start - b.start),
+        // Silence Mastery re-runs REPLACE their previous applied regions (sm*
+        // ids) instead of stacking on them — each Apply reflects exactly the
+        // current settings. Regions from other sources are untouched.
+        silences: [
+          ...st.project.silences.filter(
+            (r) => !(enabled.some((e2) => String(e2.id).startsWith('sm')) && String(r.id).startsWith('sm'))
+          ),
+          ...enabled
+        ].sort((a, b) => a.start - b.start),
         // "trim cuts" from the ⚙ profile becomes the word-splice trim.
         wordCutPad: wordCutPad(st.cutLordSettings),
         // FastCut / ProCut exports get 25ms anti-click fades at every cut seam.
