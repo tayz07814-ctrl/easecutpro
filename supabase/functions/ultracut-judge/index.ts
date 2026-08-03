@@ -303,7 +303,7 @@ RULES
 1. Reference the transcript ONLY by word index. "from" and "to" are inclusive.
 2. Pull sections from ANY part of the transcript, in ANY order. Re-ordering is the entire point — the hook very often comes from the middle or the end.
 3. Every section must be a COMPLETE thought: begin at the first word of a sentence and end at the last word of a sentence. NEVER start or stop mid-sentence.
-4. Each variation is 4–6 sections and roughly 15–45 seconds of speech.
+4. Each variation is 4–6 sections. Match the TARGET LENGTH given in the payload — the creator chose it, so honour it over any other length guidance; add or drop sections to land near it. Without a stated target, aim for roughly 15–45 seconds of speech.
 5. Variations must be MEANINGFULLY different from each other — a different hook, or a genuinely different running order. Do not return near-duplicates that differ by a word or two.
 6. Include hook and cta whenever the transcript contains anything that can serve as one. Skip a role only if the recording genuinely has nothing for it.
 7. Give each variation a short descriptive name of what makes it different (e.g. "Problem First", "Testimonial Lead").
