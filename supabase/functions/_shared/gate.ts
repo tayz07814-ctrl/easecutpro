@@ -13,6 +13,10 @@
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { json } from './http.ts'
+// Imported, not just re-exported: wavSecondsFromUrl below CALLS this, and a bare
+// `export { wavSeconds } from './wav.ts'` re-exports without binding the name in
+// this module's scope — which threw ReferenceError at runtime.
+import { wavSeconds } from './wav.ts'
 
 export function serviceClient(): SupabaseClient {
   return createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -150,7 +154,7 @@ export async function chargeSttSeconds(
   return { ok: true }
 }
 
-export { wavSeconds } from './wav.ts'
+export { wavSeconds }
 
 /** Fetch just enough of a signed URL to measure the audio, without pulling the
  *  whole object through the function. */
