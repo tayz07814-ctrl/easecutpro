@@ -2075,8 +2075,14 @@ export const useStore = create<AppState>((set, get) => ({
     // both read the STORED project, see duration 0, and bail — regions stage
     // fine but nothing ever gets cut (observed live: keeps=0, edited=0).
     // Same base-persistence contract runRetakeCutBeta uses.
+    //
+    // The base starts with a CLEAN silence set: any project.silences carried
+    // from before belong to the OLD (unroutable) domain — persisting the base
+    // made them routable and they cut the timeline INSTANTLY at stage time,
+    // before the user ever pressed Apply (observed live). The staged regions
+    // this run produces are the only ones that may apply, and only via Apply.
     if (!stored.media && !(stored.baseSequence?.length ?? 0)) {
-      set((st) => ({ project: { ...st.project, media: p0.media, baseSequence: p0.baseSequence } }))
+      set((st) => ({ project: { ...st.project, media: p0.media, baseSequence: p0.baseSequence, silences: [] } }))
     }
     const t = get().project.transcript ?? null
     const words = (t?.words ?? []).filter((w) => !w.deleted).map((w) => ({ start: w.start, end: w.end, text: w.text }))
