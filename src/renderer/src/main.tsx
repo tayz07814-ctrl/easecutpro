@@ -12,7 +12,7 @@ import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
-import { cloudAuthMe, cloudLogin } from './cloud/auth'
+import { cloudAuthMe, testAccountLogin, testAutoLoginEnabled } from './cloud/auth'
 import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
@@ -172,15 +172,13 @@ const IS_ADMIN_ROUTE =
 
 
 // TEST BRANCH ONLY (silence-mastery): this branch ships to its own public
-// preview URL purely for testing and never merges to main. No login of any
-// kind — the cloud bootstrap below silently signs into a shared TEST account
-// instead of showing the auth screen, so the full app (transcription + the
-// cut judge, which require a JWT at the edge functions) works for anyone who
-// opens the URL. The credentials are deliberately public: the account exists
-// only for this branch's testing.
+// preview URL purely for testing and never merges to main. No login by
+// DEFAULT — the cloud bootstrap below silently signs into a shared TEST
+// account (see cloud/auth.ts) so the full app works for anyone who opens the
+// URL. Signing in with a REAL account still works: `?login=1` (or Log out)
+// shows the normal auth screen, and an existing session of any account is
+// always reused instead of the test account.
 const TEST_BRANCH_NO_AUTH = true
-const TEST_ACCOUNT_EMAIL = 'silence.mastery.tester@easecutpro.com'
-const TEST_ACCOUNT_PASSWORD = 'smx-testing-4271-branch'
 
 type RouteView = 'landing' | 'auth' | 'home' | 'terms' | 'privacy' | 'refund'
 
@@ -257,13 +255,15 @@ function Root(): JSX.Element {
           return
         }
         let { user } = await cloudAuthMe()
-        // Test branch: never show the auth screen — reuse an existing session
-        // or silently sign into the shared test account. If that fails (e.g.
-        // the account was deleted), fall back to the offline local editor
-        // rather than dead-ending at a login form.
-        if (TEST_BRANCH_NO_AUTH && !user) {
+        // Test branch: reuse an existing session (any account), else silently
+        // sign into the shared test account — unless the user opted for a
+        // real sign-in (`?login=1` / Log out), in which case the normal auth
+        // screen shows. If the test login itself fails (e.g. the account was
+        // deleted), fall back to the offline local editor rather than
+        // dead-ending.
+        if (TEST_BRANCH_NO_AUTH && !user && testAutoLoginEnabled()) {
           try {
-            user = await cloudLogin(TEST_ACCOUNT_EMAIL, TEST_ACCOUNT_PASSWORD)
+            user = await testAccountLogin()
           } catch {
             if (cancelled) return
             useStore.getState().setServerAvailable(false)
