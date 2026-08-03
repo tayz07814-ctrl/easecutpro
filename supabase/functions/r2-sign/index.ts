@@ -107,10 +107,57 @@ Deno.serve(async (req: Request) => {
   }
 
   const fullKey = `spaces/${spaceId}/${clean}`
+
+  // WRITES go through the upload Worker when it is configured. A presigned PUT
+  // cannot be made single-use, so one mint is an unlimited-replay licence for
+  // its whole lifetime — and because overwriting a key is storage-neutral, no
+  // byte quota can ever notice. Routing writes through the Worker puts us on
+  // the path of every single one, which is the only place a per-write budget
+  // can actually be enforced. The Worker owns the counter; this function keeps
+  // owning identity, membership and the storage quota, and hands over a signed
+  // ticket saying "this user may write this key, up to this many bytes".
+  const workerUrl = Deno.env.get('R2_UPLOAD_WORKER')?.trim()
+  const ticketSecret = Deno.env.get('R2_TICKET_SECRET')?.trim()
+  if (op === 'put' && workerUrl && ticketSecret) {
+    const maxBytes = Math.min(
+      MAX_OBJECT_BYTES,
+      Math.max(1, Number(body.contentLength) || MAX_OBJECT_BYTES)
+    )
+    const ticket = await mintTicket({ u: uid, k: fullKey, m: maxBytes, e: Math.floor(Date.now() / 1000) + 300 }, ticketSecret)
+    return json({ mode: 'worker', url: workerUrl.replace(/\/+$/, ''), ticket, key: fullKey, maxBytes }, 200)
+  }
+
   const aws = new AwsClient({ accessKeyId, secretAccessKey, service: 's3', region: 'auto' })
   const endpoint = new URL(`https://${account}.r2.cloudflarestorage.com/${bucket}/${fullKey}`)
-  endpoint.searchParams.set('X-Amz-Expires', '3600') // 1 hour is plenty for one op
+  // 60s, not an hour: until the Worker is deployed this URL is replayable for
+  // its whole life, so its life is the blast radius. A presigned URL's expiry is
+  // checked when the request STARTS, so a slow upload is unaffected.
+  endpoint.searchParams.set('X-Amz-Expires', op === 'put' ? '60' : '300')
   const signed = await aws.sign(endpoint.toString(), { method: op === 'put' ? 'PUT' : 'GET', aws: { signQuery: true } })
 
-  return json({ url: signed.url, key: fullKey }, 200)
+  return json({ mode: 'presigned', url: signed.url, key: fullKey }, 200)
 })
+
+/** Hard ceiling per object, independent of the space quota. */
+const MAX_OBJECT_BYTES = 5 * 1024 * 1024 * 1024
+
+function b64url(bytes: Uint8Array): string {
+  let s = ''
+  for (const b of bytes) s += String.fromCharCode(b)
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/** `<base64url(payload)>.<base64url(hmac)>` — verified by the Worker with the
+ *  same secret, so the hot upload path needs no database round-trip. */
+async function mintTicket(payload: Record<string, unknown>, secret: string): Promise<string> {
+  const p = b64url(new TextEncoder().encode(JSON.stringify(payload)))
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(p)))
+  return `${p}.${b64url(sig)}`
+}

@@ -100,14 +100,97 @@ const mediaKey = (pid: string, id: string): string => `projects/${pid}/media/${i
 const manifestKey = (pid: string): string => `projects/${pid}/media/_manifest.json`
 const editKey = (pid: string, uid: string): string => `projects/${pid}/edits/${uid}.json`
 
+interface SignRes {
+  mode?: 'worker' | 'presigned'
+  url: string
+  key: string
+  ticket?: string
+  maxBytes?: number
+}
+
+async function signOp(
+  op: 'put' | 'get',
+  spaceId: string,
+  key: string,
+  opts?: { contentLength?: number; countsToQuota?: boolean }
+): Promise<SignRes> {
+  return invokeEdge<SignRes>('r2-sign', { op, spaceId, key, ...opts })
+}
 async function presign(
   op: 'put' | 'get',
   spaceId: string,
   key: string,
   opts?: { contentLength?: number; countsToQuota?: boolean }
 ): Promise<string> {
-  const r = await invokeEdge<{ url: string; key: string }>('r2-sign', { op, spaceId, key, ...opts })
-  return r.url
+  return (await signOp(op, spaceId, key, opts)).url
+}
+
+/** Parts stay under the Workers request-body limit. Each part is one charged
+ *  write, so this also sets how much of a user's daily budget a big file costs:
+ *  a 1 GB upload is ~13 writes. */
+const PART_BYTES = 80 * 1024 * 1024
+
+/**
+ * Upload through the gateway Worker when the server says to, else fall back to
+ * the presigned PUT. Callers don't care which — same signature, same progress.
+ */
+async function uploadVia(
+  sign: SignRes,
+  blob: Blob,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<void> {
+  if (sign.mode !== 'worker' || !sign.ticket) {
+    await xhrPut(sign.url, blob, onProgress)
+    return
+  }
+  const base = sign.url
+  const t = encodeURIComponent(sign.ticket)
+  if (blob.size <= PART_BYTES) {
+    await xhrPut(`${base}/put?t=${t}`, blob, onProgress)
+    return
+  }
+  // Multipart. Sequential on purpose: parallel parts would race the daily
+  // counter into rejecting a legitimate upload halfway through, and leave a
+  // half-written multipart behind.
+  const created = await fetch(`${base}/mpu/create?t=${t}`, { method: 'POST' })
+  if (!created.ok) throw new Error(await uploadError(created))
+  const { uploadId } = (await created.json()) as { uploadId: string }
+  const parts: { partNumber: number; etag: string }[] = []
+  let done = 0
+  try {
+    for (let i = 0; i * PART_BYTES < blob.size; i++) {
+      const chunk = blob.slice(i * PART_BYTES, Math.min(blob.size, (i + 1) * PART_BYTES))
+      const res = await fetch(`${base}/mpu/part?t=${t}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${i + 1}`, {
+        method: 'PUT',
+        body: chunk
+      })
+      if (!res.ok) throw new Error(await uploadError(res))
+      parts.push((await res.json()) as { partNumber: number; etag: string })
+      done += chunk.size
+      onProgress?.(done, blob.size)
+    }
+    const fin = await fetch(`${base}/mpu/complete?t=${t}&uploadId=${encodeURIComponent(uploadId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parts })
+    })
+    if (!fin.ok) throw new Error(await uploadError(fin))
+  } catch (e) {
+    // Never leave a dangling multipart holding storage; aborting is free.
+    void fetch(`${base}/mpu/abort?t=${t}&uploadId=${encodeURIComponent(uploadId)}`, { method: 'POST' }).catch(() => undefined)
+    throw e
+  }
+}
+
+/** Surface the Worker's own message (notably the daily-limit one) instead of a
+ *  bare status code. */
+async function uploadError(res: Response): Promise<string> {
+  try {
+    const j = (await res.json()) as { message?: string; error?: string }
+    return j.message || j.error || `Upload failed (${res.status})`
+  } catch {
+    return `Upload failed (${res.status})`
+  }
 }
 /** PUT via XHR so we get real upload-progress events (fetch exposes none). */
 function xhrPut(url: string, blob: Blob, onProgress?: (loaded: number, total: number) => void): Promise<void> {
@@ -144,8 +227,8 @@ async function r2Put(
   countsToQuota: boolean,
   onProgress?: (loaded: number, total: number) => void
 ): Promise<void> {
-  const url = await presign('put', spaceId, key, { contentLength: blob.size, countsToQuota })
-  await xhrPut(url, blob, onProgress)
+  const sign = await signOp('put', spaceId, key, { contentLength: blob.size, countsToQuota })
+  await uploadVia(sign, blob, onProgress)
 }
 async function r2GetBlob(
   spaceId: string,

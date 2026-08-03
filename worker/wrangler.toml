@@ -1,0 +1,28 @@
+name = "easecutpro-uploads"
+main = "src/index.ts"
+compatibility_date = "2026-01-15"
+
+# Writes go through the Worker via this binding, so no R2 credentials and no
+# presigned write URLs ever reach a browser.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "easecutpro"          # set to your real bucket name
+
+# One Durable Object per user holds that user's daily counter. A DO is used
+# rather than KV because KV is eventually consistent — two uploads racing on KV
+# can both read the same "used" value and both be allowed, which is exactly the
+# case an attacker creates on purpose.
+[[durable_objects.bindings]]
+name = "QUOTA"
+class_name = "DailyQuota"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DailyQuota"]
+
+[vars]
+DAILY_WRITE_LIMIT = "200"
+ALLOWED_ORIGINS = "https://easecutpro.com,https://www.easecutpro.com"
+
+# Secret — NOT set here. Must match the edge function's R2_TICKET_SECRET:
+#   npx wrangler secret put TICKET_SECRET
