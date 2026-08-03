@@ -12,7 +12,7 @@ import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
-import { cloudAuthMe } from './cloud/auth'
+import { cloudAuthMe, cloudLogin } from './cloud/auth'
 import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
 import { serializeProjectLite, saveProject } from './projectsApi'
@@ -173,10 +173,14 @@ const IS_ADMIN_ROUTE =
 
 // TEST BRANCH ONLY (silence-mastery): this branch ships to its own public
 // preview URL purely for testing and never merges to main. No login of any
-// kind — the cloud bootstrap below skips Supabase auth and opens a local
-// editor session directly (the same path the app takes when offline: import /
-// edit / silence-clean / export all run on-device and need no backend).
+// kind — the cloud bootstrap below silently signs into a shared TEST account
+// instead of showing the auth screen, so the full app (transcription + the
+// cut judge, which require a JWT at the edge functions) works for anyone who
+// opens the URL. The credentials are deliberately public: the account exists
+// only for this branch's testing.
 const TEST_BRANCH_NO_AUTH = true
+const TEST_ACCOUNT_EMAIL = 'silence.mastery.tester@easecutpro.com'
+const TEST_ACCOUNT_PASSWORD = 'smx-testing-4271-branch'
 
 type RouteView = 'landing' | 'auth' | 'home' | 'terms' | 'privacy' | 'refund'
 
@@ -239,8 +243,7 @@ function Root(): JSX.Element {
       // config + network. Unconfigured/offline still opens a local editor
       // session (manual editing + on-device export need no backend at all).
       if (IS_CLOUD) {
-        // Test branch: force the no-backend path so no auth screen ever shows.
-        const online = !TEST_BRANCH_NO_AUTH && supabaseConfigured() && navigator.onLine !== false
+        const online = supabaseConfigured() && navigator.onLine !== false
         if (cancelled) return
         useStore.getState().setServerAvailable(online)
         if (!online) {
@@ -253,7 +256,27 @@ function Root(): JSX.Element {
           })
           return
         }
-        const { user } = await cloudAuthMe()
+        let { user } = await cloudAuthMe()
+        // Test branch: never show the auth screen — reuse an existing session
+        // or silently sign into the shared test account. If that fails (e.g.
+        // the account was deleted), fall back to the offline local editor
+        // rather than dead-ending at a login form.
+        if (TEST_BRANCH_NO_AUTH && !user) {
+          try {
+            user = await cloudLogin(TEST_ACCOUNT_EMAIL, TEST_ACCOUNT_PASSWORD)
+          } catch {
+            if (cancelled) return
+            useStore.getState().setServerAvailable(false)
+            useStore.setState({
+              user: null,
+              currentProjectId: null,
+              project: useStore.getState().freshProject(),
+              library: [],
+              view: 'editor'
+            })
+            return
+          }
+        }
         if (!cancelled) useStore.setState({ user, view: viewForPath(window.location.pathname, user) })
         return
       }
