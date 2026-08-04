@@ -102,8 +102,7 @@ export async function retakeAwareCutCloud(
 
   // 3. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript:
   //    Gemma 4 31B via OpenRouter (ultracut-judge edge fn) on the 'sharp' word-list
-  //    prompt. Reasoning is OFF: Gemma is not a reasoning model, so an effort value
-  //    is either ignored or billed for nothing.
+  //    prompt, reasoning effort 'medium' — Gemma reasons, and the judge wants it.
   //
   //    HISTORY — Gemma 4 31B was swapped OUT for GPT-5.6 Luna because its shared
   //    FREE provider rate-limited (HTTP 429) and returned empty completions often
@@ -128,7 +127,7 @@ export async function retakeAwareCutCloud(
       proposal: { word_cuts: [], pause_cuts: [] },
       model: 'google/gemma-4-31b-it',
       promptVariant: 'sharp',
-      reasoning: 'off'
+      reasoning: 'medium'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {

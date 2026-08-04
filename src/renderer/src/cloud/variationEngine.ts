@@ -47,11 +47,10 @@ export async function generateVariationsCloud(
     res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      // Gemma 4 31B, matching the retake judge. Reasoning OFF — Gemma is not a
-      // reasoning model, so an effort value buys nothing here.
+      // Gemma 4 31B at reasoning 'medium', matching the retake judge.
       model: 'google/gemma-4-31b-it',
       promptVariant: 'variations',
-      reasoning: 'off'
+      reasoning: 'medium'
     })
   } catch {
     return { variations: [], warnings: ['Couldn’t reach the AI — please try again.'] }

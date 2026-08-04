@@ -73,7 +73,10 @@ function reasoningConfig(): Record<string, unknown> {
     const n = parseInt(raw, 10)
     if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
   }
-  return { effort: 'low' }
+  // Default effort for callers that send no `reasoning` of their own. 'medium'
+  // matches what the retake judge and the variations caster both ask for, so a
+  // caller that omits it gets the same quality rather than a quieter 'low'.
+  return { effort: 'medium' }
 }
 
 function reasoningOverride(v: unknown): Record<string, unknown> | null {

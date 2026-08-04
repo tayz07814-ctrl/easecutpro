@@ -303,11 +303,10 @@ Future<VariationParse> generateVariations(
     res = await invokeEdge('ultracut-judge', {
       'payload': payload,
       'proposal': {'word_cuts': [], 'pause_cuts': []},
-      // Gemma 4 31B, matching the web client. Reasoning OFF — Gemma is not a
-      // reasoning model.
+      // Gemma 4 31B at reasoning 'medium', matching the web client.
       'model': 'google/gemma-4-31b-it',
       'promptVariant': 'variations',
-      'reasoning': 'off',
+      'reasoning': 'medium',
     });
   } catch (_) {
     return const VariationParse([], warnings: ['Couldn’t reach the AI — please try again.']);
