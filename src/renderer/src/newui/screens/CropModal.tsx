@@ -31,6 +31,8 @@ const ASPECTS: { label: string; ratio: number | null; kind?: 'original' | 'free'
 const clampN = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
 const pct = (v: number): string => `${Math.round(v * 100)}%`
 
+type Corner = 'nw' | 'ne' | 'sw' | 'se'
+
 interface Box {
   x: number
   y: number
@@ -117,9 +119,10 @@ export default function CropModal(): JSX.Element | null {
     window.addEventListener('pointerup', up)
   }
 
-  // Drag the bottom-right corner → resize. A ratio preset stays LOCKED to its
-  // ratio; Free resizes both axes; Original (a full-frame box) drops to Free.
-  function onResize(e: ReactPointerEvent): void {
+  // Drag ANY corner → resize, with the OPPOSITE corner pinned. A ratio preset
+  // stays LOCKED to its ratio; Free resizes both axes; Original (a full-frame
+  // box) drops to Free.
+  function onResize(e: ReactPointerEvent, corner: Corner): void {
     e.preventDefault()
     e.stopPropagation()
     const r = rect()
@@ -131,18 +134,36 @@ export default function CropModal(): JSX.Element | null {
     // desired box w/h in STAGE-FRACTION space (the stage matches the source frame)
     const locked = a && a.ratio != null ? a.ratio / stageAspect : null
     if (a?.kind === 'original') setAspect(1) // resizing the full frame = free crop
+
+    // Which way this corner grows, and the edge it pivots around. Dragging the
+    // left edge leftwards must GROW the box, hence the sign flip; the anchor is
+    // whichever edge isn't moving, so the opposite corner stays put.
+    const right = corner === 'ne' || corner === 'se'
+    const bottom = corner === 'se' || corner === 'sw'
+    const signX = right ? 1 : -1
+    const signY = bottom ? 1 : -1
+    const ax = right ? b0.x : b0.x + b0.w // pinned vertical edge
+    const ay = bottom ? b0.y : b0.y + b0.h // pinned horizontal edge
+    const maxW = right ? 1 - ax : ax
+    const maxH = bottom ? 1 - ay : ay
+
     const move = (ev: PointerEvent): void => {
       const dx = (ev.clientX - sx) / r.width
       const dy = (ev.clientY - sy) / r.height
       setBox((b) => {
+        let w: number
+        let h: number
         if (locked != null) {
-          let w = clampN(b0.w + dx, Math.max(MIN, MIN * locked), 1 - b0.x)
-          let h = w / locked
-          if (h > 1 - b0.y) { h = 1 - b0.y; w = h * locked }
+          w = clampN(b0.w + signX * dx, MIN, maxW)
+          h = w / locked
+          if (h > maxH) { h = maxH; w = h * locked }
           if (h < MIN) { h = MIN; w = h * locked }
-          return { ...b, w, h }
+          if (w > maxW) { w = maxW; h = w / locked }
+        } else {
+          w = clampN(b0.w + signX * dx, MIN, maxW)
+          h = clampN(b0.h + signY * dy, MIN, maxH)
         }
-        return { ...b, w: clampN(b0.w + dx, MIN, 1 - b.x), h: clampN(b0.h + dy, MIN, 1 - b.y) }
+        return { ...b, x: right ? ax : ax - w, y: bottom ? ay : ay - h, w, h }
       })
     }
     const up = (): void => {
@@ -208,7 +229,18 @@ export default function CropModal(): JSX.Element | null {
               <div style={css('position:absolute;left:66.6%;top:0;bottom:0;width:1px;background:rgba(255,255,255,.16)')} />
               <div style={css('position:absolute;top:33.3%;left:0;right:0;height:1px;background:rgba(255,255,255,.16)')} />
               <div style={css('position:absolute;top:66.6%;left:0;right:0;height:1px;background:rgba(255,255,255,.16)')} />
-              <div onPointerDown={onResize} style={css('position:absolute;right:-7px;bottom:-7px;width:16px;height:16px;border-right:2px solid #ededf2;border-bottom:2px solid #ededf2;cursor:nwse-resize')} />
+              {/* All four corners resize; each draws the two edges it owns so the
+                  grab target reads as that corner of the frame. */}
+              {(
+                [
+                  ['nw', 'left:-7px;top:-7px;border-left:2px solid #ededf2;border-top:2px solid #ededf2;cursor:nwse-resize'],
+                  ['ne', 'right:-7px;top:-7px;border-right:2px solid #ededf2;border-top:2px solid #ededf2;cursor:nesw-resize'],
+                  ['sw', 'left:-7px;bottom:-7px;border-left:2px solid #ededf2;border-bottom:2px solid #ededf2;cursor:nesw-resize'],
+                  ['se', 'right:-7px;bottom:-7px;border-right:2px solid #ededf2;border-bottom:2px solid #ededf2;cursor:nwse-resize']
+                ] as const
+              ).map(([c, pos]) => (
+                <div key={c} onPointerDown={(ev) => onResize(ev, c)} style={css(`position:absolute;width:16px;height:16px;${pos}`)} />
+              ))}
               <div style={css('position:absolute;left:-1px;top:-1px;width:16px;height:16px;border-left:2px solid #ededf2;border-top:2px solid #ededf2;pointer-events:none')} />
               <div style={css('position:absolute;right:-1px;top:-1px;width:16px;height:16px;border-right:2px solid #ededf2;border-top:2px solid #ededf2;pointer-events:none')} />
               <div style={css('position:absolute;left:-1px;bottom:-1px;width:16px;height:16px;border-left:2px solid #ededf2;border-bottom:2px solid #ededf2;pointer-events:none')} />

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useStore } from '../store'
+import { suppressPreviewClick } from '../previewClickGuard'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
 import { secondsToFrames } from '@shared/timeline/time'
 import { mainTrackId } from '@shared/timeline/model'
@@ -190,6 +191,9 @@ function TextItem({
     <div
       className={'text-item' + (selected ? ' selected' : '')}
       style={{ left: x * frame.width, top: y * frame.height, transform: 'translate(-50%, -50%)', textAlign: view.align, touchAction: 'none' }}
+      // Same guard as OverlayLayer: a text drag must not leave a click that
+      // reaches the <video> underneath and toggles playback.
+      onPointerDownCapture={() => suppressPreviewClick()}
       onPointerDown={onPointerDown}
     >
       <span

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { previewClickSuppressed } from '../previewClickGuard'
 import { computeKeepRanges, editedDuration, isMultiBase } from '@shared/edit'
 import OverlayLayer from './OverlayLayer'
 import TextLayer from './TextLayer'
@@ -254,7 +255,7 @@ export default function VideoPreview(): JSX.Element {
                 data-ec-base
                 src={mediaUrl}
                 onTimeUpdate={onTimeUpdate}
-                onClick={() => { if (!playing) primePlayback(); setPlaying(!playing) }}
+                onClick={() => { if (previewClickSuppressed()) return; if (!playing) primePlayback(); setPlaying(!playing) }}
                 style={{ transformOrigin: 'center center' }}
               />
               {frame.width > 0 && (

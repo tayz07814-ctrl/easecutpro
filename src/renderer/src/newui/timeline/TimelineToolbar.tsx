@@ -7,8 +7,8 @@
 // redesign centres on.
 
 import { useEngine, useTimeline } from './TimelineContext'
+import { dropNeighbour } from './actions'
 import { useStore } from '../../store'
-import { mainTrackId } from '@shared/timeline/model'
 import { framesToSeconds } from '@shared/timeline/time'
 import type { ReactNode } from 'react'
 
@@ -51,21 +51,6 @@ export function TimelineToolbar(): JSX.Element {
     }
   }
 
-  // Q / E — ripple-delete the main-track clip just before / after the playhead.
-  const dropNeighbour = (dir: -1 | 1): void => {
-    const doc = engine.document
-    const main = doc.tracks.find((t) => t.id === mainTrackId(doc))
-    if (!main) return
-    const ph = engine.sessionState.playhead
-    const clips = [...main.clips].sort((a, b) => a.start - b.start)
-    const before = clips.filter((c) => c.end <= ph + 1)
-    const target = dir < 0 ? before[before.length - 1] : clips.filter((c) => c.start >= ph - 1)[0]
-    if (target) {
-      engine.select([target.id])
-      engine.deleteSelection(true)
-    }
-  }
-
   return (
     <div className="ec-tl-toolbar">
       <button
@@ -100,10 +85,10 @@ export function TimelineToolbar(): JSX.Element {
         <IcCrop />
         Crop
       </button>
-      <button className="ec-tl2" onClick={() => dropNeighbour(-1)} title="Drop the clip just before the playhead (Q)">
+      <button className="ec-tl2" onClick={() => dropNeighbour(engine, -1)} title="Drop the clip just before the playhead (Q)">
         Drop before <Kbd>Q</Kbd>
       </button>
-      <button className="ec-tl2" onClick={() => dropNeighbour(1)} title="Drop the clip just after the playhead (E)">
+      <button className="ec-tl2" onClick={() => dropNeighbour(engine, 1)} title="Drop the clip just after the playhead (E)">
         Drop after <Kbd>E</Kbd>
       </button>
 

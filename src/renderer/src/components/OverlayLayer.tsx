@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { suppressPreviewClick } from '../previewClickGuard'
 import { playClock } from '../clock'
 import { kenBurnsTransform } from '../kenBurns'
 import { mediaSrc } from '../platform'
@@ -351,12 +352,6 @@ function OverlayBox({
     window.addEventListener('pointercancel', onUp)
   }
 
-  /** Rounded overlays: the single legacy handle — scale only (top-left anchored). */
-  function startResize(e: React.MouseEvent): void {
-    const w0 = boxW
-    runDrag(e, (dx) => ({ scale: clamp((w0 + dx) / frame.width, 0.05, 1.6) }))
-  }
-
   /** Corner scale: resize about the OPPOSITE corner (it stays put on screen). */
   function startCorner(e: React.PointerEvent, corner: 'nw' | 'ne' | 'sw' | 'se'): void {
     const x0 = x
@@ -408,6 +403,9 @@ function OverlayBox({
     <div
       className={'ov-box' + (selected ? ' selected' : '') + (view.rounded ? ' rounded' : '')}
       style={{ left: x * frame.width, top: y * frame.height, width: boxW, height: boxH, touchAction: 'none' }}
+      // Capture phase: the corner/crop handles stopPropagation, so a bubbling
+      // listener here would miss them. This fires first for every one of them.
+      onPointerDownCapture={() => suppressPreviewClick()}
       onPointerDown={onPointerDown}
     >
       {/* inner clipper: crops the media (and rounds it) so the handles on the
@@ -429,7 +427,14 @@ function OverlayBox({
           />
         )}
       </div>
-      {selected && view.rounded && <div className="ov-resize" onPointerDown={startResize} />}
+      {/* Rounded overlays scale from all four corners too — they used to offer a
+          single bottom-right handle, so grabbing any other corner did nothing.
+          Side CROP handles stay off for them: cropping a circle to an
+          off-centre rectangle is what the ellipse mask exists to avoid. */}
+      {selected && view.rounded &&
+        (['nw', 'ne', 'sw', 'se'] as const).map((c) => (
+          <div key={c} className={`ov-corner ${c}`} onPointerDown={(e) => startCorner(e, c)} />
+        ))}
       {selected && !view.rounded && (
         <>
           {(['nw', 'ne', 'sw', 'se'] as const).map((c) => (

@@ -14,6 +14,7 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react'
 import { useEngine, useTimeline } from './TimelineContext'
+import { dropNeighbour } from './actions'
 import { TimelineToolbar } from './TimelineToolbar'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import * as C from '@shared/timeline/commands'
@@ -196,9 +197,24 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
         engine.deleteSelection(!e.shiftKey) // Delete = ripple, Shift+Delete = leave gap
+      } else if (k === 'd') {
+        // The toolbar prints D on its Delete button; without this it printed a
+        // shortcut that did nothing. Ripple, matching what that button does.
+        e.preventDefault()
+        engine.deleteSelection(true)
       } else if (k === 's') {
         e.preventDefault()
         engine.splitAtPlayhead()
+      } else if (k === 'q') {
+        e.preventDefault()
+        dropNeighbour(engine, -1)
+      } else if (k === 'e') {
+        e.preventDefault()
+        dropNeighbour(engine, 1)
+      } else if (k === 'm') {
+        // Advertised in the Magnet button's tooltip; same toggle.
+        e.preventDefault()
+        engine.updateSettings({ magnet: !engine.sessionState.settings.magnet })
       } else if (e.key === 'Escape') {
         engine.clearSelection()
       } else if (e.key === 'ArrowLeft') {

@@ -29,6 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
+import { previewClickSuppressed } from '../previewClickGuard'
 import { playClock, primePlayback } from '../clock'
 import { kenBurnsOrigin, kenBurnsTransform, cropToKenBurns } from '../kenBurns'
 import { SeamlessAudio } from '../previewAudio'
@@ -1197,7 +1198,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     <div className="preview">
       <DocAudio doc={doc} playing={playing} playhead={playhead} />
       <div className="video-wrap">
-        <div className="stage" ref={stageRef} onClick={() => { if (!playing) primePlayback(); setPlaying(!playing) }}>
+        <div className="stage" ref={stageRef} onClick={() => { if (previewClickSuppressed()) return; if (!playing) primePlayback(); setPlaying(!playing) }}>
           <div
             ref={frameRef}
             className="frame"
