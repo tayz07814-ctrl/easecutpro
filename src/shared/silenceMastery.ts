@@ -376,6 +376,65 @@ export function rmsAutoThreshold(framesDb: number[]): RmsAutoThreshold {
   return { floorDb, speechDb, thresholdDb, usable }
 }
 
+/** Max seconds an edge may be extended over breath-energy audio. Big enough
+ *  for a long end-of-take exhale, small enough that a genuinely quiet spoken
+ *  passage can't be swallowed whole. */
+export const EDGE_REFINE_MAX_S = 1.5
+/** Frames louder than speechDb minus this are VOICE — refinement stops there.
+ *  Breaths sit ~15–25dB under voiced speech; soft word onsets sit well inside
+ *  this margin and survive. */
+const EDGE_REFINE_VOICE_MARGIN_DB = 15
+
+/**
+ * Breath-tail edge refinement — the adaptive answer to "even a 500ms trim
+ * leaves breath trails". The VAD counts an audible breath as speech, so the
+ * detected silence starts only AFTER the breath; any fixed trim then measures
+ * from the wrong edge. Instead of a fixed bite, walk each region edge outward
+ * over the audio's own 20ms RMS frames: keep extending while the energy stays
+ * below the clip's voice level (breaths do, voiced speech doesn't), capped at
+ * EDGE_REFINE_MAX_S per edge. The cut then lands where the VOICE stops, not
+ * where the noise stops. Runs BEFORE pads/trims, which shape the refined edge.
+ */
+export function refineRegionEdgesByRms(
+  regions: { start: number; end: number }[],
+  framesDb: number[],
+  frameS: number,
+  durationS: number
+): { regions: { start: number; end: number }[]; info: RmsAutoThreshold | null } {
+  if (!regions.length || !framesDb.length || frameS <= 0) return { regions, info: null }
+  const t = rmsAutoThreshold(framesDb)
+  if (!t.usable) return { regions, info: t }
+  // A frame quieter than BOTH bounds is breath/noise, not voice: the auto
+  // threshold anchors near the noise floor, the margin bound under the speech
+  // level — the higher of the two decides, so a hot noise floor can't push
+  // the cutoff into voiced territory and quiet voices keep their onsets.
+  const cutoffDb = Math.max(t.thresholdDb, t.speechDb - EDGE_REFINE_VOICE_MARGIN_DB)
+  const frameAt = (s: number): number =>
+    framesDb[Math.min(framesDb.length - 1, Math.max(0, Math.floor(s / frameS)))]
+  const out = regions.map((r) => ({ ...r }))
+  for (const r of out) {
+    let ext = 0
+    while (r.start > 0 && ext < EDGE_REFINE_MAX_S && frameAt(r.start - frameS / 2) < cutoffDb) {
+      r.start = Math.max(0, r.start - frameS)
+      ext += frameS
+    }
+    ext = 0
+    while (r.end < durationS && ext < EDGE_REFINE_MAX_S && frameAt(r.end + frameS / 2) < cutoffDb) {
+      r.end = Math.min(durationS, r.end + frameS)
+      ext += frameS
+    }
+  }
+  // Extension can make neighbours touch — merge before handing back.
+  out.sort((a, b) => a.start - b.start)
+  const merged: typeof out = []
+  for (const r of out) {
+    const last = merged[merged.length - 1]
+    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end)
+    else merged.push(r)
+  }
+  return { regions: merged, info: t }
+}
+
 export interface RmsPassResult {
   regions: { start: number; end: number }[]
   info: RmsAutoThreshold & { frameS: number; frames: number; raw_runs: number }
