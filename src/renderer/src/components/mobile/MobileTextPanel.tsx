@@ -19,7 +19,9 @@ import * as C from '@shared/timeline/commands'
 import type { Clip as DocClip, TextContent, TimelineDocument } from '@shared/timeline/types'
 import { addDocTexts } from '../../docTextClips'
 import { addCustomFont, getCustomFontFamilies, getDefaultFont, setDefaultFont, onCustomFontsChange } from '../../customFonts'
-import { TEXT_STYLES } from '../../textStyles'
+import { textStyles, styleOfTextClip, type TextStylePreset } from '../../textStyles'
+import { addCustomPreset, bgFill, removeCustomPreset } from '@shared/textPresets'
+import { ecPrompt } from '../../ui/ecPrompt'
 import { Icon } from './Icon'
 
 type Tab = 'text' | 'font' | 'style'
@@ -152,6 +154,26 @@ function Placeholder({ text }: { text: string }): JSX.Element {
   return <p style={css('color:#8f8f96;font-size:13px;line-height:1.6;margin-top:20px;text-align:center')}>{text}</p>
 }
 
+// Every tile sits on the SAME neutral stand-in for footage, so a dark
+// translucent box reads as a box instead of vanishing into the panel.
+const TILE_BACK = 'background:linear-gradient(135deg,#4a4a58,#1c1c24)'
+
+/** The "Aa" and its box, drawn with the preset's own values. The doc's 0..1
+ *  stroke/shadow fractions are relative to font size, so scale them against the
+ *  ~14px tile glyph or they render as invisible hairlines. Background alpha is
+ *  baked into the fill; `opacity` would fade the "Aa" along with the box. */
+function glyphFace(s: TextStylePreset): string {
+  const p = s.patch
+  const stroke = (p.strokeWidth ?? 0) > 0 ? `-webkit-text-stroke:${((p.strokeWidth ?? 0) * 12).toFixed(2)}px ${p.strokeColor};` : ''
+  const shadow = p.shadowEnabled
+    ? `text-shadow:${((p.shadowDx ?? 0) * 6).toFixed(1)}px ${((p.shadowDy ?? 0) * 6).toFixed(1)}px ${((p.shadowBlur ?? 0) * 6).toFixed(1)}px ${p.shadowColor || '#000'};`
+    : ''
+  const box = p.bgEnabled
+    ? `background:${bgFill(p.bgColor ?? '#000000', p.bgOpacity ?? 1)};padding:1px 6px;border-radius:3px;`
+    : ''
+  return `color:${p.color};${stroke}${shadow}${box}`
+}
+
 export default function MobileTextPanel(): JSX.Element {
   const project = useStore((s) => s.project)
   const playhead = useStore((s) => s.project.playhead)
@@ -234,6 +256,18 @@ export default function MobileTextPanel(): JSX.Element {
   const selectStyle = css('flex:1;min-width:0;background:#101014;color:#e7e7ea;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:11px 10px;font-family:inherit;font-size:13px;-webkit-appearance:none;appearance:none')
 
   const tabs: [Tab, string][] = [['text', 'Text'], ['font', 'Font'], ['style', 'Style']]
+
+  // Rebuilt each render (cheap: ~25 objects) so a just-saved or just-removed
+  // preset shows up without a reload.
+  const presets = textStyles()
+
+  async function saveCurrentPreset(): Promise<void> {
+    if (!clip) return
+    const name = await ecPrompt('Name this style', 'My style')
+    if (name === null) return
+    addCustomPreset(name, styleOfTextClip(clip))
+    force((n) => n + 1)
+  }
 
   return (
     <div style={css('flex:1;min-height:0;display:flex;flex-direction:column')}>
@@ -324,16 +358,33 @@ export default function MobileTextPanel(): JSX.Element {
           !clip ? <Placeholder text="Add a text on the Text tab first, then pick a style here." /> : (
             <>
               <div style={css(CARD)}>
-                <div style={css(CAP)}>Presets</div>
+                <div style={css('display:flex;align-items:center;justify-content:space-between')}>
+                  <div style={css(CAP)}>Presets</div>
+                  <button
+                    onClick={() => void saveCurrentPreset()}
+                    style={css('background:none;border:1px solid rgba(255,255,255,.14);color:#c4baff;font-family:inherit;font-size:12px;border-radius:8px;padding:6px 11px;cursor:pointer')}>
+                    + Save current
+                  </button>
+                </div>
                 <div style={css('display:flex;flex-wrap:wrap;gap:8px;margin-top:10px')}>
-                  {TEXT_STYLES.map((s) => (
-                    <button key={s.id} onClick={() => set(s.patch)}
-                      style={css('flex:1;min-width:82px;border:1px solid rgba(255,255,255,.1);background:#101014;border-radius:10px;padding:10px 6px;cursor:pointer')}>
-                      <div style={css('height:26px;display:grid;place-items:center;margin-bottom:6px;border-radius:6px;background:' + (s.id === 'boxed' ? '#000' : 'transparent'))}>
-                        <span style={css('font-size:14px;font-weight:800;color:' + (s.id === 'yellow' ? '#ffe14d' : '#fff') + (s.id === 'outline' || s.id === 'pop' || s.id === 'yellow' ? ';-webkit-text-stroke:1px #000' : '') + (s.id === 'shadow' || s.id === 'pop' ? ';text-shadow:0 2px 3px rgba(0,0,0,.85)' : '') + (s.id === 'boxed' ? ';background:#000;padding:0 6px;border-radius:3px' : ''))}>Aa</span>
-                      </div>
-                      <div style={css('font-size:11.5px;font-weight:600;color:#c6c9d2;text-align:center')}>{s.label}</div>
-                    </button>
+                  {presets.map((s) => (
+                    // The tile IS the preview: it renders with the preset's own
+                    // values, so there is no per-id styling to keep in sync.
+                    <div key={s.id} style={css('position:relative;flex:1;min-width:82px')}>
+                      <button onClick={() => set(s.patch)}
+                        style={css('width:100%;border:1px solid rgba(255,255,255,.1);background:#101014;border-radius:10px;padding:10px 6px;cursor:pointer')}>
+                        <div style={css('height:26px;display:grid;place-items:center;margin-bottom:6px;border-radius:6px;overflow:hidden;', TILE_BACK)}>
+                          <span style={css('font-size:14px;font-weight:800;line-height:1.1;', glyphFace(s))}>Aa</span>
+                        </div>
+                        <div style={css('font-size:11.5px;font-weight:600;color:#c6c9d2;text-align:center')}>{s.label}</div>
+                      </button>
+                      {s.custom && (
+                        <div onClick={() => { removeCustomPreset(s.id); force((n) => n + 1) }}
+                          style={css('position:absolute;right:-4px;top:-4px;width:18px;height:18px;border-radius:50%;background:#2a2a33;border:1px solid rgba(255,255,255,.18);color:#ff9b9b;font-size:12px;line-height:16px;text-align:center;cursor:pointer')}>
+                          ×
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>

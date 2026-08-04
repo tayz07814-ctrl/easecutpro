@@ -17,7 +17,8 @@ import { primePlayback } from '../../clock'
 import { addMediaToTimeline } from '../../timelineAdd'
 import { countCaptionTexts } from '../../docTextClips'
 import { loadStoredFonts } from '../../customFonts'
-import { CAPTION_STYLES, DEFAULT_CAPTION_STYLE } from '../../captionStyles'
+import { DEFAULT_CAPTION_STYLE } from '../../captionStyles'
+import TextPresetStrip from './TextPresetStrip'
 
 // Mobile layout for the new UI editor. Same chassis the proven legacy MobileApp
 // uses — a FIXED, user-resizable stage (so the timeline never drifts), the
@@ -142,23 +143,8 @@ function CaptionsSheet({ onClose }: { onClose: () => void }): JSX.Element {
   return (
     <Sheet onClose={onClose} header={<div style={css('flex:none;padding:6px 16px 12px;font-size:15px;font-weight:650')}>Captions</div>}>
       <div style={css('flex:1;min-height:0;overflow:auto;padding:2px 16px 20px')}>
-        <div style={css('font-size:11.5px;font-weight:650;color:#8b8ba0;letter-spacing:.3px;text-transform:uppercase;margin-bottom:9px')}>Style</div>
-        <div style={css('display:flex;gap:10px;margin-bottom:16px')}>
-          {CAPTION_STYLES.map((s) => {
-            const on = style === s.id
-            return (
-              <button key={s.id} onClick={() => setStyle(s.id)}
-                style={css(`flex:1;text-align:left;border-radius:13px;padding:12px 13px;cursor:pointer;background:${on ? 'rgba(124,107,255,.14)' : '#08080a'};border:1px solid ${on ? 'rgba(124,107,255,.55)' : 'rgba(255,255,255,.07)'}`)}>
-                {/* mini preview of the look */}
-                <div style={css(`height:34px;border-radius:8px;display:grid;place-items:center;margin-bottom:9px;background:${s.id === 'boxed' ? '#000' : 'linear-gradient(135deg,#22222b,#101015)'}`)}>
-                  <span style={css(`font-size:14px;font-weight:800;color:#fff;${s.id === 'clean' ? '-webkit-text-stroke:1px #000;text-shadow:0 1px 2px rgba(0,0,0,.9)' : s.id === 'boxed' ? 'background:#000;padding:1px 7px;border-radius:3px' : ''}`)}>Aa</span>
-                </div>
-                <div style={css(`font-size:13px;font-weight:650;color:${on ? '#c4baff' : '#ededf2'}`)}>{s.label}</div>
-                <div style={css('font-size:11px;color:#8b8ba0;margin-top:2px')}>{s.hint}</div>
-              </button>
-            )
-          })}
-        </div>
+        <TextPresetStrip title="Style" current={null} selectedId={style} onApply={(_s, p) => setStyle(p.id)} />
+        <div style={css('height:16px')} />
         <button onClick={() => void generateCaptions(style)} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(100deg,#7c6bff,#8e7fff);border:none;color:#fff;font-family:inherit;font-size:14px;font-weight:700;border-radius:12px;padding:14px 0;box-shadow:0 6px 18px rgba(124,107,255,.32);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>
           <Icon name="captions" size={19} /> {jobActive ? 'Working…' : capCount > 0 ? 'Regenerate captions' : 'Generate captions'}
         </button>

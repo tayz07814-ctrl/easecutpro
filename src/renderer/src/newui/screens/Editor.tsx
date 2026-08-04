@@ -10,6 +10,7 @@ import TranscriptDrawer from './TranscriptDrawer'
 import SpeechCleanerPanel from './SpeechCleanerPanel'
 import SilenceMasterySettingsModal from './SilenceMasterySettingsModal'
 import VariationsPanel from './VariationsPanel'
+import TextPresetStrip from './TextPresetStrip'
 import OverlayPanel from '../../components/OverlayPanel'
 import CutProgressOverlay from './CutProgressOverlay'
 import ExportModal from '../../components/ExportModal'
@@ -21,6 +22,7 @@ import VideoPreview from '../../components/VideoPreview'
 import TimelinePanel from '../timeline/TimelinePanel'
 import { getSharedEngine, useSharedEngineSnapshot } from '../../timelineEngine'
 import { addDocTexts, countCaptionTexts } from '../../docTextClips'
+import { DEFAULT_CAPTION_STYLE } from '../../captionStyles'
 import { loadStoredFonts } from '../../customFonts'
 import { resolveMedia } from '../../media/resolver'
 import { primePlayback } from '../../clock'
@@ -505,10 +507,16 @@ function CaptionsTab(): JSX.Element {
   const snap = useSharedEngineSnapshot()
   const capCount = countCaptionTexts(snap?.doc)
   const jobActive = useStore((s) => s.job.active)
+  // The look the whole batch is generated with. Same catalogue the Edit tab
+  // applies to a single clip, so a caption restyled by hand can be saved as a
+  // preset and picked here next time.
+  const [style, setStyle] = useState<string>(DEFAULT_CAPTION_STYLE)
   return (
     <div style={css('flex:1;min-height:0;overflow-y:auto;padding:14px 16px')}>
       <div style={css('font-size:10px;font-weight:700;letter-spacing:.08em;color:#6e6e85;text-transform:uppercase;margin-bottom:10px')}>Auto captions</div>
-      <button onClick={() => void generateCaptions()} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;box-shadow:0 6px 18px rgba(124,107,255,.3);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>Generate captions</button>
+      <TextPresetStrip title="Caption style" current={null} selectedId={style} onApply={(_s, p) => setStyle(p.id)} />
+      <div style={css('height:14px')} />
+      <button onClick={() => void generateCaptions(style)} disabled={jobActive} style={css(`width:100%;display:flex;align-items:center;justify-content:center;gap:7px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;border-radius:10px;padding:11px 0;box-shadow:0 6px 18px rgba(124,107,255,.3);opacity:${jobActive ? 0.6 : 1};cursor:${jobActive ? 'default' : 'pointer'}`)}>{capCount > 0 ? 'Regenerate captions' : 'Generate captions'}</button>
       {capCount > 0 && (
         <div style={css('margin-top:10px;display:flex;align-items:center;gap:8px')}>
           <div style={css('flex:1;font-size:12px;color:#9fdfbe')}>{capCount} caption line{capCount === 1 ? '' : 's'} on the timeline</div>

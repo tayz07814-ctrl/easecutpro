@@ -104,6 +104,19 @@ export function removeCaptionTexts(): number {
   return ids.length
 }
 
+/** Push one look onto every caption clip in a single undo step. Captions arrive
+ *  as dozens of clips, so restyling them one at a time is not a thing anyone
+ *  would do — the Edit tab offers this the moment a caption is selected.
+ *  Returns how many clips changed. */
+export function applyStyleToAllCaptions(style: Partial<TextContent>): number {
+  const engine = getSharedEngine()
+  if (!engine) return 0
+  const ids: string[] = []
+  for (const t of engine.document.tracks) if (t.kind === 'text') for (const c of t.clips) if (c.metadata?.caption) ids.push(c.id)
+  if (ids.length) engine.batch('Restyle captions', ids.map((id) => C.setClipText(id, style)))
+  return ids.length
+}
+
 /** Count caption-tagged text clips in a document. */
 export function countCaptionTexts(doc: TimelineDocument | undefined): number {
   if (!doc) return 0
