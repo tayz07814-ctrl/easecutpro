@@ -15,12 +15,13 @@ class CutLordModel {
 }
 
 // One Retake, matching the desktop web "Retake Final Boss" engine: the judge is the
-// ultracut-judge edge fn running OpenAI GPT-5.6 Luna (via OpenRouter), reasoning
-// 'medium', on the default word-list SYSTEM prompt. NO 'sharp' promptVariant is sent
-// — ultracut-judge's resolvePrompt() maps an absent/unknown variant to the SAME
-// SYSTEM prompt 'sharp' selects, so omitting it is byte-identical and can't pick the
-// wrong prompt. (Single named model so existing call sites don't churn.)
-const cutLordRetake = CutLordModel('Retake', 'ultracut-judge', 'openai/gpt-5.6-luna', 'medium');
+// ultracut-judge edge fn running Gemma 4 31B (via OpenRouter) with reasoning OFF
+// (Gemma is not a reasoning model), on the default word-list SYSTEM prompt. NO
+// 'sharp' promptVariant is sent — ultracut-judge's resolvePrompt() maps an
+// absent/unknown variant to the SAME SYSTEM prompt 'sharp' selects, so omitting it is
+// byte-identical and can't pick the wrong prompt. (Single named model so existing
+// call sites don't churn.)
+const cutLordRetake = CutLordModel('Retake', 'ultracut-judge', 'google/gemma-4-31b-it', 'off');
 
 /// Extract the clip's audio and transcribe it (AssemblyAI → Deepgram).
 Future<List<Word>> extractAndTranscribe(

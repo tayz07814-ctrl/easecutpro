@@ -85,7 +85,7 @@ export async function retakeAwareCutCloud(
 ): Promise<RetakeAwareResult> {
   const warnings: string[] = []
   const op: ProgressFn = (pct, msg) => onProgress?.(pct, msg)
-  console.log('[retake-aware-beta] cloud job start (GPT-5.6 Luna + sharp judge):', mediaId)
+  console.log('[retake-aware-beta] cloud job start (Gemma 4 31B + sharp judge):', mediaId)
 
   // 1. audio — decoded ONCE; the transcription reads from this single decode.
   op(3, 'Getting your audio ready…')
@@ -101,10 +101,16 @@ export async function retakeAwareCutCloud(
   const vadSil: { start: number; end: number }[] = []
 
   // 3. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript:
-  //    OpenAI GPT-5.6 Luna via OpenRouter (ultracut-judge edge fn) on the 'sharp'
-  //    word-list prompt, reasoning effort 'medium'. It replaces Gemma 4 31B, whose
-  //    shared free provider was rate-limiting (HTTP 429) and returning empty
-  //    completions often enough to fail the judge outright.
+  //    Gemma 4 31B via OpenRouter (ultracut-judge edge fn) on the 'sharp' word-list
+  //    prompt. Reasoning is OFF: Gemma is not a reasoning model, so an effort value
+  //    is either ignored or billed for nothing.
+  //
+  //    HISTORY — Gemma 4 31B was swapped OUT for GPT-5.6 Luna because its shared
+  //    FREE provider rate-limited (HTTP 429) and returned empty completions often
+  //    enough to fail the judge. Coming back to it, that failure mode is the thing
+  //    to watch. Two things blunt it: ultracut-judge falls back to deepseek-v4-pro
+  //    whenever the primary returns empty/non-OK, and setting the ULTRACUT_PROVIDER_SORT
+  //    edge secret to `throughput` routes off the free provider entirely.
   //
   //    The model MUST also be in the edge function's MODEL_WHITELIST — resolveModel
   //    silently falls back to the default for anything unlisted. 0.01 ONLY.
@@ -120,9 +126,9 @@ export async function retakeAwareCutCloud(
     const res = await invokeEdge<ProcutJudgeRes>('ultracut-judge', {
       payload,
       proposal: { word_cuts: [], pause_cuts: [] },
-      model: 'openai/gpt-5.6-luna',
+      model: 'google/gemma-4-31b-it',
       promptVariant: 'sharp',
-      reasoning: 'medium'
+      reasoning: 'off'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
