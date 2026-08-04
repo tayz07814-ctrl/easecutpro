@@ -2033,8 +2033,11 @@ export const useStore = create<AppState>((set, get) => ({
     set({ mediaCollapsed: v })
   },
   silenceMasterySettings: ((): SilenceMasterySettings => {
+    // v3: the preset revamp (Flash default, Mad Scientist lever). The key bump
+    // deliberately DROPS v2-era stored values — they carried the old defaults
+    // as plain numbers, which would silently override the new Flash default.
     try {
-      const raw = localStorage.getItem('ec.silenceMastery2')
+      const raw = localStorage.getItem('ec.silenceMastery3')
       if (raw) return normalizeSilenceMastery(JSON.parse(raw))
     } catch {
       /* ignore */
@@ -2044,7 +2047,7 @@ export const useStore = create<AppState>((set, get) => ({
   setSilenceMasterySettings: (patch) => {
     const next = normalizeSilenceMastery({ ...get().silenceMasterySettings, ...patch })
     try {
-      localStorage.setItem('ec.silenceMastery2', JSON.stringify(next))
+      localStorage.setItem('ec.silenceMastery3', JSON.stringify(next))
     } catch {
       /* ignore */
     }

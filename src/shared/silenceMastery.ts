@@ -54,24 +54,30 @@ export interface SilenceMasterySettings {
   /** Word-timestamp (transcript-gap) pass — cuts the gaps between word
    *  stamps using minSilence/pads/trim. Off = Silero-only cleaning. */
   gapPass: boolean
+  /** "Mad Scientist" lever (UI-only — the engine ignores it): ON unlocks the
+   *  sliders for hand-tuned values; OFF keeps the modal preset-chips-only. */
+  madScientist: boolean
 }
 
 export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
-  minSilenceS: 0.25,
-  padLeftMs: 100,
-  padRightMs: 100,
-  trimLeftMs: 0,
-  trimRightMs: 0,
+  // Default = the "Flash" preset: no pads, trims cutting 50ms into the
+  // sentence ending and 150ms into the next sentence's onset.
+  minSilenceS: 0.15,
+  padLeftMs: 0,
+  padRightMs: 0,
+  trimLeftMs: 50,
+  trimRightMs: 150,
   clampStretchedWords: true,
-  // SILERO-ONLY by default (per testing direction): the neural ear does the
-  // cutting; the word-timestamp and RMS passes are opt-in extras.
+  // SILERO-ONLY (final engine config — locked in normalizeSilenceMastery).
   rmsPass: false,
   sileroPass: true,
-  gapPass: false
+  gapPass: false,
+  madScientist: false
 }
 
-/** The three creator presets (numeric fields only — the pass toggles are
- *  orthogonal). Edited values flip the modal to "custom". */
+/** The creator presets (numeric fields only). "Mad Scientist" is the modal's
+ *  fifth chip — not listed here because it has no fixed values: its lever
+ *  unlocks the sliders for hand-tuned settings. */
 export interface SilenceMasteryPreset {
   id: string
   label: string
@@ -79,21 +85,28 @@ export interface SilenceMasteryPreset {
 }
 export const SILENCE_MASTERY_PRESETS: SilenceMasteryPreset[] = [
   {
+    // Gentle: keeps a breath at both detected edges, no trimming into speech.
     id: 'natural-rhythm',
     label: 'Natural Rhythm',
-    values: { minSilenceS: 0.25, padLeftMs: 100, padRightMs: 100, trimLeftMs: 0, trimRightMs: 0 }
+    values: { minSilenceS: 0.25, padLeftMs: 50, padRightMs: 100, trimLeftMs: 0, trimRightMs: 0 }
   },
   {
     id: 'no-chill',
     label: 'No Chill',
-    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 0, trimRightMs: 0 }
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 20, trimRightMs: 50 }
   },
   {
-    // Cuts PAST the detected silence: 150ms off the sentence ending (left of
-    // the gap) and 50ms off the next sentence's onset (right of the gap).
+    // THE DEFAULT (mirrors DEFAULT_SILENCE_MASTERY_SETTINGS above).
+    id: 'flash',
+    label: 'Flash',
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 50, trimRightMs: 150 }
+  },
+  {
+    // Cuts hard PAST the detected silence: 100ms off the sentence ending
+    // (left of the gap) and 350ms off the next sentence's onset (right).
     id: 'cut-throat',
     label: 'Cut Throat',
-    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 150, trimRightMs: 50 }
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 100, trimRightMs: 350 }
   }
 ]
 /** The preset the current numeric values exactly match, else null (custom). */
@@ -136,7 +149,10 @@ export function normalizeSilenceMastery(
     clampStretchedWords: d.clampStretchedWords,
     rmsPass: false,
     sileroPass: true,
-    gapPass: false
+    gapPass: false,
+    // The Mad Scientist lever is a real user choice (unlike the locked pass
+    // flags above) — persist it.
+    madScientist: typeof v?.madScientist === 'boolean' ? v.madScientist : d.madScientist
   }
 }
 

@@ -22,8 +22,16 @@ const check = (name: string, ok: boolean, detail = ''): void => {
   console.log(`  ${ok ? '✓' : '✗ FAIL'} ${name}${detail ? ` — ${detail}` : ''}`)
   if (!ok) failures++
 }
+// Neutral test base: the engine's historical reference values (gentle pads,
+// no trims) — NOT the shipping default, which is the trim-heavy Flash preset.
+// Tests state their own overrides on top of this stable base.
 const S = (p?: Partial<SilenceMasterySettings>): SilenceMasterySettings => ({
   ...DEFAULT_SILENCE_MASTERY_SETTINGS,
+  minSilenceS: 0.25,
+  padLeftMs: 100,
+  padRightMs: 100,
+  trimLeftMs: 0,
+  trimRightMs: 0,
   ...p
 })
 const fmt = (rs: { start: number; end: number }[]): string =>
@@ -215,24 +223,33 @@ console.log('10) Silero edge guard — regions clamp off word spans')
 console.log('11) presets + Silero region shaping (padTrimRegions)')
 {
   const byId = Object.fromEntries(SILENCE_MASTERY_PRESETS.map((p) => [p.id, p.values]))
-  check('Natural Rhythm = 0.25 / 100 / 100 / 0 / 0',
-    byId['natural-rhythm'].minSilenceS === 0.25 && byId['natural-rhythm'].padLeftMs === 100 && byId['natural-rhythm'].padRightMs === 100 && byId['natural-rhythm'].trimLeftMs === 0 && byId['natural-rhythm'].trimRightMs === 0)
-  check('No Chill = 0.15 / 0 / 0 / 0 / 0',
-    byId['no-chill'].minSilenceS === 0.15 && byId['no-chill'].padLeftMs === 0 && byId['no-chill'].padRightMs === 0 && byId['no-chill'].trimLeftMs === 0 && byId['no-chill'].trimRightMs === 0)
-  check('Cut Throat = 0.15 / 0 / 0 / trimL 150 / trimR 50',
-    byId['cut-throat'].minSilenceS === 0.15 && byId['cut-throat'].padLeftMs === 0 && byId['cut-throat'].padRightMs === 0 && byId['cut-throat'].trimLeftMs === 150 && byId['cut-throat'].trimRightMs === 50)
+  check('Natural Rhythm = 0.25 / padL 50 / padR 100 / 0 / 0',
+    byId['natural-rhythm'].minSilenceS === 0.25 && byId['natural-rhythm'].padLeftMs === 50 && byId['natural-rhythm'].padRightMs === 100 && byId['natural-rhythm'].trimLeftMs === 0 && byId['natural-rhythm'].trimRightMs === 0)
+  check('No Chill = 0.15 / 0 / 0 / trimL 20 / trimR 50',
+    byId['no-chill'].minSilenceS === 0.15 && byId['no-chill'].padLeftMs === 0 && byId['no-chill'].padRightMs === 0 && byId['no-chill'].trimLeftMs === 20 && byId['no-chill'].trimRightMs === 50)
+  check('Flash = 0.15 / 0 / 0 / trimL 50 / trimR 150',
+    byId['flash'].minSilenceS === 0.15 && byId['flash'].padLeftMs === 0 && byId['flash'].padRightMs === 0 && byId['flash'].trimLeftMs === 50 && byId['flash'].trimRightMs === 150)
+  check('Cut Throat = 0.15 / 0 / 0 / trimL 100 / trimR 350',
+    byId['cut-throat'].minSilenceS === 0.15 && byId['cut-throat'].padLeftMs === 0 && byId['cut-throat'].padRightMs === 0 && byId['cut-throat'].trimLeftMs === 100 && byId['cut-throat'].trimRightMs === 350)
+  check('Flash IS the shipping default',
+    matchSilenceMasteryPreset(DEFAULT_SILENCE_MASTERY_SETTINGS) === 'flash')
   check('preset matcher round-trips', matchSilenceMasteryPreset(S(byId['cut-throat'])) === 'cut-throat' && matchSilenceMasteryPreset(S({ minSilenceS: 0.33 })) === null)
+  const mad = normalizeSilenceMastery({ madScientist: true })
+  check('Mad Scientist lever persists through normalize (default off)',
+    mad.madScientist && !normalizeSilenceMastery({}).madScientist)
 
   // Silero region shaping: [5,8] on a 20s clip.
   const nr = padTrimRegions([{ start: 5, end: 8 }], S(byId['natural-rhythm']), 20)
-  check('Natural Rhythm keeps 100ms each side of the detected edges', nr.length === 1 && near(nr[0].start, 5.1) && near(nr[0].end, 7.9), fmt(nr))
+  check('Natural Rhythm keeps 50ms left / 100ms right of the detected edges', nr.length === 1 && near(nr[0].start, 5.05) && near(nr[0].end, 7.9), fmt(nr))
   const nc = padTrimRegions([{ start: 5, end: 8 }], S(byId['no-chill']), 20)
-  check('No Chill cuts flush to the detected edges', nc.length === 1 && near(nc[0].start, 5) && near(nc[0].end, 8), fmt(nc))
+  check('No Chill eats 20ms of the ending + 50ms of the next onset', nc.length === 1 && near(nc[0].start, 4.98) && near(nc[0].end, 8.05), fmt(nc))
+  const fl = padTrimRegions([{ start: 5, end: 8 }], S(byId['flash']), 20)
+  check('Flash eats 50ms of the ending + 150ms of the next onset', fl.length === 1 && near(fl[0].start, 4.95) && near(fl[0].end, 8.15), fmt(fl))
   const ct = padTrimRegions([{ start: 5, end: 8 }], S(byId['cut-throat']), 20)
-  check('Cut Throat eats 150ms of the ending + 50ms of the next onset', ct.length === 1 && near(ct[0].start, 4.85) && near(ct[0].end, 8.05), fmt(ct))
+  check('Cut Throat eats 100ms of the ending + 350ms of the next onset', ct.length === 1 && near(ct[0].start, 4.9) && near(ct[0].end, 8.35), fmt(ct))
   // Media boundaries: leading keeps 0, trailing keeps the end.
   const edges = padTrimRegions([{ start: 0, end: 3 }, { start: 18, end: 20 }], S(byId['natural-rhythm']), 20)
-  check('leading cut pinned at 0, trailing at media end', edges.length === 2 && near(edges[0].start, 0) && near(edges[0].end, 2.9) && near(edges[1].start, 18.1) && near(edges[1].end, 20), fmt(edges))
+  check('leading cut pinned at 0, trailing at media end', edges.length === 2 && near(edges[0].start, 0) && near(edges[0].end, 2.9) && near(edges[1].start, 18.05) && near(edges[1].end, 20), fmt(edges))
   // Pads bigger than a small region swallow it.
   const gone = padTrimRegions([{ start: 5, end: 5.15 }], S(byId['natural-rhythm']), 20)
   check('pads ≥ region → dropped', gone.length === 0)

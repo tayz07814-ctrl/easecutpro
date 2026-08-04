@@ -68,14 +68,36 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
           <div onClick={() => close(false)} style={css('color:#9a9aae;font-size:15px;padding:4px 8px;border-radius:8px;cursor:pointer;margin:-4px -6px 0 0')}>✕</div>
         </div>
 
-        {/* Presets — the numeric values below are the whole surface. */}
+        {/* Presets — 4 fixed recipes. The 5th chip, Mad Scientist, has no fixed
+            values: its lever below unlocks the sliders for hand-tuning. */}
         <div style={css('display:flex;gap:6px;margin-top:16px;flex-wrap:wrap')}>
           {SILENCE_MASTERY_PRESETS.map((p) => (
-            <button key={p.id} onClick={() => setSt({ ...p.values })} style={css(matchSilenceMasteryPreset(st) === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
+            <button key={p.id} onClick={() => setSt({ ...p.values })} style={css(!st.madScientist && matchSilenceMasteryPreset(st) === p.id ? CHIP_ON : CHIP)}>{p.label}</button>
           ))}
-          <span style={css(matchSilenceMasteryPreset(st) === null ? CHIP_ON + ';cursor:default' : CHIP + ';cursor:default;opacity:.55')}>Custom</span>
         </div>
 
+        {/* Mad Scientist — the lever. ON unlocks the sliders (start from the
+            current values); OFF locks back to presets, snapping stray values
+            to the default (Flash) when they match no preset. */}
+        <div style={css('display:flex;align-items:center;gap:11px;margin-top:16px')}>
+          <div
+            onClick={() => {
+              if (st.madScientist) {
+                const back = matchSilenceMasteryPreset(st) ? {} : { ...DEFAULT_SILENCE_MASTERY_SETTINGS }
+                setSt({ ...back, madScientist: false })
+              } else setSt({ madScientist: true })
+            }}
+            style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;background:${st.madScientist ? '#7c6bff' : '#2a2a34'}`)}
+          >
+            <div style={css(st.madScientist ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
+          </div>
+          <div style={css('flex:1;min-width:0')}>
+            <div style={css(`font-size:12.5px;font-weight:600;color:${st.madScientist ? '#a99bff' : '#ededf2'}`)}>Mad Scientist 🧪</div>
+            <div style={css('font-size:11px;color:#9a9aae;margin-top:2px;line-height:1.45')}>Roll your own: unlock the sliders and tune every value by hand.</div>
+          </div>
+        </div>
+
+        {st.madScientist && (
         <div style={css('display:flex;flex-direction:column;gap:18px;margin-top:18px')}>
           <Slider
             label="Min silence to remove"
@@ -113,9 +135,10 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
             onChange={(v) => setSt({ trimRightMs: v })}
           />
         </div>
+        )}
 
         <div style={css('display:flex;align-items:center;margin-top:20px')}>
-          <span onClick={() => setSt({ ...DEFAULT_SILENCE_MASTERY_SETTINGS })} style={css(FOOT_RESET)}>Reset to default</span>
+          <span onClick={() => setSt({ ...DEFAULT_SILENCE_MASTERY_SETTINGS })} style={css(FOOT_RESET)}>Reset to default (Flash)</span>
           <div style={css('flex:1')} />
           <button onClick={() => close(false)} style={css(FOOT_APPLY)}>Done</button>
         </div>
