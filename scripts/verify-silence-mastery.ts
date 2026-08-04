@@ -9,6 +9,8 @@ import {
   unionCutRegions,
   guardRegionEdgesOffWords,
   padTrimRegions,
+  refineRegionEdgesByRms,
+  EDGE_REFINE_MAX_S,
   SILENCE_MASTERY_PRESETS,
   matchSilenceMasteryPreset,
   normalizeSilenceMastery,
@@ -253,6 +255,46 @@ console.log('11) presets + Silero region shaping (padTrimRegions)')
   // Pads bigger than a small region swallow it.
   const gone = padTrimRegions([{ start: 5, end: 5.15 }], S(byId['natural-rhythm']), 20)
   check('pads ≥ region → dropped', gone.length === 0)
+}
+
+console.log('12) breath-tail edge refinement (refineRegionEdgesByRms)')
+{
+  // Synthetic 20ms RMS frames from (start, end, dB) spans.
+  const F = 0.02
+  const frames = (durS: number, spans: [number, number, number][]): number[] => {
+    const n = Math.round(durS / F)
+    const out = new Array<number>(n).fill(-60)
+    for (const [a, b, db] of spans) for (let i = Math.round(a / F); i < Math.min(n, Math.round(b / F)); i++) out[i] = db
+    return out
+  }
+  // Speech 0–4 at -20dB, a 400ms BREATH at -38dB (VAD called it speech, so the
+  // detected region starts after it), then true silence to 10s.
+  const f1 = frames(10, [[0, 4, -20], [4, 4.4, -38]])
+  const r1 = refineRegionEdgesByRms([{ start: 4.4, end: 10 }], f1, F, 10)
+  check('left edge walks back over the breath to where the voice stops',
+    r1.regions.length === 1 && Math.abs(r1.regions[0].start - 4.0) < 0.05 && r1.regions[0].end === 10, fmt(r1.regions))
+  // Inhale on the RIGHT edge: silence 0–5, 300ms breath 5–5.3, speech after.
+  const f2 = frames(10, [[5, 5.3, -38], [5.3, 10, -20]])
+  const r2 = refineRegionEdgesByRms([{ start: 0, end: 5 }], f2, F, 10)
+  check('right edge walks forward over the inhale to the next word’s onset',
+    r2.regions.length === 1 && Math.abs(r2.regions[0].end - 5.3) < 0.05, fmt(r2.regions))
+  // A 2s exhale is longer than the cap — only EDGE_REFINE_MAX_S is swallowed.
+  const f3 = frames(12, [[0, 4, -20], [4, 6, -38]])
+  const r3 = refineRegionEdgesByRms([{ start: 6, end: 12 }], f3, F, 12)
+  check(`cap: a 2s breath yields at most ${EDGE_REFINE_MAX_S}s of extension`,
+    r3.regions.length === 1 && Math.abs(r3.regions[0].start - (6 - EDGE_REFINE_MAX_S)) < 0.05, fmt(r3.regions))
+  // Voiced speech at the edge (only 5dB under the speech level) is NOT eaten.
+  const f4 = frames(10, [[0, 4, -20], [4, 4.4, -25]])
+  const r4 = refineRegionEdgesByRms([{ start: 4.4, end: 10 }], f4, F, 10)
+  check('soft but voiced tail (5dB under speech) survives', r4.regions[0].start === 4.4, fmt(r4.regions))
+  // Flat clip (no dynamic range) → refinement is a no-op.
+  const f5 = new Array(500).fill(-30)
+  const r5 = refineRegionEdgesByRms([{ start: 4, end: 6 }], f5, F, 10)
+  check('flat clip → unusable range → edges untouched', r5.regions[0].start === 4 && r5.regions[0].end === 6)
+  // Two regions extending into the same breath island merge.
+  const f6 = frames(10, [[0, 2, -20], [2, 2.4, -38], [2.4, 2.6, -38], [8, 10, -20]])
+  const r6 = refineRegionEdgesByRms([{ start: 2.6, end: 4 }, { start: 4, end: 8 }], f6, F, 10)
+  check('adjacent refined regions merge', r6.regions.length === 1 && Math.abs(r6.regions[0].start - 2.0) < 0.05 && r6.regions[0].end === 8, fmt(r6.regions))
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall silence-mastery checks green')

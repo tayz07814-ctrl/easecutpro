@@ -60,6 +60,7 @@ import {
   planRmsSilence,
   unionCutRegions,
   padTrimRegions,
+  refineRegionEdgesByRms,
   RMS_FRAME_MS,
   normalizeSilenceMastery,
   DEFAULT_SILENCE_MASTERY_SETTINGS,
@@ -2135,9 +2136,12 @@ export const useStore = create<AppState>((set, get) => ({
       try {
         set({ job: { active: true, kind: 'silence', percent: 58, message: 'Silero is listening for speech…' } })
         const raw = await detectSileroSilences(audio.float32, audio.sampleRate, durationS, settings.minSilenceS)
-        // Pads keep silence at the detected edges; trims cut PAST them into
+        // Breath-tail refinement: walk each detected edge outward over
+        // low-energy (breath) frames so the cut lands where the VOICE stops.
+        const refined = refineRegionEdgesByRms(raw, frameRmsDb(audio.float32, audio.sampleRate), RMS_FRAME_MS / 1000, durationS)
+        // Pads keep silence at the (refined) edges; trims cut PAST them into
         // the sentence ending (left) / next sentence's onset (right).
-        sileroRegions = padTrimRegions(raw, settings, durationS)
+        sileroRegions = padTrimRegions(refined.regions, settings, durationS)
         sileroOk = true
       } catch (e) {
         console.warn('[silence-mastery] Silero pass skipped:', (e as Error).message)
@@ -2362,7 +2366,9 @@ export const useStore = create<AppState>((set, get) => ({
           const durationS = p0.media?.duration || baseTimelineDuration(p0) || (tw.length ? tw[tw.length - 1].end : 0)
           const audio = await extractSttAudio(path)
           const raw = await detectSileroSilences(audio.float32, audio.sampleRate, durationS, smSettings.minSilenceS)
-          silenceRegions = unionCutRegions([padTrimRegions(raw, smSettings, durationS)], durationS)
+          // Same breath-tail edge refinement Clean Silence runs.
+          const refined = refineRegionEdgesByRms(raw, frameRmsDb(audio.float32, audio.sampleRate), RMS_FRAME_MS / 1000, durationS)
+          silenceRegions = unionCutRegions([padTrimRegions(refined.regions, smSettings, durationS)], durationS)
           // Same stage telemetry Clean Silence writes, marked as the Find cuts
           // path so the two entry points stay distinguishable in review.
           const r2s = (n: number): number => Math.round(n * 100) / 100
