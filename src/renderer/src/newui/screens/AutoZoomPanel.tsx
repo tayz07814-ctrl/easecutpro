@@ -1,4 +1,4 @@
-// Auto Zoom — its own AI-panel tab (beside AI Cut). One button runs the Gemma
+// Auto Zoom — its own EaseTools tool (beside Speech cleaner). One button runs the Gemma
 // zoom judge over the cut clips (store.runAutoZoom → cloud/autoZoom), and the panel
 // lists WHICH clips ended up zoomed, read live from the timeline document so it
 // reflects the real state (manual zooms show here too, and re-running updates it).
@@ -79,7 +79,7 @@ export default function AutoZoomPanel(): JSX.Element {
 
       {clipCount < 2 && (
         <p style={css('font-size:11.5px;color:#6e6e85;line-height:1.6;margin:12px 0 0')}>
-          Auto Zoom needs a few cut clips — run <b>Find Retakes &amp; Silence</b> in the AI Cut tab first.
+          Auto Zoom needs a few cut clips — run <b>Find cuts</b> in the EaseTools tab first.
         </p>
       )}
 

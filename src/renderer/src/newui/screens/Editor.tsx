@@ -532,11 +532,11 @@ function ComingSoon({ title, note, Icon }: { title: string; note: string; Icon: 
   )
 }
 
-// Right panel — the redesign's two top-level tabs. "AI tools" holds an inner
+// Right panel — the redesign's two top-level tabs. "EaseTools" holds an inner
 // sub-nav over the three AI workflows (Script cleaner = retake/AI-cut, Auto zoom,
 // Auto b-roll = overlays); "Edit" is the clip/text/overlay inspector. Each panel
 // is the same wired component as before — only the container/nav changed.
-const PANEL_TABS = ['AI tools', 'Edit'] as const
+const PANEL_TABS = ['EaseTools', 'Edit'] as const
 type AiSub = 'script' | 'variations' | 'zoom' | 'overlay'
 const AI_SUB: { id: AiSub; label: string }[] = [
   { id: 'script', label: 'Speech cleaner' },
@@ -546,12 +546,12 @@ const AI_SUB: { id: AiSub; label: string }[] = [
 ]
 
 function RightPanel({ width }: { width: number }): JSX.Element {
-  const [tab, setTab] = useState<0 | 1>(0) // 0 = AI tools, 1 = Edit
+  const [tab, setTab] = useState<0 | 1>(0) // 0 = EaseTools, 1 = Edit
   const [ai, setAi] = useState<AiSub>('script')
   const cutCount = useStore((s) => s.selectedWordIds.size) // live "Speech cleaner" badge
   // Jump to Edit when a clip / text / overlay is selected (inspector behaviour).
   // Only fires on a *new* engine selection — clicking transcript words never
-  // yanks you out of the AI tools.
+  // yanks you out of the EaseTools panel.
   const snap = useSharedEngineSnapshot()
   const selId = snap?.interaction.selection[0] ?? null
   const prevSel = useRef<string | null>(selId)
@@ -567,8 +567,14 @@ function RightPanel({ width }: { width: number }): JSX.Element {
         ))}
       </div>
       {tab === 0 ? (
-        <div style={css('flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden')}>
-          <div style={css('flex:none;padding:10px 12px 8px;display:flex;flex-direction:column;gap:1px')}>
+        // ONE scroll region under the fixed tab bar: the tool list and the open
+        // tool's body scroll together, so a long panel can't strand the list off
+        // screen. Deliberately a plain BLOCK, not a flex column — each tool panel's
+        // root is `flex:1;min-height:0;overflow-y:auto`, which in a block parent
+        // goes inert and lays the panel out at its natural height instead of
+        // nesting a second scroller inside this one.
+        <div style={css('flex:1;min-height:0;overflow-y:auto')}>
+          <div style={css('padding:10px 12px 8px;display:flex;flex-direction:column;gap:1px')}>
             {AI_SUB.map((a) => {
               const on = ai === a.id
               const badge = a.id === 'script' && cutCount > 0 ? String(cutCount) : ''
@@ -581,7 +587,7 @@ function RightPanel({ width }: { width: number }): JSX.Element {
               )
             })}
           </div>
-          <div style={css(`flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-top:1px solid ${HAIR}`)}>
+          <div style={css(`border-top:1px solid ${HAIR}`)}>
             {ai === 'script' ? (
               <SpeechCleanerPanel />
             ) : ai === 'variations' ? (
@@ -589,7 +595,7 @@ function RightPanel({ width }: { width: number }): JSX.Element {
             ) : ai === 'zoom' ? (
               <AutoZoomPanel />
             ) : (
-              <div style={css('flex:1;min-height:0;overflow:auto;padding:12px')}>
+              <div style={css('padding:12px')}>
                 <OverlayPanel />
               </div>
             )}

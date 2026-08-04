@@ -100,7 +100,7 @@ export default function TranscriptDrawer({ width }: { width: number }): JSX.Elem
       {empty ? (
         <div style={css('flex:1;min-height:0;display:grid;place-items:center;padding:24px;text-align:center')}>
           <div>
-            <div style={css('font-size:12.5px;color:#9a9aae;line-height:1.6;max-width:220px;margin:0 auto')}>No transcript yet. Transcribe your video, then use the Speech cleaner (AI tools) to Find cuts or Find Silences.</div>
+            <div style={css('font-size:12.5px;color:#9a9aae;line-height:1.6;max-width:220px;margin:0 auto')}>No transcript yet. Transcribe your video, then use the Speech cleaner (EaseTools) to Find cuts or Find Silences.</div>
             <button onClick={r.transcribeOnly} style={css('margin-top:14px;background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 16px;cursor:pointer')}>Transcribe</button>
           </div>
         </div>

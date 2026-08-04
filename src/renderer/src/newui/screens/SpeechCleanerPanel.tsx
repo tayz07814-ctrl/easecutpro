@@ -1,4 +1,4 @@
-// Speech cleaner (right panel → AI tools) — the redesign's cut-card review.
+// Speech cleaner (right panel → EaseTools) — the redesign's cut-card review.
 // The cards are DERIVED live from the real staged cuts (contiguous runs of struck
 // transcript words) + staged silences, so toggling a card here changes the same
 // selection the Transcript drawer paints and the Execute path applies. Nothing is
@@ -125,8 +125,11 @@ export default function SpeechCleanerPanel(): JSX.Element | null {
   const newRuntime = Math.max(0, original - r.timeSavedS)
 
   return (
-    <div style={css('flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden')}>
-      <div style={css('flex:none;padding:10px 14px 0')}>
+    // Plain block, and the cut-card list below is content-height: the EaseTools
+    // panel is now one outer scroll region, so a flex column here would give the
+    // `flex:1` card list a 0 base size in an auto-height parent and collapse it.
+    <div>
+      <div style={css('padding:10px 14px 0')}>
         <div style={css('font-size:11.5px;color:#7a7a8c;line-height:1.45')}>Retakes, false starts, fillers and dead air found in your speech.</div>
       </div>
 
@@ -155,7 +158,7 @@ export default function SpeechCleanerPanel(): JSX.Element | null {
       </div>
 
       {/* cut cards */}
-      <div style={css('flex:1;min-height:0;overflow-y:auto;padding:10px 12px')}>
+      <div style={css('padding:10px 12px')}>
         {cuts.length === 0 ? (
           <div style={css('padding:30px 8px;text-align:center;font-size:12px;color:#6e6e85;line-height:1.6')}>{applied ? 'No cuts remain.' : 'No cuts staged — strike words in the Transcript, or Re-scan.'}</div>
         ) : (
