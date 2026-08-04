@@ -11,7 +11,7 @@
 // clock, so seam transitions are sample-adjacent in OUTPUT time (gapless); a 6ms
 // gain ramp at each scheduled edge guards the splice click from a non-zero sample.
 
-import { getFile, isWebMediaId } from './webmedia'
+import { getFile, isWebMediaId, mp4AudioStartOffset, padLeadingSilence } from './webmedia'
 
 /** A main-lane segment as the audio engine needs it (subset of the preview Seg). */
 export interface AudioSeg {
@@ -103,7 +103,18 @@ export class SeamlessAudio {
       // registered File directly, just like the WebCodecs video path does.
       const file = isWebMediaId(src) ? getFile(src) : undefined
       const bytes = file ? await file.arrayBuffer() : await (await fetch(url)).arrayBuffer()
-      const buf = await ctx.decodeAudioData(bytes)
+      // Recover the container's audio start offset BEFORE decoding — parse first,
+      // because decodeAudioData both strips the offset AND detaches `bytes`.
+      //
+      // Phone .mov files delay their audio track with an `elst` empty edit; the
+      // <video> element honours it, decodeAudioData throws it away. This engine
+      // MUTES the element and drives the sound itself, so without re-padding, its
+      // audio runs early by that offset — the .mov lip-sync drift. Every other
+      // audio path already does this (webmedia.localWaveform / extractAudioWavBlob,
+      // localExport.renderAudio, ffmpeg's first_pts=0); this one was missed.
+      const leadSec = mp4AudioStartOffset(bytes)
+      let buf = await ctx.decodeAudioData(bytes)
+      if (leadSec > 0.001) buf = padLeadingSilence(ctx, buf, leadSec)
       this.buffers.set(src, buf)
     })()
       .catch(() => {

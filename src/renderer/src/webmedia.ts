@@ -271,6 +271,23 @@ export function mp4AudioStartOffset(buf: ArrayBuffer): number {
   }
 }
 
+/** Re-add an edit-list audio delay that decodeAudioData strips. Phone .mov/.mp4
+ *  files start their audio a fraction of a second after the video (an `elst` empty
+ *  edit); decodeAudioData discards it, so the decoded audio ends up shifted EARLIER
+ *  than the video. Prepending that much silence realigns it — the same fix the
+ *  desktop `first_pts=0` pass uses. Returns the buffer unchanged when there is no
+ *  offset (0 for clean audio / WAV).
+ *
+ *  Lives here, beside mp4AudioStartOffset, so BOTH the preview audio engine and the
+ *  exporter can use it — the preview must not have to import the whole exporter. */
+export function padLeadingSilence(ctx: BaseAudioContext, buf: AudioBuffer, leadSec: number): AudioBuffer {
+  const lead = Math.round(leadSec * buf.sampleRate)
+  if (lead <= 0) return buf
+  const out = ctx.createBuffer(buf.numberOfChannels, buf.length + lead, buf.sampleRate)
+  for (let c = 0; c < buf.numberOfChannels; c++) out.getChannelData(c).set(buf.getChannelData(c), lead)
+  return out
+}
+
 /** Decode a file's audio to an AudioBuffer at (near) `targetRate`, then ALWAYS
  *  release the context. iOS caps the number of live AudioContexts, so leaking one
  *  per clip eventually breaks all audio (waveform + Cut Lord). A hard timeout

@@ -20,7 +20,7 @@ import { useStore } from '../store'
 import { mainTrackId, documentDuration } from '@shared/timeline/model'
 import { framesToSeconds } from '@shared/timeline/time'
 import { resolveMedia } from '../media/resolver'
-import { isWebMediaId, getFile, mp4AudioStartOffset } from '../webmedia'
+import { isWebMediaId, getFile, mp4AudioStartOffset, padLeadingSilence } from '../webmedia'
 import { IS_WEB } from '../platform'
 import { kenBurnsEase, cropToKenBurns } from '../kenBurns'
 import { openDecodeSource, type DecodeSource } from './decodeSource'
@@ -329,20 +329,6 @@ export function equalPowerRamp(base: number, dir: 'in' | 'out', n = 64): Float32
     a[i] = base * (dir === 'in' ? Math.sin((t * Math.PI) / 2) : Math.cos((t * Math.PI) / 2))
   }
   return a
-}
-
-/** Re-add an edit-list audio delay that decodeAudioData strips. Phone .mov/.mp4
- *  files start their audio a fraction of a second after the video (an `elst` empty
- *  edit); decodeAudioData discards it, so the decoded audio ends up shifted EARLIER
- *  than the video. Prepending that much silence realigns it — the same fix the
- *  timeline waveform (webmedia.localWaveform) and the desktop first_pts=0 pass use.
- *  Returns the buffer unchanged when there is no offset (0 for clean audio / WAV). */
-export function padLeadingSilence(ctx: BaseAudioContext, buf: AudioBuffer, leadSec: number): AudioBuffer {
-  const lead = Math.round(leadSec * buf.sampleRate)
-  if (lead <= 0) return buf
-  const out = ctx.createBuffer(buf.numberOfChannels, buf.length + lead, buf.sampleRate)
-  for (let c = 0; c < buf.numberOfChannels; c++) out.getChannelData(c).set(buf.getChannelData(c), lead)
-  return out
 }
 
 // ---- audio (offline mix -> AudioData chunks) ----

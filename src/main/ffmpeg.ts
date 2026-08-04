@@ -415,10 +415,31 @@ async function concatSegmentsToFile(
     // re-assert square pixels — the concat filter rejects segments with mixed SAR.
     // Only for transformed segs, so the untransformed graph stays byte-identical.
     const sar = xform !== '' ? ',setsar=1' : ''
+    // A/V DRIFT AT EVERY CUT (the .mov lip-sync bug): `trim` keeps whole FRAMES,
+    // so a segment's video snaps to the source frame grid, while `atrim` cuts at
+    // exact SAMPLES. Each segment therefore ends up with slightly different video
+    // and audio lengths, and `concat` SUMS that difference across cuts — twenty
+    // cuts drift by up to twenty frame-periods, and worse on variable-frame-rate
+    // phone .mov where the frame period isn't even constant.
+    //
+    // So pin BOTH streams of every segment to the same length: segDur, the
+    // intended edited length quantized to the output frame grid. Every segment is
+    // then equal-length in both streams and concat has nothing to accumulate.
+    // Mirrors the on-device exporter's per-clip window alignment (localExport.ts
+    // renderAudio).
+    //
+    // Both sides pad-then-cut, because a segment can come up SHORT as well as
+    // long — the last clip of a source runs out of frames/samples before segDur,
+    // and padding only one side would just move the mismatch. `tpad` clones the
+    // final frame / `apad` appends silence, indefinitely; the following trim is
+    // what bounds them. Video is already conformed to FPS by `tail`, so its trim
+    // yields exactly segFrames frames.
+    const segFrames = Math.max(1, Math.round((spanSec / speed) * FPS))
+    const segDur = (segFrames / FPS).toFixed(6)
     seg.push(
       `[${ci}:v]trim=start=${inS.toFixed(3)}:end=${outS.toFixed(3)},setpts=PTS-STARTPTS,` +
         `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1` +
-        `${xform}${tail}${sar}[v${ci}]`
+        `${xform}${tail}${sar},tpad=stop=-1:stop_mode=clone,trim=duration=${segDur},setpts=PTS-STARTPTS[v${ci}]`
     )
     if (s.hasAudio) {
       // Align the audio to the VIDEO timeline FIRST (pad a delayed-audio stream's
@@ -428,15 +449,17 @@ async function concatSegmentsToFile(
       const vol = Math.abs(gain - 1) > 1e-3 ? `,volume=${Math.max(0, gain).toFixed(6)}` : ''
       seg.push(
         `[${ci}:a]aresample=async=1:first_pts=0,atrim=start=${inS.toFixed(3)}:end=${outS.toFixed(3)},` +
-          `asetpts=PTS-STARTPTS${atempoChain(speed)}${vol}[a${ci}]`
+          `asetpts=PTS-STARTPTS${atempoChain(speed)}${vol},` +
+          `apad,atrim=duration=${segDur},asetpts=PTS-STARTPTS[a${ci}]`
       )
       order.push(`[v${ci}][a${ci}]`)
     } else {
       // Silent bed matches the (sped) video length so concat stays A/V-aligned.
-      inArgs.push('-f', 'lavfi', '-t', (spanSec / speed).toFixed(3), '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000')
+      inArgs.push('-f', 'lavfi', '-t', segDur, '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000')
       const ai = idx
       idx++
-      order.push(`[v${ci}][${ai}:a]`)
+      seg.push(`[${ai}:a]apad,atrim=duration=${segDur},asetpts=PTS-STARTPTS[a${ci}]`)
+      order.push(`[v${ci}][a${ci}]`)
     }
   }
   const fc = `${seg.join(';')};${order.join('')}concat=n=${segs.length}:v=1:a=1[outv][outa]`
