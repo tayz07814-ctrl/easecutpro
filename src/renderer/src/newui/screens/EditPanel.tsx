@@ -8,9 +8,11 @@
 //   • video / image clip  — Scale, Crop, Zoom (Ken Burns), Speed, Volume
 //   • audio clip          — Volume, Speed
 //   • text / caption      — content, size, bold/italic/outline, colour, align,
-//                           position, Stroke, Background
+//                           position, Stroke, Background, style presets
+//                           (built-in + the user's own, saved from the current
+//                           look), and "apply to all captions" for a batch
 // Not yet in the model (would need renderer + export work): text rotate /
-// opacity / glow / shadow / curve, and "save as preset".
+// opacity / glow / curve.
 
 import { useState, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
@@ -21,6 +23,9 @@ import * as C from '@shared/timeline/commands'
 import type { Clip as DocClip, Track, TextContent } from '@shared/timeline/types'
 import { FONT_OPTIONS } from '@shared/types'
 import { addCustomFont, getCustomFontFamilies, removeCustomFont, onCustomFontsChange } from '../../customFonts'
+import { applyStyleToAllCaptions } from '../../docTextClips'
+import { styleOf } from '@shared/textPresets'
+import TextPresetStrip from './TextPresetStrip'
 
 const clampN = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
 const mnum = (v: unknown, d: number): number => (typeof v === 'number' ? v : d)
@@ -286,6 +291,7 @@ function DocTextControls({ clip }: { clip: DocClip }): JSX.Element {
   const setY = (v: number): void => void getSharedEngine()?.dispatch(C.setClipTransform(clip.id, { y: v / 100 - 0.5 }))
   const [strokeOpen, setStrokeOpen] = useState(false)
   const [bgOpen, setBgOpen] = useState(false)
+  const [applied, setApplied] = useState<number | null>(null)
   const bg = t.background
 
   return (
@@ -311,6 +317,22 @@ function DocTextControls({ clip }: { clip: DocClip }): JSX.Element {
       <Row label="Size" value={Math.round(t.fontSize * 100)} min={2} max={40} unit="" onChange={(v) => setC({ fontSize: v / 100 })} />
       <ColorField label="Colour" value={t.color} onChange={(v) => setC({ color: v })} />
       <PairRow label="Position" ax={Math.round((0.5 + clip.transform.x.static) * 100)} ay={Math.round((0.5 + clip.transform.y.static) * 100)} min={0} max={100} unit="%" onX={setX} onY={setY} />
+
+      <TextPresetStrip current={styleOf(t)} onApply={(s) => setC(s)} />
+      {isCaption && (
+        // One caption is one clip of many; a look picked here is almost always
+        // meant for the whole batch.
+        <button
+          onClick={() => {
+            const n = applyStyleToAllCaptions(styleOf(t))
+            setApplied(n)
+            window.setTimeout(() => setApplied(null), 2200)
+          }}
+          style={css('width:100%;margin-top:10px;background:none;border:1px solid rgba(124,107,255,.45);color:#c4baff;font-family:inherit;font-size:12px;border-radius:9px;padding:8px 0;cursor:pointer')}
+        >
+          {applied === null ? 'Apply this look to all captions' : `Applied to ${applied} caption${applied === 1 ? '' : 's'}`}
+        </button>
+      )}
 
       <Section title="Outline" open={strokeOpen} onToggleOpen={() => setStrokeOpen((o) => !o)} enabled={t.strokeWidth > 0} onToggleEnabled={() => setC({ strokeWidth: t.strokeWidth > 0 ? 0 : 0.08 })}>
         <Row label="Width" value={Math.round(t.strokeWidth * 100)} min={0} max={40} unit="" onChange={(v) => setC({ strokeWidth: v / 100 })} />

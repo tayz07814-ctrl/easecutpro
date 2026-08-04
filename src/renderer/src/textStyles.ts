@@ -1,48 +1,81 @@
-// Premade text-look presets (0.01 mobile Style tab). Each preset is a full bundle
-// of the style-controlling flat TextClip fields, so switching presets is
-// predictable — a preset that has no outline/box/shadow explicitly turns them OFF.
-// Applied via the panel's set(patch); the store deep-merges background + shadow.
+// Text-look presets for the mobile Style tab.
+//
+// The catalogue is the SHARED one (textPresets.ts) — the same list the desktop
+// Edit tab and the Captions tabs use — so a look saved on one surface shows up
+// on all of them. This file only translates it into the flat TextClip fields the
+// mobile panel edits (bgEnabled/bgColor/…, shadowDx/…), because that panel works
+// on project.texts rather than the doc's nested TextContent.
+//
+// Every preset is a FULL bundle of the style-controlling fields, so switching
+// presets is predictable: a preset with no outline/box/shadow explicitly turns
+// them OFF rather than leaving the previous look's leftovers behind.
 
 import type { TextClip } from '@shared/types'
+import {
+  TEXT_PRESETS,
+  loadCustomPresets,
+  presetPatch,
+  type TextPreset,
+  type TextStyle
+} from '@shared/textPresets'
 
 export interface TextStylePreset {
   id: string
   label: string
   patch: Partial<TextClip>
+  /** User-made presets can be removed from the strip; built-ins cannot. */
+  custom?: boolean
 }
 
-const OFF_BG = { bgEnabled: false, bgColor: '#000000', bgOpacity: 1, bgRadius: 0.3, bgPadding: 0.3 }
-const OFF_SHADOW = { shadowEnabled: false, shadowColor: '#000000', shadowBlur: 0, shadowDx: 0, shadowDy: 0 }
-
-export const TEXT_STYLES: TextStylePreset[] = [
-  {
-    id: 'plain',
-    label: 'Plain',
-    patch: { color: '#ffffff', strokeWidth: 0, strokeColor: '#000000', ...OFF_BG, ...OFF_SHADOW }
-  },
-  {
-    id: 'outline',
-    label: 'Outline',
-    patch: { color: '#ffffff', strokeWidth: 0.08, strokeColor: '#000000', ...OFF_BG, ...OFF_SHADOW }
-  },
-  {
-    id: 'boxed',
-    label: 'Boxed',
-    patch: { color: '#ffffff', strokeWidth: 0, strokeColor: '#000000', bgEnabled: true, bgColor: '#000000', bgOpacity: 1, bgRadius: 0.22, bgPadding: 0.34, ...OFF_SHADOW }
-  },
-  {
-    id: 'shadow',
-    label: 'Shadow',
-    patch: { color: '#ffffff', strokeWidth: 0, strokeColor: '#000000', ...OFF_BG, shadowEnabled: true, shadowColor: '#000000', shadowBlur: 0.16, shadowDx: 0.03, shadowDy: 0.06 }
-  },
-  {
-    id: 'yellow',
-    label: 'Yellow',
-    patch: { color: '#ffe14d', strokeWidth: 0.09, strokeColor: '#000000', ...OFF_BG, ...OFF_SHADOW }
-  },
-  {
-    id: 'pop',
-    label: 'Pop',
-    patch: { color: '#ffffff', strokeWidth: 0.12, strokeColor: '#000000', ...OFF_BG, shadowEnabled: true, shadowColor: '#000000', shadowBlur: 0.12, shadowDx: 0.03, shadowDy: 0.05 }
+/** Shared (nested) look → the mobile panel's flat TextClip fields. */
+function flatten(s: TextStyle): Partial<TextClip> {
+  return {
+    color: s.color,
+    strokeWidth: s.strokeWidth,
+    strokeColor: s.strokeColor,
+    bgEnabled: s.background.enabled,
+    bgColor: s.background.color,
+    bgOpacity: s.background.opacity,
+    bgRadius: s.background.radius,
+    bgPadding: s.background.padding,
+    shadowEnabled: s.shadow.enabled,
+    shadowColor: s.shadow.color,
+    shadowBlur: s.shadow.blur,
+    shadowDx: s.shadow.dx,
+    shadowDy: s.shadow.dy
   }
-]
+}
+
+/** The mobile panel's flat fields → the shared (nested) look, so the current
+ *  text can be saved as a preset the desktop swatches understand too. */
+export function styleOfTextClip(c: TextClip): TextStyle {
+  return {
+    color: c.color,
+    strokeWidth: c.strokeWidth,
+    strokeColor: c.strokeColor,
+    background: {
+      enabled: c.bgEnabled,
+      color: c.bgColor,
+      opacity: c.bgOpacity,
+      radius: c.bgRadius,
+      padding: c.bgPadding
+    },
+    shadow: {
+      enabled: !!c.shadowEnabled,
+      color: c.shadowColor || '#000000',
+      blur: c.shadowBlur ?? 0,
+      dx: c.shadowDx ?? 0,
+      dy: c.shadowDy ?? 0
+    }
+  }
+}
+
+function toMobile(p: TextPreset): TextStylePreset {
+  return { id: p.id, label: p.label, patch: flatten(presetPatch(p)), custom: p.custom }
+}
+
+/** Built-ins plus the user's saved looks. A function, not a const, so a preset
+ *  saved a moment ago appears without a reload. */
+export function textStyles(): TextStylePreset[] {
+  return [...TEXT_PRESETS, ...loadCustomPresets()].map(toMobile)
+}
