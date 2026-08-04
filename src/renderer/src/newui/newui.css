@@ -374,8 +374,12 @@
   position: fixed;
   z-index: 4000;
   pointer-events: none;
-  transform: scale(1.04);
-  opacity: 0.6;
+  /* Just enough lift to read as "in your hand": a 2% bump rather than 4%, and
+     80% opacity so the carried clip stays legible (its thumbnail and label are
+     what you're aiming with) instead of washing out. The drop shadow does most
+     of the "picked up" work, so the scale doesn't have to. */
+  transform: scale(1.02);
+  opacity: 0.8;
   filter: drop-shadow(0 12px 28px rgba(0, 0, 0, 0.65));
   will-change: transform;
 }
