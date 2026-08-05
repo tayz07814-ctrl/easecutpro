@@ -49,7 +49,7 @@ for (const [source, target] of [
 const seoDir = join(root, 'seo')
 const pubRoot = join(root, '.cloud-public')
 const nSeo =
-  copyMatching(seoDir, /\.(txt|xml|svg)$/, pubRoot) +
+  copyMatching(seoDir, /\.(txt|xml|svg|css|png)$/, pubRoot) +
   copyMatching(join(seoDir, 'pages'), /\.html$/, pubRoot)
 
 console.log(

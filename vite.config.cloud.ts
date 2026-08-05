@@ -125,6 +125,20 @@ function cloudSeo(): Plugin {
         name: q,
         acceptedAnswer: { '@type': 'Answer', text: a }
       }))
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'Organization',
+      name: 'Easecut',
+      url: `${SITE}/`,
+      logo: `${SITE}/favicon.svg`,
+      email: 'support@easecutpro.com'
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'WebSite',
+      name: 'Easecut',
+      url: `${SITE}/`
     }
   ]
 
@@ -140,7 +154,11 @@ function cloudSeo(): Plugin {
     `<meta property="og:title" content="${title}" />`,
     `<meta property="og:description" content="${description}" />`,
     `<meta property="og:url" content="${SITE}/" />`,
-    `<meta name="twitter:card" content="summary" />`,
+    `<meta property="og:image" content="${SITE}/og.png" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
+    `<meta name="twitter:card" content="summary_large_image" />`,
+    `<meta name="twitter:image" content="${SITE}/og.png" />`,
     `<link rel="preconnect" href="https://fonts.googleapis.com" />`,
     `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />`,
     `<link id="ec-landing-fonts" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=Hanken+Grotesk:wght@400;500;600;700&amp;display=swap" />`,

@@ -10,6 +10,12 @@
     { "source": "/descript-alternative", "destination": "/descript-alternative.html" },
     { "source": "/transcript-based-video-editor", "destination": "/transcript-based-video-editor.html" },
     { "source": "/ai-auto-cut", "destination": "/ai-auto-cut.html" },
+    { "source": "/remove-silence-from-video", "destination": "/remove-silence-from-video.html" },
+    { "source": "/remove-filler-words-from-video", "destination": "/remove-filler-words-from-video.html" },
+    { "source": "/remove-retakes", "destination": "/remove-retakes.html" },
+    { "source": "/auto-jump-cut", "destination": "/auto-jump-cut.html" },
+    { "source": "/ugc-video-editing", "destination": "/ugc-video-editing.html" },
+    { "source": "/ai-video-editor-for-youtube", "destination": "/ai-video-editor-for-youtube.html" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
