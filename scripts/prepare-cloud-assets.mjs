@@ -11,7 +11,7 @@ const outDir = join(root, '.cloud-public', 'vad')
 mkdirSync(outDir, { recursive: true })
 
 /** Copy every file in dir matching re; ok if the dir is missing. */
-function copyMatching(dir, re) {
+function copyMatching(dir, re, target = outDir) {
   if (!existsSync(dir)) {
     console.warn(`[cloud-assets] missing: ${dir} (npm install?)`)
     return 0
@@ -19,7 +19,7 @@ function copyMatching(dir, re) {
   let n = 0
   for (const f of readdirSync(dir)) {
     if (!re.test(f)) continue
-    copyFileSync(join(dir, f), join(outDir, f))
+    copyFileSync(join(dir, f), join(target, f))
     n++
   }
   return n
@@ -42,5 +42,17 @@ for (const [source, target] of [
   nFsmn++
 }
 
-console.log(`[cloud-assets] staged ${nVad} vad-web + ${nOrt} onnxruntime + ${nFsmn} FSMN files -> ${outDir}`)
-if (!nVad || !nOrt || nFsmn !== 2) process.exitCode = 1
+// SEO statics committed under seo/: robots.txt, sitemap.xml, favicon, and the
+// prerendered marketing pages (seo/pages/*.html). They're copied into the
+// publicDir root so Vercel serves them from / (vercel.json maps the pretty
+// URLs like /descript-alternative onto the .html files).
+const seoDir = join(root, 'seo')
+const pubRoot = join(root, '.cloud-public')
+const nSeo =
+  copyMatching(seoDir, /\.(txt|xml|svg)$/, pubRoot) +
+  copyMatching(join(seoDir, 'pages'), /\.html$/, pubRoot)
+
+console.log(
+  `[cloud-assets] staged ${nVad} vad-web + ${nOrt} onnxruntime + ${nFsmn} FSMN + ${nSeo} SEO files -> ${outDir}`
+)
+if (!nVad || !nOrt || nFsmn !== 2 || !nSeo) process.exitCode = 1
