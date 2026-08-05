@@ -7,6 +7,8 @@
       "source": "/edge/:fn",
       "destination": "https://zlqxrdlognjvwqpmnfjq.supabase.co/functions/v1/:fn"
     },
+    { "source": "/sitemap", "destination": "/sitemap.xml" },
+    { "source": "/robots", "destination": "/robots.txt" },
     { "source": "/descript-alternative", "destination": "/descript-alternative.html" },
     { "source": "/transcript-based-video-editor", "destination": "/transcript-based-video-editor.html" },
     { "source": "/ai-auto-cut", "destination": "/ai-auto-cut.html" },
