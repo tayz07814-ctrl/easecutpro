@@ -60,7 +60,7 @@ function cloudCsp(supabaseUrl: string | undefined): Plugin {
   }
 }
 
-const SITE = 'https://easecutpro.com'
+const SITE = 'https://www.easecutpro.com'
 
 /** SEO for the public site. The SPA shell Vercel serves on every route is an
  *  empty <div id="root"> with the title "EaseCutPro" — invisible to search
