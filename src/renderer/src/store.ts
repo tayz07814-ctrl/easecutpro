@@ -70,6 +70,7 @@ import {
 import { extractSttAudio } from './cloud/audio'
 import { detectSileroSilences } from './cloud/sileroVad'
 import { mediaSrc, IS_WEB, IS_CLOUD, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
+import { aiApi, onDesktopCloudProgress } from './cloud/desktopHybrid'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
 import { openSpaceProject, saveMyEdit, fmtBytes, type CoworkProject, type XferReporter } from './cloud/cowork'
@@ -1109,9 +1110,13 @@ export const useStore = create<AppState>((set, get) => ({
         if (sel && !models.some((m) => m.name === sel)) set({ whisperModel: '' })
       })
       .catch(() => {})
-    window.api.onProgress((e: ProgressEvent) => {
+    const onJob = (e: ProgressEvent): void => {
       set({ job: { active: e.percent < 100, kind: e.kind, percent: e.percent, message: e.message } })
-    })
+    }
+    window.api.onProgress(onJob)
+    // Desktop hybrid: the cloud edge engines emit progress renderer-side (it
+    // never crosses IPC) — feed those events into the same job bar.
+    onDesktopCloudProgress(onJob)
   },
 
   addToLibrary: async () => {
@@ -1776,7 +1781,7 @@ export const useStore = create<AppState>((set, get) => ({
       try {
         const combined = await window.api.combineClips(clips, true) // audio-only = fast
         set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Cut Lord is listening…' } })
-        const transcript: Transcript = await window.api.transcribe(
+        const transcript: Transcript = await aiApi().transcribe(
           combined.path,
           backend,
           backend === 'local' ? whisperModel || undefined : undefined
@@ -1800,7 +1805,7 @@ export const useStore = create<AppState>((set, get) => ({
     const label = 'Cut Lord is listening…'
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: label } })
     try {
-      const transcript: Transcript = await window.api.transcribe(
+      const transcript: Transcript = await aiApi().transcribe(
         project.media.path,
         backend,
         backend === 'local' ? whisperModel || undefined : undefined
@@ -2265,7 +2270,7 @@ export const useStore = create<AppState>((set, get) => ({
       }
       // ProCut transcribes with its own OpenAI whisper-1 (inside cutCutPro) and pulls
       // it into the word selector below. Word cuts only — no silence pass exists.
-      const res = await window.api.cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, get().project.script || undefined)
+      const res = await aiApi().cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, get().project.script || undefined)
       // REVIEW-ONLY: adopt the transcript if the pipeline made one (ids must
       // match), HIGHLIGHT the words + stage the pause cuts — nothing is applied
       // until the user presses Execute cuts. ⚙ filler switch adds filler words.
@@ -2319,7 +2324,7 @@ export const useStore = create<AppState>((set, get) => ({
       } else {
         path = p0.media!.path
       }
-      const res = await window.api.retakeAwareCut(path)
+      const res = await aiApi().retakeAwareCut(path)
       const cur = get().project
       // REVIEW-STATE CONTRACT (the whole point of this fix):
       //  - ALWAYS show the beta's FULL raw/verbatim transcript. Its decisions
@@ -2481,7 +2486,7 @@ export const useStore = create<AppState>((set, get) => ({
       // The SAME AssemblyAI verbatim transcribe step Retake β runs (cloud:
       // window.api.transcribe -> transcribeCloud, cached by mediaId and sharing
       // Retake β's transcript cache) — NO judge, NO silence, NO word cuts.
-      const transcript = await window.api.transcribe(path)
+      const transcript = await aiApi().transcribe(path)
       const cur = get().project
       // Persist the folded doc base (identical rationale to runRetakeCutBeta) so the
       // transcript's word times live in the base's domain and later cuts align.
@@ -2671,7 +2676,7 @@ export const useStore = create<AppState>((set, get) => ({
     // ultracut-judge edge fn, OpenRouter GLM 5.2). Shares NOTHING with Retake Beta's
     // Opus judge, so its cuts can be compared against Retake Beta's in the app. Same
     // review-first contract (highlight + stage, apply on Execute cuts).
-    const runUltra = (window.api as { ultracutCut?: typeof window.api.retakeAwareCut }).ultracutCut
+    const runUltra = aiApi().ultracutCut
     if (!runUltra) {
       // Ultracut's judge only exists in the cloud build. Off-cloud (desktop /
       // self-host) fall back to Retake β rather than dead-ending with an error.
@@ -2742,7 +2747,7 @@ export const useStore = create<AppState>((set, get) => ({
     // premium-cut edge fn, Gemini 3.5 Flash multimodal). Gemini LISTENS to the raw
     // audio and returns the transcript + the word cuts itself — no STT. Same
     // review-first contract (highlight + stage, Execute cuts).
-    const runPremium = (window.api as { premiumCut?: typeof window.api.retakeAwareCut }).premiumCut
+    const runPremium = aiApi().premiumCut
     if (!runPremium) {
       // Premium's judge only exists in the cloud build. Off-cloud (desktop /
       // self-host) fall back to Retake β rather than dead-ending with an error.
@@ -2825,10 +2830,10 @@ export const useStore = create<AppState>((set, get) => ({
       }
       let transcript: Transcript
       try {
-        transcript = await window.api.transcribe(path, 'local', 'parakeet')
+        transcript = await aiApi().transcribe(path, 'local', 'parakeet')
       } catch {
         set((s) => ({ job: { ...s.job, message: 'Parakeet model missing — using local whisper…' } }))
-        transcript = await window.api.transcribe(path, 'local', undefined)
+        transcript = await aiApi().transcribe(path, 'local', undefined)
       }
       set((s) => ({ project: { ...s.project, transcript } }))
       return true
@@ -3015,7 +3020,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       await get().ensureOverlayDescriptions() // v1.5: cache vision descriptions first
       const freshAssets = get().project.overlayAssets ?? assets
-      const res = await window.api.generateOverlays(t, freshAssets, rules, { duration: dur, cuts })
+      const res = await aiApi().generateOverlays(t, freshAssets, rules, { duration: dur, cuts })
       const events = res.events as OverlayEvent[]
       const log = [...res.log]
       let placed = 0
@@ -3127,7 +3132,7 @@ export const useStore = create<AppState>((set, get) => ({
       const img = await imageToBase64(a.file)
       if (!img) continue // image bytes not loadable right now (e.g. not yet hydrated) — retry next run, don't cache
       try {
-        const r = await window.api.describeOverlayImage(img.base64, img.mediaType)
+        const r = await aiApi().describeOverlayImage(img.base64, img.mediaType)
         // Cache the API's answer — even '' — so a genuinely undescribable image (or a
         // no-key backend) isn't re-analyzed every run. Matching falls back to the name.
         get().updateOverlayAsset(a.id, { description: r.description || '' })
@@ -3171,7 +3176,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (assets.length > 0) {
         await get().ensureOverlayDescriptions() // v1.5: cache vision descriptions first
         const freshAssets = get().project.overlayAssets ?? assets
-        const res = await window.api.suggestOverlays(t, freshAssets, { duration: dur, cuts })
+        const res = await aiApi().suggestOverlays(t, freshAssets, { duration: dur, cuts })
         suggestions = [...res.suggestions]
         log.push(...res.log)
       }
@@ -3220,7 +3225,7 @@ export const useStore = create<AppState>((set, get) => ({
             let overlayId = ''
             let note = ''
             try {
-              const r = await window.api.matchMoment(frames, m.text, thumbs)
+              const r = await aiApi().matchMoment(frames, m.text, thumbs)
               overlayId = r.overlayId || ''
               note = r.note || ''
             } catch (e) {
@@ -3710,7 +3715,7 @@ export const useStore = create<AppState>((set, get) => ({
         } else {
           path = p0.media!.path
         }
-        const transcript: Transcript = await window.api.transcribe(path, backend, backend === 'local' ? whisperModel || undefined : undefined)
+        const transcript: Transcript = await aiApi().transcribe(path, backend, backend === 'local' ? whisperModel || undefined : undefined)
         // Captions only need the transcript — they place text clips, they do NOT
         // cut, so (unlike runRetakeCutBeta) we must NOT rewrite media/baseSequence
         // here; doing so desynced the project from the doc and could disturb the

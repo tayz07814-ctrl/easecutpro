@@ -1,9 +1,15 @@
-// Desktop-cloud HYBRID api overlay. The Electron preload's window.api stays the
-// source of truth for everything NATIVE (dialogs, probe, waveform, thumbnails,
-// combine, export, the ffmpeg preview) — this overlay replaces ONLY the AI
-// methods with the same edge-function engines the cloud web build uses, so the
-// shipped installer contains zero API keys and every AI run is authenticated +
-// metered per account exactly like easecutpro.com.
+// Desktop-cloud HYBRID api. The Electron preload's window.api stays the source
+// of truth for everything NATIVE (dialogs, probe, waveform, thumbnails,
+// combine, export, the ffmpeg preview) — `aiApi()` returns a merged surface
+// whose AI methods are the same edge-function engines the cloud web build
+// uses, so the shipped installer contains zero API keys and every AI run is
+// authenticated + metered per account exactly like easecutpro.com.
+//
+// WHY an indirection instead of overwriting window.api: contextBridge exposes
+// window.api as a READ-ONLY global — `window.api = …` throws in strict-mode
+// ESM and killed the renderer at startup (black screen). Call sites that can
+// route to the cloud go through aiApi(); on web builds it returns window.api
+// unchanged, so their behavior is byte-identical.
 //
 // The engines take a mediaId and pull audio through cloud/audio.ts, whose
 // native branch extracts the 16 kHz STT WAV with the bundled ffmpeg — so on
@@ -13,6 +19,7 @@
 // equivalent for them (desktopOnly stubs there too).
 
 import type { ProgressEvent } from '@shared/types'
+import { IS_DESKTOP_CLOUD } from '../platform'
 import { generateOverlaysCloud, suggestOverlaysCloud } from './overlayMatch'
 import { invokeEdge } from './supabase'
 import { retakeAwareCutCloud, ultracutCutCloud, transcribeCloud } from './retakeEngine'
@@ -26,14 +33,25 @@ function emit(kind: ProgressEvent['kind'], percent: number, message?: string, jo
   for (const cb of progressListeners) cb({ jobId, kind, percent, message })
 }
 
-/** Install the cloud AI methods over the native preload api. Call once at
- *  startup (main.tsx), only when IS_DESKTOP_CLOUD. */
-export function installDesktopCloudOverlay(): void {
+/** The cloud engines emit progress here (they never cross IPC). store.init()
+ *  registers the same handler it gives window.api.onProgress. */
+export function onDesktopCloudProgress(cb: (e: ProgressEvent) => void): () => void {
+  progressListeners.add(cb)
+  return () => progressListeners.delete(cb)
+}
+
+export type HybridApi = Window['api'] & {
+  ultracutCut: Window['api']['retakeAwareCut']
+  premiumCut: Window['api']['retakeAwareCut']
+}
+
+let merged: HybridApi | null = null
+
+function buildHybrid(): HybridApi {
   const native = window.api
-  const overlay: Partial<Window['api']> & {
-    ultracutCut: Window['api']['retakeAwareCut']
-    premiumCut: Window['api']['retakeAwareCut']
-  } = {
+  return {
+    ...native,
+
     // Verbatim STT via the edge functions (AssemblyAI -> Deepgram). The native
     // backend/model args are meaningless here and ignored.
     transcribe: async (path) => transcribeCloud(path, (pct, msg) => emit('transcribe', pct, msg)),
@@ -46,7 +64,7 @@ export function installDesktopCloudOverlay(): void {
     retakeAwareCut: (path) => retakeAwareCutCloud(path, (pct, msg) => emit('transcribe', pct, msg)),
 
     // Ultracut (Beta) / Premium Cut — extra keys the store feature-detects
-    // (store.ts falls back to retakeAwareCut when they're absent).
+    // (it falls back to retakeAwareCut when they're absent).
     ultracutCut: (path) => ultracutCutCloud(path, (pct, msg) => emit('transcribe', pct, msg)),
     premiumCut: (path) => premiumCutCloud(path, (pct, msg) => emit('transcribe', pct, msg)),
 
@@ -68,20 +86,20 @@ export function installDesktopCloudOverlay(): void {
       } catch {
         return { overlayId: '' } // graceful: moment matching just adds nothing
       }
-    },
-
-    // Progress must flow from BOTH worlds: native jobs emit over IPC, the
-    // cloud engines emit into this module's listener set.
-    onProgress: (cb) => {
-      progressListeners.add(cb)
-      const unNative = native.onProgress(cb)
-      return () => {
-        progressListeners.delete(cb)
-        unNative()
-      }
     }
   }
-  window.api = { ...native, ...overlay }
+}
+
+/** The api surface AI call sites should use. Desktop hybrid → cloud engines
+ *  merged over native; every other build → window.api untouched. */
+export function aiApi(): Window['api'] & Partial<Pick<HybridApi, 'ultracutCut' | 'premiumCut'>> {
+  if (!IS_DESKTOP_CLOUD) return window.api
+  if (!merged) merged = buildHybrid()
+  return merged
+}
+
+/** One-time desktop-hybrid boot work (main.tsx). */
+export function initDesktopCloud(): void {
   // Cross-device user settings (same table the web build syncs through).
   initSettingsSync()
 }

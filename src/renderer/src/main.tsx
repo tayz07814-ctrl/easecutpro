@@ -12,7 +12,7 @@ import { IS_WEB, IS_CLOUD, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
-import { installDesktopCloudOverlay } from './cloud/desktopHybrid'
+import { initDesktopCloud } from './cloud/desktopHybrid'
 import { cloudAuthMe } from './cloud/auth'
 import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
@@ -48,9 +48,9 @@ if (IS_NEW_UI) document.documentElement.setAttribute('data-ec-ui', 'new')
 // localStorage) drops back to legacy. Independent of IS_NEW_UI above.
 const NEW_UI = isNewUi()
 
-// Desktop-cloud hybrid: keep the native preload api, overlay the AI methods
-// with the cloud edge engines (same brains as easecutpro.com, zero local keys).
-if (IS_DESKTOP_CLOUD) installDesktopCloudOverlay()
+// Desktop-cloud hybrid: settings sync boot. The AI routing itself happens at
+// the call sites via aiApi() (window.api is contextBridge read-only).
+if (IS_DESKTOP_CLOUD) initDesktopCloud()
 
 if (IS_WEB) {
   if (IS_CLOUD) installCloudApi()
@@ -243,8 +243,13 @@ function Root(): JSX.Element {
           useStore.setState({ user: null, view: 'home' })
           return
         }
-        const { user } = await cloudAuthMe()
-        if (!cancelled) useStore.setState({ user, view: user ? 'home' : 'auth' })
+        try {
+          const { user } = await cloudAuthMe()
+          if (!cancelled) useStore.setState({ user, view: user ? 'home' : 'auth' })
+        } catch {
+          // Session probe failed — never strand the app on "Loading…".
+          if (!cancelled) useStore.setState({ user: null, view: 'auth' })
+        }
       })()
       return () => {
         cancelled = true
