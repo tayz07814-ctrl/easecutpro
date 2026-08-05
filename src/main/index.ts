@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol, shell } from 'electron'
 import { join, extname } from 'path'
 import { createReadStream } from 'fs'
 import { stat, readdir, mkdir, writeFile } from 'fs/promises'
@@ -7,7 +7,7 @@ import { Readable } from 'stream'
 import { randomUUID } from 'crypto'
 import { IPC } from '../shared/ipc'
 import { checkTools, listWhisperModels } from './binaries'
-import { probe, exportProject, extractWaveform, extractThumbnails, combineClips } from './ffmpeg'
+import { probe, exportProject, extractWaveform, extractThumbnails, combineClips, extractAudioWav } from './ffmpeg'
 import { handleFrameStream, extractPreviewAudioWav, killAllFrameStreams } from './framestream'
 import { transcribe } from './whisper'
 import { transcribeOpenAI } from './openai-transcribe'
@@ -115,6 +115,13 @@ function createWindow(): void {
       nodeIntegration: false
     },
     show: false
+  })
+
+  // Any window.open (Stripe checkout/portal, external links) goes to the
+  // SYSTEM browser — the app window must never navigate away from the bundle.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
@@ -359,6 +366,10 @@ app.whenReady().then(() => {
 
   // Preview audio: whole-source 48k stereo WAV (elst offset baked in by ffmpeg).
   ipcMain.handle(IPC.previewAudioWav, async (_e, path: string) => extractPreviewAudioWav(path))
+
+  // Cloud-hybrid STT: 16k mono WAV (same aresample=first_pts=0 alignment the
+  // local engines use) for upload to the stt edge function.
+  ipcMain.handle(IPC.sttAudioWav, async (_e, path: string) => extractAudioWav(path))
 
   // ---- Filmstrip thumbnails ----
   ipcMain.handle(IPC.thumbnails, async (_e, path: string, intervalSec?: number) =>

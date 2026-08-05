@@ -9,7 +9,7 @@
 // ?checkout=success reopens the account panel and polls until the webhook flips
 // Pro on. Go-live steps (prices, secrets, webhook destination) live in PAYMENTS.md.
 import { getSupabase, invokeEdge } from './supabase'
-import { IS_CLOUD } from '../platform'
+import { IS_CLOUD_BACKEND, IS_DESKTOP_CLOUD } from '../platform'
 
 export interface Subscription {
   status: string
@@ -33,10 +33,11 @@ const PRICE_TO_PLAN: Record<string, PlanId> = {
   price_1Tz4oy2MO59VUOO67qsVtvTZ: 'test'
 }
 
-/** Checkout is available whenever this is the cloud build — the edge function +
- *  Stripe secret do the work server-side. Gates the upgrade UI. */
+/** Checkout is available whenever the cloud BACKEND is in use (cloud web build
+ *  or the desktop hybrid) — the edge function + Stripe secret do the work
+ *  server-side. Gates the upgrade UI. */
 export function checkoutConfigured(): boolean {
-  return IS_CLOUD
+  return IS_CLOUD_BACKEND
 }
 
 // A tiny "billing changed" bus so the dashboard's Pro badge and the account
@@ -59,7 +60,11 @@ export async function openProCheckout(
 ): Promise<void> {
   const { url } = await invokeEdge<{ url?: string }>('stripe-checkout', { plan })
   if (!url) throw new Error('Could not start checkout — please try again.')
-  window.location.href = url
+  // Desktop: never navigate the app window to Stripe — hand the URL to the
+  // system browser (main-process setWindowOpenHandler → shell.openExternal).
+  // The webhook writes the subscription; the account panel polls it.
+  if (IS_DESKTOP_CLOUD) window.open(url, '_blank')
+  else window.location.href = url
 }
 
 /** Open Stripe's hosted billing portal (upgrade / downgrade / cancel / payment
@@ -68,7 +73,8 @@ export async function openProCheckout(
 export async function openBillingPortal(): Promise<void> {
   const { url } = await invokeEdge<{ url?: string }>('stripe-portal', {})
   if (!url) throw new Error('Could not open billing management — please try again.')
-  window.location.href = url
+  if (IS_DESKTOP_CLOUD) window.open(url, '_blank')
+  else window.location.href = url
 }
 
 /** The signed-in user's subscription row (RLS scopes it to their own), or null. */

@@ -69,7 +69,7 @@ import {
 } from '@shared/silenceMastery'
 import { extractSttAudio } from './cloud/audio'
 import { detectSileroSilences } from './cloud/sileroVad'
-import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
+import { mediaSrc, IS_WEB, IS_CLOUD, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
 import { openSpaceProject, saveMyEdit, fmtBytes, type CoworkProject, type XferReporter } from './cloud/cowork'
@@ -1066,7 +1066,9 @@ export const useStore = create<AppState>((set, get) => ({
   pendingCaptions: false,
   pendingAutoZoom: false,
   autoZoomBusy: false,
-  view: IS_WEB ? 'loading' : 'home',
+  // Desktop-cloud hybrid boots to 'loading' too — main.tsx resolves the
+  // Supabase session and lands on auth/home (no flash of the signed-out home).
+  view: IS_WEB || IS_DESKTOP_CLOUD ? 'loading' : 'home',
   user: null,
   editingClipId: null,
   currentProjectId: null,

@@ -84,6 +84,8 @@ const api = {
   /** Desktop-only: full-source 48k stereo WAV extracted by the bundled ffmpeg
    *  (elst offset baked in via first_pts=0) for the preview audio engine. */
   previewAudioWav: (path: string): Promise<string> => ipcRenderer.invoke(IPC.previewAudioWav, path),
+  /** Desktop-only: 16k mono WAV (STT timebase) for the cloud edge engines. */
+  sttAudioWav: (path: string): Promise<string> => ipcRenderer.invoke(IPC.sttAudioWav, path),
   // `onPartial` streams thumbnails as they generate on the web build; Electron
   // returns the whole strip over IPC at once (callbacks can't cross IPC), so it
   // is accepted for a shared signature but ignored here.

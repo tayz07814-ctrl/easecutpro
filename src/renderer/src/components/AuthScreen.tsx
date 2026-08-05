@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { authLogin, authSignup, authMe } from '../webapi'
 import { cloudLogin, cloudSignup } from '../cloud/auth'
-import { IS_CLOUD } from '../platform'
+import { IS_CLOUD_BACKEND } from '../platform'
 import { safeErrMessage } from '../safeError'
 
 export default function AuthScreen(): JSX.Element {
@@ -17,8 +17,9 @@ export default function AuthScreen(): JSX.Element {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    // Cloud (Supabase) has no invite code — gating is a dashboard switch there.
-    if (IS_CLOUD) return
+    // Cloud backend (Supabase) has no invite code — gating is a dashboard
+    // switch there. Covers the cloud web build AND the desktop hybrid.
+    if (IS_CLOUD_BACKEND) return
     authMe().then(({ signupGated }) => setGated(signupGated))
   }, [])
 
@@ -27,7 +28,7 @@ export default function AuthScreen(): JSX.Element {
     setBusy(true)
     setErr('')
     try {
-      const user = IS_CLOUD
+      const user = IS_CLOUD_BACKEND
         ? mode === 'signup'
           ? await cloudSignup(email, password)
           : await cloudLogin(email, password)

@@ -2,6 +2,7 @@
 // Configured entirely from Vite env vars; the anon key is public by design —
 // all authority lives in RLS policies and the edge functions' JWT check.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { IS_WEB } from '../platform'
 
 export function supabaseConfigured(): boolean {
   return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY)
@@ -48,17 +49,21 @@ export async function invokeEdge<T>(name: string, body: unknown): Promise<T> {
     /* signed out — anon key */
   }
   let res: Response | null = null
-  try {
-    res = await fetch(`/edge/${encodeURIComponent(name)}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, apikey: anon },
-      body: JSON.stringify(body ?? {})
-    })
-    // The functions only ever produce JSON (shared http.ts). Anything else
-    // means the rewrite isn't in front of us (SPA index.html, host 404/504).
-    if (!res.headers.get('content-type')?.includes('application/json')) res = null
-  } catch {
-    res = null // transport failed (offline/blocked/no rewrite) — direct call below
+  // Electron (desktop-cloud hybrid) has no /edge rewrite — a same-origin POST
+  // would just 404 against the bundled files. Go straight to the direct call.
+  if (IS_WEB) {
+    try {
+      res = await fetch(`/edge/${encodeURIComponent(name)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, apikey: anon },
+        body: JSON.stringify(body ?? {})
+      })
+      // The functions only ever produce JSON (shared http.ts). Anything else
+      // means the rewrite isn't in front of us (SPA index.html, host 404/504).
+      if (!res.headers.get('content-type')?.includes('application/json')) res = null
+    } catch {
+      res = null // transport failed (offline/blocked/no rewrite) — direct call below
+    }
   }
   if (res) {
     const detail = await res.json().catch(() => null)

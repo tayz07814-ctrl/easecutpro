@@ -239,6 +239,9 @@ const webApi: Window['api'] = {
   previewAudioWav: async () => {
     throw new Error('previewAudioWav is desktop-only')
   },
+  sttAudioWav: async () => {
+    throw new Error('sttAudioWav is desktop-only')
+  },
   thumbnails: (path, intervalSec, onPartial) =>
     isWebMediaId(path) ? localThumbnails(path, intervalSec, onPartial) : call('/api/thumbnails', { path, intervalSec }),
   transcribe: async (path, backend, modelName) => {

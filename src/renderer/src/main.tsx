@@ -8,10 +8,11 @@ import { EcPromptHost } from './ui/ecPrompt'
 import LegalPage from './landing/LegalPage'
 import AccountPanelHost from './newui/screens/AccountPanelHost'
 import { useStore, firstVideoSourcePath } from './store'
-import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
+import { IS_WEB, IS_CLOUD, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
+import { installDesktopCloudOverlay } from './cloud/desktopHybrid'
 import { cloudAuthMe } from './cloud/auth'
 import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
@@ -46,6 +47,10 @@ if (IS_NEW_UI) document.documentElement.setAttribute('data-ec-ui', 'new')
 // The Stage A–C new UI, now the default on every host; ?newui=0 (persisted to
 // localStorage) drops back to legacy. Independent of IS_NEW_UI above.
 const NEW_UI = isNewUi()
+
+// Desktop-cloud hybrid: keep the native preload api, overlay the AI methods
+// with the cloud edge engines (same brains as easecutpro.com, zero local keys).
+if (IS_DESKTOP_CLOUD) installDesktopCloudOverlay()
 
 if (IS_WEB) {
   if (IS_CLOUD) installCloudApi()
@@ -224,6 +229,27 @@ function Root(): JSX.Element {
   // (import / split / trim / cut / preview) and on-device export need no server.
   // Only when the backend answers do we run the normal auth → home/login flow.
   useEffect(() => {
+    // Desktop-cloud hybrid: same Supabase bootstrap as the cloud web build —
+    // sign-in gate when online, local editor session when offline. Media stays
+    // native either way; only auth + edge AI need the network. No SPA paths in
+    // Electron, so the view is simply auth/home.
+    if (IS_DESKTOP_CLOUD) {
+      let cancelled = false
+      ;(async () => {
+        const online = supabaseConfigured() && navigator.onLine !== false
+        if (cancelled) return
+        useStore.getState().setServerAvailable(online)
+        if (!online) {
+          useStore.setState({ user: null, view: 'home' })
+          return
+        }
+        const { user } = await cloudAuthMe()
+        if (!cancelled) useStore.setState({ user, view: user ? 'home' : 'auth' })
+      })()
+      return () => {
+        cancelled = true
+      }
+    }
     if (!IS_WEB) return
     let cancelled = false
     ;(async () => {
