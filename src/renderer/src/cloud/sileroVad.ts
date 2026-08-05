@@ -20,13 +20,12 @@ const VAD_ASSET_BASE = '/vad/'
 const FRAME_MS = 96
 const REDEMPTION_S = FRAME_MS / 1000
 const MIN_SPEECH_MS = 250
-// 0.7 (was 0.5): breaths and mouth noise right after a sentence score ~0.5-0.65
-// and were counted as SPEECH, so the detected silence started only after the
-// breath — leaving breath tails on every cut edge no fixed trim could reliably
-// eat. At 0.7 they fall below the bar and the edge lands before the breath.
-// The RMS edge-refinement pass (silenceMastery.refineRegionEdgesByRms) then
-// adaptively swallows whatever breath energy still leaks past the VAD.
-const SPEECH_THRESHOLD = 0.7
+// 0.55: raised from 0.5 because breaths right after a sentence scored ~0.5-0.65
+// and were counted as SPEECH (leaving breath tails at every cut edge) — but the
+// first attempt at 0.7 OVERCUT, clipping soft real speech. 0.55 keeps quiet
+// speech in while the RMS edge-refinement pass (refineRegionEdgesByRms, on the
+// Flash/Cut Throat presets) adaptively swallows the breath tails the VAD keeps.
+const SPEECH_THRESHOLD = 0.55
 /** No built-in padding: the Silence settings' pad/trim values own the cut
  *  edges (padTrimRegions shapes the raw regions after detection). */
 const SPEECH_PAD_S = 0

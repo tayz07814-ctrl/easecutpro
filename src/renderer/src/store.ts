@@ -2136,12 +2136,15 @@ export const useStore = create<AppState>((set, get) => ({
       try {
         set({ job: { active: true, kind: 'silence', percent: 58, message: 'Silero is listening for speech…' } })
         const raw = await detectSileroSilences(audio.float32, audio.sampleRate, durationS, settings.minSilenceS)
-        // Breath-tail refinement: walk each detected edge outward over
-        // low-energy (breath) frames so the cut lands where the VOICE stops.
-        const refined = refineRegionEdgesByRms(raw, frameRmsDb(audio.float32, audio.sampleRate), RMS_FRAME_MS / 1000, durationS)
+        // Breath cleanup (Flash/Cut Throat presets): walk each region's LEFT
+        // edge back over low-energy breath frames so the cut lands where the
+        // voice stops. Sentence endings only — onsets are never walked.
+        const shaped = settings.breathRefine
+          ? refineRegionEdgesByRms(raw, frameRmsDb(audio.float32, audio.sampleRate), RMS_FRAME_MS / 1000, durationS).regions
+          : raw
         // Pads keep silence at the (refined) edges; trims cut PAST them into
         // the sentence ending (left) / next sentence's onset (right).
-        sileroRegions = padTrimRegions(refined.regions, settings, durationS)
+        sileroRegions = padTrimRegions(shaped, settings, durationS)
         sileroOk = true
       } catch (e) {
         console.warn('[silence-mastery] Silero pass skipped:', (e as Error).message)
@@ -2366,9 +2369,11 @@ export const useStore = create<AppState>((set, get) => ({
           const durationS = p0.media?.duration || baseTimelineDuration(p0) || (tw.length ? tw[tw.length - 1].end : 0)
           const audio = await extractSttAudio(path)
           const raw = await detectSileroSilences(audio.float32, audio.sampleRate, durationS, smSettings.minSilenceS)
-          // Same breath-tail edge refinement Clean Silence runs.
-          const refined = refineRegionEdgesByRms(raw, frameRmsDb(audio.float32, audio.sampleRate), RMS_FRAME_MS / 1000, durationS)
-          silenceRegions = unionCutRegions([padTrimRegions(refined.regions, smSettings, durationS)], durationS)
+          // Same breath cleanup Clean Silence runs (Flash/Cut Throat only).
+          const shaped = smSettings.breathRefine
+            ? refineRegionEdgesByRms(raw, frameRmsDb(audio.float32, audio.sampleRate), RMS_FRAME_MS / 1000, durationS).regions
+            : raw
+          silenceRegions = unionCutRegions([padTrimRegions(shaped, smSettings, durationS)], durationS)
           // Same stage telemetry Clean Silence writes, marked as the Find cuts
           // path so the two entry points stay distinguishable in review.
           const r2s = (n: number): number => Math.round(n * 100) / 100
