@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto'
 import { IPC } from '../shared/ipc'
 import { checkTools, listWhisperModels } from './binaries'
 import { probe, exportProject, extractWaveform, extractThumbnails, combineClips } from './ffmpeg'
+import { handleFrameStream, extractPreviewAudioWav, killAllFrameStreams } from './framestream'
 import { transcribe } from './whisper'
 import { transcribeOpenAI } from './openai-transcribe'
 import { transcribeParakeet } from './parakeet'
@@ -47,6 +48,12 @@ let mainWindow: BrowserWindow | null = null
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'ecmedia',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true }
+  },
+  {
+    // Native preview frames: raw yuv420p decoded by the bundled ffmpeg,
+    // streamed to the renderer's FfPlayer (see src/main/framestream.ts).
+    scheme: 'ecframes',
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true }
   }
 ])
@@ -194,6 +201,9 @@ app.whenReady().then(() => {
       }
     })
   })
+
+  // Native preview frames (raw yuv420p from the bundled ffmpeg — FfPlayer).
+  protocol.handle('ecframes', (request) => handleFrameStream(request))
 
   // ---- Tool status ----
   ipcMain.handle(IPC.toolStatus, () => checkTools())
@@ -347,6 +357,9 @@ app.whenReady().then(() => {
   // ---- Waveform peaks ----
   ipcMain.handle(IPC.waveform, async (_e, path: string) => extractWaveform(path))
 
+  // Preview audio: whole-source 48k stereo WAV (elst offset baked in by ffmpeg).
+  ipcMain.handle(IPC.previewAudioWav, async (_e, path: string) => extractPreviewAudioWav(path))
+
   // ---- Filmstrip thumbnails ----
   ipcMain.handle(IPC.thumbnails, async (_e, path: string, intervalSec?: number) =>
     extractThumbnails(path, intervalSec ?? 2)
@@ -414,4 +427,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
-app.on('will-quit', stopFastcutSidecar)
+app.on('will-quit', () => {
+  stopFastcutSidecar()
+  killAllFrameStreams()
+})

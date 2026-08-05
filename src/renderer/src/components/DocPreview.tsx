@@ -39,6 +39,7 @@ import { mainTrackId, documentDuration } from '@shared/timeline/model'
 import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
 import { WcPlayer, wcSupported } from '../preview/wcPlayer'
+import { FfPlayer, ffSupported } from '../preview/ffPlayer'
 import { useIsMobile } from '../useMobile'
 import { useNativePreview } from '../useNativePreview'
 import OverlayLayer from './OverlayLayer'
@@ -379,11 +380,17 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // (the elements stay paused). Mobile keeps the element path (single hardware
   // decode pipeline), and ANY engine failure — including audio that won't start
   // — flips wcOn off, handing back to the untouched element machinery below.
-  const [wcOn, setWcOn] = useState(() => !isMobile && wcSupported())
+  // Desktop (Electron) prefers the NATIVE ffmpeg frame engine (FfPlayer) — the
+  // bundled ffmpeg decodes in the main process and streams raw frames over
+  // ecframes://, so preview codec support equals export codec support. The
+  // WebCodecs engine stays the web-build path; both share one public surface,
+  // so everything below drives `wc` without knowing which it holds. Any engine
+  // failure still flips wcOn off → the untouched element path.
+  const [wcOn, setWcOn] = useState(() => !isMobile && (ffSupported() || wcSupported()))
   const wcOnRef = useRef(wcOn)
   wcOnRef.current = wcOn
-  const wcRef = useRef<WcPlayer | null>(null)
-  if (wcOn && !wcRef.current) wcRef.current = new WcPlayer()
+  const wcRef = useRef<WcPlayer | FfPlayer | null>(null)
+  if (wcOn && !wcRef.current) wcRef.current = ffSupported() ? new FfPlayer() : new WcPlayer()
   useEffect(() => () => wcRef.current?.dispose(), [])
   // Fallback frees the decoders immediately (the element path never reads them).
   useEffect(() => {

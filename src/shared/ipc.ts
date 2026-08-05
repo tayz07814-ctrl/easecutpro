@@ -18,6 +18,7 @@ export const IPC = {
   whisperModels: 'tools:whisperModels',
   waveform: 'media:waveform',
   thumbnails: 'media:thumbnails',
+  previewAudioWav: 'media:previewAudioWav', // desktop-only: native PCM for the preview audio engine
   export: 'project:export',
   saveProject: 'project:save',
   loadProject: 'project:load',

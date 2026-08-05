@@ -12,6 +12,7 @@
 // gain ramp at each scheduled edge guards the splice click from a non-zero sample.
 
 import { getFile, isWebMediaId, mp4AudioStartOffset, padLeadingSilence } from './webmedia'
+import { IS_WEB, mediaSrc } from './platform'
 
 /** A main-lane segment as the audio engine needs it (subset of the preview Seg). */
 export interface AudioSeg {
@@ -98,6 +99,26 @@ export class SeamlessAudio {
     this.failed.delete(src)
     const p = (async () => {
       const ctx = this.ensureCtx()
+      // DESKTOP: the bundled ffmpeg extracts the source's full audio to a 48k
+      // stereo WAV (cached in the main process). `first_pts=0` bakes the phone
+      // .mov `elst` delay into the file itself, so the elst re-pad below is not
+      // needed on this path, and the browser never decodes AAC — decodeAudioData
+      // on a WAV only unwraps the container. Any failure (e.g. a video with no
+      // audio stream) falls through to the browser path, whose own failure sets
+      // `failed` and keeps element audio — same as today.
+      if (!IS_WEB && !isWebMediaId(src)) {
+        const api = (window as { api?: { previewAudioWav?: (p: string) => Promise<string> } }).api
+        if (api?.previewAudioWav) {
+          try {
+            const wavPath = await api.previewAudioWav(src)
+            const wav = await (await fetch(mediaSrc(wavPath))).arrayBuffer()
+            this.buffers.set(src, await ctx.decodeAudioData(wav))
+            return
+          } catch {
+            /* fall through to the browser decode below */
+          }
+        }
+      }
       // Browser-local media is identified by a stable webmedia id while its
       // blob URL may be replaced/revoked after a timeline edit. Read the
       // registered File directly, just like the WebCodecs video path does.
