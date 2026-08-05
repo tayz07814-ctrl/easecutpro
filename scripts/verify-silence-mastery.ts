@@ -229,10 +229,10 @@ console.log('11) presets + Silero region shaping (padTrimRegions)')
     byId['natural-rhythm'].minSilenceS === 0.25 && byId['natural-rhythm'].padLeftMs === 50 && byId['natural-rhythm'].padRightMs === 100 && byId['natural-rhythm'].trimLeftMs === 0 && byId['natural-rhythm'].trimRightMs === 0)
   check('No Chill = 0.15 / 0 / 0 / trimL 20 / trimR 50',
     byId['no-chill'].minSilenceS === 0.15 && byId['no-chill'].padLeftMs === 0 && byId['no-chill'].padRightMs === 0 && byId['no-chill'].trimLeftMs === 20 && byId['no-chill'].trimRightMs === 50)
-  check('Flash = 0.15 / 0 / 0 / trimL 50 / trimR 150',
-    byId['flash'].minSilenceS === 0.15 && byId['flash'].padLeftMs === 0 && byId['flash'].padRightMs === 0 && byId['flash'].trimLeftMs === 50 && byId['flash'].trimRightMs === 150)
-  check('Cut Throat = 0.15 / 0 / 0 / trimL 100 / trimR 350',
-    byId['cut-throat'].minSilenceS === 0.15 && byId['cut-throat'].padLeftMs === 0 && byId['cut-throat'].padRightMs === 0 && byId['cut-throat'].trimLeftMs === 100 && byId['cut-throat'].trimRightMs === 350)
+  check('Flash = 0.15 / 0 / 0 / trimL 30 / trimR 10',
+    byId['flash'].minSilenceS === 0.15 && byId['flash'].padLeftMs === 0 && byId['flash'].padRightMs === 0 && byId['flash'].trimLeftMs === 30 && byId['flash'].trimRightMs === 10)
+  check('Cut Throat = 0.15 / 0 / 0 / trimL 75 / trimR 15',
+    byId['cut-throat'].minSilenceS === 0.15 && byId['cut-throat'].padLeftMs === 0 && byId['cut-throat'].padRightMs === 0 && byId['cut-throat'].trimLeftMs === 75 && byId['cut-throat'].trimRightMs === 15)
   check('Flash IS the shipping default',
     matchSilenceMasteryPreset(DEFAULT_SILENCE_MASTERY_SETTINGS) === 'flash')
   check('preset matcher round-trips', matchSilenceMasteryPreset(S(byId['cut-throat'])) === 'cut-throat' && matchSilenceMasteryPreset(S({ minSilenceS: 0.33 })) === null)
@@ -246,9 +246,9 @@ console.log('11) presets + Silero region shaping (padTrimRegions)')
   const nc = padTrimRegions([{ start: 5, end: 8 }], S(byId['no-chill']), 20)
   check('No Chill eats 20ms of the ending + 50ms of the next onset', nc.length === 1 && near(nc[0].start, 4.98) && near(nc[0].end, 8.05), fmt(nc))
   const fl = padTrimRegions([{ start: 5, end: 8 }], S(byId['flash']), 20)
-  check('Flash eats 50ms of the ending + 150ms of the next onset', fl.length === 1 && near(fl[0].start, 4.95) && near(fl[0].end, 8.15), fmt(fl))
+  check('Flash eats 30ms of the ending + 10ms of the next onset', fl.length === 1 && near(fl[0].start, 4.97) && near(fl[0].end, 8.01), fmt(fl))
   const ct = padTrimRegions([{ start: 5, end: 8 }], S(byId['cut-throat']), 20)
-  check('Cut Throat eats 100ms of the ending + 350ms of the next onset', ct.length === 1 && near(ct[0].start, 4.9) && near(ct[0].end, 8.35), fmt(ct))
+  check('Cut Throat eats 75ms of the ending + 15ms of the next onset', ct.length === 1 && near(ct[0].start, 4.925) && near(ct[0].end, 8.015), fmt(ct))
   // Media boundaries: leading keeps 0, trailing keeps the end.
   const edges = padTrimRegions([{ start: 0, end: 3 }, { start: 18, end: 20 }], S(byId['natural-rhythm']), 20)
   check('leading cut pinned at 0, trailing at media end', edges.length === 2 && near(edges[0].start, 0) && near(edges[0].end, 2.9) && near(edges[1].start, 18.05) && near(edges[1].end, 20), fmt(edges))
