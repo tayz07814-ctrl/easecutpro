@@ -1,33 +1,25 @@
-// Gated cutover switch for the new UI.
+// Which UI to render.
 //
-// - `?newui=1` opts IN and persists; `?newui=0` opts OUT and persists (an instant
-//   escape hatch to the legacy UI from anywhere).
-// - With no explicit choice, the DEFAULT depends on the domain: the product
-//   domain (easecutpro.com + any subdomain) shows the new UI; everywhere else
-//   (the raw *.vercel.app URL, git previews, localhost) stays on legacy — so the
-//   .vercel.app URL remains a known-good fallback for comparison / rollback.
-// An explicit ?newui choice always wins over the domain default.
-function onProductDomain(): boolean {
-  try {
-    return /(^|\.)easecutpro\.com$/i.test(location.hostname)
-  } catch {
-    return false
-  }
-}
-
+// The new UI is THE product now, so it is the default EVERYWHERE — the product
+// domain, the raw *.vercel.app URL, git previews, localhost, self-hosted. It
+// used to default on easecutpro.com only, which meant any link that wasn't that
+// exact hostname silently served the old UI.
+//
+// `?newui=0` is still an instant escape hatch to legacy from anywhere, and it
+// persists; `?newui=1` comes back. ONLY that explicit opt-out keeps the legacy
+// UI — nothing else does.
 export function isNewUi(): boolean {
   // The bundled native app (Capacitor) is served from localhost with no query
-  // string and no product domain, so force the new UI on at build time.
+  // string, and must never be switchable to legacy — force it at build time.
   if (import.meta.env.VITE_FORCE_NEWUI === '1') return true
   try {
     const q = new URLSearchParams(location.search).get('newui')
     if (q === '1') localStorage.setItem('ec.newui', '1')
     else if (q === '0') localStorage.setItem('ec.newui', '0')
-    const stored = localStorage.getItem('ec.newui')
-    if (stored === '1') return true
-    if (stored === '0') return false
-    return onProductDomain()
+    return localStorage.getItem('ec.newui') !== '0'
   } catch {
-    return onProductDomain()
+    // Storage blocked (private mode / strict cookie settings) must not drop
+    // anyone to the old UI, so fail toward the default.
+    return true
   }
 }

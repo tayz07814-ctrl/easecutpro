@@ -43,8 +43,8 @@ import './newui/newui.css'
 // attempt is dormant in production (the env var is unset); kept inert, not removed.
 if (IS_NEW_UI) document.documentElement.setAttribute('data-ec-ui', 'new')
 
-// Gated cutover to the Stage A–C new UI: legacy is the default; ?newui=1
-// (persisted to localStorage) opts in. Independent of IS_NEW_UI above.
+// The Stage A–C new UI, now the default on every host; ?newui=0 (persisted to
+// localStorage) drops back to legacy. Independent of IS_NEW_UI above.
 const NEW_UI = isNewUi()
 
 if (IS_WEB) {
