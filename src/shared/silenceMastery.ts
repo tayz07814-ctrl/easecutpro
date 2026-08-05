@@ -57,6 +57,13 @@ export interface SilenceMasterySettings {
   /** "Mad Scientist" lever (UI-only — the engine ignores it): ON unlocks the
    *  sliders for hand-tuned values; OFF keeps the modal preset-chips-only. */
   madScientist: boolean
+  /** Breath cleanup (RMS edge refinement) at SENTENCE ENDINGS: walk each
+   *  detected region's LEFT edge back over low-energy breath frames so the
+   *  cut lands where the voice stops. Endings only — the right edge (the next
+   *  sentence's onset) is never walked, soft onsets were getting overcut.
+   *  On for the aggressive presets (Flash, Cut Throat); off for the gentle
+   *  two (Natural Rhythm, No Chill). */
+  breathRefine: boolean
 }
 
 export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
@@ -72,7 +79,8 @@ export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
   rmsPass: false,
   sileroPass: true,
   gapPass: false,
-  madScientist: false
+  madScientist: false,
+  breathRefine: true
 }
 
 /** The creator presets (numeric fields only). "Mad Scientist" is the modal's
@@ -81,32 +89,34 @@ export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
 export interface SilenceMasteryPreset {
   id: string
   label: string
-  values: Pick<SilenceMasterySettings, 'minSilenceS' | 'padLeftMs' | 'padRightMs' | 'trimLeftMs' | 'trimRightMs'>
+  values: Pick<SilenceMasterySettings, 'minSilenceS' | 'padLeftMs' | 'padRightMs' | 'trimLeftMs' | 'trimRightMs' | 'breathRefine'>
 }
 export const SILENCE_MASTERY_PRESETS: SilenceMasteryPreset[] = [
   {
-    // Gentle: keeps a breath at both detected edges, no trimming into speech.
+    // Gentle: keeps a breath at both detected edges, no trimming into speech,
+    // no breath cleanup.
     id: 'natural-rhythm',
     label: 'Natural Rhythm',
-    values: { minSilenceS: 0.25, padLeftMs: 50, padRightMs: 100, trimLeftMs: 0, trimRightMs: 0 }
+    values: { minSilenceS: 0.25, padLeftMs: 50, padRightMs: 100, trimLeftMs: 0, trimRightMs: 0, breathRefine: false }
   },
   {
     id: 'no-chill',
     label: 'No Chill',
-    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 20, trimRightMs: 50 }
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 20, trimRightMs: 50, breathRefine: false }
   },
   {
-    // THE DEFAULT (mirrors DEFAULT_SILENCE_MASTERY_SETTINGS above).
+    // THE DEFAULT (mirrors DEFAULT_SILENCE_MASTERY_SETTINGS above). Breath
+    // cleanup on: sentence-ending exhales are walked over adaptively.
     id: 'flash',
     label: 'Flash',
-    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 50, trimRightMs: 150 }
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 50, trimRightMs: 150, breathRefine: true }
   },
   {
     // Cuts hard PAST the detected silence: 100ms off the sentence ending
     // (left of the gap) and 350ms off the next sentence's onset (right).
     id: 'cut-throat',
     label: 'Cut Throat',
-    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 100, trimRightMs: 350 }
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 100, trimRightMs: 350, breathRefine: true }
   }
 ]
 /** The preset the current numeric values exactly match, else null (custom). */
@@ -118,7 +128,8 @@ export function matchSilenceMasteryPreset(s: SilenceMasterySettings): string | n
       v.padLeftMs === s.padLeftMs &&
       v.padRightMs === s.padRightMs &&
       v.trimLeftMs === s.trimLeftMs &&
-      v.trimRightMs === s.trimRightMs
+      v.trimRightMs === s.trimRightMs &&
+      v.breathRefine === s.breathRefine
     )
       return p.id
   }
@@ -150,9 +161,10 @@ export function normalizeSilenceMastery(
     rmsPass: false,
     sileroPass: true,
     gapPass: false,
-    // The Mad Scientist lever is a real user choice (unlike the locked pass
-    // flags above) — persist it.
-    madScientist: typeof v?.madScientist === 'boolean' ? v.madScientist : d.madScientist
+    // The Mad Scientist lever and breath cleanup are real user choices
+    // (unlike the locked pass flags above) — persist them.
+    madScientist: typeof v?.madScientist === 'boolean' ? v.madScientist : d.madScientist,
+    breathRefine: typeof v?.breathRefine === 'boolean' ? v.breathRefine : d.breathRefine
   }
 }
 
@@ -389,11 +401,17 @@ const EDGE_REFINE_VOICE_MARGIN_DB = 15
  * Breath-tail edge refinement — the adaptive answer to "even a 500ms trim
  * leaves breath trails". The VAD counts an audible breath as speech, so the
  * detected silence starts only AFTER the breath; any fixed trim then measures
- * from the wrong edge. Instead of a fixed bite, walk each region edge outward
- * over the audio's own 20ms RMS frames: keep extending while the energy stays
- * below the clip's voice level (breaths do, voiced speech doesn't), capped at
- * EDGE_REFINE_MAX_S per edge. The cut then lands where the VOICE stops, not
- * where the noise stops. Runs BEFORE pads/trims, which shape the refined edge.
+ * from the wrong edge. Instead of a fixed bite, walk the region's LEFT edge
+ * (the ENDING of the speech before the gap) backward over the audio's own
+ * 20ms RMS frames: keep extending while the energy stays below the clip's
+ * voice level (breaths do, voiced speech doesn't), capped at EDGE_REFINE_MAX_S.
+ * The cut then lands where the VOICE stops, not where the noise stops.
+ *
+ * ENDINGS ONLY: the right edge (the next sentence's ONSET) is deliberately
+ * never walked — soft onsets ("h", "s", whispered pickups) sit low enough in
+ * energy that walking forward overcut real speech in testing.
+ *
+ * Runs BEFORE pads/trims, which shape the refined edge.
  */
 export function refineRegionEdgesByRms(
   regions: { start: number; end: number }[],
@@ -416,11 +434,6 @@ export function refineRegionEdgesByRms(
     let ext = 0
     while (r.start > 0 && ext < EDGE_REFINE_MAX_S && frameAt(r.start - frameS / 2) < cutoffDb) {
       r.start = Math.max(0, r.start - frameS)
-      ext += frameS
-    }
-    ext = 0
-    while (r.end < durationS && ext < EDGE_REFINE_MAX_S && frameAt(r.end + frameS / 2) < cutoffDb) {
-      r.end = Math.min(durationS, r.end + frameS)
       ext += frameS
     }
   }

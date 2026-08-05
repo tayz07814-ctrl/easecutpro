@@ -273,11 +273,12 @@ console.log('12) breath-tail edge refinement (refineRegionEdgesByRms)')
   const r1 = refineRegionEdgesByRms([{ start: 4.4, end: 10 }], f1, F, 10)
   check('left edge walks back over the breath to where the voice stops',
     r1.regions.length === 1 && Math.abs(r1.regions[0].start - 4.0) < 0.05 && r1.regions[0].end === 10, fmt(r1.regions))
-  // Inhale on the RIGHT edge: silence 0–5, 300ms breath 5–5.3, speech after.
+  // The RIGHT edge (next sentence's onset) is NEVER walked — low-energy soft
+  // onsets were getting overcut when it was.
   const f2 = frames(10, [[5, 5.3, -38], [5.3, 10, -20]])
   const r2 = refineRegionEdgesByRms([{ start: 0, end: 5 }], f2, F, 10)
-  check('right edge walks forward over the inhale to the next word’s onset',
-    r2.regions.length === 1 && Math.abs(r2.regions[0].end - 5.3) < 0.05, fmt(r2.regions))
+  check('right edge (next onset) is left untouched — endings only',
+    r2.regions.length === 1 && r2.regions[0].end === 5, fmt(r2.regions))
   // A 2s exhale is longer than the cap — only EDGE_REFINE_MAX_S is swallowed.
   const f3 = frames(12, [[0, 4, -20], [4, 6, -38]])
   const r3 = refineRegionEdgesByRms([{ start: 6, end: 12 }], f3, F, 12)
@@ -291,10 +292,16 @@ console.log('12) breath-tail edge refinement (refineRegionEdgesByRms)')
   const f5 = new Array(500).fill(-30)
   const r5 = refineRegionEdgesByRms([{ start: 4, end: 6 }], f5, F, 10)
   check('flat clip → unusable range → edges untouched', r5.regions[0].start === 4 && r5.regions[0].end === 6)
-  // Two regions extending into the same breath island merge.
+  // Two regions whose left walks make them touch merge into one.
   const f6 = frames(10, [[0, 2, -20], [2, 2.4, -38], [2.4, 2.6, -38], [8, 10, -20]])
   const r6 = refineRegionEdgesByRms([{ start: 2.6, end: 4 }, { start: 4, end: 8 }], f6, F, 10)
-  check('adjacent refined regions merge', r6.regions.length === 1 && Math.abs(r6.regions[0].start - 2.0) < 0.05 && r6.regions[0].end === 8, fmt(r6.regions))
+  check('touching refined regions merge', r6.regions.length === 1 && Math.abs(r6.regions[0].start - 2.0) < 0.05 && r6.regions[0].end === 8, fmt(r6.regions))
+  // Preset wiring: breath cleanup rides the aggressive presets only.
+  const byId2 = Object.fromEntries(SILENCE_MASTERY_PRESETS.map((p) => [p.id, p.values]))
+  check('breath cleanup: off for Natural Rhythm + No Chill, on for Flash + Cut Throat',
+    !byId2['natural-rhythm'].breathRefine && !byId2['no-chill'].breathRefine && byId2['flash'].breathRefine && byId2['cut-throat'].breathRefine)
+  check('default (Flash) carries breath cleanup on', DEFAULT_SILENCE_MASTERY_SETTINGS.breathRefine === true)
+  check('breathRefine persists through normalize', normalizeSilenceMastery({ breathRefine: false }).breathRefine === false)
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall silence-mastery checks green')

@@ -134,6 +134,17 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
             fmt={(v) => `${Math.round(v)} ms`} lo="0 · safe" hi="500ms · aggressive"
             onChange={(v) => setSt({ trimRightMs: v })}
           />
+          {/* Breath cleanup — Flash/Cut Throat carry it on, the gentle presets
+              off; Mad Scientists decide for themselves here. */}
+          <div style={css('display:flex;align-items:flex-start;gap:11px')}>
+            <div onClick={() => setSt({ breathRefine: !st.breathRefine })} style={css(`width:32px;height:18px;border-radius:9px;position:relative;flex:none;cursor:pointer;margin-top:1px;background:${st.breathRefine ? '#7c6bff' : '#2a2a34'}`)}>
+              <div style={css(st.breathRefine ? 'position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff' : 'position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#9a9aae')} />
+            </div>
+            <div style={css('flex:1;min-width:0')}>
+              <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Breath cleanup (sentence endings)</div>
+              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Walks each cut back over the exhale at the end of a sentence until the voice actually stops (max 1.5s). Endings only — the next sentence’s onset is never touched.</div>
+            </div>
+          </div>
         </div>
         )}
 
