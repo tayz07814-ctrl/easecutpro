@@ -1,0 +1,40 @@
+/* Shared stylesheet for the static SEO pages (seo/pages/*.html), served from
+ * /seo.css. Mirrors the landing page's dark brand look. */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #08080A; color: #EDEDF2; font-family: 'Hanken Grotesk', system-ui, sans-serif; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+a { color: #A5B4FC; text-decoration: none; }
+a:hover { color: #fff; }
+h1, h2, h3 { font-family: 'Space Grotesk', system-ui, sans-serif; letter-spacing: -0.02em; line-height: 1.15; color: #fff; }
+.wrap { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+.logo { display: flex; align-items: center; gap: 10px; color: #fff; font-family: 'Space Grotesk'; font-weight: 600; font-size: 18px; }
+.logo img { width: 26px; height: 26px; }
+.navlinks { display: flex; gap: 20px; font-size: 14.5px; color: #A0A0AB; align-items: center; }
+.btn { display: inline-block; font-weight: 600; color: #fff !important; background: linear-gradient(180deg, #6366F1, #5457E5); padding: 12px 24px; border-radius: 11px; box-shadow: 0 6px 22px rgba(99,102,241,0.45); }
+.btn:hover { transform: translateY(-1px); }
+main { padding: 40px 0 30px; }
+h1 { font-size: clamp(32px, 5.4vw, 52px); margin-top: 24px; }
+.lead { margin-top: 20px; font-size: 18px; color: #B7B7C0; }
+section { margin-top: 56px; }
+h2 { font-size: clamp(24px, 3.4vw, 32px); margin-bottom: 16px; }
+h3 { font-size: 19px; margin-top: 24px; color: #fff; }
+p { margin-top: 12px; color: #9A9AA6; }
+ul, ol { margin: 14px 0 0 22px; color: #9A9AA6; }
+li { margin-top: 8px; }
+li strong, p strong { color: #D6D6DE; }
+.tablewrap { overflow-x: auto; margin-top: 18px; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 560px; }
+th, td { text-align: left; padding: 13px 16px; border: 1px solid rgba(255,255,255,0.09); vertical-align: top; }
+th { font-family: 'Space Grotesk'; color: #fff; background: rgba(255,255,255,0.03); }
+td { color: #B7B7C0; }
+td:first-child { color: #8A8A94; white-space: nowrap; }
+details { border: 1px solid rgba(255,255,255,0.09); border-radius: 12px; background: rgba(255,255,255,0.02); margin-top: 12px; padding: 16px 20px; }
+summary { cursor: pointer; font-family: 'Space Grotesk'; font-size: 16.5px; color: #EDEDF2; }
+details p { margin-top: 12px; }
+.cta { margin-top: 64px; text-align: center; border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 48px 28px; background: linear-gradient(180deg, rgba(99,102,241,0.14), rgba(14,14,18,0.2)); }
+.cta p { margin-top: 12px; }
+.cta .btn { margin-top: 22px; }
+.crosslinks { margin-top: 56px; font-size: 14.5px; color: #6C6C77; line-height: 2.1; }
+.crosslinks a { margin-right: 22px; white-space: nowrap; }
+footer { margin-top: 70px; padding: 32px 0 48px; border-top: 1px solid rgba(255,255,255,0.07); font-size: 13px; color: #5A5A64; }
+footer a { color: #8A8A94; margin-right: 18px; }
