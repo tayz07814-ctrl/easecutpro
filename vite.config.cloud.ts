@@ -95,9 +95,9 @@ function cloudSeo(): Plugin {
     faq.push({ q: strip(m[1]), a: strip(m[2]) })
   }
 
-  const title = 'Easecut — Transcript-Based AI Video Editor | Auto-Cut Retakes & Silence'
+  const title = 'Easecut — AI Video Editor for TikTok Shop Creators & Affiliate Marketers'
   const description =
-    'Easecut is a transcript-based video editor with AI auto-cut. It finds retakes, filler, and long pauses in raw talking-head footage, you approve every cut, and it exports a publish-ready video in minutes.'
+    'Easecut is a transcript-based AI video editor that cuts editing time by up to 95%. Auto-cut retakes, silences, and filler from raw product videos, approve every cut, and post more content — built for TikTok Shop creators and affiliate marketers.'
 
   const jsonLd = [
     {
