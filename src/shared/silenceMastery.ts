@@ -67,13 +67,14 @@ export interface SilenceMasterySettings {
 }
 
 export const DEFAULT_SILENCE_MASTERY_SETTINGS: SilenceMasterySettings = {
-  // Default = the "Flash" preset: no pads, trims cutting 50ms into the
-  // sentence ending and 150ms into the next sentence's onset.
+  // Default = the "Flash" preset: no pads, trims cutting 30ms into the
+  // sentence ending and 10ms into the next sentence's onset (breath cleanup
+  // does the heavy lifting on endings; trims stay light to avoid overcuts).
   minSilenceS: 0.15,
   padLeftMs: 0,
   padRightMs: 0,
-  trimLeftMs: 50,
-  trimRightMs: 150,
+  trimLeftMs: 30,
+  trimRightMs: 10,
   clampStretchedWords: true,
   // SILERO-ONLY (final engine config — locked in normalizeSilenceMastery).
   rmsPass: false,
@@ -106,17 +107,18 @@ export const SILENCE_MASTERY_PRESETS: SilenceMasteryPreset[] = [
   },
   {
     // THE DEFAULT (mirrors DEFAULT_SILENCE_MASTERY_SETTINGS above). Breath
-    // cleanup on: sentence-ending exhales are walked over adaptively.
+    // cleanup on: sentence-ending exhales are walked over adaptively, so the
+    // fixed trims stay light (30ms ending / 10ms onset).
     id: 'flash',
     label: 'Flash',
-    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 50, trimRightMs: 150, breathRefine: true }
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 30, trimRightMs: 10, breathRefine: true }
   },
   {
-    // Cuts hard PAST the detected silence: 100ms off the sentence ending
-    // (left of the gap) and 350ms off the next sentence's onset (right).
+    // Harder than Flash but still onset-safe: 75ms off the sentence ending,
+    // 15ms off the next sentence's onset (breath cleanup rides on top).
     id: 'cut-throat',
     label: 'Cut Throat',
-    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 100, trimRightMs: 350, breathRefine: true }
+    values: { minSilenceS: 0.15, padLeftMs: 0, padRightMs: 0, trimLeftMs: 75, trimRightMs: 15, breathRefine: true }
   }
 ]
 /** The preset the current numeric values exactly match, else null (custom). */
