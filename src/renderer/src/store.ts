@@ -69,7 +69,7 @@ import {
 } from '@shared/silenceMastery'
 import { extractSttAudio } from './cloud/audio'
 import { detectSileroSilences } from './cloud/sileroVad'
-import { mediaSrc, IS_WEB, IS_CLOUD, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
+import { mediaSrc, IS_WEB, IS_CLOUD, IS_CLOUD_BACKEND, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
 import { aiApi, onDesktopCloudProgress } from './cloud/desktopHybrid'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
@@ -2122,7 +2122,10 @@ export const useStore = create<AppState>((set, get) => ({
     const effWords = settings.clampStretchedWords ? clampStretchedWords(words).words : words
 
     let audio: { float32: Float32Array; sampleRate: number } | null = null
-    const needAudio = (settings.sileroPass || settings.rmsPass) && IS_CLOUD
+    // Cloud backend (web OR desktop hybrid): the audio passes run in the
+    // renderer. On desktop, extractSttAudio's native branch pulls the WAV from
+    // the bundled ffmpeg, so this works on file paths too.
+    const needAudio = (settings.sileroPass || settings.rmsPass) && IS_CLOUD_BACKEND
     if (needAudio) {
       try {
         set({ job: { active: true, kind: 'silence', percent: 4, message: 'Listening to your audio…' } })
@@ -2368,7 +2371,10 @@ export const useStore = create<AppState>((set, get) => ({
       // Silence (this branch's sole, final silence engine). Never fatal: if
       // the model can't run, Find cuts still stages its word cuts.
       let silenceRegions: SilenceRegion[] = res.silenceRegions ?? []
-      if (IS_CLOUD) {
+      // Cloud backend: the edge judge stages word cuts only (silenceRegions is
+      // always empty on this branch), so the renderer runs the Silero silence
+      // step itself — web AND desktop hybrid (native audio via extractSttAudio).
+      if (IS_CLOUD_BACKEND) {
         try {
           set({ job: { active: true, kind: 'silence', percent: 88, message: 'Silero is listening for silence…' } })
           const smSettings = get().silenceMasterySettings

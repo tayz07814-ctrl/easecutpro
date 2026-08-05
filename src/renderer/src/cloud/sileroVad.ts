@@ -12,8 +12,13 @@
 // same redemption-frame correction; the old settings machinery is gone.
 
 import { NonRealTimeVAD } from '@ricky0123/vad-web'
+import { IS_WEB } from '../platform'
 
-const VAD_ASSET_BASE = '/vad/'
+// Web builds serve the staged assets same-origin at /vad/. The Electron
+// desktop hybrid loads via file://, where fetch() of sibling files is blocked
+// — its copy of the same assets is served by the ecvad:// protocol (main
+// process, src/main/index.ts).
+const VAD_ASSET_BASE = IS_WEB ? '/vad/' : 'ecvad://assets/'
 // vad-web frames are 1536 samples at 16 kHz = 96ms. One redemption frame ends
 // a speech segment on the first quiet frame; the reported end overshoots real
 // speech by that frame, which we subtract back out below.

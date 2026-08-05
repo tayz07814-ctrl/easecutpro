@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol, shell } from 'electron'
 import { join, extname } from 'path'
-import { createReadStream } from 'fs'
+import { createReadStream, existsSync } from 'fs'
 import { stat, readdir, mkdir, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { Readable } from 'stream'
@@ -54,6 +54,13 @@ protocol.registerSchemesAsPrivileged([
     // Native preview frames: raw yuv420p decoded by the bundled ffmpeg,
     // streamed to the renderer's FfPlayer (see src/main/framestream.ts).
     scheme: 'ecframes',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true }
+  },
+  {
+    // Silero VAD assets (ONNX model + onnxruntime wasm/mjs) for the renderer's
+    // silence engine. A file:// page cannot fetch() its sibling files, so the
+    // bundled out/renderer/vad directory is served over this scheme instead.
+    scheme: 'ecvad',
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true }
   }
 ])
@@ -211,6 +218,30 @@ app.whenReady().then(() => {
 
   // Native preview frames (raw yuv420p from the bundled ffmpeg — FfPlayer).
   protocol.handle('ecframes', (request) => handleFrameStream(request))
+
+  // Silero VAD assets for the renderer silence engine (ecvad://assets/<file>).
+  // Serves the staged out/renderer/vad files (works from inside app.asar — fs
+  // reads asar contents transparently); dev falls back to the source publicDir.
+  protocol.handle('ecvad', async (request) => {
+    const name = decodeURIComponent(new URL(request.url).pathname).replace(/^\/+/, '')
+    if (!/^[\w.-]+$/.test(name)) return new Response('Bad Request', { status: 400 })
+    const candidates = [
+      join(__dirname, '../renderer/vad', name), // packaged + electron-vite build
+      join(process.cwd(), 'src/renderer/public/vad', name) // dev server
+    ]
+    const p = candidates.find((c) => existsSync(c))
+    if (!p) return new Response('Not Found', { status: 404 })
+    const type = name.endsWith('.wasm')
+      ? 'application/wasm'
+      : name.endsWith('.mjs') || name.endsWith('.js')
+        ? 'text/javascript'
+        : 'application/octet-stream'
+    const size = (await stat(p)).size
+    return new Response(Readable.toWeb(createReadStream(p)) as unknown as ReadableStream, {
+      status: 200,
+      headers: { 'Content-Type': type, 'Content-Length': String(size) }
+    })
+  })
 
   // ---- Tool status ----
   ipcMain.handle(IPC.toolStatus, () => checkTools())
