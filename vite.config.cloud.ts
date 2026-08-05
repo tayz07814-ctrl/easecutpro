@@ -2,6 +2,7 @@
 // main/preload, no PC server: the bundle is a static SPA that talks to
 // Supabase (auth/projects/settings/edge functions) and does all media work
 // on-device. `npm run build:cloud` -> dist-cloud/ (what Vercel serves).
+import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -38,8 +39,11 @@ function cloudCsp(supabaseUrl: string | undefined): Plugin {
     // the localStorage cache + Supabase downloads). Without this they fall back to
     // default-src 'self' and the browser blocks them ("A network error occurred"),
     // so imported fonts silently render as the fallback sans-serif.
-    "font-src 'self' data: blob:",
-    "style-src 'self' 'unsafe-inline'",
+    // fonts.gstatic.com: the landing page's webfonts (Space Grotesk / Hanken
+    // Grotesk) — without it the marketing page silently renders in system fonts.
+    "font-src 'self' data: blob: https://fonts.gstatic.com",
+    // fonts.googleapis.com serves the landing webfonts' stylesheet.
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     // wasm-unsafe-eval: onnxruntime-web (Silero VAD) compiles wasm at runtime
     "script-src 'self' 'wasm-unsafe-eval'",
     // ort spawns blob: workers for its wasm proxy/threads
@@ -52,6 +56,108 @@ function cloudCsp(supabaseUrl: string | undefined): Plugin {
         /(http-equiv="Content-Security-Policy"[\s\S]*?content=")[^"]*(")/,
         `$1${CSP}$2`
       )
+    }
+  }
+}
+
+const SITE = 'https://easecutpro.com'
+
+/** SEO for the public site. The SPA shell Vercel serves on every route is an
+ *  empty <div id="root"> with the title "EaseCutPro" — invisible to search
+ *  engines until (if ever) they execute the JS bundle. This plugin makes the
+ *  homepage crawlable without JS:
+ *   - keyword-bearing <title> + meta description + canonical + Open Graph tags
+ *   - JSON-LD (SoftwareApplication with pricing, FAQPage extracted from the
+ *     landing markup so it can never drift out of sync with the visible FAQ)
+ *   - the full landing template prerendered into #root. React's createRoot()
+ *     replaces it on mount, so the app behaves exactly as before; crawlers and
+ *     first paint get the real content. (On non-landing routes the static hero
+ *     shows for the moment before the bundle mounts — cosmetic only.)
+ *  Companion statics (robots.txt, sitemap.xml, favicon, /descript-alternative
+ *  and friends) live in seo/ and are staged by prepare-cloud-assets.mjs. */
+function cloudSeo(): Plugin {
+  const template = readFileSync(
+    resolve(__dirname, 'src/renderer/src/landing/landing.template.html'),
+    'utf8'
+  )
+
+  const strip = (s: string): string =>
+    s
+      .replace(/<[^>]+>/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+  // Each FAQ item is a button[data-faq] (question in its first <span>) followed
+  // by a [data-ans] block (answer in its <p>).
+  const faq: Array<{ q: string; a: string }> = []
+  const faqRe =
+    /<button[^>]*data-faq[^>]*>\s*<span[^>]*>([\s\S]*?)<\/span>[\s\S]*?data-ans[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/g
+  for (let m = faqRe.exec(template); m; m = faqRe.exec(template)) {
+    faq.push({ q: strip(m[1]), a: strip(m[2]) })
+  }
+
+  const title = 'Easecut — Transcript-Based AI Video Editor | Auto-Cut Retakes & Silence'
+  const description =
+    'Easecut is a transcript-based video editor with AI auto-cut. It finds retakes, filler, and long pauses in raw talking-head footage, you approve every cut, and it exports a publish-ready video in minutes.'
+
+  const jsonLd = [
+    {
+      '@context': 'https://schema.org',
+      '@type': 'SoftwareApplication',
+      name: 'Easecut',
+      alternateName: 'EaseCutPro',
+      applicationCategory: 'MultimediaApplication',
+      operatingSystem: 'Web',
+      url: `${SITE}/`,
+      description,
+      offers: {
+        '@type': 'AggregateOffer',
+        priceCurrency: 'USD',
+        lowPrice: '29',
+        highPrice: '79',
+        offerCount: 3
+      }
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: faq.map(({ q, a }) => ({
+        '@type': 'Question',
+        name: q,
+        acceptedAnswer: { '@type': 'Answer', text: a }
+      }))
+    }
+  ]
+
+  // The font links carry LandingScreen's ensureFonts() id, so it detects them
+  // and skips re-adding the stylesheet at runtime.
+  const head = [
+    `<title>${title}</title>`,
+    `<meta name="description" content="${description}" />`,
+    `<link rel="canonical" href="${SITE}/" />`,
+    `<link rel="icon" type="image/svg+xml" href="/favicon.svg" />`,
+    `<meta property="og:type" content="website" />`,
+    `<meta property="og:site_name" content="Easecut" />`,
+    `<meta property="og:title" content="${title}" />`,
+    `<meta property="og:description" content="${description}" />`,
+    `<meta property="og:url" content="${SITE}/" />`,
+    `<meta name="twitter:card" content="summary" />`,
+    `<link rel="preconnect" href="https://fonts.googleapis.com" />`,
+    `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />`,
+    `<link id="ec-landing-fonts" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;family=Hanken+Grotesk:wght@400;500;600;700&amp;display=swap" />`,
+    `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>`
+  ].join('\n    ')
+
+  return {
+    name: 'cloud-seo',
+    transformIndexHtml(html) {
+      // Replacer callbacks so "$" sequences in the markup are never treated as
+      // replacement patterns.
+      return html
+        .replace('<title>EaseCutPro</title>', () => head)
+        .replace(
+          '<div id="root"></div>',
+          () => `<div id="root"><div class="ec-landing">${template}</div></div>`
+        )
     }
   }
 }
@@ -103,6 +209,6 @@ export default defineConfig(({ mode }) => {
         '@shared': resolve(__dirname, 'src/shared')
       }
     },
-    plugins: [react(), cloudCsp(env.VITE_SUPABASE_URL)]
+    plugins: [react(), cloudCsp(env.VITE_SUPABASE_URL), cloudSeo()]
   }
 })
