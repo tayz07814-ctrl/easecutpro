@@ -86,6 +86,8 @@ class _EditorScreenState extends State<EditorScreen> {
   int _sourceDurationMs = 0;
   bool _playing = false;
   bool _scrubbing = false;
+  bool _loop = false; // transport loop toggle — replay from 0 when playback ends
+  bool _previewExpanded = false; // fullscreen-preview mode (hides timeline + dock)
 
   double _stageFrac = 0.46;
   bool _selected = false;
@@ -473,6 +475,11 @@ class _EditorScreenState extends State<EditorScreen> {
       if (s.ended) _playing = false;
       if (!_playing) _sw.stop();
     });
+    // Loop: when playback runs off the end, jump back to 0 and keep going.
+    if (s.ended && _loop && _hasBase) {
+      _player.seek(0);
+      _player.play();
+    }
   }
 
   /// Advance the displayed playhead between native ticks for smooth 60 fps motion.
@@ -1435,6 +1442,22 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   Widget build(BuildContext context) {
     final screenH = MediaQuery.of(context).size.height;
+    if (_previewExpanded) {
+      // Fullscreen preview: just the top bar, the stage filling everything, and
+      // the transport (whose expand button collapses back).
+      return Scaffold(
+        backgroundColor: Ec.bg,
+        body: SafeArea(
+          child: Column(
+            children: [
+              _topBar(),
+              Expanded(child: _stage(screenH, fill: true)),
+              _transport(),
+            ],
+          ),
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: Ec.bg,
       body: SafeArea(
@@ -1468,16 +1491,6 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  Widget _undoRedoBtn(IconData ic, bool enabled, VoidCallback onTap) => GestureDetector(
-        onTap: enabled ? onTap : null,
-        behavior: HitTestBehavior.opaque,
-        child: SizedBox(
-          width: 34,
-          height: 38,
-          child: Icon(ic, size: 20, color: enabled ? Ec.text : Ec.disabled),
-        ),
-      );
-
   /// The nearest common name for the source's aspect ratio (falls back to the
   /// rounded ratio, e.g. "1.85"), shown in the top-bar badge.
   String get _aspectLabel {
@@ -1510,11 +1523,9 @@ class _EditorScreenState extends State<EditorScreen> {
                   width: 38,
                   height: 38,
                   alignment: Alignment.center,
-                  child: const Icon(Icons.chevron_left, size: 26, color: Ec.text),
+                  child: const Icon(Icons.arrow_back, size: 22, color: Ec.text),
                 ),
               ),
-              _undoRedoBtn(Icons.undo, _undoStack.isNotEmpty, _undo),
-              _undoRedoBtn(Icons.redo, _redoStack.isNotEmpty, _redo),
               const Spacer(),
               GestureDetector(
                 onTap: _openSettings,
@@ -1696,10 +1707,10 @@ class _EditorScreenState extends State<EditorScreen> {
         ),
       );
 
-  Widget _stage(double screenH) {
+  Widget _stage(double screenH, {bool fill = false}) {
     final h = (screenH * _stageFrac).clamp(160.0, screenH * 0.58);
     return SizedBox(
-      height: h,
+      height: fill ? double.infinity : h,
       width: double.infinity,
       child: Container(
         color: Ec.stage,
@@ -1838,8 +1849,10 @@ class _EditorScreenState extends State<EditorScreen> {
       decoration: const BoxDecoration(border: Border(top: BorderSide(color: Ec.hair))),
       child: Row(
         children: [
-          _icBtn(Icons.undo, _undo, enabled: _undoStack.isNotEmpty),
-          _icBtn(Icons.redo, _redo, enabled: _redoStack.isNotEmpty),
+          // Fullscreen-preview toggle (matches the web editor's expand control).
+          _icBtn(_previewExpanded ? Icons.close_fullscreen : Icons.open_in_full,
+              () => setState(() => _previewExpanded = !_previewExpanded),
+              enabled: _hasBase),
           const Spacer(),
           GestureDetector(
             onTap: _togglePlay,
@@ -1854,11 +1867,39 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
           ),
           const Spacer(),
-          // Split at the playhead (the scissors live here as the primary edit).
-          _icBtn(Icons.content_cut, _split, enabled: _hasBase),
-          const SizedBox(width: 6),
-          _icBtn(Icons.delete_outline, _deleteSelected, enabled: _hasBase && _model.clips.length > 1),
+          _loopToggle(),
+          const SizedBox(width: 8),
+          _icBtn(Icons.undo, _undo, enabled: _undoStack.isNotEmpty),
+          const SizedBox(width: 2),
+          _icBtn(Icons.redo, _redo, enabled: _redoStack.isNotEmpty),
         ],
+      ),
+    );
+  }
+
+  /// Loop-playback toggle — teal with an ON caption when active (the transport
+  /// slot the web editor uses for its state toggle).
+  Widget _loopToggle() {
+    const teal = Color(0xFF2DD4BF);
+    return GestureDetector(
+      onTap: () => setState(() => _loop = !_loop),
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 34,
+        height: 40,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.repeat, size: 19, color: _loop ? teal : Ec.textDim),
+            const SizedBox(height: 1),
+            Text(_loop ? 'ON' : 'OFF',
+                style: TextStyle(
+                    fontSize: 7.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.4,
+                    color: _loop ? teal : Ec.textFaint)),
+          ],
+        ),
       ),
     );
   }
@@ -1870,12 +1911,35 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  /// All main clips muted? (drives the gutter mute tile's state)
+  bool get _clipsMuted =>
+      _model.clips.isNotEmpty && _model.clips.every((c) => c.volume <= 0.001);
+
+  /// Toggle every main clip's audio (the CapCut "Mute clip audio" tile).
+  Future<void> _toggleMuteClips() async {
+    if (!_hasBase) return;
+    _pushHistory();
+    final target = _clipsMuted ? 1.0 : 0.0;
+    for (final c in _model.clips) {
+      c.volume = target;
+    }
+    await _reload(seekTo: _positionMs);
+    _scheduleSave();
+    setState(() {});
+  }
+
   Widget _timeline() {
     return Container(
       decoration: const BoxDecoration(border: Border(top: BorderSide(color: Ec.hair))),
       child: MiniTimeline(
         model: _model,
         clipName: _clipName ?? '',
+        muted: _clipsMuted,
+        onToggleMute: _toggleMuteClips,
+        onCover: () => _toast('Cover picker is coming soon'),
+        onAddMedia: _import,
+        onAddText: _openText,
+        onAddAudio: _openAudio,
         positionMs: _positionMs,
         totalMs: _totalMs,
         media: _media,

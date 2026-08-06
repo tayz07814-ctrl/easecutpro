@@ -65,6 +65,15 @@ class MiniTimeline extends StatefulWidget {
   final VoidCallback? onTrimStart;
   final VoidCallback? onTrimEnd;
 
+  /// CapCut-style leading tiles in the pre-roll gutter (left of the strip start):
+  /// mute-all-clips toggle, cover tile, and the per-lane add shortcuts.
+  final bool muted;
+  final VoidCallback? onToggleMute;
+  final VoidCallback? onCover;
+  final VoidCallback? onAddMedia;
+  final VoidCallback? onAddText;
+  final VoidCallback? onAddAudio;
+
   const MiniTimeline({
     super.key,
     required this.model,
@@ -102,6 +111,12 @@ class MiniTimeline extends StatefulWidget {
     this.onTrim,
     this.onTrimStart,
     this.onTrimEnd,
+    this.muted = false,
+    this.onToggleMute,
+    this.onCover,
+    this.onAddMedia,
+    this.onAddText,
+    this.onAddAudio,
   });
 
   @override
@@ -286,36 +301,31 @@ class _MiniTimelineState extends State<MiniTimeline> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Timecode + zoom control.
-        Container(
-          height: 34,
-          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFF262A37)))),
-          child: Stack(
-            children: [
-              Center(
-                child: Text(
-                  '${_fmt(widget.positionMs)} / ${_fmt(widget.totalMs)}',
+        // Timecode readout — left-aligned like the web editor; pinch zooms.
+        SizedBox(
+          height: 30,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 14),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: RichText(
+                text: TextSpan(
                   style: const TextStyle(
-                      color: Color(0xFFEEF0F7),
                       fontSize: 12.5,
                       fontWeight: FontWeight.w600,
                       fontFamily: Ec.mono,
                       fontFeatures: [FontFeature.tabularFigures()]),
-                ),
-              ),
-              Positioned(
-                right: 8,
-                top: 0,
-                bottom: 0,
-                child: Row(
                   children: [
-                    _zoomBtn(Icons.zoom_out, () => _setZoom(_zoom - 0.4), _zoom > 0.3),
-                    const SizedBox(width: 4),
-                    _zoomBtn(Icons.zoom_in, () => _setZoom(_zoom + 0.4), _zoom < 8),
+                    TextSpan(
+                        text: _fmt(widget.positionMs),
+                        style: const TextStyle(color: Color(0xFFEEF0F7))),
+                    TextSpan(
+                        text: ' / ${_fmt(widget.totalMs)}',
+                        style: const TextStyle(color: Color(0xFF6E6E85))),
                   ],
                 ),
               ),
-            ],
+            ),
           ),
         ),
         Expanded(
@@ -328,6 +338,29 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 _didInit = true;
                 WidgetsBinding.instance.addPostFrameCallback((_) => _alignToPlayhead());
               }
+              // One track row: [pre-roll gutter (leading tiles, right-aligned)] +
+              // [the track content, tracksW wide]. Keeping every row exactly
+              // side + tracksW + side wide preserves the existing scroll maths.
+              Widget lane(Widget? lead, Widget content, {double? height}) => SizedBox(
+                    height: height,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SizedBox(
+                          width: side,
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: lead ?? const SizedBox.shrink(),
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: tracksW, child: content),
+                        SizedBox(width: side),
+                      ],
+                    ),
+                  );
               return Listener(
                 behavior: HitTestBehavior.translucent,
                 onPointerDown: _onPinchDown,
@@ -344,55 +377,87 @@ class _MiniTimelineState extends State<MiniTimeline> {
                         physics: _pinching
                             ? const NeverScrollableScrollPhysics()
                             : const ClampingScrollPhysics(),
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(horizontal: side),
-                          child: SizedBox(
-                            width: tracksW,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                const SizedBox(height: 8),
-                                SizedBox(height: _clipsH, child: _clipsRow(model)),
-                                if (widget.audios.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  _audioLane(tracksW),
-                                ],
-                                if (widget.texts.any((t) => t.isCaption)) ...[
-                                  const SizedBox(height: 4),
-                                  _overlayLane(tracksW, captions: true),
-                                ],
-                                if (widget.texts.any((t) => !t.isCaption)) ...[
-                                  const SizedBox(height: 4),
-                                  _overlayLane(tracksW, captions: false),
-                                ],
-                                if (widget.images.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  _imageLane(tracksW),
-                                ],
-                                const SizedBox(height: 8),
+                        child: SizedBox(
+                          width: side + tracksW + side,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Ruler — tick labels every "nice" interval.
+                              lane(
+                                null,
+                                CustomPaint(
+                                  painter: _RulerPainter(
+                                    pxPerMs: _pxPerMs,
+                                    totalMs: _total,
+                                    visibleFromMs: ((_sc.hasClients ? _sc.offset : 0) / _pxPerMs) - _viewW / _pxPerMs,
+                                    visibleToMs: ((_sc.hasClients ? _sc.offset : 0) / _pxPerMs) + _viewW / _pxPerMs,
+                                  ),
+                                  child: const SizedBox.expand(),
+                                ),
+                                height: 16,
+                              ),
+                              const SizedBox(height: 6),
+                              // Video track — mute + cover tiles lead the strip.
+                              lane(
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _muteTile(),
+                                    const SizedBox(width: 6),
+                                    _coverTile(model),
+                                  ],
+                                ),
+                                _clipsRow(model),
+                                height: _clipsH,
+                              ),
+                              if (widget.images.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                lane(_gutterIcon(Icons.photo_library_outlined, widget.onAddMedia),
+                                    _imageLane(tracksW)),
                               ],
-                            ),
+                              if (widget.texts.any((t) => t.isCaption)) ...[
+                                const SizedBox(height: 4),
+                                lane(_gutterIcon(Icons.closed_caption_outlined, null),
+                                    _overlayLane(tracksW, captions: true)),
+                              ],
+                              const SizedBox(height: 4),
+                              // Text lane — the tile always leads; ghost row when empty.
+                              widget.texts.any((t) => !t.isCaption)
+                                  ? lane(_gutterIcon(Icons.title, widget.onAddText),
+                                      _overlayLane(tracksW, captions: false))
+                                  : lane(_gutterIcon(Icons.title, widget.onAddText),
+                                      _ghostRow('＋ Add text', widget.onAddText),
+                                      height: _laneH),
+                              const SizedBox(height: 4),
+                              // Audio lane — same treatment.
+                              widget.audios.isNotEmpty
+                                  ? lane(_gutterIcon(Icons.music_note, widget.onAddAudio),
+                                      _audioLane(tracksW))
+                                  : lane(_gutterIcon(Icons.music_note, widget.onAddAudio),
+                                      _ghostRow('＋ Add audio', widget.onAddAudio),
+                                      height: _laneH),
+                              const SizedBox(height: 8),
+                            ],
                           ),
                         ),
                       ),
                     ),
-                    // Fixed centre playhead.
+                    // Fixed centre playhead — thin white line, CapCut-style.
                     Positioned(
                       left: side - 1,
                       top: 0,
                       bottom: 0,
                       child: IgnorePointer(
-                        child: Column(
-                          children: [
-                            Container(
-                              width: 12,
-                              height: 12,
-                              decoration: const BoxDecoration(
-                                  color: Color(0xFFFF5D6C), shape: BoxShape.circle),
-                            ),
-                            Expanded(child: Container(width: 2, color: const Color(0xFFFF5D6C))),
-                          ],
+                        child: Container(
+                          width: 2,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(1),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withValues(alpha: 0.55), blurRadius: 3),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -403,6 +468,121 @@ class _MiniTimelineState extends State<MiniTimeline> {
           ),
         ),
       ],
+    );
+  }
+
+  /// The "Mute clip audio" gutter tile — toggles every main clip's audio.
+  Widget _muteTile() {
+    final on = widget.muted;
+    return GestureDetector(
+      onTap: widget.onToggleMute,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: 86,
+        decoration: BoxDecoration(
+          color: const Color(0xFF17171B),
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(on ? Icons.volume_off : Icons.volume_up_outlined,
+                size: 17, color: on ? const Color(0xFFFF9BA6) : const Color(0xFFC9C9DA)),
+            const SizedBox(height: 4),
+            Text(on ? 'Unmute clip\naudio' : 'Mute clip\naudio',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF8B8BA0), fontSize: 8.5, height: 1.25)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The "Cover" gutter tile — the first frame of the timeline as a thumb.
+  Widget _coverTile(TimelineModel model) {
+    ThumbFrame? thumb;
+    if (model.clips.isNotEmpty) {
+      final frames = _clipThumbs(model.clips.first);
+      if (frames.isNotEmpty) thumb = frames.first;
+    }
+    return GestureDetector(
+      onTap: widget.onCover,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: _clipsH,
+        clipBehavior: Clip.hardEdge,
+        decoration: BoxDecoration(
+          color: const Color(0xFF17171B),
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (thumb != null)
+              Image.memory(thumb.jpeg, fit: BoxFit.cover, gaplessPlayback: true),
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                color: const Color(0xB3000000),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.edit, size: 8, color: Colors.white),
+                    SizedBox(width: 3),
+                    Text('Cover', style: TextStyle(color: Colors.white, fontSize: 8.5)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Small square gutter tile leading a secondary lane.
+  Widget _gutterIcon(IconData ic, VoidCallback? onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: 26,
+        height: _laneH,
+        decoration: BoxDecoration(
+          color: const Color(0xFF17171B),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        child: Icon(ic, size: 13, color: const Color(0xFFC9C9DA)),
+      ),
+    );
+  }
+
+  /// Empty-lane ghost row — "＋ Add text" / "＋ Add audio", CapCut-style.
+  Widget _ghostRow(String label, VoidCallback? onTap) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          width: 200,
+          height: _laneH,
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF141419),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(label,
+              style: const TextStyle(color: Color(0xFF8B8BA0), fontSize: 10.5, fontWeight: FontWeight.w500)),
+        ),
+      ),
     );
   }
 
@@ -424,22 +604,6 @@ class _MiniTimelineState extends State<MiniTimeline> {
       children: [
         for (int i = 0; i < model.clips.length; i++) _clip(model, i),
       ],
-    );
-  }
-
-  Widget _zoomBtn(IconData icon, VoidCallback onTap, bool enabled) {
-    return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: Container(
-        width: 30,
-        height: 24,
-        decoration: BoxDecoration(
-          color: const Color(0xFF23252b),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-        ),
-        child: Icon(icon, size: 16, color: enabled ? Ec.text : Ec.textFaint),
-      ),
     );
   }
 
@@ -1101,6 +1265,62 @@ class _MiniTimelineState extends State<MiniTimeline> {
       ),
     );
   }
+}
+
+/// Paints the ruler's tick labels ("00:00  00:02  00:04 …") at a "nice" interval
+/// chosen so labels sit ≥ ~64 px apart at the current zoom. Only ticks inside the
+/// visible window (plus margin) are laid out, so long timelines stay cheap.
+class _RulerPainter extends CustomPainter {
+  final double pxPerMs;
+  final int totalMs;
+  final double visibleFromMs;
+  final double visibleToMs;
+  const _RulerPainter({
+    required this.pxPerMs,
+    required this.totalMs,
+    required this.visibleFromMs,
+    required this.visibleToMs,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (pxPerMs <= 0 || totalMs <= 0) return;
+    const candidates = [500, 1000, 2000, 5000, 10000, 20000, 30000, 60000, 120000, 300000];
+    var stepMs = candidates.last;
+    for (final s in candidates) {
+      if (s * pxPerMs >= 64) {
+        stepMs = s;
+        break;
+      }
+    }
+    final from = (visibleFromMs.clamp(0, totalMs.toDouble()) / stepMs).floor() * stepMs;
+    final to = visibleToMs.clamp(0, totalMs.toDouble());
+    const style = TextStyle(
+        color: Color(0xFF6E6E85), fontSize: 9, fontFamily: Ec.mono, fontWeight: FontWeight.w500);
+    final dot = Paint()..color = const Color(0xFF3A3A46);
+    for (var t = from; t <= to; t += stepMs) {
+      final x = t * pxPerMs;
+      final s = t ~/ 1000;
+      final label = '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+      final tp = TextPainter(
+        text: TextSpan(text: label, style: style),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(x + 3, (size.height - tp.height) / 2));
+      // Midpoint dot between labels, like the reference ruler.
+      final midX = x + stepMs * pxPerMs / 2;
+      if (midX < totalMs * pxPerMs) {
+        canvas.drawCircle(Offset(midX, size.height / 2), 1.2, dot);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RulerPainter old) =>
+      old.pxPerMs != pxPerMs ||
+      old.totalMs != totalMs ||
+      old.visibleFromMs != visibleFromMs ||
+      old.visibleToMs != visibleToMs;
 }
 
 /// Paints a centered amplitude waveform: dense, closely-adjacent bright-purple
