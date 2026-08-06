@@ -1,64 +1,98 @@
-/// Silence-detection settings — mirrors web 0.01's VadSilenceSettings + presets
-/// (Conservative / Balanced / Aggressive). Written by the Silence Settings modal,
-/// read by Cut Lord when it computes keep-ranges. The on-device (VAD-free) cut
-/// uses minGapS (pause threshold) and the pads; speechThreshold / removeBreaths /
-/// edgeTrim are carried for parity with 0.01 (and future on-device VAD).
+/// Silence Mastery settings — a 1:1 mirror of main's shared/silenceMastery.ts
+/// (SilenceMasterySettings + SILENCE_MASTERY_PRESETS). The engine is Silero-only,
+/// exactly like the web app: the VAD's fixed tuning (threshold 0.55 etc.) lives
+/// in the native engine; these values shape the cuts it finds.
 class SilenceSettings {
-  static double speechThreshold = 0.75; // VAD strictness (parity)
-  static double minGapS = 0.3; // trim pauses longer than this
-  static double padBeforeS = 0.1; // lead kept before the next word at a cut
-  static double padAfterS = 0.12; // air kept after the last word at a cut
-  static double edgeTrimS = 0.0; // tighten joins to the word boundary (parity)
-  static bool removeBreaths = false; // parity (needs on-device VAD)
-  static int seamOverlapMs = 0; // blend audio across a cut (0 = hard cut)
+  /// Gaps shorter than this many seconds are natural beats — kept.
+  static double minSilenceS = 0.15;
+
+  /// Silence KEPT on a removed gap's left edge (after the sentence ending), ms.
+  static int padLeftMs = 0;
+
+  /// Silence KEPT on the right edge (before the next sentence), ms.
+  static int padRightMs = 0;
+
+  /// Cut extended LEFT into the sentence ENDING beyond the detected edge, ms.
+  static int trimLeftMs = 30;
+
+  /// Cut extended RIGHT into the next sentence's ONSET, ms.
+  static int trimRightMs = 10;
+
+  /// Breath cleanup (RMS edge refinement) at sentence endings — on for the
+  /// aggressive presets (Flash, Cut Throat), off for the gentle two.
+  static bool breathRefine = true;
+
+  /// "Mad Scientist" lever (UI-only): ON unlocks the sliders for hand-tuning.
+  static bool madScientist = false;
+
+  /// Blend audio across a cut on export (0 = hard cut) — mobile-only extra.
+  static int seamOverlapMs = 0;
+
+  /// Cut Lord's "also clean silence" toggle.
   static bool cutSilence = true;
 
-  // Back-compat aliases used by the cut-pipeline call sites.
-  static double get trimS => minGapS;
-  static double get keepS => padAfterS;
+  // ---- Back-compat aliases: the transcript word-gap FALLBACK (used only when
+  // the native engine fails) and Cut Lord's judge still consume the old names.
+  static double get minGapS => minSilenceS;
+  static double get trimS => minSilenceS;
+  static double get keepS => padLeftMs / 1000.0;
+  static double get padBeforeS => padRightMs / 1000.0; // lead kept before the next word
+  static double get padAfterS => padLeftMs / 1000.0; // air kept after the last word
 
-  /// Apply a named preset (values copied from web 0.01 SILENCE_PRESETS).
+  /// Apply a named preset (values copied verbatim from SILENCE_MASTERY_PRESETS).
   static void applyPreset(String id) {
     switch (id) {
-      case 'conservative':
-        speechThreshold = 0.65;
-        minGapS = 0.6;
-        padBeforeS = 0.15;
-        padAfterS = 0.2;
-        edgeTrimS = 0.0;
-        removeBreaths = false;
+      case 'natural-rhythm':
+        minSilenceS = 0.25;
+        padLeftMs = 50;
+        padRightMs = 100;
+        trimLeftMs = 0;
+        trimRightMs = 0;
+        breathRefine = false;
         break;
-      case 'aggressive':
-        speechThreshold = 0.75;
-        minGapS = 0.05;
-        padBeforeS = 0.0;
-        padAfterS = 0.0;
-        edgeTrimS = 0.05;
-        removeBreaths = true;
+      case 'no-chill':
+        minSilenceS = 0.15;
+        padLeftMs = 0;
+        padRightMs = 0;
+        trimLeftMs = 20;
+        trimRightMs = 50;
+        breathRefine = false;
         break;
-      case 'balanced':
+      case 'cut-throat':
+        minSilenceS = 0.15;
+        padLeftMs = 0;
+        padRightMs = 0;
+        trimLeftMs = 75;
+        trimRightMs = 15;
+        breathRefine = true;
+        break;
+      case 'flash': // THE DEFAULT
       default:
-        speechThreshold = 0.75;
-        minGapS = 0.3;
-        padBeforeS = 0.1;
-        padAfterS = 0.12;
-        edgeTrimS = 0.0;
-        removeBreaths = false;
+        minSilenceS = 0.15;
+        padLeftMs = 0;
+        padRightMs = 0;
+        trimLeftMs = 30;
+        trimRightMs = 10;
+        breathRefine = true;
     }
   }
 
-  /// Which preset the current values match, or 'custom'.
-  static String detectPreset() {
-    bool eq(double a, double b) => (a - b).abs() < 1e-6;
-    if (eq(speechThreshold, 0.65) && eq(minGapS, 0.6) && eq(padBeforeS, 0.15) && eq(padAfterS, 0.2) && eq(edgeTrimS, 0.0) && !removeBreaths) {
-      return 'conservative';
+  /// Which preset the current values exactly match, or null (custom) —
+  /// mirrors matchSilenceMasteryPreset.
+  static String? detectPreset() {
+    bool eq(double a, double b) => (a - b).abs() < 1e-9;
+    if (eq(minSilenceS, 0.25) && padLeftMs == 50 && padRightMs == 100 && trimLeftMs == 0 && trimRightMs == 0 && !breathRefine) {
+      return 'natural-rhythm';
     }
-    if (eq(speechThreshold, 0.75) && eq(minGapS, 0.05) && eq(padBeforeS, 0.0) && eq(padAfterS, 0.0) && eq(edgeTrimS, 0.05) && removeBreaths) {
-      return 'aggressive';
+    if (eq(minSilenceS, 0.15) && padLeftMs == 0 && padRightMs == 0 && trimLeftMs == 20 && trimRightMs == 50 && !breathRefine) {
+      return 'no-chill';
     }
-    if (eq(speechThreshold, 0.75) && eq(minGapS, 0.3) && eq(padBeforeS, 0.1) && eq(padAfterS, 0.12) && eq(edgeTrimS, 0.0) && !removeBreaths) {
-      return 'balanced';
+    if (eq(minSilenceS, 0.15) && padLeftMs == 0 && padRightMs == 0 && trimLeftMs == 30 && trimRightMs == 10 && breathRefine) {
+      return 'flash';
     }
-    return 'custom';
+    if (eq(minSilenceS, 0.15) && padLeftMs == 0 && padRightMs == 0 && trimLeftMs == 75 && trimRightMs == 15 && breathRefine) {
+      return 'cut-throat';
+    }
+    return null;
   }
 }

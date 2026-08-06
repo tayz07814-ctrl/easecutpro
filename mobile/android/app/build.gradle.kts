@@ -58,7 +58,8 @@ dependencies {
     implementation("androidx.media3:media3-common:$media3")
     // ImmutableList for OverlayEffect / Effects.
     implementation("com.google.guava:guava:33.0.0-android")
-    // NOTE: the ONNX runtime (FSMN VAD) is gone on purpose — it segfaulted on some
-    // devices and cost several MB per ABI. Silence detection is now the two-pass
-    // transcript + RMS engine in SilenceEngine.kt: pure Kotlin, no native ML.
+    // Silero VAD (Silence Mastery — the SAME engine the web app runs). The ONNX
+    // runtime lives in the crash-isolated :vadengine process, so a native fault
+    // there can never take the app down.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
 }

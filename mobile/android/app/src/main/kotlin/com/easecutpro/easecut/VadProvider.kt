@@ -7,12 +7,12 @@ import android.net.Uri
 import android.os.Bundle
 
 /**
- * Binder front door of the two-pass silence engine, hosted in its OWN OS process
- * (android:process=":vadengine" in the manifest — the process/authority names are
- * legacy from the retired VAD). The app calls
- * `contentResolver.call(AUTHORITY, "detect", uri, params)`; the whole engine —
- * MediaCodec decode + RMS keep-mask ([SilenceEngine]) — runs here, on this
- * process's binder thread, and the cut regions come back in the reply Bundle.
+ * Binder front door of the Silence Mastery engine (Silero VAD, the same engine
+ * the web app on main runs), hosted in its OWN OS process (android:process=
+ * ":vadengine"). The app calls `contentResolver.call(AUTHORITY, "detect", uri,
+ * params)`; the whole engine — MediaCodec decode + Silero ONNX + the mastery
+ * post-pipeline ([SilenceEngine]) — runs here, on this process's binder thread,
+ * and the cut regions come back in the reply Bundle.
  *
  * Why a ContentProvider: it is the lightest same-app cross-process call there is —
  * the system spawns the helper process on first use, call() is synchronous (the
@@ -36,13 +36,12 @@ class VadProvider : ContentProvider() {
             val regions = SilenceEngine.detect(
                 context!!,
                 arg,
-                extras?.getDoubleArray("wordsS") ?: DoubleArray(0),
-                extras?.getDouble("minSilenceS", 0.3) ?: 0.3,
-                extras?.getDouble("padLeftS", 0.12) ?: 0.12,
-                extras?.getDouble("padRightS", 0.1) ?: 0.1,
-                extras?.getDouble("trimEdgeS", 0.0) ?: 0.0,
-                extras?.getBoolean("removeBreaths", false) ?: false,
-                extras?.getDouble("sensitivityDb", 10.0) ?: 10.0
+                extras?.getDouble("minSilenceS", 0.15) ?: 0.15,
+                extras?.getDouble("padLeftMs", 0.0) ?: 0.0,
+                extras?.getDouble("padRightMs", 0.0) ?: 0.0,
+                extras?.getDouble("trimLeftMs", 30.0) ?: 30.0,
+                extras?.getDouble("trimRightMs", 10.0) ?: 10.0,
+                extras?.getBoolean("breathRefine", true) ?: true
             )
             val flat = DoubleArray(regions.size * 2)
             for (i in regions.indices) {

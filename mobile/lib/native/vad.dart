@@ -1,52 +1,47 @@
 import 'package:flutter/services.dart';
 
-/// Bridge to the native two-pass silence engine (see SilenceEngine.kt): pass 1
-/// protects the kept transcript words (timestamps), pass 2 protects real sound the
-/// transcript missed (adaptive RMS energy) — everything else becomes a cut. Runs
-/// in its own OS process so a native decoder fault can never crash the app.
-/// ("Vad" in the names is legacy — the FSMN VAD/ONNX engine was removed to cut
-/// APK size after it proved crashy on some devices.)
+/// Bridge to the native Silence Mastery engine (SilenceEngine.kt) — the SAME
+/// engine the web app on main runs: Silero VAD (threshold 0.55) finds silence
+/// by listening to the audio; breath cleanup walks sentence-ending exhales;
+/// pads/trims shape every cut edge. No transcript involvement. Runs in its own
+/// OS process so a native fault can never crash the app.
 ///
-/// Returns silence regions [startS, endS] (seconds) to REMOVE, or an empty list on
-/// any failure so the caller can fall back to transcript word-gap silence.
+/// Returns silence regions [startS, endS] (seconds) to REMOVE, or an empty list
+/// on any failure so the caller can fall back to transcript word-gap silence.
 class NativeVad {
   static const MethodChannel _m = MethodChannel('ec/vad');
 
   static Future<List<List<double>>> detectSilences(
     String uri, {
-    /// KEPT transcript words (after the AI's word cuts) as flattened
-    /// [startS, endS, startS, endS, …] pairs — these spans are protected.
-    required List<double> wordsS,
+    /// Gaps shorter than this many seconds are natural beats — kept.
+    double minSilenceS = 0.15,
 
-    /// Gaps shorter than this are left alone.
-    double minSilenceS = 0.3,
+    /// Silence KEPT on a removed gap's left edge (right after the sentence
+    /// ending that precedes it), ms.
+    double padLeftMs = 0,
 
-    /// Air kept at a cut's start — right after the preceding speech ends.
-    double padLeftS = 0.12,
+    /// Silence KEPT on the right edge (just before the next sentence), ms.
+    double padRightMs = 0,
 
-    /// Lead kept at a cut's end — just before the next speech starts.
-    double padRightS = 0.1,
+    /// Cut extended LEFT into the sentence ENDING beyond the detected edge, ms.
+    double trimLeftMs = 30,
 
-    /// Energy-verified shrink into word spans (eats ASR-padded word tails; half
-    /// of it may trim word starts). 0 = timestamps are inviolable.
-    double trimEdgeS = 0.0,
+    /// Cut extended RIGHT into the next sentence's ONSET, ms.
+    double trimRightMs = 10,
 
-    /// Treat non-word energy islands under 400 ms (breaths, lip smacks) as silence.
-    bool removeBreaths = false,
-
-    /// dB above the clip's measured noise floor that counts as sound.
-    double sensitivityDb = 10.0,
+    /// Breath cleanup at sentence endings (RMS edge refinement) — walks each
+    /// cut's left edge back over the exhale so it lands where the voice stops.
+    bool breathRefine = true,
   }) async {
     try {
       final res = await _m.invokeMethod<List<dynamic>>('detectSilences', {
         'uri': uri,
-        'wordsS': wordsS,
         'minSilenceS': minSilenceS,
-        'padLeftS': padLeftS,
-        'padRightS': padRightS,
-        'trimEdgeS': trimEdgeS,
-        'removeBreaths': removeBreaths,
-        'sensitivityDb': sensitivityDb,
+        'padLeftMs': padLeftMs,
+        'padRightMs': padRightMs,
+        'trimLeftMs': trimLeftMs,
+        'trimRightMs': trimRightMs,
+        'breathRefine': breathRefine,
       });
       if (res == null) return const [];
       return [

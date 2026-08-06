@@ -5,7 +5,11 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import java.io.File
+import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.floor
 import kotlin.math.log10
@@ -14,44 +18,62 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * The two-pass silence engine — transcript timestamps first, RMS energy second,
- * one keep-mask. No model, no ONNX (the FSMN VAD is gone: it segfaulted on some
- * devices and cost several MB of APK). Everything here is arithmetic over the
- * decoded audio, so every decision is deterministic and explainable.
+ * Silence Mastery — the native port of main's ONE silence engine
+ * (src/shared/silenceMastery.ts + src/renderer/src/cloud/sileroVad.ts +
+ * the store's Silero-only pipeline). Same model, same fixed VAD tuning, same
+ * post-pipeline, same settings semantics — so a preset behaves identically on
+ * the web app and on this phone.
  *
- * The mask, in order:
- *  1. KEPT WORDS (passed in from the app: the transcript minus the AI's word cuts)
- *     are protected. Their edges may be walked inward by up to `trimEdgeS`, but
- *     only while the audio there is actually below the silence threshold —
- *     AssemblyAI pads word END times through trailing silence, so an
- *     energy-verified shrink eats that dead air without ever clipping speech.
- *     Word STARTS get half the allowance: onsets ("m" of "my") are low-energy and
- *     clip easily.
- *  2. ENERGY-ACTIVE REGIONS (RMS over an adaptive threshold) that fall OUTSIDE
- *     word spans are protected too — real sound the transcript missed. Two island
- *     rules: blips under 120 ms that overlap no word are clicks/taps → silence;
- *     with `removeBreaths` on, non-word islands under 400 ms (breaths, lip smacks)
- *     → silence as well.
- *  3. Everything not protected is a gap. Gaps at least `minSilenceS` long become
- *     cuts, shrunk by `padLeftS` at their start (air kept after speech ends) and
- *     `padRightS` at their end (lead kept before speech resumes). Each cut edge
- *     then valley-snaps ±30 ms (within its pad zone) to the locally quietest
- *     frame, so seams land on the deadest instant.
- *
- * The threshold is ADAPTIVE: noise floor = 10th percentile of 20 ms frame RMS,
- * threshold = floor + sensitivity dB, capped below the 90th percentile (speech)
- * so a noisy clip can't have its quiet speech eaten. Absolute dBFS settings can't
- * do this — a car vlog and a studio take differ by 30 dB.
+ * THE PIPELINE (store.ts runRetakeSilence, Silero-only default), in order:
+ *   1. Silero VAD (silero_vad_legacy.onnx via vad-web's NonRealTimeVAD
+ *      semantics): 1536-sample frames @16 kHz (96 ms), speech threshold 0.55
+ *      (negative 0.40), ONE redemption frame ends a segment, segments with
+ *      < 250 ms of speech-positive frames are misfires. Speech segments invert
+ *      to silence regions ≥ minSilenceS (redemption overshoot subtracted from
+ *      each non-EOF segment end first).
+ *   2. breathRefine (Flash / Cut Throat): walk each region's LEFT edge (the
+ *      sentence ENDING) backward over 20 ms RMS frames quieter than the clip's
+ *      own voice cutoff — breaths score as speech to the VAD, so the cut lands
+ *      where the VOICE stops. Endings only; onsets are never walked. Cap 1.5 s.
+ *   3. padTrimRegions: padLeft/padRight KEEP silence at the region's edges;
+ *      trimLeft/trimRight cut PAST the detected edge into the sentence ending /
+ *      next sentence's onset. Regions touching the media's start/end stay
+ *      flush with it.
+ *   4. unionCutRegions: sort, join regions within 20 ms, drop slivers < 30 ms.
+ * No transcript involvement — Silero's ear is the truth on this engine.
  *
  * THIS CODE RUNS IN ITS OWN OS PROCESS (see [VadProvider], android:process=
- * ":vadengine"): the MediaCodec decoder is still native code, and a native fault
- * there kills only the helper process — the app's binder call throws, EcVad
- * reports the stage recorded in [stageFile] and falls back to word-gap silence.
+ * ":vadengine"): the media decoder and the ONNX runtime are native code, and a
+ * native fault kills only the helper — the app's binder call throws, EcVad
+ * reports the stage recorded in [stageFile] and falls back gracefully.
  *
- * Memory: the decode resamples to 16 kHz mono 16-bit inline (~19 MB per 10 min);
- * the RMS scan adds one float per 10 ms hop. Nothing else is materialised.
+ * Memory: the decode resamples to 16 kHz mono 16-bit inline (~19 MB / 10 min);
+ * Silero sees one 1536-sample frame at a time through reused direct buffers.
  */
 object SilenceEngine {
+
+    // ---- Silero fixed tuning (sileroVad.ts — NOT user settings) -------------
+    private const val FRAME_SAMPLES = 1536 // 96 ms @ 16 kHz
+    private const val FRAME_S = FRAME_SAMPLES / 16000.0
+    private const val SPEECH_THRESHOLD = 0.55f
+    private const val NEG_THRESHOLD = SPEECH_THRESHOLD - 0.15f
+    private const val MIN_SPEECH_FRAMES = 250.0 / 96.0 // vad-web minSpeechMs / frameMs
+    private const val REDEMPTION_S = FRAME_S // one redemption frame's overshoot
+
+    // ---- RMS refinement constants (silenceMastery.ts) ------------------------
+    private const val RMS_FRAME_S = 0.02
+    private const val RMS_SENSITIVITY_DB = 12.0
+    private const val RMS_SPEECH_HEADROOM_DB = 8.0
+    private const val RMS_MIN_RANGE_DB = 6.0
+    private const val EDGE_REFINE_MAX_S = 1.5
+    private const val EDGE_REFINE_VOICE_MARGIN_DB = 15.0
+
+    private const val TARGET_RATE = 16000
+    private const val MAX_DURATION_US = 45L * 60L * 1_000_000L
+
+    // Loaded once per process, reused across runs.
+    @Volatile private var env: OrtEnvironment? = null
+    @Volatile private var session: OrtSession? = null
 
     /** filesDir is per-APP (shared by both processes), so the app side can read which
      *  stage was in flight when the helper process died. */
@@ -65,237 +87,298 @@ object SilenceEngine {
     }
 
     /**
-     * Full pipeline. [wordsS] is the KEPT transcript as flattened [start, end, …]
-     * pairs in seconds, sorted. Returns cut regions [startS, endS] to REMOVE.
-     * Throws on any catchable failure (the caller reports it); a native fault kills
-     * this process and the caller learns the stage from [stageFile].
+     * Full pipeline; settings are the web's SilenceMasterySettings numeric fields.
+     * Returns cut regions [startS, endS] (seconds) to REMOVE. Throws on any
+     * catchable failure; a native fault kills this process and the caller learns
+     * the stage from [stageFile].
      */
     fun detect(
         context: Context,
         uri: String,
-        wordsS: DoubleArray,
         minSilenceS: Double,
-        padLeftS: Double,
-        padRightS: Double,
-        trimEdgeS: Double,
-        removeBreaths: Boolean,
-        sensitivityDb: Double
+        padLeftMs: Double,
+        padRightMs: Double,
+        trimLeftMs: Double,
+        trimRightMs: Double,
+        breathRefine: Boolean
     ): List<DoubleArray> {
         stage(context, "audio decode")
         val (pcm, count) = decodeMono16k(context, uri)
         if (count <= 0) throw IllegalStateException("decoder produced no audio samples")
         val durationS = count.toDouble() / TARGET_RATE
 
-        stage(context, "energy scan")
-        val rmsDb = frameRmsDb(pcm, count)
-        val thr = adaptiveThresholdDb(rmsDb, sensitivityDb)
-        val active = activeIntervals(rmsDb, thr, durationS)
+        stage(context, "silero model load")
+        ensureRuntime(context)
+
+        val raw = detectSileroSilences(context, pcm, count, durationS, minSilenceS)
+
+        val shaped = if (breathRefine) {
+            stage(context, "breath cleanup")
+            refineRegionEdgesByRms(raw, frameRmsDb(pcm, count), RMS_FRAME_S, durationS)
+        } else raw
 
         stage(context, "cut geometry")
-        val words = mergeIntervals(pairsToIntervals(wordsS, durationS))
-        val protected_ = buildProtected(words, active, trimEdgeS, rmsDb, thr, removeBreaths)
-        val cuts = gapsToCuts(protected_, durationS, minSilenceS, padLeftS, padRightS, rmsDb)
+        val padded = padTrimRegions(shaped, padLeftMs / 1000.0, padRightMs / 1000.0,
+            trimLeftMs / 1000.0, trimRightMs / 1000.0, durationS)
+        val out = unionCutRegions(padded, durationS)
         stage(context, "done")
-        return cuts
-    }
-
-    // --- energy ---------------------------------------------------------------
-
-    /** RMS (dBFS) of 20 ms frames on a 10 ms hop — index i covers [i·10ms, i·10ms+20ms). */
-    private fun frameRmsDb(pcm: ShortArray, count: Int): FloatArray {
-        val frames = max(0, 1 + (count - FRAME_WIN) / FRAME_HOP)
-        val out = FloatArray(frames)
-        for (i in 0 until frames) {
-            val a = i * FRAME_HOP
-            var sum = 0.0
-            for (j in a until a + FRAME_WIN) {
-                val v = pcm[j] / 32768.0
-                sum += v * v
-            }
-            val rms = sqrt(sum / FRAME_WIN)
-            out[i] = if (rms > 1e-9) (20.0 * log10(rms)).toFloat() else -180f
-        }
         return out
     }
 
-    /** floor(p10) + sensitivity, kept at least 8 dB under speech (p90) and never
-     *  below floor+3 — so uniform-loudness clips degrade to "no energy regions"
-     *  rather than eating everything or nothing. */
-    private fun adaptiveThresholdDb(rmsDb: FloatArray, sensitivityDb: Double): Float {
-        if (rmsDb.isEmpty()) return -45f
-        val sorted = rmsDb.copyOf()
-        sorted.sort()
-        val floorDb = sorted[(sorted.size * 10 / 100).coerceIn(0, sorted.size - 1)]
-        val speechDb = sorted[(sorted.size * 90 / 100).coerceIn(0, sorted.size - 1)]
-        var thr = floorDb + sensitivityDb.toFloat().coerceIn(3f, 30f)
-        thr = min(thr, speechDb - 8f)
-        thr = max(thr, floorDb + 3f)
-        return min(thr, -20f) // never call anything above -20 dBFS "silence"
-    }
+    // --- ONNX runtime (lazy) ------------------------------------------------
 
-    /** Hysteresis: enter active above thr+2, leave below thr−2 → intervals (seconds). */
-    private fun activeIntervals(rmsDb: FloatArray, thr: Float, durationS: Double): List<DoubleArray> {
-        val out = ArrayList<DoubleArray>()
-        var start = -1
-        for (i in rmsDb.indices) {
-            if (start < 0) {
-                if (rmsDb[i] > thr + 2f) start = i
-            } else if (rmsDb[i] < thr - 2f) {
-                out.add(doubleArrayOf(start * HOP_S, min(durationS, i * HOP_S + WIN_S)))
-                start = -1
+    private fun ensureRuntime(context: Context) {
+        if (session != null) return
+        synchronized(this) {
+            if (session == null) {
+                val e = OrtEnvironment.getEnvironment()
+                val bytes = context.assets.open("silero/silero_vad_legacy.onnx").use { it.readBytes() }
+                val opts = OrtSession.SessionOptions()
+                opts.setIntraOpNumThreads(1)
+                opts.setInterOpNumThreads(1)
+                val sess = e.createSession(bytes, opts)
+                val ins = sess.inputNames
+                val outs = sess.outputNames
+                if (!ins.containsAll(listOf("input", "sr", "h", "c")) ||
+                    !outs.containsAll(listOf("output", "hn", "cn"))
+                ) {
+                    try {
+                        sess.close()
+                    } catch (_: Exception) {
+                    }
+                    throw IllegalStateException(
+                        "silero model i/o unexpected: in=$ins out=$outs"
+                    )
+                }
+                env = e
+                session = sess
             }
         }
-        if (start >= 0) out.add(doubleArrayOf(start * HOP_S, durationS))
-        return out
     }
 
-    /** Is the 10 ms grid frame containing [t] below the silence threshold? */
-    private fun quietAt(rmsDb: FloatArray, thr: Float, t: Double): Boolean {
-        if (rmsDb.isEmpty()) return true
-        val i = (t / HOP_S).toInt().coerceIn(0, rmsDb.size - 1)
-        return rmsDb[i] < thr
-    }
-
-    // --- keep mask --------------------------------------------------------------
-
-    private fun pairsToIntervals(flat: DoubleArray, durationS: Double): List<DoubleArray> {
-        val out = ArrayList<DoubleArray>(flat.size / 2)
-        var i = 0
-        while (i + 1 < flat.size) {
-            val a = flat[i].coerceIn(0.0, durationS)
-            val b = flat[i + 1].coerceIn(0.0, durationS)
-            if (b > a) out.add(doubleArrayOf(a, b))
-            i += 2
-        }
-        out.sortBy { it[0] }
-        return out
-    }
-
-    private fun mergeIntervals(sorted: List<DoubleArray>): List<DoubleArray> {
-        val out = ArrayList<DoubleArray>()
-        for (iv in sorted) {
-            val last = out.lastOrNull()
-            if (last != null && iv[0] <= last[1]) last[1] = max(last[1], iv[1])
-            else out.add(doubleArrayOf(iv[0], iv[1]))
-        }
-        return out
-    }
-
-    private fun overlapsAny(iv: DoubleArray, set: List<DoubleArray>): Boolean {
-        for (s in set) {
-            if (s[0] < iv[1] && iv[0] < s[1]) return true
-            if (s[0] >= iv[1]) break // sorted
-        }
-        return false
-    }
+    // --- stage 1: Silero speech → silence regions ----------------------------
 
     /**
-     * Protected = trimmed word spans ∪ surviving energy islands.
-     * Word-edge trim is ENERGY-VERIFIED: an edge only moves through frames already
-     * below the threshold — full [trimEdgeS] on word ends (ASR pads them), half on
-     * word starts (onsets are low-energy and precious).
+     * vad-web NonRealTimeVAD semantics over the decoded PCM: full 1536-sample
+     * frames, LSTM state carried across the whole run, ONE redemption frame ends
+     * a segment (its 96 ms overshoot subtracted from each non-EOF segment end),
+     * segments with < ~2.6 speech-positive frames are misfires. Speech is then
+     * inverted to silence over [0, durationS], keeping runs ≥ max(0.03, minSilenceS)
+     * (sileroVad.ts detectSileroSilences).
      */
-    private fun buildProtected(
-        words: List<DoubleArray>,
-        active: List<DoubleArray>,
-        trimEdgeS: Double,
-        rmsDb: FloatArray,
-        thr: Float,
-        removeBreaths: Boolean
+    private fun detectSileroSilences(
+        context: Context,
+        pcm: ShortArray,
+        count: Int,
+        durationS: Double,
+        minSilenceS: Double
     ): List<DoubleArray> {
-        val trimmed = ArrayList<DoubleArray>(words.size)
-        val trim = trimEdgeS.coerceIn(0.0, 0.2)
-        for (w in words) {
-            var w0 = w[0]
-            var w1 = w[1]
-            if (trim > 0) {
-                var eaten = 0.0
-                while (eaten + STEP_S <= trim && w1 - STEP_S > w0 + MIN_WORD_S &&
-                    quietAt(rmsDb, thr, w1 - STEP_S)
-                ) {
-                    w1 -= STEP_S; eaten += STEP_S
+        val s = session ?: return emptyList()
+        val ortEnv = env ?: return emptyList()
+        val frames = count / FRAME_SAMPLES
+        if (frames == 0) return emptyList()
+
+        // Reused direct buffers: the audio frame and the LSTM h/c states.
+        val frameBuf = ByteBuffer.allocateDirect(FRAME_SAMPLES * 4)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val hBuf = ByteBuffer.allocateDirect(2 * 64 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val cBuf = ByteBuffer.allocateDirect(2 * 64 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val hData = FloatArray(2 * 64)
+        val cData = FloatArray(2 * 64)
+        val stateShape = longArrayOf(2, 1, 64)
+        val frameShape = longArrayOf(1, FRAME_SAMPLES.toLong())
+        // `sr` is a SCALAR int64 tensor (shape []) — direct buffer like the rest.
+        val srBuf = ByteBuffer.allocateDirect(8).order(ByteOrder.nativeOrder()).asLongBuffer()
+        srBuf.put(TARGET_RATE.toLong())
+        srBuf.flip()
+        val srTensor = OnnxTensor.createTensor(ortEnv, srBuf, longArrayOf())
+
+        val speech = ArrayList<DoubleArray>() // [startS, endS] raw speech segments
+        var speaking = false
+        var segStartFrame = 0
+        var posCount = 0
+
+        try {
+            for (f in 0 until frames) {
+                if (f % 250 == 0) stage(context, "silero vad ${f + 1}/$frames")
+                frameBuf.clear()
+                val base = f * FRAME_SAMPLES
+                for (i in 0 until FRAME_SAMPLES) frameBuf.put(pcm[base + i] / 32768f)
+                frameBuf.flip()
+                hBuf.clear(); hBuf.put(hData); hBuf.flip()
+                cBuf.clear(); cBuf.put(cData); cBuf.flip()
+
+                val feeds = HashMap<String, OnnxTensor>()
+                feeds["input"] = OnnxTensor.createTensor(ortEnv, frameBuf, frameShape)
+                feeds["sr"] = srTensor
+                feeds["h"] = OnnxTensor.createTensor(ortEnv, hBuf, stateShape)
+                feeds["c"] = OnnxTensor.createTensor(ortEnv, cBuf, stateShape)
+                val res = try {
+                    s.run(feeds)
+                } catch (t: Throwable) {
+                    feeds.values.forEach { if (it !== srTensor) runCatching { it.close() } }
+                    throw t
                 }
-                eaten = 0.0
-                while (eaten + STEP_S <= trim / 2 && w0 + STEP_S < w1 - MIN_WORD_S &&
-                    quietAt(rmsDb, thr, w0)
-                ) {
-                    w0 += STEP_S; eaten += STEP_S
+                val prob: Float
+                try {
+                    prob = (res.get("output").get() as OnnxTensor).floatBuffer.get(0)
+                    val hn = (res.get("hn").get() as OnnxTensor).floatBuffer
+                    val cn = (res.get("cn").get() as OnnxTensor).floatBuffer
+                    hn.get(hData, 0, min(hData.size, hn.remaining()))
+                    cn.get(cData, 0, min(cData.size, cn.remaining()))
+                } finally {
+                    res.close()
+                    feeds.values.forEach { if (it !== srTensor) it.close() }
+                }
+
+                // vad-web FrameProcessor: pos resets redemption + starts/extends the
+                // segment; a frame under the negative threshold while speaking ends it
+                // (redemptionFrames == 1); the in-between zone changes nothing.
+                if (prob >= SPEECH_THRESHOLD) {
+                    if (!speaking) {
+                        speaking = true
+                        segStartFrame = f
+                        posCount = 0
+                    }
+                    posCount++
+                } else if (speaking && prob < NEG_THRESHOLD) {
+                    speaking = false
+                    if (posCount >= MIN_SPEECH_FRAMES) {
+                        speech.add(doubleArrayOf(segStartFrame * FRAME_S, (f + 1) * FRAME_S))
+                    }
+                    posCount = 0
                 }
             }
-            trimmed.add(doubleArrayOf(w0, w1))
+            if (speaking && posCount >= MIN_SPEECH_FRAMES) {
+                speech.add(doubleArrayOf(segStartFrame * FRAME_S, frames * FRAME_S))
+            }
+        } finally {
+            try {
+                srTensor.close()
+            } catch (_: Exception) {
+            }
         }
 
-        val keep = ArrayList<DoubleArray>(trimmed)
-        for (a in active) {
-            if (overlapsAny(a, trimmed)) {
-                keep.add(a) // sound attached to a word (its own onset/tail) — protected
-                continue
-            }
-            val len = a[1] - a[0]
-            if (len < CLICK_MAX_S) continue // click/tap/chair creak → silence
-            if (removeBreaths && len < BREATH_MAX_S) continue // breath/lip smack → silence
-            keep.add(a) // real non-word sound the transcript missed — protected
+        // Undo the redemption-frame overshoot (EOF-closed segments left alone),
+        // merge overlaps, then invert SPEECH → silence ≥ minSilenceS.
+        speech.sortBy { it[0] }
+        val padded = ArrayList<DoubleArray>()
+        for (seg in speech) {
+            val end = if (seg[1] >= durationS - 0.15) seg[1] else max(seg[0], seg[1] - REDEMPTION_S)
+            val a = max(0.0, seg[0])
+            val b = min(durationS, end)
+            val last = padded.lastOrNull()
+            if (last != null && a <= last[1]) last[1] = max(last[1], b)
+            else padded.add(doubleArrayOf(a, b))
         }
-        keep.sortBy { it[0] }
-        return mergeIntervals(keep)
+        val minDur = max(0.03, minSilenceS)
+        val regions = ArrayList<DoubleArray>()
+        var cursor = 0.0
+        for (seg in padded) {
+            if (seg[0] > cursor + 0.02) regions.add(doubleArrayOf(cursor, seg[0]))
+            cursor = max(cursor, seg[1])
+        }
+        if (durationS > cursor + 0.02) regions.add(doubleArrayOf(cursor, durationS))
+        return regions.filter { it[1] - it[0] >= minDur }
     }
 
-    /** Complement of the protected set → pads → min-length filter → valley snap. */
-    private fun gapsToCuts(
-        protected_: List<DoubleArray>,
-        durationS: Double,
-        minSilenceS: Double,
+    // --- stage 2: breath cleanup (silenceMastery.ts refineRegionEdgesByRms) ---
+
+    /** Per-frame RMS level in dBFS — NON-overlapping 20 ms frames, matching the
+     *  web's frameRmsDb exactly. */
+    private fun frameRmsDb(pcm: ShortArray, count: Int): DoubleArray {
+        val n = max(1, (RMS_FRAME_S * TARGET_RATE).toInt())
+        val frames = count / n
+        val out = DoubleArray(frames)
+        for (f in 0 until frames) {
+            var acc = 0.0
+            val base = f * n
+            for (i in 0 until n) {
+                val v = pcm[base + i] / 32768.0
+                acc += v * v
+            }
+            out[f] = 20 * log10(sqrt(acc / n) + 1e-9)
+        }
+        return out
+    }
+
+    /** index = floor(p·(n−1)), matching the web percentile helper. */
+    private fun percentile(sorted: DoubleArray, p: Double): Double =
+        if (sorted.isEmpty()) -100.0
+        else sorted[(p * (sorted.size - 1)).toInt().coerceIn(0, sorted.size - 1)]
+
+    private fun refineRegionEdgesByRms(
+        regions: List<DoubleArray>,
+        framesDb: DoubleArray,
+        frameS: Double,
+        durationS: Double
+    ): List<DoubleArray> {
+        if (regions.isEmpty() || framesDb.isEmpty() || frameS <= 0) return regions
+        val sorted = framesDb.copyOf()
+        sorted.sort()
+        val floorDb = percentile(sorted, 0.1)
+        val speechDb = percentile(sorted, 0.9)
+        if (speechDb - floorDb < RMS_MIN_RANGE_DB) return regions // no usable range
+        val thresholdDb = min(floorDb + RMS_SENSITIVITY_DB, speechDb - RMS_SPEECH_HEADROOM_DB)
+        val cutoffDb = max(thresholdDb, speechDb - EDGE_REFINE_VOICE_MARGIN_DB)
+        fun frameAt(t: Double): Double =
+            framesDb[(t / frameS).toInt().coerceIn(0, framesDb.size - 1)]
+        val out = regions.map { doubleArrayOf(it[0], it[1]) }.toMutableList()
+        for (r in out) {
+            var ext = 0.0
+            while (r[0] > 0 && ext < EDGE_REFINE_MAX_S && frameAt(r[0] - frameS / 2) < cutoffDb) {
+                r[0] = max(0.0, r[0] - frameS)
+                ext += frameS
+            }
+        }
+        out.sortBy { it[0] }
+        val merged = ArrayList<DoubleArray>()
+        for (r in out) {
+            val last = merged.lastOrNull()
+            if (last != null && r[0] <= last[1]) last[1] = max(last[1], r[1])
+            else merged.add(r)
+        }
+        return merged
+    }
+
+    // --- stage 3+4: pads/trims + union (silenceMastery.ts) --------------------
+
+    /** Pads KEEP silence at the region's edges; trims cut PAST the detected edge
+     *  into speech. Regions touching the media's start/end stay flush with it. */
+    private fun padTrimRegions(
+        regions: List<DoubleArray>,
         padLeftS: Double,
         padRightS: Double,
-        rmsDb: FloatArray
+        trimLeftS: Double,
+        trimRightS: Double,
+        durationS: Double
     ): List<DoubleArray> {
-        val minSil = minSilenceS.coerceIn(0.0, 10.0)
-        val padL = padLeftS.coerceIn(0.0, 1.0)
-        val padR = padRightS.coerceIn(0.0, 1.0)
-
-        // Gaps between protected intervals (plus the clip edges).
-        val gaps = ArrayList<DoubleArray>()
-        var cursor = 0.0
-        for (p in protected_) {
-            if (p[0] > cursor + 0.001) gaps.add(doubleArrayOf(cursor, p[0]))
-            cursor = max(cursor, p[1])
+        val out = ArrayList<DoubleArray>()
+        for (r in regions) {
+            val atStart = r[0] <= 0.01
+            val atEnd = durationS > 0 && r[1] >= durationS - 0.01
+            val a = if (atStart) 0.0 else r[0] + padLeftS - trimLeftS
+            val b = if (atEnd) r[1] else r[1] - padRightS + trimRightS
+            val start = max(0.0, a)
+            val end = if (durationS > 0) min(b, durationS) else b
+            if (end - start >= 0.03) out.add(doubleArrayOf(start, end))
         }
-        if (durationS > cursor + 0.001) gaps.add(doubleArrayOf(cursor, durationS))
-
-        val cuts = ArrayList<DoubleArray>()
-        for (g in gaps) {
-            if (g[1] - g[0] < minSil) continue
-            val leading = g[0] <= 0.001 // nothing before → trim flush to the start
-            val trailing = g[1] >= durationS - 0.001 // nothing after → flush to the end
-            var c0 = if (leading) 0.0 else g[0] + padL
-            var c1 = if (trailing) durationS else g[1] - padR
-            if (c1 - c0 < MIN_CUT_S) continue
-            // Valley snap: slide each interior edge (within its pad zone, ±30 ms) to
-            // the locally quietest frame so the seam lands on the deadest instant.
-            if (!leading) c0 = snapToValley(rmsDb, c0, g[0], c1 - MIN_CUT_S)
-            if (!trailing) c1 = snapToValley(rmsDb, c1, c0 + MIN_CUT_S, g[1])
-            cuts.add(doubleArrayOf(c0, c1))
-        }
-        return cuts
+        return out
     }
 
-    /** Quietest 10 ms frame within ±30 ms of [t], clamped to [lo, hi]. */
-    private fun snapToValley(rmsDb: FloatArray, t: Double, lo: Double, hi: Double): Double {
-        if (rmsDb.isEmpty() || hi <= lo) return t.coerceIn(min(lo, hi), max(lo, hi))
-        val from = max(lo, t - SNAP_S)
-        val to = min(hi, t + SNAP_S)
-        var best = t
-        var bestDb = Float.MAX_VALUE
-        var x = from
-        while (x <= to + 1e-9) {
-            val i = (x / HOP_S).toInt().coerceIn(0, rmsDb.size - 1)
-            if (rmsDb[i] < bestDb) {
-                bestDb = rmsDb[i]
-                best = x
-            }
-            x += STEP_S
+    /** Sort, join regions within 20 ms, drop slivers < 30 ms. */
+    private fun unionCutRegions(regions: List<DoubleArray>, durationS: Double): List<DoubleArray> {
+        val all = regions
+            .map { doubleArrayOf(max(0.0, it[0]), if (durationS > 0) min(it[1], durationS) else it[1]) }
+            .filter { it[1] - it[0] >= 0.03 }
+            .sortedBy { it[0] }
+        val merged = ArrayList<DoubleArray>()
+        for (c in all) {
+            val last = merged.lastOrNull()
+            if (last != null && c[0] <= last[1] + 0.02) last[1] = max(last[1], c[1])
+            else merged.add(doubleArrayOf(c[0], c[1]))
         }
-        return best.coerceIn(lo, hi)
+        return merged
     }
 
     // --- audio decode: any source → 16 kHz mono 16-bit PCM ------------------
@@ -331,8 +414,7 @@ object SilenceEngine {
             if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L
-            // Past this the PCM alone would dominate the heap; word-gap silence is the
-            // better trade for feature-length audio.
+            // Past this the PCM alone would dominate the heap; the caller falls back.
             if (durationUs > MAX_DURATION_US) throw IllegalStateException("clip over 45 min — silence scan skipped")
 
             // Pre-size from the container duration so the decode never reallocates.
@@ -436,17 +518,4 @@ object SilenceEngine {
         if (written == 0 || sampleRate <= 0) throw IllegalStateException("decoder produced no audio samples")
         return out to written
     }
-
-    private const val TARGET_RATE = 16000
-    private const val FRAME_WIN = 320 // 20 ms @ 16 kHz
-    private const val FRAME_HOP = 160 // 10 ms hop
-    private const val WIN_S = 0.02
-    private const val HOP_S = 0.01
-    private const val STEP_S = 0.01 // edge-walk / valley-scan step
-    private const val SNAP_S = 0.03 // valley-snap search radius
-    private const val MIN_CUT_S = 0.04 // never emit a cut shorter than this
-    private const val MIN_WORD_S = 0.05 // edge trim always leaves this much word core
-    private const val CLICK_MAX_S = 0.12 // non-word energy shorter than this = click
-    private const val BREATH_MAX_S = 0.40 // …than this = breath (when removeBreaths)
-    private const val MAX_DURATION_US = 45L * 60L * 1_000_000L
 }

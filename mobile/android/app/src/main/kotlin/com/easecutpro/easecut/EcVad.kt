@@ -113,14 +113,12 @@ class EcVad(
             return
         }
         val extras = Bundle()
-        val words = call.argument<List<Number>>("wordsS") ?: emptyList()
-        extras.putDoubleArray("wordsS", DoubleArray(words.size) { words[it].toDouble() })
-        extras.putDouble("minSilenceS", (call.argument<Number>("minSilenceS"))?.toDouble() ?: 0.3)
-        extras.putDouble("padLeftS", (call.argument<Number>("padLeftS"))?.toDouble() ?: 0.12)
-        extras.putDouble("padRightS", (call.argument<Number>("padRightS"))?.toDouble() ?: 0.1)
-        extras.putDouble("trimEdgeS", (call.argument<Number>("trimEdgeS"))?.toDouble() ?: 0.0)
-        extras.putBoolean("removeBreaths", call.argument<Boolean>("removeBreaths") ?: false)
-        extras.putDouble("sensitivityDb", (call.argument<Number>("sensitivityDb"))?.toDouble() ?: 10.0)
+        extras.putDouble("minSilenceS", (call.argument<Number>("minSilenceS"))?.toDouble() ?: 0.15)
+        extras.putDouble("padLeftMs", (call.argument<Number>("padLeftMs"))?.toDouble() ?: 0.0)
+        extras.putDouble("padRightMs", (call.argument<Number>("padRightMs"))?.toDouble() ?: 0.0)
+        extras.putDouble("trimLeftMs", (call.argument<Number>("trimLeftMs"))?.toDouble() ?: 30.0)
+        extras.putDouble("trimRightMs", (call.argument<Number>("trimRightMs"))?.toDouble() ?: 10.0)
+        extras.putBoolean("breathRefine", call.argument<Boolean>("breathRefine") ?: true)
 
         // One run at a time — a second concurrent run would double the decode + ONNX
         // working set at exactly the moment memory is tightest.

@@ -4,9 +4,11 @@ import '../editor/silence_settings.dart';
 import '../theme.dart';
 import '../widgets/controls.dart';
 
-/// Silence Settings — mirrors web 0.01's redesigned sheet: three named presets
-/// (Conservative / Balanced / Aggressive) that bundle the real fields, plus
-/// custom sliders. Values persist to SilenceSettings on Apply.
+/// Silence Settings — mirrors main's SilenceMasterySettingsModal: four fixed
+/// presets (Natural Rhythm / No Chill / Flash / Cut Throat) plus the Mad
+/// Scientist lever that unlocks the sliders for hand-tuning. Values persist to
+/// SilenceSettings on Apply and drive the native Silero engine — the same
+/// engine, presets and semantics as the web app.
 class SilenceModal extends StatefulWidget {
   const SilenceModal({super.key});
 
@@ -15,63 +17,58 @@ class SilenceModal extends StatefulWidget {
 }
 
 class _SilenceModalState extends State<SilenceModal> {
-  double _thr = SilenceSettings.speechThreshold;
-  double _gap = SilenceSettings.minGapS;
-  double _padBefore = SilenceSettings.padBeforeS;
-  double _padAfter = SilenceSettings.padAfterS;
-  double _edge = SilenceSettings.edgeTrimS;
-  bool _breaths = SilenceSettings.removeBreaths;
+  double _minSil = SilenceSettings.minSilenceS;
+  double _padL = SilenceSettings.padLeftMs.toDouble();
+  double _padR = SilenceSettings.padRightMs.toDouble();
+  double _trimL = SilenceSettings.trimLeftMs.toDouble();
+  double _trimR = SilenceSettings.trimRightMs.toDouble();
+  bool _breath = SilenceSettings.breathRefine;
+  bool _mad = SilenceSettings.madScientist;
   double _overlap = SilenceSettings.seamOverlapMs.toDouble();
 
-  // Preset names carried over from the desktop Retake Final Boss. They map onto the
-  // native two-pass silence engine (SilenceEngine.kt): pads + edge-trim + remove-
-  // breaths shape the cuts, min-gap is the smallest silence worth removing, and
-  // strictness sets the energy pass's sensitivity over the clip's noise floor.
-  static const _presets = ['Chill Talker', 'Just Right', 'No Chill', 'Espresso Shot', 'Mad Scientist'];
+  // SILENCE_MASTERY_PRESETS, verbatim.
+  static const _presets = ['Natural Rhythm', 'No Chill', 'Flash', 'Cut Throat'];
   static const _blurbs = {
-    'Chill Talker': 'Leaves generous breathing room — relaxed, natural pacing.',
-    'Just Right': 'Trims dead air but keeps a comfortable rhythm. (Default)',
-    'No Chill': 'Tight cuts with a quiet-tail trim — punchy without clipping words.',
-    'Espresso Shot': 'The tightest — gapless jump cuts, dead air removed.',
-    'Mad Scientist': 'Your own mix of the settings below.',
+    'Natural Rhythm': 'Gentle: keeps a breath at both edges, never trims into speech.',
+    'No Chill': 'Tight cuts into the sentence ending and the next onset — no pads.',
+    'Flash': 'The default: light trims + breath cleanup at sentence endings.',
+    'Cut Throat': 'The hardest: 75ms off every ending, breath cleanup on top.',
+    'Mad Scientist': 'Roll your own: unlock the sliders and tune every value by hand.',
   };
 
-  bool _eq(double a, double b) => (a - b).abs() < 1e-6;
-  String get _preset {
-    final o = _overlap;
-    if (_eq(_padBefore, 0.4) && _eq(_padAfter, 0.8) && _eq(_edge, 0) && !_breaths && _eq(o, 50)) return 'Chill Talker';
-    if (_eq(_padBefore, 0.1) && _eq(_padAfter, 0.3) && _eq(_edge, 0) && !_breaths && _eq(o, 50)) return 'Just Right';
-    if (_eq(_padBefore, 0.05) && _eq(_padAfter, 0.1) && _eq(_edge, 0) && _breaths && _eq(o, 50)) return 'No Chill';
-    if (_eq(_padBefore, 0) && _eq(_padAfter, 0) && _eq(_edge, 0.05) && _breaths && _eq(o, 50)) return 'Espresso Shot';
-    return 'Mad Scientist'; // the editable preset
+  bool _eq(double a, double b) => (a - b).abs() < 1e-9;
+  String? get _preset {
+    if (_mad) return null;
+    if (_eq(_minSil, 0.25) && _padL == 50 && _padR == 100 && _trimL == 0 && _trimR == 0 && !_breath) return 'Natural Rhythm';
+    if (_eq(_minSil, 0.15) && _padL == 0 && _padR == 0 && _trimL == 20 && _trimR == 50 && !_breath) return 'No Chill';
+    if (_eq(_minSil, 0.15) && _padL == 0 && _padR == 0 && _trimL == 30 && _trimR == 10 && _breath) return 'Flash';
+    if (_eq(_minSil, 0.15) && _padL == 0 && _padR == 0 && _trimL == 75 && _trimR == 15 && _breath) return 'Cut Throat';
+    return null;
   }
 
   void _applyPreset(String id) {
     setState(() {
+      _mad = false;
       switch (id) {
-        case 'Chill Talker':
-          _padBefore = 0.4; _padAfter = 0.8; _edge = 0; _breaths = false; _overlap = 50;
+        case 'Natural Rhythm':
+          _minSil = 0.25; _padL = 50; _padR = 100; _trimL = 0; _trimR = 0; _breath = false;
           break;
         case 'No Chill':
-          _padBefore = 0.05; _padAfter = 0.1; _edge = 0; _breaths = true; _overlap = 50;
+          _minSil = 0.15; _padL = 0; _padR = 0; _trimL = 20; _trimR = 50; _breath = false;
           break;
-        case 'Espresso Shot':
-          _padBefore = 0; _padAfter = 0; _edge = 0.05; _breaths = true; _overlap = 50;
+        case 'Cut Throat':
+          _minSil = 0.15; _padL = 0; _padR = 0; _trimL = 75; _trimR = 15; _breath = true;
           break;
-        case 'Mad Scientist':
-          _padBefore = 0.1; _padAfter = 0.3; _edge = 0; _breaths = false; _overlap = 0;
-          break;
-        default: // Just Right
-          _padBefore = 0.1; _padAfter = 0.3; _edge = 0; _breaths = false; _overlap = 50;
+        default: // Flash — the default
+          _minSil = 0.15; _padL = 0; _padR = 0; _trimL = 30; _trimR = 10; _breath = true;
       }
     });
   }
 
-  String get _strictLabel => _thr < 0.6 ? 'Gentle' : _thr < 0.72 ? 'Standard' : _thr < 0.85 ? 'Strict' : 'Very strict';
-
   @override
   Widget build(BuildContext context) {
     final cur = _preset;
+    final blurbKey = _mad ? 'Mad Scientist' : (cur ?? 'Mad Scientist');
     return Dialog(
       backgroundColor: Ec.card,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
@@ -102,53 +99,64 @@ class _SilenceModalState extends State<SilenceModal> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  for (final p in _presets) EcChip(label: p, active: cur == p, onTap: () => _applyPreset(p)),
+                  for (final p in _presets)
+                    EcChip(label: p, active: !_mad && cur == p, onTap: () => _applyPreset(p)),
                 ],
               ),
               const SizedBox(height: 8),
-              Text(_blurbs[cur] ?? '', style: const TextStyle(color: Ec.textMute, fontSize: 12, height: 1.4)),
-              const SizedBox(height: 14),
-              EcSliderRow(
-                label: 'Trim pauses longer than',
-                valueLabel: '${_gap.toStringAsFixed(2)}s',
-                value: _gap,
-                min: 0.05,
-                max: 2,
-                onChanged: (v) => setState(() => _gap = v),
+              Text(_blurbs[blurbKey] ?? '', style: const TextStyle(color: Ec.textMute, fontSize: 12, height: 1.4)),
+              const SizedBox(height: 12),
+              // Mad Scientist — the lever that unlocks the sliders.
+              EcRow(
+                label: 'Mad Scientist 🧪',
+                trailing: EcToggle(value: _mad, onChanged: (v) => setState(() => _mad = v)),
               ),
-              EcSliderRow(
-                label: 'Pause kept at each cut',
-                valueLabel: '${_padAfter.toStringAsFixed(2)}s',
-                value: _padAfter,
-                min: 0,
-                max: 0.4,
-                onChanged: (v) => setState(() => _padAfter = v),
-              ),
-              EcSliderRow(
-                label: 'Lead into the next word',
-                valueLabel: '${_padBefore.toStringAsFixed(2)}s',
-                value: _padBefore,
-                min: 0,
-                max: 0.4,
-                onChanged: (v) => setState(() => _padBefore = v),
-              ),
-              EcSliderRow(
-                label: 'Silence detection strictness',
-                valueLabel: _strictLabel,
-                value: _thr,
-                min: 0.5,
-                max: 0.9,
-                onChanged: (v) => setState(() => _thr = v),
-              ),
-              EcSliderRow(
-                label: 'Tighten cut joins (edge trim)',
-                valueLabel: '${(_edge * 1000).round()}ms',
-                value: _edge,
-                min: 0,
-                max: 0.2,
-                onChanged: (v) => setState(() => _edge = v),
-              ),
-              EcRow(label: 'Remove breaths', trailing: EcToggle(value: _breaths, onChanged: (v) => setState(() => _breaths = v))),
+              if (_mad) ...[
+                EcSliderRow(
+                  label: 'Min silence to remove',
+                  valueLabel: '${_minSil.toStringAsFixed(2)}s',
+                  value: _minSil,
+                  min: 0.1,
+                  max: 3,
+                  onChanged: (v) => setState(() => _minSil = v),
+                ),
+                EcSliderRow(
+                  label: 'Pad left of the gap',
+                  valueLabel: '${_padL.round()}ms',
+                  value: _padL,
+                  min: 0,
+                  max: 500,
+                  onChanged: (v) => setState(() => _padL = (v / 10).round() * 10.0),
+                ),
+                EcSliderRow(
+                  label: 'Pad right of the gap',
+                  valueLabel: '${_padR.round()}ms',
+                  value: _padR,
+                  min: 0,
+                  max: 500,
+                  onChanged: (v) => setState(() => _padR = (v / 10).round() * 10.0),
+                ),
+                EcSliderRow(
+                  label: 'Trim left (sentence ending)',
+                  valueLabel: '${_trimL.round()}ms',
+                  value: _trimL,
+                  min: 0,
+                  max: 500,
+                  onChanged: (v) => setState(() => _trimL = (v / 5).round() * 5.0),
+                ),
+                EcSliderRow(
+                  label: 'Trim right (next sentence start)',
+                  valueLabel: '${_trimR.round()}ms',
+                  value: _trimR,
+                  min: 0,
+                  max: 500,
+                  onChanged: (v) => setState(() => _trimR = (v / 5).round() * 5.0),
+                ),
+                EcRow(
+                  label: 'Breath cleanup (sentence endings)',
+                  trailing: EcToggle(value: _breath, onChanged: (v) => setState(() => _breath = v)),
+                ),
+              ],
               EcRow(
                 label: 'Blend audio at cuts (overlap)',
                 trailing: EcToggle(value: _overlap > 0, onChanged: (v) => setState(() => _overlap = v ? 20 : 0)),
@@ -163,13 +171,14 @@ class _SilenceModalState extends State<SilenceModal> {
                   onChanged: (v) => setState(() => _overlap = v),
                 ),
               const SizedBox(height: 8),
-              const Text('Cuts come from your transcript’s word timestamps plus an energy scan that protects any sound the transcript missed. Padding keeps air around speech, edge trim tightens into word boundaries, min-gap sets the smallest pause worth removing, and strictness sets how quiet counts as silence.',
+              const Text(
+                  'Silero listens to your audio and finds every silent stretch. Pads KEEP silence at a cut\'s edges; trims cut PAST the detected edge into the sentence ending (left) or the next sentence\'s onset (right). Breath cleanup walks end-of-sentence exhales so cuts land where the voice stops.',
                   style: TextStyle(color: Ec.textFaint, fontSize: 11, height: 1.4)),
               const SizedBox(height: 16),
               Row(
                 children: [
                   GestureDetector(
-                    onTap: () => _applyPreset('Just Right'),
+                    onTap: () => _applyPreset('Flash'),
                     child: const Text('Reset to default', style: TextStyle(color: Color(0xFF9BA0AC), fontSize: 13)),
                   ),
                   const Spacer(),
@@ -182,12 +191,13 @@ class _SilenceModalState extends State<SilenceModal> {
                   ),
                   GestureDetector(
                     onTap: () {
-                      SilenceSettings.speechThreshold = _thr;
-                      SilenceSettings.minGapS = _gap;
-                      SilenceSettings.padBeforeS = _padBefore;
-                      SilenceSettings.padAfterS = _padAfter;
-                      SilenceSettings.edgeTrimS = _edge;
-                      SilenceSettings.removeBreaths = _breaths;
+                      SilenceSettings.minSilenceS = _minSil;
+                      SilenceSettings.padLeftMs = _padL.round();
+                      SilenceSettings.padRightMs = _padR.round();
+                      SilenceSettings.trimLeftMs = _trimL.round();
+                      SilenceSettings.trimRightMs = _trimR.round();
+                      SilenceSettings.breathRefine = _breath;
+                      SilenceSettings.madScientist = _mad;
                       SilenceSettings.seamOverlapMs = _overlap.round();
                       Navigator.of(context).pop();
                     },
