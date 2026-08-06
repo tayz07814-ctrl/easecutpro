@@ -378,12 +378,15 @@ class EcPlayer(
                     override fun getNextSpeedChangeTimeUs(timeUs: Long): Long = C.TIME_UNSET
                 })
             }
-            if (volume <= 0.001f) {
-                b.setRemoveAudio(true)
-            } else if (volume != 1f) {
+            if (volume != 1f) {
+                // Muted clips get a ZERO-GAIN mix rather than setRemoveAudio: with the
+                // whole timeline muted, removeAudio would strip the composition's audio
+                // track entirely, which CompositionPlayer does not take kindly to —
+                // keeping a silent track is safe and audibly identical.
+                val gain = if (volume <= 0.001f) 0f else volume
                 val mix = ChannelMixingAudioProcessor()
-                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
-                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
+                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(gain))
+                mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(gain))
                 b.setEffects(
                     Effects(ImmutableList.of<AudioProcessor>(mix), ImmutableList.of<Effect>())
                 )

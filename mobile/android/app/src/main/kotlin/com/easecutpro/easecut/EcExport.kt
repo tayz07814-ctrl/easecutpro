@@ -21,7 +21,6 @@ import java.nio.ByteOrder
 import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
@@ -131,41 +130,65 @@ class EcExport(
         }
     }
 
-    private var audioTx: Transformer? = null
 
     // The preview proxy renders on its OWN transformer + pending, fully independent of
     // the export above, so a proxy render and a real export never block each other.
     private var proxyTx: Transformer? = null
     private var proxyPending: MethodChannel.Result? = null
 
-    /** Extract the source's audio to a compact AAC .m4a (for Cut Lord transcription). */
+    /**
+     * Extract the clip's audio as a 16 kHz mono 16-bit WAV. WAV is the ONLY
+     * container the stt edge function accepts — its AI-minute meter reads the
+     * WAV header for the duration and 400s ("unreadable audio") anything else,
+     * which is exactly what the old AAC/M4A extraction produced.
+     */
     private fun extractAudio(call: MethodCall, result: MethodChannel.Result) {
         val uri = call.argument<String>("uri")
         if (uri == null) {
             result.error("ec_export", "no uri", null)
             return
         }
-        try {
-            val item = EditedMediaItem.Builder(MediaItem.fromUri(uri)).setRemoveVideo(true).build()
-            val out = File(context.cacheDir, "ec_audio_${System.currentTimeMillis()}.m4a")
-            val t = Transformer.Builder(context)
-                .setAudioMimeType(MimeTypes.AUDIO_AAC)
-                .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                        audioTx = null
-                        result.success(mapOf("path" to out.absolutePath))
-                    }
+        Thread {
+            try {
+                val (pcm, count) = SilenceEngine.decodeMono16k(context, uri)
+                if (count <= 0) throw IllegalStateException("decoder produced no audio samples")
+                val out = File(context.cacheDir, "ec_audio_${System.currentTimeMillis()}.wav")
+                writeWav(out, pcm, count, 16000)
+                main.post { result.success(mapOf("path" to out.absolutePath)) }
+            } catch (t: Throwable) {
+                main.post { result.error("ec_export", "audio extract failed: ${t.message}", null) }
+            }
+        }.start()
+    }
 
-                    override fun onError(composition: Composition, exportResult: ExportResult, exception: ExportException) {
-                        audioTx = null
-                        result.error("ec_export", "audio extract failed: ${exception.message}", null)
-                    }
-                })
-                .build()
-            audioTx = t
-            t.start(item, out.absolutePath)
-        } catch (e: Exception) {
-            result.error("ec_export", "audio extract could not start: ${e.message}", null)
+    /** Minimal RIFF/WAVE writer: PCM16, mono, [sampleRate]. */
+    private fun writeWav(file: File, pcm: ShortArray, count: Int, sampleRate: Int) {
+        FileOutputStream(file).use { fos ->
+            val dataLen = count * 2
+            val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+            h.put("RIFF".toByteArray(Charsets.US_ASCII))
+            h.putInt(36 + dataLen)
+            h.put("WAVE".toByteArray(Charsets.US_ASCII))
+            h.put("fmt ".toByteArray(Charsets.US_ASCII))
+            h.putInt(16) // PCM fmt chunk size
+            h.putShort(1.toShort()) // PCM
+            h.putShort(1.toShort()) // mono
+            h.putInt(sampleRate)
+            h.putInt(sampleRate * 2) // byte rate (the meter reads this)
+            h.putShort(2.toShort()) // block align
+            h.putShort(16.toShort()) // bits per sample
+            h.put("data".toByteArray(Charsets.US_ASCII))
+            h.putInt(dataLen)
+            fos.write(h.array())
+            val buf = ByteBuffer.allocate(1 shl 16).order(ByteOrder.LITTLE_ENDIAN)
+            var i = 0
+            while (i < count) {
+                buf.clear()
+                val n = kotlin.math.min(count - i, buf.capacity() / 2)
+                for (j in 0 until n) buf.putShort(pcm[i + j])
+                fos.write(buf.array(), 0, n * 2)
+                i += n
+            }
         }
     }
 

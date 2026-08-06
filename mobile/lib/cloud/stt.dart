@@ -31,7 +31,9 @@ Future<List<Word>> transcribe(String audioPath, {Progress? onProgress}) async {
     String? path;
     try {
       onProgress?.call(16, 'Uploading your audio…');
-      final sign = await invokeEdge('stt', {'action': 'sign-upload', 'ext': 'm4a'});
+      // The server pins the upload extension to wav (its AI-minute meter reads
+      // the WAV header); the native extractor produces 16 kHz mono PCM WAV.
+      final sign = await invokeEdge('stt', {'action': 'sign-upload', 'ext': 'wav'});
       path = sign['path'] as String;
       final token = sign['token'] as String;
       await client.storage.from('stt-audio').uploadBinaryToSignedUrl(path, token, bytes);

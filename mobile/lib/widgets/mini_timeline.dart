@@ -65,12 +65,13 @@ class MiniTimeline extends StatefulWidget {
   final VoidCallback? onTrimStart;
   final VoidCallback? onTrimEnd;
 
-  /// CapCut-style leading tiles in the pre-roll gutter (left of the strip start):
-  /// mute-all-clips toggle, cover tile, and the per-lane add shortcuts.
+  /// CapCut-style track-head tiles, PINNED at the viewport's left edge (they
+  /// must stay reachable at any scrub position): mute-all-clips toggle, cover
+  /// tile, and the per-lane add shortcuts.
   final bool muted;
   final VoidCallback? onToggleMute;
   final VoidCallback? onCover;
-  final VoidCallback? onAddMedia;
+  final VoidCallback? onAddOverlay;
   final VoidCallback? onAddText;
   final VoidCallback? onAddAudio;
 
@@ -114,7 +115,7 @@ class MiniTimeline extends StatefulWidget {
     this.muted = false,
     this.onToggleMute,
     this.onCover,
-    this.onAddMedia,
+    this.onAddOverlay,
     this.onAddText,
     this.onAddAudio,
   });
@@ -338,29 +339,107 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 _didInit = true;
                 WidgetsBinding.instance.addPostFrameCallback((_) => _alignToPlayhead());
               }
-              // One track row: [pre-roll gutter (leading tiles, right-aligned)] +
-              // [the track content, tracksW wide]. Keeping every row exactly
-              // side + tracksW + side wide preserves the existing scroll maths.
-              Widget lane(Widget? lead, Widget content, {double? height}) => SizedBox(
-                    height: height,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SizedBox(
-                          width: side,
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: lead ?? const SizedBox.shrink(),
-                            ),
-                          ),
-                        ),
-                        SizedBox(width: tracksW, child: content),
-                        SizedBox(width: side),
-                      ],
-                    ),
-                  );
+
+              // Deterministic lane heights so the pinned track-head tiles line up
+              // exactly with their rows (audio rows carry a 3px top margin EACH;
+              // text/caption/image lanes pad 3px between stacked lanes only).
+              int lanesOfTexts(bool captions) {
+                var n = 0;
+                for (final t in widget.texts) {
+                  if (t.isCaption == captions && t.lane + 1 > n) n = t.lane + 1;
+                }
+                return n;
+              }
+
+              int lanesOfImages() {
+                var n = 0;
+                for (final o in widget.images) {
+                  if (o.lane + 1 > n) n = o.lane + 1;
+                }
+                return n;
+              }
+
+              double stackedH(int n) => n * _laneH + (n - 1) * 3.0;
+
+              // Row specs: (height, pinned tile, scrolling content). Gap rows have
+              // neither. Built once, then rendered twice — the content column and
+              // the pinned tile column share the same heights, so they can't drift.
+              final rows = <(double, Widget?, Widget?)>[];
+              rows.add((
+                16,
+                null,
+                CustomPaint(
+                  painter: _RulerPainter(
+                    pxPerMs: _pxPerMs,
+                    totalMs: _total,
+                    visibleFromMs: ((_sc.hasClients ? _sc.offset : 0) / _pxPerMs) - _viewW / _pxPerMs,
+                    visibleToMs: ((_sc.hasClients ? _sc.offset : 0) / _pxPerMs) + _viewW / _pxPerMs,
+                  ),
+                  child: const SizedBox.expand(),
+                )
+              ));
+              rows.add((6, null, null));
+              rows.add((
+                _clipsH,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [_muteTile(), const SizedBox(width: 6), _coverTile(model)],
+                ),
+                _clipsRow(model)
+              ));
+              // Overlay (image / PiP) lane — ALWAYS present, like the reference.
+              rows.add((4, null, null));
+              if (widget.images.isNotEmpty) {
+                rows.add((
+                  stackedH(lanesOfImages()),
+                  _gutterIcon(Icons.photo_library_outlined, widget.onAddOverlay),
+                  _imageLane(tracksW)
+                ));
+              } else {
+                rows.add((
+                  _laneH,
+                  _gutterIcon(Icons.photo_library_outlined, widget.onAddOverlay),
+                  _ghostRow('＋ Add overlay', widget.onAddOverlay)
+                ));
+              }
+              if (widget.texts.any((t) => t.isCaption)) {
+                rows.add((4, null, null));
+                rows.add((
+                  stackedH(lanesOfTexts(true)),
+                  _gutterIcon(Icons.closed_caption_outlined, null),
+                  _overlayLane(tracksW, captions: true)
+                ));
+              }
+              rows.add((4, null, null));
+              if (widget.texts.any((t) => !t.isCaption)) {
+                rows.add((
+                  stackedH(lanesOfTexts(false)),
+                  _gutterIcon(Icons.title, widget.onAddText),
+                  _overlayLane(tracksW, captions: false)
+                ));
+              } else {
+                rows.add((
+                  _laneH,
+                  _gutterIcon(Icons.title, widget.onAddText),
+                  _ghostRow('＋ Add text', widget.onAddText)
+                ));
+              }
+              rows.add((4, null, null));
+              if (widget.audios.isNotEmpty) {
+                rows.add((
+                  widget.audios.length * (_laneH + 3.0),
+                  _gutterIcon(Icons.music_note, widget.onAddAudio),
+                  _audioLane(tracksW)
+                ));
+              } else {
+                rows.add((
+                  _laneH,
+                  _gutterIcon(Icons.music_note, widget.onAddAudio),
+                  _ghostRow('＋ Add audio', widget.onAddAudio)
+                ));
+              }
+              rows.add((8, null, null));
+
               return Listener(
                 behavior: HitTestBehavior.translucent,
                 onPointerDown: _onPinchDown,
@@ -368,79 +447,68 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 onPointerUp: _onPinchUp,
                 onPointerCancel: _onPinchUp,
                 child: Stack(
-                children: [
-                  NotificationListener<ScrollNotification>(
-                    onNotification: _onScroll,
-                      child: SingleChildScrollView(
-                        controller: _sc,
-                        scrollDirection: Axis.horizontal,
-                        physics: _pinching
-                            ? const NeverScrollableScrollPhysics()
-                            : const ClampingScrollPhysics(),
-                        child: SizedBox(
-                          width: side + tracksW + side,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Ruler — tick labels every "nice" interval.
-                              lane(
-                                null,
-                                CustomPaint(
-                                  painter: _RulerPainter(
-                                    pxPerMs: _pxPerMs,
-                                    totalMs: _total,
-                                    visibleFromMs: ((_sc.hasClients ? _sc.offset : 0) / _pxPerMs) - _viewW / _pxPerMs,
-                                    visibleToMs: ((_sc.hasClients ? _sc.offset : 0) / _pxPerMs) + _viewW / _pxPerMs,
-                                  ),
-                                  child: const SizedBox.expand(),
-                                ),
-                                height: 16,
-                              ),
-                              const SizedBox(height: 6),
-                              // Video track — mute + cover tiles lead the strip.
-                              lane(
-                                Row(
+                  children: [
+                    // The whole track area scrolls VERTICALLY too — more lanes must
+                    // never push the audio track out of a short timeline viewport.
+                    SingleChildScrollView(
+                      physics: _pinching
+                          ? const NeverScrollableScrollPhysics()
+                          : const ClampingScrollPhysics(),
+                      child: Stack(
+                        children: [
+                          NotificationListener<ScrollNotification>(
+                            onNotification: _onScroll,
+                            child: SingleChildScrollView(
+                              controller: _sc,
+                              scrollDirection: Axis.horizontal,
+                              physics: _pinching
+                                  ? const NeverScrollableScrollPhysics()
+                                  : const ClampingScrollPhysics(),
+                              child: SizedBox(
+                                width: side + tracksW + side,
+                                child: Column(
                                   mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    _muteTile(),
-                                    const SizedBox(width: 6),
-                                    _coverTile(model),
+                                    for (final (h, _, content) in rows)
+                                      SizedBox(
+                                        height: h,
+                                        child: content == null
+                                            ? null
+                                            : Row(
+                                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                                children: [
+                                                  SizedBox(width: side),
+                                                  SizedBox(width: tracksW, child: content),
+                                                  SizedBox(width: side),
+                                                ],
+                                              ),
+                                      ),
                                   ],
                                 ),
-                                _clipsRow(model),
-                                height: _clipsH,
                               ),
-                              if (widget.images.isNotEmpty) ...[
-                                const SizedBox(height: 4),
-                                lane(_gutterIcon(Icons.photo_library_outlined, widget.onAddMedia),
-                                    _imageLane(tracksW)),
-                              ],
-                              if (widget.texts.any((t) => t.isCaption)) ...[
-                                const SizedBox(height: 4),
-                                lane(_gutterIcon(Icons.closed_caption_outlined, null),
-                                    _overlayLane(tracksW, captions: true)),
-                              ],
-                              const SizedBox(height: 4),
-                              // Text lane — the tile always leads; ghost row when empty.
-                              widget.texts.any((t) => !t.isCaption)
-                                  ? lane(_gutterIcon(Icons.title, widget.onAddText),
-                                      _overlayLane(tracksW, captions: false))
-                                  : lane(_gutterIcon(Icons.title, widget.onAddText),
-                                      _ghostRow('＋ Add text', widget.onAddText),
-                                      height: _laneH),
-                              const SizedBox(height: 4),
-                              // Audio lane — same treatment.
-                              widget.audios.isNotEmpty
-                                  ? lane(_gutterIcon(Icons.music_note, widget.onAddAudio),
-                                      _audioLane(tracksW))
-                                  : lane(_gutterIcon(Icons.music_note, widget.onAddAudio),
-                                      _ghostRow('＋ Add audio', widget.onAddAudio),
-                                      height: _laneH),
-                              const SizedBox(height: 8),
-                            ],
+                            ),
                           ),
-                        ),
+                          // Track-head tiles — pinned to the viewport's left edge
+                          // (they scroll vertically with their rows, never
+                          // horizontally), so they stay reachable mid-clip.
+                          Positioned(
+                            left: 8,
+                            top: 0,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                for (final (h, tile, _) in rows)
+                                  SizedBox(
+                                    height: h,
+                                    child: tile == null
+                                        ? const SizedBox.shrink()
+                                        : Align(alignment: Alignment.topLeft, child: tile),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     // Fixed centre playhead — thin white line, CapCut-style.

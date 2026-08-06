@@ -390,8 +390,11 @@ object SilenceEngine {
      * backing array plus the number of valid samples (the array may be longer).
      * Failures THROW with a named reason so the app can show it — a silent empty
      * return here used to read as "engine found nothing".
+     *
+     * PUBLIC: EcExport reuses this for the transcription WAV (the stt edge
+     * function only accepts WAV — its AI-minute meter reads the WAV header).
      */
-    private fun decodeMono16k(context: Context, uri: String): Pair<ShortArray, Int> {
+    fun decodeMono16k(context: Context, uri: String): Pair<ShortArray, Int> {
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
         var sampleRate = 0

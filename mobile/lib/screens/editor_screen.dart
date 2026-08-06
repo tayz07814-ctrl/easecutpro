@@ -1907,6 +1907,7 @@ class _EditorScreenState extends State<EditorScreen> {
     for (final c in _model.clips) {
       c.volume = target;
     }
+    _toast(target == 0.0 ? 'Clip audio muted' : 'Clip audio unmuted');
     await _reload(seekTo: _positionMs);
     _scheduleSave();
     setState(() {});
@@ -1921,7 +1922,7 @@ class _EditorScreenState extends State<EditorScreen> {
         muted: _clipsMuted,
         onToggleMute: _toggleMuteClips,
         onCover: () => _toast('Cover picker is coming soon'),
-        onAddMedia: _import,
+        onAddOverlay: _addOverlay,
         onAddText: _openText,
         onAddAudio: _openAudio,
         positionMs: _positionMs,
