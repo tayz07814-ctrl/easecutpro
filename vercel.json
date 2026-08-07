@@ -19,6 +19,7 @@
     { "source": "/ugc-video-editing", "destination": "/ugc-video-editing.html" },
     { "source": "/ai-video-editor-for-youtube", "destination": "/ai-video-editor-for-youtube.html" },
     { "source": "/tiktok-shop-video-editing", "destination": "/tiktok-shop-video-editing.html" },
+    { "source": "/blog/best-descript-alternatives", "destination": "/best-descript-alternatives.html" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
