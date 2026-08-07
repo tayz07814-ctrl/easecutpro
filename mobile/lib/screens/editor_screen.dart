@@ -864,10 +864,72 @@ class _EditorScreenState extends State<EditorScreen> {
           _openSilence();
         },
         onRun: _runCutLord,
+        onCleanSilence: _cleanSilenceOnly,
         onAutoZoom: _autoZoom,
         onAutoBroll: _autoBroll,
         onVariations: _openVariations,
       ));
+
+  /// Silence-only quick action: run JUST the Silero engine on the source and
+  /// apply its cuts — no transcription, no judge, no review. The fastest way to
+  /// test (and debug) the silence cutter by itself.
+  Future<void> _cleanSilenceOnly() async {
+    if (!_hasBase || _model.sourcePath == null) {
+      _toast('Import a clip first');
+      return;
+    }
+    final durS = _sourceDurationMs / 1000.0;
+    final prog = ValueNotifier<String>('Cleaning silence…');
+    _showProgress(prog);
+    var timedOut = false;
+    String? engineErr;
+    List<List<int>> regionsMs = const [];
+    try {
+      final regions = await NativeVad.detectSilences(
+        'file://${_model.sourcePath!}',
+        minSilenceS: SilenceSettings.minSilenceS,
+        padLeftMs: SilenceSettings.padLeftMs.toDouble(),
+        padRightMs: SilenceSettings.padRightMs.toDouble(),
+        trimLeftMs: SilenceSettings.trimLeftMs.toDouble(),
+        trimRightMs: SilenceSettings.trimRightMs.toDouble(),
+        breathRefine: SilenceSettings.breathRefine,
+      ).timeout(const Duration(minutes: 4), onTimeout: () {
+        timedOut = true;
+        return const [];
+      });
+      regionsMs = [for (final r in regions) [(r[0] * 1000).round(), (r[1] * 1000).round()]];
+    } catch (e) {
+      engineErr = _cleanErr(e);
+    } finally {
+      if (mounted) Navigator.of(context).pop();
+      prog.dispose();
+    }
+    if (engineErr != null) {
+      _toast('Silero failed: $engineErr — NO silence was cut');
+      return;
+    }
+    if (timedOut) {
+      _toast('Silero timed out — NO silence was cut');
+      return;
+    }
+    if (regionsMs.isEmpty) {
+      _toast('Silence Mastery (Silero): no silence over the threshold');
+      return;
+    }
+    _toast('Silence Mastery (Silero): ${regionsMs.length} silent region${regionsMs.length == 1 ? '' : 's'} cut');
+    // Apply directly: keeps = the timeline minus the regions (no words involved).
+    final keeps = keepRanges(
+      const [],
+      const [],
+      durS,
+      cutSilence: false,
+      extraSilenceMs: regionsMs,
+    );
+    _pushHistory();
+    _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
+    _model.applyKeepRanges(keeps);
+    await _reload(seekTo: 0);
+  }
 
   // ---- Variations: recut the same footage into a different edit ----
   void _openVariations() => _openSheet(VariationsSheet(

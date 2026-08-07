@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../editor/cutlord.dart';
 import '../theme.dart';
-import '../widgets/controls.dart';
 import 'sheet_scaffold.dart';
 
 /// Retake Cleaner — one action (like web 0.01). Finds silences, fillers and bad
@@ -11,6 +10,7 @@ import 'sheet_scaffold.dart';
 class CutLordSheet extends StatefulWidget {
   final VoidCallback onOpenSilence;
   final void Function(CutLordModel model, bool cutSilence) onRun;
+  final VoidCallback onCleanSilence;
   final VoidCallback onAutoZoom;
   final VoidCallback onAutoBroll;
   final VoidCallback onVariations;
@@ -18,6 +18,7 @@ class CutLordSheet extends StatefulWidget {
     super.key,
     required this.onOpenSilence,
     required this.onRun,
+    required this.onCleanSilence,
     required this.onAutoZoom,
     required this.onAutoBroll,
     required this.onVariations,
@@ -28,11 +29,9 @@ class CutLordSheet extends StatefulWidget {
 }
 
 class _CutLordSheetState extends State<CutLordSheet> {
-  bool _smartSilence = true;
-
   void _run() {
     Navigator.of(context).pop();
-    widget.onRun(cutLordRetake, _smartSilence);
+    widget.onRun(cutLordRetake, true);
   }
 
   Widget _autoBtn(IconData icon, String label, VoidCallback onTap) {
@@ -107,6 +106,34 @@ class _CutLordSheetState extends State<CutLordSheet> {
                           style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
                     ),
                   ),
+                  const SizedBox(height: 10),
+                  // Silence-only quick action: runs ONLY the Silero engine and
+                  // applies its cuts directly — no transcription, no judge. The
+                  // fastest way to hear (and debug) the silence cutter alone.
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      widget.onCleanSilence();
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(11),
+                        color: const Color(0xFF123331),
+                        border: Border.all(color: const Color(0xFF4FD1C5).withValues(alpha: 0.5)),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.volume_off, size: 16, color: Color(0xFF4FD1C5)),
+                          SizedBox(width: 7),
+                          Text('Clean Silence only (Silero)',
+                              style: TextStyle(color: Color(0xFFCDEFEB), fontSize: 13.5, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   Row(
                     children: [
@@ -129,11 +156,6 @@ class _CutLordSheetState extends State<CutLordSheet> {
                       decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: Ec.border)),
                       child: const Text('Silence Settings', style: TextStyle(color: Ec.textDim, fontSize: 13.5)),
                     ),
-                  ),
-                  const SizedBox(height: 6),
-                  EcRow(
-                    label: 'Smart Silence Cutter',
-                    trailing: EcToggle(value: _smartSilence, onChanged: (v) => setState(() => _smartSilence = v)),
                   ),
                   const SizedBox(height: 12),
                   const Text('Runs on your device: extracts the audio, transcribes it, and an AI picks the cuts. Takes ~30–60s.',
