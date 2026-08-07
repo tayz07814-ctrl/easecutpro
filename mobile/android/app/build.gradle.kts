@@ -30,6 +30,16 @@ android {
         release {
             // Debug-signed for now so `flutter build apk` produces an installable APK.
             signingConfig = signingConfigs.getByName("debug")
+            // R8 was renaming ai.onnxruntime.* — whose native code resolves those
+            // classes BY NAME — so every session.run() aborted the engine process
+            // with "JNI DETECTED ERROR: java_class == null" (SIGABRT). Belt and
+            // braces: shrinking off, plus keep rules in case it is turned back on.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }
