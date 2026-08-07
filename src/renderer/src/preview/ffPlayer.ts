@@ -87,6 +87,9 @@ class FfPipe {
   private pumping = false
   /** See wcPlayer.ts Pipe.pendingStart — coverage checks MUST consult this. */
   private pendingStart: number | null = null
+  /** Last requested time — frames older than this are cut footage and are
+   *  skipped without building a VideoFrame (see ingest()). */
+  private want: number | null = null
   private lastRestartWall = 0
   private stillTimer = 0
   private stillTarget: number | null = null
@@ -205,6 +208,13 @@ class FfPipe {
       this.partsLen -= bytes
       const t = this.meta.t0 + this.frameIdx / this.meta.fps
       const dur = 1 / this.meta.fps
+      // Cut footage the playhead already passed: drop the bytes without
+      // building a VideoFrame so a skip costs nothing but the memcpy (same
+      // fast-forward rule as wcPlayer.pump — see the long note there).
+      if (this.want !== null && t + dur < this.want - 0.001) {
+        this.frameIdx++
+        continue
+      }
       try {
         const vf = new VideoFrame(data, {
           format: 'I420',
@@ -226,6 +236,7 @@ class FfPipe {
 
   /** Playing: keep `cur` tracking `t` (same policy as wcPlayer's follow). */
   follow(t: number): void {
+    this.want = t
     if (this.pendingStart !== null) {
       if (Math.abs(t - this.pendingStart) > 2.5) this.restart(t)
     } else if (!this.reader && !this.opening) {
@@ -251,6 +262,7 @@ class FfPipe {
   park(t: number): void {
     if (this.pendingStart !== null && Math.abs(t - this.pendingStart) < 0.5) return
     if (this.score(t) <= 0.25) return
+    this.want = t
     this.restart(t)
   }
 
@@ -258,6 +270,7 @@ class FfPipe {
    *  an ffmpeg spawn, and the rAF loop re-targets on every drag tick — so
    *  restarts are rate-limited and always retarget to the LATEST request. */
   requestStill(t: number): void {
+    this.want = t
     let moved = false
     while (this.queue.length && this.queue[0].t <= t) {
       this.cur?.vf.close()

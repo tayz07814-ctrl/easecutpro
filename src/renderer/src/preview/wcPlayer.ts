@@ -70,6 +70,10 @@ class Pipe {
    *  every tick issue another restart, each killing the previous pump before
    *  it could deliver a frame: a frozen picture with running audio. */
   private pendingStart: number | null = null
+  /** The time the reconciler last asked for. pump() discards decoded samples
+   *  that end BEFORE this, so a cut can be skipped at decode speed instead of
+   *  QUEUE_AHEAD frames per animation frame — see the note in pump(). */
+  private want: number | null = null
 
   constructor(
     private readonly sink: VideoSampleSink,
@@ -129,6 +133,24 @@ class Pipe {
           return
         }
         if (r.done) break
+        // FAST-FORWARD OVER CUT FOOTAGE (the "preview freezes at every cut").
+        // A cut jumps the playhead forward inside the SAME source. Seeking
+        // there is usually worse than decoding to it — phone H.264 keyframes
+        // sit ~3s apart, so a seek re-decodes up to 90 frames from the last
+        // keyframe — which is why follow() only restarts on a big jump and
+        // otherwise lets the decoder walk forward.
+        //
+        // But walking forward used to deliver only QUEUE_AHEAD (3) frames per
+        // pump, and the reconciler pumps once per animation frame: skipping a
+        // 1s cut took ~30 ticks (~0.5s) with the picture held the whole time.
+        // Samples that end before the requested time are removed footage no
+        // one will ever see, so drop them here WITHOUT queueing — the loop
+        // then races to the landing frame at decode speed. `await it.next()`
+        // still yields, so the UI stays responsive while it catches up.
+        if (this.want !== null && r.value.timestamp + r.value.duration < this.want - 0.001) {
+          r.value.close()
+          continue
+        }
         this.queue.push(r.value)
         this.pendingStart = null // the restarted iterator delivered — coverage is real again
       }
@@ -150,6 +172,7 @@ class Pipe {
    *  needed. Never re-restarts while a restart is still decoding toward a
    *  nearby time (that's what froze the picture). */
   follow(t: number): void {
+    this.want = t
     if (this.pendingStart !== null) {
       // a restart is in flight; only abandon it if the playhead ran far past
       if (Math.abs(t - this.pendingStart) > 2.5) this.restart(t)
@@ -180,6 +203,7 @@ class Pipe {
   park(t: number): void {
     if (this.pendingStart !== null && Math.abs(t - this.pendingStart) < 0.5) return
     if (this.score(t) <= 0.25) return
+    this.want = t
     this.restart(t)
   }
 
@@ -189,6 +213,7 @@ class Pipe {
    *  and the two decoders contended for hardware. Keeping one iterator means the
    *  paused frame also leaves a ready-made playback runway in `queue`. */
   requestStill(t: number): void {
+    this.want = t
     // Promote a decoded landing frame BEFORE testing coverage. Checking `cur`
     // first sees it as empty even though queue[0] is ready, and restarts the
     // iterator every rAF before that frame can ever be drawn.
