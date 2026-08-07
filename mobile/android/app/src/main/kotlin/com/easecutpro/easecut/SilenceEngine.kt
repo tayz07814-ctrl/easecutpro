@@ -11,7 +11,6 @@ import ai.onnxruntime.OrtSession
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
@@ -88,9 +87,11 @@ object SilenceEngine {
 
     /**
      * Full pipeline; settings are the web's SilenceMasterySettings numeric fields.
-     * Returns cut regions [startS, endS] (seconds) to REMOVE. Throws on any
-     * catchable failure; a native fault kills this process and the caller learns
-     * the stage from [stageFile].
+     * Returns cut regions [startS, endS] (seconds) to REMOVE plus a one-line stats
+     * string (probability bands / segment count / speech coverage) so a surprising
+     * result can be diagnosed from the phone alone. Throws on any catchable
+     * failure; a native fault kills this process and the caller learns the stage
+     * from [stageFile].
      */
     fun detect(
         context: Context,
@@ -101,7 +102,7 @@ object SilenceEngine {
         trimLeftMs: Double,
         trimRightMs: Double,
         breathRefine: Boolean
-    ): List<DoubleArray> {
+    ): Pair<List<DoubleArray>, String> {
         stage(context, "audio decode")
         val (pcm, count) = decodeMono16k(context, uri)
         if (count <= 0) throw IllegalStateException("decoder produced no audio samples")
@@ -110,7 +111,7 @@ object SilenceEngine {
         stage(context, "silero model load")
         ensureRuntime(context)
 
-        val raw = detectSileroSilences(context, pcm, count, durationS, minSilenceS)
+        val (raw, stats) = detectSileroSilences(context, pcm, count, durationS, minSilenceS)
 
         val shaped = if (breathRefine) {
             stage(context, "breath cleanup")
@@ -122,7 +123,7 @@ object SilenceEngine {
             trimLeftMs / 1000.0, trimRightMs / 1000.0, durationS)
         val out = unionCutRegions(padded, durationS)
         stage(context, "done")
-        return out
+        return out to stats
     }
 
     // --- ONNX runtime (lazy) ------------------------------------------------
@@ -172,11 +173,14 @@ object SilenceEngine {
         count: Int,
         durationS: Double,
         minSilenceS: Double
-    ): List<DoubleArray> {
-        val s = session ?: return emptyList()
-        val ortEnv = env ?: return emptyList()
+    ): Pair<List<DoubleArray>, String> {
+        val s = session ?: return emptyList<DoubleArray>() to "no session"
+        val ortEnv = env ?: return emptyList<DoubleArray>() to "no env"
         val frames = count / FRAME_SAMPLES
-        if (frames == 0) return emptyList()
+        if (frames == 0) return emptyList<DoubleArray>() to "clip shorter than one frame"
+        var nBelow = 0 // prob < NEG (true silence to Silero)
+        var nMid = 0 // NEG..POS (the dead zone — keeps a running segment open)
+        var nAbove = 0 // ≥ POS (speech)
 
         // Reused direct buffers: the audio frame and the LSTM h/c states.
         val frameBuf = ByteBuffer.allocateDirect(FRAME_SAMPLES * 4)
@@ -231,6 +235,7 @@ object SilenceEngine {
                     feeds.values.forEach { if (it !== srTensor) it.close() }
                 }
 
+                if (prob < NEG_THRESHOLD) nBelow++ else if (prob < SPEECH_THRESHOLD) nMid++ else nAbove++
                 // vad-web FrameProcessor: pos resets redemption + starts/extends the
                 // segment; a frame under the negative threshold while speaking ends it
                 // (redemptionFrames == 1); the in-between zone changes nothing.
@@ -279,7 +284,13 @@ object SilenceEngine {
             cursor = max(cursor, seg[1])
         }
         if (durationS > cursor + 0.02) regions.add(doubleArrayOf(cursor, durationS))
-        return regions.filter { it[1] - it[0] >= minDur }
+        val kept = regions.filter { it[1] - it[0] >= minDur }
+        val covered = padded.sumOf { it[1] - it[0] }
+        fun pct(n: Int) = if (frames > 0) (n * 100 / frames) else 0
+        val stats = "probs <.40:${pct(nBelow)}% mid:${pct(nMid)}% ≥.55:${pct(nAbove)}% · " +
+            "${speech.size} speech segs cover ${(covered * 100 / max(0.001, durationS)).toInt()}% " +
+            "of ${durationS.toInt()}s · ${kept.size} gaps ≥${minDur}s"
+        return kept to stats
     }
 
     // --- stage 2: breath cleanup (silenceMastery.ts refineRegionEdgesByRms) ---
@@ -425,12 +436,18 @@ object SilenceEngine {
             else 10 * 60 * TARGET_RATE
             out = ShortArray(max(TARGET_RATE, estimate))
 
-            // Streaming linear-interpolation resample state (global sample indices, so
-            // interpolation is exact across decoder-buffer boundaries).
+            // Streaming BOX-AVERAGE decimation (the same shape as vad-web's Resampler,
+            // which the web app feeds Silero through): each 16 kHz output sample is the
+            // MEAN of the source samples in its window. The mean is a crude lowpass —
+            // essential, because a bare linear pick-off ALIASES high-frequency content
+            // (cabin hiss, road noise) back into the band, raising Silero's speech
+            // score on "silence" until segments never close.
             var ratio = if (sampleRate > 0) sampleRate.toDouble() / TARGET_RATE else 1.0
             var outIdx = 0L
-            var base = 0L
-            var prev = 0f
+            var globalIn = 0L
+            var acc = 0.0
+            var accN = 0
+            var lastOut: Short = 0
 
             fun ensure(need: Int) {
                 if (need <= out.size) return
@@ -438,23 +455,23 @@ object SilenceEngine {
             }
 
             fun push(mono: FloatArray, len: Int) {
-                if (len <= 0) return
-                val last = base + len - 1
-                while (true) {
-                    val p = outIdx * ratio
-                    val left = floor(p).toLong()
-                    val right = left + 1
-                    if (right > last || left < base - 1) break
-                    val mix = (p - left).toFloat()
-                    val lv = if (left < base) prev else mono[(left - base).toInt()]
-                    val rv = mono[(right - base).toInt()]
-                    ensure(written + 1)
-                    val v = lv * (1 - mix) + rv * mix
-                    out[written++] = max(-32768, min(32767, (v * 32767f).toInt())).toShort()
-                    outIdx++
+                for (i in 0 until len) {
+                    acc += mono[i]
+                    accN++
+                    globalIn++
+                    while (globalIn >= (outIdx + 1) * ratio) {
+                        ensure(written + 1)
+                        val v: Short = if (accN > 0) {
+                            val m = (acc / accN).toFloat()
+                            max(-32768, min(32767, (m * 32767f).toInt())).toShort()
+                        } else lastOut // upsampling edge (source < 16 kHz): repeat
+                        out[written++] = v
+                        lastOut = v
+                        outIdx++
+                        acc = 0.0
+                        accN = 0
+                    }
                 }
-                prev = mono[len - 1]
-                base += len
             }
 
             codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!)

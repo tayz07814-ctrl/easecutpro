@@ -119,6 +119,7 @@ class EcVad(
         // builds when notifications are off — errors were vanishing silently.)
         Thread {
             var error: String? = null
+            var stats = ""
             val regions: List<List<Double>> = try {
                 val strikes = guardStrikes()
                 if (strikes >= MAX_STRIKES) {
@@ -137,6 +138,7 @@ class EcVad(
                         emptyList()
                     } else {
                         setGuardStrikes(0)
+                        stats = reply?.getString("stats") ?: ""
                         val flat = reply?.getDoubleArray("regions") ?: DoubleArray(0)
                         val out = ArrayList<List<Double>>(flat.size / 2)
                         var i = 0
@@ -157,7 +159,7 @@ class EcVad(
             }
             main.post {
                 if (error != null) result.error("ec_vad", error, null)
-                else result.success(regions)
+                else result.success(mapOf("regions" to regions, "stats" to stats))
             }
         }.start()
     }

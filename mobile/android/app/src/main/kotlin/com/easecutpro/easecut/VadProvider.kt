@@ -33,7 +33,7 @@ class VadProvider : ContentProvider() {
             return out
         }
         return try {
-            val regions = SilenceEngine.detect(
+            val (regions, stats) = SilenceEngine.detect(
                 context!!,
                 arg,
                 extras?.getDouble("minSilenceS", 0.15) ?: 0.15,
@@ -49,6 +49,7 @@ class VadProvider : ContentProvider() {
                 flat[i * 2 + 1] = regions[i][1]
             }
             out.putDoubleArray("regions", flat)
+            out.putString("stats", stats)
             out
         } catch (t: Throwable) {
             val top = t.stackTrace.firstOrNull()?.let {

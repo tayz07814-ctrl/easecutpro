@@ -883,9 +883,10 @@ class _EditorScreenState extends State<EditorScreen> {
     _showProgress(prog);
     var timedOut = false;
     String? engineErr;
+    var stats = '';
     List<List<int>> regionsMs = const [];
     try {
-      final regions = await NativeVad.detectSilences(
+      final res = await NativeVad.detectSilences(
         'file://${_model.sourcePath!}',
         minSilenceS: SilenceSettings.minSilenceS,
         padLeftMs: SilenceSettings.padLeftMs.toDouble(),
@@ -895,9 +896,10 @@ class _EditorScreenState extends State<EditorScreen> {
         breathRefine: SilenceSettings.breathRefine,
       ).timeout(const Duration(minutes: 4), onTimeout: () {
         timedOut = true;
-        return const [];
+        return const SilenceResult([], '');
       });
-      regionsMs = [for (final r in regions) [(r[0] * 1000).round(), (r[1] * 1000).round()]];
+      stats = res.stats;
+      regionsMs = [for (final r in res.regions) [(r[0] * 1000).round(), (r[1] * 1000).round()]];
     } catch (e) {
       engineErr = _cleanErr(e);
     } finally {
@@ -913,10 +915,10 @@ class _EditorScreenState extends State<EditorScreen> {
       return;
     }
     if (regionsMs.isEmpty) {
-      _toast('Silence Mastery (Silero): no silence over the threshold');
+      _toast('Silero found no silence · $stats');
       return;
     }
-    _toast('Silence Mastery (Silero): ${regionsMs.length} silent region${regionsMs.length == 1 ? '' : 's'} cut');
+    _toast('Silero: ${regionsMs.length} region${regionsMs.length == 1 ? '' : 's'} cut · $stats');
     // Apply directly: keeps = the timeline minus the regions (no words involved).
     final keeps = keepRanges(
       const [],
@@ -1184,8 +1186,9 @@ class _EditorScreenState extends State<EditorScreen> {
       _showProgress(prog);
       var timedOut = false;
       String? engineErr;
+      var stats = '';
       try {
-        final regions = await NativeVad.detectSilences(
+        final res = await NativeVad.detectSilences(
           'file://${_model.sourcePath!}',
           minSilenceS: SilenceSettings.minSilenceS,
           padLeftMs: SilenceSettings.padLeftMs.toDouble(),
@@ -1195,9 +1198,10 @@ class _EditorScreenState extends State<EditorScreen> {
           breathRefine: SilenceSettings.breathRefine,
         ).timeout(const Duration(minutes: 4), onTimeout: () {
           timedOut = true;
-          return const [];
+          return const SilenceResult([], '');
         });
-        fsmn = [for (final r in regions) [(r[0] * 1000).round(), (r[1] * 1000).round()]];
+        stats = res.stats;
+        fsmn = [for (final r in res.regions) [(r[0] * 1000).round(), (r[1] * 1000).round()]];
       } catch (e) {
         engineErr = _cleanErr(e);
         fsmn = const [];
@@ -1210,9 +1214,9 @@ class _EditorScreenState extends State<EditorScreen> {
       } else if (timedOut) {
         _toast('Silero timed out — NO silence was cut');
       } else if (fsmn.isEmpty) {
-        _toast('Silence Mastery (Silero): no silence over the threshold');
+        _toast('Silero found no silence · $stats');
       } else {
-        _toast('Silence Mastery (Silero): ${fsmn.length} silent region${fsmn.length == 1 ? '' : 's'}');
+        _toast('Silero: ${fsmn.length} region${fsmn.length == 1 ? '' : 's'} · $stats');
       }
     }
 
