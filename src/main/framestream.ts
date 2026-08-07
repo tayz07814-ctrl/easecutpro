@@ -90,6 +90,12 @@ export async function handleFrameStream(request: Request): Promise<Response> {
 
   const args = [
     '-v', 'error',
+    // HARDWARE decode when the machine offers it (D3D11VA/QuickSync/NVDEC on
+    // Windows). `auto` silently falls back to software if no device or the
+    // codec isn't supported, so this can only help. Frames are downloaded to
+    // system memory for the rawvideo pipe, but the DECODE itself stops being
+    // pure CPU — the difference between usable and unusable on older laptops.
+    '-hwaccel', 'auto',
     // Input seeking: fast (keyframe jump) AND accurate (decode+discard to t).
     // Output timestamps restart at 0, so the fps grid aligns to the seek point
     // and frame k sits at t + k/fps — which is how the renderer stamps them.

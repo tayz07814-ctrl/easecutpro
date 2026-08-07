@@ -380,18 +380,45 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // (the elements stay paused). Mobile keeps the element path (single hardware
   // decode pipeline), and ANY engine failure — including audio that won't start
   // — flips wcOn off, handing back to the untouched element machinery below.
-  // Desktop (Electron) prefers the NATIVE ffmpeg frame engine (FfPlayer) — the
-  // bundled ffmpeg decodes in the main process and streams raw frames over
-  // ecframes://, so preview codec support equals export codec support. The
-  // WebCodecs engine stays the web-build path; both share one public surface,
-  // so everything below drives `wc` without knowing which it holds. Any engine
-  // failure still flips wcOn off → the untouched element path.
-  const [wcOn, setWcOn] = useState(() => !isMobile && (ffSupported() || wcSupported()))
+  // ENGINE LADDER (desktop): WebCodecs first, native ffmpeg second, elements last.
+  //
+  // WcPlayer decodes through Chromium's WebCodecs, which on Windows is HARDWARE
+  // decode (D3D11VA/QuickSync) — the frames never cost CPU, which is what keeps
+  // playback smooth on modest machines. FfPlayer decodes with the bundled ffmpeg
+  // in the MAIN process and copies raw frames over a pipe: that is real CPU work
+  // plus a process spawn per seek, so on an older laptop it stutters, races
+  // through cut footage instead of jumping, and holds the picture at every seam.
+  // It therefore runs ONLY where WebCodecs cannot open the file at all (exotic
+  // HEVC/ProRes) — the one thing it is genuinely better at.
+  //
+  // `wcOn` = "a canvas engine is driving"; `engineKind` = which one. A decode
+  // failure DEMOTES one rung (wc → ff → elements) instead of dropping straight
+  // to the element path, so an unsupported codec still gets a picture.
+  const [engineKind, setEngineKind] = useState<'wc' | 'ff'>(() => (wcSupported() ? 'wc' : 'ff'))
+  const engineKindRef = useRef(engineKind)
+  engineKindRef.current = engineKind
+  const [wcOn, setWcOn] = useState(() => !isMobile && (wcSupported() || ffSupported()))
   const wcOnRef = useRef(wcOn)
   wcOnRef.current = wcOn
   const wcRef = useRef<WcPlayer | FfPlayer | null>(null)
-  if (wcOn && !wcRef.current) wcRef.current = ffSupported() ? new FfPlayer() : new WcPlayer()
+  if (wcOn && !wcRef.current) {
+    wcRef.current = engineKindRef.current === 'wc' && wcSupported() ? new WcPlayer() : new FfPlayer()
+  }
   useEffect(() => () => wcRef.current?.dispose(), [])
+  // Demote one rung. Held in a ref so the rAF reconciler can call it without
+  // re-subscribing every render.
+  const demoteRef = useRef<() => void>(() => undefined)
+  demoteRef.current = () => {
+    if (engineKindRef.current === 'wc' && ffSupported()) {
+      console.warn('[preview] WebCodecs could not decode — switching to native ffmpeg')
+      wcRef.current?.dispose()
+      wcRef.current = null
+      engineKindRef.current = 'ff'
+      setEngineKind('ff')
+      return
+    }
+    setWcOn(false)
+  }
   // Fallback frees the decoders immediately (the element path never reads them).
   useEffect(() => {
     if (!wcOn && wcRef.current) {
@@ -412,9 +439,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const srcSig = sources.join('|')
   useEffect(() => {
     if (!wcOn) return
+    // engineKind is a dep: a demotion builds a NEW player that owns no sources.
     wcRef.current?.setSources(segsRef.current.filter((s) => !s.isImage).map((s) => ({ src: s.src })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [srcSig, wcOn])
+  }, [srcSig, wcOn, engineKind])
 
   // POLISHING phase: executeCuts bumps polishReq. Decode every cut's landing
   // frame ONCE (the seam cache), driving the % bar, then clear it so the editor
@@ -470,7 +498,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       window.clearTimeout(safety)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [polishReq, wcOn])
+  }, [polishReq, wcOn, engineKind])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the
@@ -789,7 +817,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         // decode queues in the display section below, never seeked.
         const eng = audioEngineRef.current
         const wc = wcRef.current
-        if (wc?.failed) setWcOn(false) // decode broke → element path next tick
+        if (wc?.failed) demoteRef.current() // decode broke → next engine down the ladder
 
         // First prime the CURRENT source while the timeline is held. A paused
         // still is not sufficient: require one queued future frame so playback
