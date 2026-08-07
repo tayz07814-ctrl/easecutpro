@@ -33,6 +33,9 @@ export function ffSupported(): boolean {
 const QUEUE_AHEAD = 3 // decoded frames buffered ahead of the playhead per pipe
 const COVER_SLACK = 0.4 // how far past the last queued frame we still count as "covered"
 const STILL_RESTART_MIN_MS = 150 // paused-scrub debounce: one ffmpeg spawn per this window
+/** Prefer decoding forward over re-spawning ffmpeg for jumps this short —
+ *  see the measured rationale on wcPlayer's FORWARD_DECODE_S. */
+const FORWARD_DECODE_S = 3.0
 
 function frameUrl(src: string, t: number, frames?: number): string {
   const f = frames ? `&frames=${frames}` : ''
@@ -242,7 +245,11 @@ class FfPipe {
     } else if (!this.reader && !this.opening) {
       this.restart(t) // first play after a paused still: begin decoding
     } else if (this.score(t) > 1.5) {
-      this.restart(t) // jumped beyond coverage (scrub-then-play, big skip)
+      // Same rule as wcPlayer (see FORWARD_DECODE_S there): a short FORWARD
+      // jump is a cut — read on through it rather than restarting, which here
+      // costs a whole ffmpeg process spawn.
+      const ahead = this.cur ? t - this.cur.t : Number.POSITIVE_INFINITY
+      if (!(ahead > 0 && ahead <= FORWARD_DECODE_S)) this.restart(t)
     }
     let moved = false
     while (this.queue.length && this.queue[0].t <= t) {

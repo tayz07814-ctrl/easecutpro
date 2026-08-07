@@ -37,6 +37,38 @@ export function wcSupported(): boolean {
 }
 
 const QUEUE_AHEAD = 3 // decoded frames buffered ahead of the playhead per pipe
+/** A `want` advance larger than this is a CUT, not normal playback. */
+const JUMP_S = 0.15
+/** How far forward we prefer to DECODE rather than seek.
+ *
+ *  Measured on a densely cut phone clip: the old "restart whenever the jump
+ *  leaves the decoded window" rule fired 110 times in 10s of playback — ~11
+ *  seeks/second, 3.9s of cumulative stall (39% of the time). Phone H.264 puts
+ *  keyframes ~3s apart, so each seek re-decodes up to a full GOP anyway; just
+ *  walking the decoder forward over the removed footage costs no more and
+ *  keeps the picture live. Beyond roughly one GOP a seek starts to win. */
+const FORWARD_DECODE_S = 3.0
+/** Frame-skip policy. 'jump' (default) skips only across cuts; 'off' and 'all'
+ *  exist so the packaged app can be A/B measured from DevTools without a
+ *  rebuild (set window.__ecSkipMode). Read per sample, so it can be flipped
+ *  mid-playback. */
+type SkipMode = 'off' | 'all' | 'jump'
+function skipMode(): SkipMode {
+  return (typeof window !== 'undefined' && (window as { __ecSkipMode?: SkipMode }).__ecSkipMode) || 'jump'
+}
+
+/** Diagnostics for the preview stall hunt — where the frozen frames go.
+ *  Readable from DevTools as window.__wcStats; zero cost when unread. */
+const STATS = {
+  restarts: 0,
+  restartLatencyMs: [] as number[],
+  skipped: 0,
+  paintGood: 0,
+  paintSeamCache: 0,
+  paintStale: 0,
+  paintNone: 0
+}
+if (typeof window !== 'undefined') (window as { __wcStats?: typeof STATS }).__wcStats = STATS
 const COVER_SLACK = 0.4 // how far past the last queued frame we still count as "covered"
 
 interface Rect {
@@ -70,15 +102,23 @@ class Pipe {
    *  every tick issue another restart, each killing the previous pump before
    *  it could deliver a frame: a frozen picture with running audio. */
   private pendingStart: number | null = null
-  /** The time the reconciler last asked for. pump() discards decoded samples
-   *  that end BEFORE this, so a cut can be skipped at decode speed instead of
-   *  QUEUE_AHEAD frames per animation frame — see the note in pump(). */
+  /** The time the reconciler last asked for. */
   private want: number | null = null
+  /** Set ONLY when `want` jumps (a cut): pump() then discards decoded samples
+   *  until it reaches this time, so the skip runs at decode speed. Null during
+   *  normal playback — see the note in pump(). */
+  private skipUntil: number | null = null
+  private restartAt = 0
 
   constructor(
     private readonly sink: VideoSampleSink,
     private readonly onError: (e: unknown) => void
   ) {}
+
+  /** Timestamp of the frame currently presentable, or null. */
+  get curTime(): number | null {
+    return this.cur ? this.cur.timestamp : null
+  }
 
   /** Coverage by DECODED frames only: ~0 when `cur`/queue can show t right
    *  now, else the distance to the covered window. */
@@ -111,6 +151,9 @@ class Pipe {
     for (const s of this.queue) s.close()
     this.queue = []
     this.pendingStart = Math.max(0, t)
+    this.skipUntil = null // a seek lands on the target; nothing to skip past
+    this.restartAt = performance.now()
+    STATS.restarts++
     try {
       this.iter = this.sink.samples(Math.max(0, t))
     } catch (e) {
@@ -140,18 +183,33 @@ class Pipe {
         // keyframe — which is why follow() only restarts on a big jump and
         // otherwise lets the decoder walk forward.
         //
-        // But walking forward used to deliver only QUEUE_AHEAD (3) frames per
-        // pump, and the reconciler pumps once per animation frame: skipping a
-        // 1s cut took ~30 ticks (~0.5s) with the picture held the whole time.
-        // Samples that end before the requested time are removed footage no
-        // one will ever see, so drop them here WITHOUT queueing — the loop
-        // then races to the landing frame at decode speed. `await it.next()`
-        // still yields, so the UI stays responsive while it catches up.
-        if (this.want !== null && r.value.timestamp + r.value.duration < this.want - 0.001) {
-          r.value.close()
-          continue
+        // But walking forward delivers only QUEUE_AHEAD (3) frames per pump,
+        // and the reconciler pumps once per animation frame: skipping a 1s cut
+        // took ~30 ticks with the picture held the whole time. So when `want`
+        // JUMPS, follow() arms skipUntil and we drop the skipped-over samples
+        // here without queueing them, racing to the landing frame at decode
+        // speed (`await it.next()` still yields, so the UI stays responsive).
+        //
+        // Gated on a jump ON PURPOSE: discarding every sample that merely
+        // lands behind the playhead throws away frames whenever the decoder
+        // runs a touch late, which is most of the time on 1080x1920 — measured
+        // at 12.6 painted fps instead of 30. Late frames still get shown.
+        const mode = skipMode()
+        if (mode !== 'off') {
+          const target = mode === 'all' ? this.want : this.skipUntil
+          if (target !== null && r.value.timestamp + r.value.duration < target - 0.001) {
+            r.value.close()
+            STATS.skipped++
+            continue
+          }
+          this.skipUntil = null // reached the landing frame
         }
         this.queue.push(r.value)
+        if (this.pendingStart !== null && this.restartAt) {
+          if (STATS.restartLatencyMs.length >= 200) STATS.restartLatencyMs.shift() // bounded
+          STATS.restartLatencyMs.push(Math.round(performance.now() - this.restartAt))
+          this.restartAt = 0
+        }
         this.pendingStart = null // the restarted iterator delivered — coverage is real again
       }
     } catch (e) {
@@ -172,6 +230,9 @@ class Pipe {
    *  needed. Never re-restarts while a restart is still decoding toward a
    *  nearby time (that's what froze the picture). */
   follow(t: number): void {
+    // A cut moves `want` forward by the removed span in ONE tick; normal
+    // playback advances it by about a frame. Only the former arms the skip.
+    if (this.want !== null && t - this.want > JUMP_S) this.skipUntil = t
     this.want = t
     if (this.pendingStart !== null) {
       // a restart is in flight; only abandon it if the playhead ran far past
@@ -179,7 +240,12 @@ class Pipe {
     } else if (!this.iter) {
       this.restart(t) // first play after a paused still: begin decoding
     } else if (this.score(t) > 1.5) {
-      this.restart(t) // jumped beyond coverage (scrub-then-play, big skip)
+      // Jumped beyond the decoded window. A SHORT FORWARD jump is just a cut:
+      // decode through it (skipUntil, armed above, keeps those frames off the
+      // canvas) instead of seeking — see FORWARD_DECODE_S. Backward jumps and
+      // long skips still seek, which is genuinely cheaper there.
+      const ahead = this.cur ? t - this.cur.timestamp : Number.POSITIVE_INFINITY
+      if (!(ahead > 0 && ahead <= FORWARD_DECODE_S)) this.restart(t)
     }
     let moved = false
     while (this.queue.length && this.queue[0].timestamp <= t) {
@@ -425,6 +491,13 @@ export class WcPlayer {
   prewarm(src: string, tSrc: number): void {
     const sp = this.sources.get(src)
     if (!sp?.ready || !sp.pipes) return
+    // Don't park the warm pipe for a seam the LIVE pipe will simply decode
+    // through: parking is a seek, and on a densely cut timeline that doubled
+    // the seek storm (one park + one restart per cut). Only pays off for a
+    // different source, or a jump too long to walk. (For a different source
+    // this source's owner holds no frame, so `own` is null and we park.)
+    const own = sp.pipes[sp.owner].curTime
+    if (own !== null && tSrc > own && tSrc - own <= FORWARD_DECODE_S) return
     sp.pipes[sp.owner ^ 1].park(tSrc)
   }
 
@@ -459,8 +532,10 @@ export class WcPlayer {
     // the nearest stale frame. The cache is what keeps a late decoder from
     // holding the WRONG (pre-cut) frame on the first pass / dense timelines.
     const good = own.cur && own.frameScore(tSrc) <= COVER_SLACK ? own.cur : null
+    if (good) STATS.paintGood++
     if (!good) {
       const hit = this.seamHit(src, tSrc)
+      if (hit) STATS.paintSeamCache++
       if (hit) {
         const rr = containRect(cw, ch, hit.aspect)
         try {
@@ -478,8 +553,12 @@ export class WcPlayer {
       const c1 = own.cur
       const c2 = other.cur
       s = !c1 ? c2 : !c2 ? c1 : Math.abs(c1.timestamp - tSrc) <= Math.abs(c2.timestamp - tSrc) ? c1 : c2
+      if (s) STATS.paintStale++
     }
-    if (!s) return false
+    if (!s) {
+      STATS.paintNone++
+      return false
+    }
     const r = containRect(cw, ch, s.displayWidth / s.displayHeight)
     try {
       ctx.fillStyle = '#000'
