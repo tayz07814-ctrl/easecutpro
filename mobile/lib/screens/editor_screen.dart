@@ -1112,13 +1112,16 @@ class _EditorScreenState extends State<EditorScreen> {
     final durS = _sourceDurationMs / 1000.0;
 
     // Silence Mastery (SilenceEngine.kt) — the SAME Silero-only engine the web
-    // app on main runs, with the same presets shaping its cuts. Falls back to
-    // the Dart transcript word-gap pass only if the engine fails.
+    // app on main runs, with the same presets shaping its cuts. NO timestamp
+    // fallback: if Silero fails, NOTHING is cut and the failure is shown in the
+    // app's own snackbar — so a silent word-gap pass can never masquerade as
+    // the engine.
     List<List<int>> fsmn = const [];
     if (cutSilence && _model.sourcePath != null) {
       final prog = ValueNotifier<String>('Cleaning silence…');
       _showProgress(prog);
       var timedOut = false;
+      String? engineErr;
       try {
         final regions = await NativeVad.detectSilences(
           'file://${_model.sourcePath!}',
@@ -1133,20 +1136,21 @@ class _EditorScreenState extends State<EditorScreen> {
           return const [];
         });
         fsmn = [for (final r in regions) [(r[0] * 1000).round(), (r[1] * 1000).round()]];
-      } catch (_) {
+      } catch (e) {
+        engineErr = _cleanErr(e);
         fsmn = const [];
       } finally {
         if (mounted) Navigator.of(context).pop();
         prog.dispose();
       }
-      // Name the engine that produced the silence cuts — which pass ran must never
-      // be a feeling. Every fallback to plain transcript gaps says so.
-      if (fsmn.isNotEmpty) {
-        _toast('Silence Mastery (Silero): ${fsmn.length} silent region${fsmn.length == 1 ? '' : 's'}');
+      if (engineErr != null) {
+        _toast('Silero failed: $engineErr — NO silence was cut');
+      } else if (timedOut) {
+        _toast('Silero timed out — NO silence was cut');
+      } else if (fsmn.isEmpty) {
+        _toast('Silence Mastery (Silero): no silence over the threshold');
       } else {
-        _toast(timedOut
-            ? 'Silence: engine timed out — using transcript gaps'
-            : 'Silence: transcript-gap fallback (engine found nothing / unavailable)');
+        _toast('Silence Mastery (Silero): ${fsmn.length} silent region${fsmn.length == 1 ? '' : 's'}');
       }
     }
 
@@ -1154,7 +1158,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _transcript!,
       wordCuts,
       durS,
-      cutSilence: cutSilence && fsmn.isEmpty, // word-gap only as the VAD fallback
+      cutSilence: false, // Silero owns silence — the word-gap pass is retired
       minPauseS: SilenceSettings.minGapS,
       padS: SilenceSettings.padAfterS,
       airAfterS: SilenceSettings.padAfterS,

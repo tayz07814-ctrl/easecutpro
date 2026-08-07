@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.widget.Toast
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -54,17 +53,6 @@ class EcVad(
 
     fun dispose() {
         channel.setMethodCallHandler(null)
-    }
-
-    /** Surface a fault on-screen — the VAD runs on a background thread and any failure
-     *  otherwise silently falls back to word-gap silence, hiding the real cause. */
-    private fun toast(msg: String) {
-        main.post {
-            try {
-                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-            } catch (_: Exception) {
-            }
-        }
     }
 
     // --- crash guard --------------------------------------------------------
@@ -126,11 +114,15 @@ class EcVad(
             result.success(emptyList<List<Double>>())
             return
         }
+        // Failures are returned as CHANNEL ERRORS, not toasts: Dart surfaces them in
+        // the app's own snackbar. (Native Toasts are suppressed on some Android
+        // builds when notifications are off — errors were vanishing silently.)
         Thread {
+            var error: String? = null
             val regions: List<List<Double>> = try {
                 val strikes = guardStrikes()
                 if (strikes >= MAX_STRIKES) {
-                    toast("On-device silence engine is off after repeated failures — using transcript gaps.")
+                    error = "engine disabled after repeated crashes (update/reinstall re-arms it)"
                     emptyList()
                 } else {
                     setGuardStrikes(strikes + 1)
@@ -141,7 +133,7 @@ class EcVad(
                     if (err != null) {
                         // The engine failed but came back cleanly — not a strike.
                         setGuardStrikes(0)
-                        toast("Silence VAD: $err")
+                        error = err
                         emptyList()
                     } else {
                         setGuardStrikes(0)
@@ -157,16 +149,16 @@ class EcVad(
                 }
             } catch (e: Throwable) {
                 // The ENGINE PROCESS died mid-call (native fault) — the strike written
-                // above stays. The app survives; say what killed it and fall back.
-                toast(
-                    "Silence engine crashed during [${lastStage()}] — using transcript gaps. " +
-                        "(${e.javaClass.simpleName})"
-                )
+                // above stays. The app survives and reports exactly what died.
+                error = "engine process crashed during [${lastStage()}] (${e.javaClass.simpleName})"
                 emptyList()
             } finally {
                 runningGate.set(false)
             }
-            main.post { result.success(regions) }
+            main.post {
+                if (error != null) result.error("ec_vad", error, null)
+                else result.success(regions)
+            }
         }.start()
     }
 

@@ -48,8 +48,9 @@ class NativeVad {
         for (final r in res)
           [for (final x in (r as List)) (x as num).toDouble()],
       ];
-    } catch (_) {
-      return const [];
+    } on PlatformException catch (e) {
+      // Engine failures must be LOUD (the caller shows them) — never swallowed.
+      throw Exception(e.message ?? 'silence engine failed');
     }
   }
 }
