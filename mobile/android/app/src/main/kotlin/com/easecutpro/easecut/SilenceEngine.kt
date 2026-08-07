@@ -111,11 +111,19 @@ object SilenceEngine {
         stage(context, "silero model load")
         ensureRuntime(context)
 
-        val (raw, stats) = detectSileroSilences(context, pcm, count, durationS, minSilenceS)
+        // Decoded-audio levels ride along in the stats: a broken decode (e.g. a
+        // PCM-format mix-up turning the track into full-scale noise) shows up as a
+        // "floor" within a few dB of the "speech" level.
+        val allDb = frameRmsDb(pcm, count)
+        val sortedDb = allDb.copyOf().also { it.sort() }
+        val levels = "audio floor ${percentile(sortedDb, 0.1).toInt()}dB / speech ${percentile(sortedDb, 0.9).toInt()}dB"
+
+        val (raw, sileroStats) = detectSileroSilences(context, pcm, count, durationS, minSilenceS)
+        val stats = "$sileroStats · $levels"
 
         val shaped = if (breathRefine) {
             stage(context, "breath cleanup")
-            refineRegionEdgesByRms(raw, frameRmsDb(pcm, count), RMS_FRAME_S, durationS)
+            refineRegionEdgesByRms(raw, allDb, RMS_FRAME_S, durationS)
         } else raw
 
         stage(context, "cut geometry")
@@ -474,6 +482,15 @@ object SilenceEngine {
                 }
             }
 
+            // Some decoders output FLOAT PCM (or ignore a 16-bit request) — reading
+            // float bytes as shorts turns the whole track into full-scale garbage
+            // noise, which Silero then scores as wall-to-wall speech. Ask for 16-bit,
+            // but ALWAYS honor whatever encoding the output format declares.
+            try {
+                format.setInteger(MediaFormat.KEY_PCM_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
+            } catch (_: Exception) {
+            }
+            var pcmFloat = false
             codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!)
             codec.configure(format, null, null, 0)
             codec.start()
@@ -502,25 +519,41 @@ object SilenceEngine {
                     if (of.containsKey(MediaFormat.KEY_SAMPLE_RATE)) sampleRate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                     if (of.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                     if (sampleRate > 0) ratio = sampleRate.toDouble() / TARGET_RATE
+                    pcmFloat = of.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
+                        of.getInteger(MediaFormat.KEY_PCM_ENCODING) == android.media.AudioFormat.ENCODING_PCM_FLOAT
                 } else if (outIndex >= 0) {
                     if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) sawOutputEOS = true
                     if (info.size > 0) {
                         val outBuf = codec.getOutputBuffer(outIndex)!!
                         outBuf.position(info.offset)
                         outBuf.limit(info.offset + info.size)
-                        val sb = outBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-                        val n = sb.remaining()
                         val ch = max(1, channels)
-                        val frames = n / ch
-                        if (frames > 0) {
-                            if (scratch.size < frames) scratch = FloatArray(frames)
-                            var idx = 0
-                            for (fr in 0 until frames) {
-                                var acc = 0f
-                                for (c in 0 until ch) acc += sb.get(idx++).toInt() / 32768f
-                                scratch[fr] = acc / ch
+                        if (pcmFloat) {
+                            val fb2 = outBuf.order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
+                            val frames = fb2.remaining() / ch
+                            if (frames > 0) {
+                                if (scratch.size < frames) scratch = FloatArray(frames)
+                                var idx = 0
+                                for (fr in 0 until frames) {
+                                    var acc = 0f
+                                    for (c in 0 until ch) acc += fb2.get(idx++)
+                                    scratch[fr] = acc / ch
+                                }
+                                push(scratch, frames)
                             }
-                            push(scratch, frames)
+                        } else {
+                            val sb = outBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                            val frames = sb.remaining() / ch
+                            if (frames > 0) {
+                                if (scratch.size < frames) scratch = FloatArray(frames)
+                                var idx = 0
+                                for (fr in 0 until frames) {
+                                    var acc = 0f
+                                    for (c in 0 until ch) acc += sb.get(idx++).toInt() / 32768f
+                                    scratch[fr] = acc / ch
+                                }
+                                push(scratch, frames)
+                            }
                         }
                     }
                     codec.releaseOutputBuffer(outIndex, false)

@@ -1991,7 +1991,6 @@ class _EditorScreenState extends State<EditorScreen> {
         clipName: _clipName ?? '',
         muted: _clipsMuted,
         onToggleMute: _toggleMuteClips,
-        onCover: () => _toast('Cover picker is coming soon'),
         onAddOverlay: _addOverlay,
         onAddText: _openText,
         onAddAudio: _openAudio,

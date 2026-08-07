@@ -70,7 +70,6 @@ class MiniTimeline extends StatefulWidget {
   /// tile, and the per-lane add shortcuts.
   final bool muted;
   final VoidCallback? onToggleMute;
-  final VoidCallback? onCover;
   final VoidCallback? onAddOverlay;
   final VoidCallback? onAddText;
   final VoidCallback? onAddAudio;
@@ -114,7 +113,6 @@ class MiniTimeline extends StatefulWidget {
     this.onTrimEnd,
     this.muted = false,
     this.onToggleMute,
-    this.onCover,
     this.onAddOverlay,
     this.onAddText,
     this.onAddAudio,
@@ -379,14 +377,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 )
               ));
               rows.add((6, null, null));
-              rows.add((
-                _clipsH,
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [_muteTile(), const SizedBox(width: 6), _coverTile(model)],
-                ),
-                _clipsRow(model)
-              ));
+              rows.add((_clipsH, _muteTile(), _clipsRow(model)));
               // Overlay (image / PiP) lane — ALWAYS present, like the reference.
               rows.add((4, null, null));
               if (widget.images.isNotEmpty) {
@@ -540,13 +531,14 @@ class _MiniTimelineState extends State<MiniTimeline> {
   }
 
   /// The "Mute clip audio" gutter tile — toggles every main clip's audio.
+  /// Compact (icon-only) so it doesn't crowd the pinned track-head column.
   Widget _muteTile() {
     final on = widget.muted;
     return GestureDetector(
       onTap: widget.onToggleMute,
       behavior: HitTestBehavior.opaque,
       child: Container(
-        width: 86,
+        width: 43,
         decoration: BoxDecoration(
           color: const Color(0xFF17171B),
           borderRadius: BorderRadius.circular(9),
@@ -556,57 +548,11 @@ class _MiniTimelineState extends State<MiniTimeline> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(on ? Icons.volume_off : Icons.volume_up_outlined,
-                size: 17, color: on ? const Color(0xFFFF9BA6) : const Color(0xFFC9C9DA)),
-            const SizedBox(height: 4),
-            Text(on ? 'Unmute clip\naudio' : 'Mute clip\naudio',
+                size: 16, color: on ? const Color(0xFFFF9BA6) : const Color(0xFFC9C9DA)),
+            const SizedBox(height: 3),
+            Text(on ? 'Unmute' : 'Mute',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFF8B8BA0), fontSize: 8.5, height: 1.25)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// The "Cover" gutter tile — the first frame of the timeline as a thumb.
-  Widget _coverTile(TimelineModel model) {
-    ThumbFrame? thumb;
-    if (model.clips.isNotEmpty) {
-      final frames = _clipThumbs(model.clips.first);
-      if (frames.isNotEmpty) thumb = frames.first;
-    }
-    return GestureDetector(
-      onTap: widget.onCover,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: _clipsH,
-        clipBehavior: Clip.hardEdge,
-        decoration: BoxDecoration(
-          color: const Color(0xFF17171B),
-          borderRadius: BorderRadius.circular(9),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-        ),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (thumb != null)
-              Image.memory(thumb.jpeg, fit: BoxFit.cover, gaplessPlayback: true),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                color: const Color(0xB3000000),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.edit, size: 8, color: Colors.white),
-                    SizedBox(width: 3),
-                    Text('Cover', style: TextStyle(color: Colors.white, fontSize: 8.5)),
-                  ],
-                ),
-              ),
-            ),
+                style: const TextStyle(color: Color(0xFF8B8BA0), fontSize: 7.5)),
           ],
         ),
       ),
