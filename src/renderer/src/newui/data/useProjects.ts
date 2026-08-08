@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ecPrompt } from '../../ui/ecPrompt'
 import { useStore } from '../../store'
-import { IS_CLOUD } from '../../platform'
+import { IS_CLOUD_BACKEND } from '../../platform'
 import { authLogout } from '../../webapi'
 import { cloudLogout } from '../../cloud/auth'
 import {
@@ -168,7 +168,7 @@ export function useProjects(): DashboardModel {
     void refresh()
   }
   async function logout(): Promise<void> {
-    if (IS_CLOUD) await cloudLogout()
+    if (IS_CLOUD_BACKEND) await cloudLogout()
     else await authLogout()
     setUser(null)
     setView('auth')

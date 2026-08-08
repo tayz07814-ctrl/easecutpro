@@ -54,11 +54,26 @@ export async function probe(path: string): Promise<MediaInfo> {
     if (d) fps = n / d
   }
 
+  // Rotation metadata (phone clips): ffmpeg auto-rotates on decode, so every
+  // consumer of these dimensions (canvas choice in combineClips/exportProject,
+  // the renderer's aspect math) needs the DISPLAY size, not the stored size.
+  // A portrait iPhone .mov stores 1920x1080 + a -90° display matrix; reporting
+  // it landscape picked a landscape canvas and pillarboxed the export.
+  let width = v?.width ?? 0
+  let height = v?.height ?? 0
+  let rotation = 0
+  const sd = (v?.side_data_list ?? []).find((s: any) => typeof s?.rotation === 'number')
+  if (sd) rotation = Number(sd.rotation)
+  else if (v?.tags?.rotate != null) rotation = Number(v.tags.rotate) || 0
+  if (Math.abs(((rotation % 360) + 360) % 360) % 180 === 90) {
+    ;[width, height] = [height, width]
+  }
+
   return {
     path,
     duration: parseFloat(data.format?.duration ?? '0'),
-    width: v?.width ?? 0,
-    height: v?.height ?? 0,
+    width,
+    height,
     fps,
     hasVideo: !!v,
     hasAudio: !!a
@@ -364,13 +379,18 @@ async function concatSegmentsToFile(
     panX?: number
     panY?: number
   }[],
-  target: { w: number; h: number },
+  target: { w: number; h: number; fps?: number },
   onProgress?: (pct: number) => void,
   outPath?: string
 ): Promise<string> {
   const W = even(target.w || 1920)
   const H = even(target.h || 1080)
-  const FPS = 30
+  // Output frame grid = the (probed) source rate when the caller supplies one,
+  // 30 otherwise. A 60fps source conformed to 30 halves its motion smoothness;
+  // a 24fps film clip conformed to 30 judders. Clamped to a sane range — VFR
+  // phone .mov avg_frame_rate can report nonsense. The segDur pinning below is
+  // rate-agnostic: it only needs every segment quantized to the SAME grid.
+  const FPS = target.fps && target.fps >= 10 && target.fps <= 120 ? Number(target.fps.toFixed(3)) : 30
   const inArgs: string[] = []
   const seg: string[] = []
   const order: string[] = []
@@ -563,14 +583,14 @@ export async function combineClips(
   // srcW/srcH default to 1920x1080 when the browser couldn't probe the file —
   // flattening a PORTRAIT phone video into that landscape canvas produced a
   // tiny pillar-boxed export. Probe the actual file and trust it first.
-  let target = { w: clips[0].srcW || 0, h: clips[0].srcH || 0 }
+  let target: { w: number; h: number; fps?: number } = { w: clips[0].srcW || 0, h: clips[0].srcH || 0 }
   try {
     const info = await probe(clips[0].sourcePath)
-    if (info.width && info.height) target = { w: info.width, h: info.height }
+    if (info.width && info.height) target = { w: info.width, h: info.height, fps: info.fps }
   } catch {
     /* fall back to the stored fields */
   }
-  if (!target.w || !target.h) target = { w: 1920, h: 1080 }
+  if (!target.w || !target.h) target = { w: 1920, h: 1080, fps: target.fps }
   const out = join(dir, `combined-${randomUUID()}.mp4`)
   return concatSegmentsToFile(segs, target, onProgress, out)
 }
@@ -635,7 +655,17 @@ export async function exportProject(
   if (project.baseSequence && project.baseSequence.length > 0 && !project.media) {
     cameFromMontage = true
     const seq = project.baseSequence
-    const target = { w: seq[0].srcW || 1920, h: seq[0].srcH || 1080 }
+    // Probe the first clip for the canvas + frame grid rather than trusting the
+    // renderer's stored srcW/srcH (default 1920x1080 when the browser couldn't
+    // probe — the same portrait-pillarbox bug combineClips already fixed) —
+    // and pass the real fps so the montage isn't force-conformed to 30.
+    let target: { w: number; h: number; fps?: number } = { w: seq[0].srcW || 1920, h: seq[0].srcH || 1080 }
+    try {
+      const info = await probe(seq[0].sourcePath)
+      if (info.width && info.height) target = { w: info.width, h: info.height, fps: info.fps }
+    } catch {
+      /* fall back to the stored fields */
+    }
     // Virtual montage: apply the project-level cuts (transcript words + silences)
     // in montage time, then map the kept ranges back to concrete clip SOURCE
     // segments (split at clip boundaries) to concatenate. The stitched montage
@@ -720,8 +750,21 @@ export async function exportProject(
   if (keeps.length === 0) throw new Error('Nothing to export (all cut)')
 
   const totalKept = keeps.reduce((s, k) => s + (k.end - k.start), 0)
-  const baseW = base.width || 1920
-  const baseH = base.height || 1080
+  // Re-probe for the canvas rather than trusting stored dimensions: projects
+  // saved before probe() was rotation-aware carry the STORED (unrotated) size
+  // for portrait phone clips, which picks a landscape canvas and pillarboxes
+  // the whole export. Probe failure falls back to the stored values.
+  let baseW = base.width || 1920
+  let baseH = base.height || 1080
+  try {
+    const bp = await probe(base.path)
+    if (bp.width > 0 && bp.height > 0) {
+      baseW = bp.width
+      baseH = bp.height
+    }
+  } catch {
+    /* keep stored dims */
+  }
 
   // Collect overlay clips (tracks 1 & 2). Each becomes an extra ffmpeg input.
   // Skip any whose source file is missing so a broken/deleted overlay never

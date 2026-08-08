@@ -1,13 +1,14 @@
-import { app, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, protocol, shell } from 'electron'
 import { join, extname } from 'path'
-import { createReadStream } from 'fs'
+import { createReadStream, existsSync } from 'fs'
 import { stat, readdir, mkdir, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { Readable } from 'stream'
 import { randomUUID } from 'crypto'
 import { IPC } from '../shared/ipc'
 import { checkTools, listWhisperModels } from './binaries'
-import { probe, exportProject, extractWaveform, extractThumbnails, combineClips } from './ffmpeg'
+import { probe, exportProject, extractWaveform, extractThumbnails, combineClips, extractAudioWav } from './ffmpeg'
+import { handleFrameStream, extractPreviewAudioWav, killAllFrameStreams } from './framestream'
 import { transcribe } from './whisper'
 import { transcribeOpenAI } from './openai-transcribe'
 import { transcribeParakeet } from './parakeet'
@@ -47,6 +48,19 @@ let mainWindow: BrowserWindow | null = null
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'ecmedia',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true }
+  },
+  {
+    // Native preview frames: raw yuv420p decoded by the bundled ffmpeg,
+    // streamed to the renderer's FfPlayer (see src/main/framestream.ts).
+    scheme: 'ecframes',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true }
+  },
+  {
+    // Silero VAD assets (ONNX model + onnxruntime wasm/mjs) for the renderer's
+    // silence engine. A file:// page cannot fetch() its sibling files, so the
+    // bundled out/renderer/vad directory is served over this scheme instead.
+    scheme: 'ecvad',
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true }
   }
 ])
@@ -108,6 +122,13 @@ function createWindow(): void {
       nodeIntegration: false
     },
     show: false
+  })
+
+  // Any window.open (Stripe checkout/portal, external links) goes to the
+  // SYSTEM browser — the app window must never navigate away from the bundle.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
@@ -192,6 +213,33 @@ app.whenReady().then(() => {
         'Accept-Ranges': 'bytes',
         'Content-Length': String(size)
       }
+    })
+  })
+
+  // Native preview frames (raw yuv420p from the bundled ffmpeg — FfPlayer).
+  protocol.handle('ecframes', (request) => handleFrameStream(request))
+
+  // Silero VAD assets for the renderer silence engine (ecvad://assets/<file>).
+  // Serves the staged out/renderer/vad files (works from inside app.asar — fs
+  // reads asar contents transparently); dev falls back to the source publicDir.
+  protocol.handle('ecvad', async (request) => {
+    const name = decodeURIComponent(new URL(request.url).pathname).replace(/^\/+/, '')
+    if (!/^[\w.-]+$/.test(name)) return new Response('Bad Request', { status: 400 })
+    const candidates = [
+      join(__dirname, '../renderer/vad', name), // packaged + electron-vite build
+      join(process.cwd(), 'src/renderer/public/vad', name) // dev server
+    ]
+    const p = candidates.find((c) => existsSync(c))
+    if (!p) return new Response('Not Found', { status: 404 })
+    const type = name.endsWith('.wasm')
+      ? 'application/wasm'
+      : name.endsWith('.mjs') || name.endsWith('.js')
+        ? 'text/javascript'
+        : 'application/octet-stream'
+    const size = (await stat(p)).size
+    return new Response(Readable.toWeb(createReadStream(p)) as unknown as ReadableStream, {
+      status: 200,
+      headers: { 'Content-Type': type, 'Content-Length': String(size) }
     })
   })
 
@@ -347,6 +395,13 @@ app.whenReady().then(() => {
   // ---- Waveform peaks ----
   ipcMain.handle(IPC.waveform, async (_e, path: string) => extractWaveform(path))
 
+  // Preview audio: whole-source 48k stereo WAV (elst offset baked in by ffmpeg).
+  ipcMain.handle(IPC.previewAudioWav, async (_e, path: string) => extractPreviewAudioWav(path))
+
+  // Cloud-hybrid STT: 16k mono WAV (same aresample=first_pts=0 alignment the
+  // local engines use) for upload to the stt edge function.
+  ipcMain.handle(IPC.sttAudioWav, async (_e, path: string) => extractAudioWav(path))
+
   // ---- Filmstrip thumbnails ----
   ipcMain.handle(IPC.thumbnails, async (_e, path: string, intervalSec?: number) =>
     extractThumbnails(path, intervalSec ?? 2)
@@ -414,4 +469,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
-app.on('will-quit', stopFastcutSidecar)
+app.on('will-quit', () => {
+  stopFastcutSidecar()
+  killAllFrameStreams()
+})

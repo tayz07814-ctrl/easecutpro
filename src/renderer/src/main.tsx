@@ -7,11 +7,13 @@ import LandingScreen from './landing/LandingScreen'
 import { EcPromptHost } from './ui/ecPrompt'
 import LegalPage from './landing/LegalPage'
 import AccountPanelHost from './newui/screens/AccountPanelHost'
+import PricingModalHost from './newui/screens/PricingModal'
 import { useStore, firstVideoSourcePath } from './store'
-import { IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
+import { IS_WEB, IS_CLOUD, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
 import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
+import { initDesktopCloud } from './cloud/desktopHybrid'
 import { cloudAuthMe } from './cloud/auth'
 import { supabaseConfigured } from './cloud/supabase'
 import { probeServer } from './offline'
@@ -46,6 +48,10 @@ if (IS_NEW_UI) document.documentElement.setAttribute('data-ec-ui', 'new')
 // The Stage A–C new UI, now the default on every host; ?newui=0 (persisted to
 // localStorage) drops back to legacy. Independent of IS_NEW_UI above.
 const NEW_UI = isNewUi()
+
+// Desktop-cloud hybrid: settings sync boot. The AI routing itself happens at
+// the call sites via aiApi() (window.api is contextBridge read-only).
+if (IS_DESKTOP_CLOUD) initDesktopCloud()
 
 if (IS_WEB) {
   if (IS_CLOUD) installCloudApi()
@@ -224,6 +230,32 @@ function Root(): JSX.Element {
   // (import / split / trim / cut / preview) and on-device export need no server.
   // Only when the backend answers do we run the normal auth → home/login flow.
   useEffect(() => {
+    // Desktop-cloud hybrid: same Supabase bootstrap as the cloud web build —
+    // sign-in gate when online, local editor session when offline. Media stays
+    // native either way; only auth + edge AI need the network. No SPA paths in
+    // Electron, so the view is simply auth/home.
+    if (IS_DESKTOP_CLOUD) {
+      let cancelled = false
+      ;(async () => {
+        const online = supabaseConfigured() && navigator.onLine !== false
+        if (cancelled) return
+        useStore.getState().setServerAvailable(online)
+        if (!online) {
+          useStore.setState({ user: null, view: 'home' })
+          return
+        }
+        try {
+          const { user } = await cloudAuthMe()
+          if (!cancelled) useStore.setState({ user, view: user ? 'home' : 'auth' })
+        } catch {
+          // Session probe failed — never strand the app on "Loading…".
+          if (!cancelled) useStore.setState({ user: null, view: 'auth' })
+        }
+      })()
+      return () => {
+        cancelled = true
+      }
+    }
     if (!IS_WEB) return
     let cancelled = false
     ;(async () => {
@@ -363,6 +395,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <Root />
     <AccountPanelHost />
+    <PricingModalHost />
     {/* window.prompt() doesn't exist in Electron, so every naming flow asks here. */}
     <EcPromptHost />
   </React.StrictMode>

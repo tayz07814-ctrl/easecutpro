@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react'
 import { useStore } from '../store'
-import { IS_CLOUD } from '../platform'
+import { IS_CLOUD, IS_WEB } from '../platform'
 import { probeEncodeCaps, whyNotLocal, type EncodeCaps } from '../export/localExport'
 import { useSmoothProgress } from '../useSmoothProgress'
 import { useSharedEngineSnapshot, getSharedEngine } from '../timelineEngine'
@@ -369,7 +369,9 @@ function MobileExport({ onClose }: { onClose: () => void }): JSX.Element {
   }, [])
   // Video-capable is the real on-device gate; audio may still be missing on
   // iOS Safari < 26, where we export video-only and warn instead of refusing.
-  const deviceOk = !!caps?.video
+  // IS_WEB gate: a narrow Electron window mounts this UI too, and desktop must
+  // export through native ffmpeg (the ⬆ button below), never WebCodecs.
+  const deviceOk = IS_WEB && !!caps?.video
   const audioMissing = !!caps?.video && !caps.audio
   const localGate = deviceOk ? whyNotLocal(project) : ''
   const setAspect = useStore((s) => s.setAspect)

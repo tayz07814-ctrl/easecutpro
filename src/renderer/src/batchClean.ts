@@ -10,6 +10,7 @@
 // Works on both desktop (real paths) and web (webmedia ids): window.api.*
 // abstracts the difference, uploading lazily on transcribe as needed.
 import type { Project, Transcript } from '@shared/types'
+import { aiApi } from './cloud/desktopHybrid'
 import { createEmptyProject } from '@shared/project'
 import { detectCleanupIds } from '@shared/fillers'
 
@@ -37,7 +38,7 @@ export async function cleanVideo(
 
   // --- Transcription-based removal (fillers, stutters, repeats) ---
   onStep('Transcribing…')
-  const transcript: Transcript = await window.api.transcribe(path)
+  const transcript: Transcript = await aiApi().transcribe(path)
   const removeIds = new Set(detectCleanupIds(transcript, fillerWords))
   project.transcript = {
     words: transcript.words.map((w) => (removeIds.has(w.id) ? { ...w, deleted: true } : w)),

@@ -235,6 +235,13 @@ const webApi: Window['api'] = {
   },
   probe: (path) => (isWebMediaId(path) ? localProbe(path) : call('/api/probe', { path })),
   waveform: (path) => (isWebMediaId(path) ? localWaveform(path) : call('/api/waveform', { path })),
+  // Desktop-only (native ffmpeg preview audio); web preview decodes in-browser.
+  previewAudioWav: async () => {
+    throw new Error('previewAudioWav is desktop-only')
+  },
+  sttAudioWav: async () => {
+    throw new Error('sttAudioWav is desktop-only')
+  },
   thumbnails: (path, intervalSec, onPartial) =>
     isWebMediaId(path) ? localThumbnails(path, intervalSec, onPartial) : call('/api/thumbnails', { path, intervalSec }),
   transcribe: async (path, backend, modelName) => {
