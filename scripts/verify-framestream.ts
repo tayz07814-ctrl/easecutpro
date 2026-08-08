@@ -10,7 +10,7 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { existsSync } from 'fs'
-import { mkdir, stat } from 'fs/promises'
+import { mkdir, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { FFMPEG } from '../src/main/binaries'
@@ -120,11 +120,25 @@ async function main(): Promise<void> {
   check('missing file → 404', mres.status === 404, String(mres.status))
 
   // ---- preview audio WAV ----
+  // Asserts the FORMAT, not a magic byte count: the renderer builds its
+  // AudioBuffer straight from this PCM, so the channel count and rate are the
+  // contract (they are what bounds memory on a long source). A 5s fixture is
+  // under the long-source threshold, so it takes the full-rate 48k profile.
   const wav = await extractPreviewAudioWav(plain)
-  const wst = await stat(wav)
-  // 5s * 48000Hz * 2ch * 2B ≈ 960044 with header; allow slack for priming.
   check('preview WAV exists', existsSync(wav), wav)
-  check('preview WAV plausible size', wst.size > 900000 && wst.size < 1050000, `${wst.size}B`)
+  const head = await readFile(wav)
+  const channels = head.readUInt16LE(22)
+  const rate = head.readUInt32LE(24)
+  const bits = head.readUInt16LE(34)
+  check('preview WAV is mono', channels === 1, `${channels}ch`)
+  check('preview WAV is 48k (short source)', rate === 48000, `${rate}Hz`)
+  check('preview WAV is 16-bit PCM', bits === 16, `${bits}bit`)
+  const expected = 5 * rate * channels * 2
+  check(
+    'preview WAV size matches duration',
+    Math.abs(head.length - expected) < expected * 0.1,
+    `${head.length}B vs ~${expected}B`
+  )
   const wav2 = await extractPreviewAudioWav(plain)
   check('preview WAV cached (same path)', wav2 === wav)
 
