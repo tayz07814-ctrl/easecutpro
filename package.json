@@ -1,7 +1,7 @@
 {
   "name": "easecutpro",
   "version": "0.1.0",
-  "description": "EaseCutPro - offline, native Windows transcript-based video editor (Descript-like)",
+  "description": "EaseCutPro - transcript-based video editor",
   "main": "./out/main/index.js",
   "author": "EaseCutPro",
   "license": "MIT",
