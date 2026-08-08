@@ -271,8 +271,8 @@ console.log('12) breath-tail edge refinement (refineRegionEdgesByRms)')
   // detected region starts after it), then true silence to 10s.
   const f1 = frames(10, [[0, 4, -20], [4, 4.4, -38]])
   const r1 = refineRegionEdgesByRms([{ start: 4.4, end: 10 }], f1, F, 10)
-  check('left edge walks back over the breath to where the voice stops',
-    r1.regions.length === 1 && Math.abs(r1.regions[0].start - 4.0) < 0.05 && r1.regions[0].end === 10, fmt(r1.regions))
+  check('left edge walks back over the breath, keeping a 100ms grace fade by the voice',
+    r1.regions.length === 1 && Math.abs(r1.regions[0].start - 4.1) < 0.05 && r1.regions[0].end === 10, fmt(r1.regions))
   // The RIGHT edge (next sentence's onset) is NEVER walked — low-energy soft
   // onsets were getting overcut when it was.
   const f2 = frames(10, [[5, 5.3, -38], [5.3, 10, -20]])
@@ -282,8 +282,8 @@ console.log('12) breath-tail edge refinement (refineRegionEdgesByRms)')
   // A 2s exhale is longer than the cap — only EDGE_REFINE_MAX_S is swallowed.
   const f3 = frames(12, [[0, 4, -20], [4, 6, -38]])
   const r3 = refineRegionEdgesByRms([{ start: 6, end: 12 }], f3, F, 12)
-  check(`cap: a 2s breath yields at most ${EDGE_REFINE_MAX_S}s of extension`,
-    r3.regions.length === 1 && Math.abs(r3.regions[0].start - (6 - EDGE_REFINE_MAX_S)) < 0.05, fmt(r3.regions))
+  check(`cap: a 2s breath yields at most ${EDGE_REFINE_MAX_S}s of extension (minus the grace)`,
+    r3.regions.length === 1 && Math.abs(r3.regions[0].start - (6 - EDGE_REFINE_MAX_S + 0.1)) < 0.05, fmt(r3.regions))
   // Voiced speech at the edge (only 5dB under the speech level) is NOT eaten.
   const f4 = frames(10, [[0, 4, -20], [4, 4.4, -25]])
   const r4 = refineRegionEdgesByRms([{ start: 4.4, end: 10 }], f4, F, 10)
@@ -295,7 +295,12 @@ console.log('12) breath-tail edge refinement (refineRegionEdgesByRms)')
   // Two regions whose left walks make them touch merge into one.
   const f6 = frames(10, [[0, 2, -20], [2, 2.4, -38], [2.4, 2.6, -38], [8, 10, -20]])
   const r6 = refineRegionEdgesByRms([{ start: 2.6, end: 4 }, { start: 4, end: 8 }], f6, F, 10)
-  check('touching refined regions merge', r6.regions.length === 1 && Math.abs(r6.regions[0].start - 2.0) < 0.05 && r6.regions[0].end === 8, fmt(r6.regions))
+  check('touching refined regions merge', r6.regions.length === 1 && Math.abs(r6.regions[0].start - 2.1) < 0.05 && r6.regions[0].end === 8, fmt(r6.regions))
+  // A breath no longer than the grace itself nets zero movement — the edge
+  // stays where the detector put it (tiny breaths ride next to the voice).
+  const f7 = frames(10, [[0, 4, -20], [4, 4.08, -38]])
+  const r7 = refineRegionEdgesByRms([{ start: 4.08, end: 10 }], f7, F, 10)
+  check('breath shorter than the grace → edge unchanged', Math.abs(r7.regions[0].start - 4.08) < 0.001, fmt(r7.regions))
   // Preset wiring: breath cleanup rides the aggressive presets only.
   const byId2 = Object.fromEntries(SILENCE_MASTERY_PRESETS.map((p) => [p.id, p.values]))
   check('breath cleanup: off for Natural Rhythm + No Chill, on for Flash + Cut Throat',
