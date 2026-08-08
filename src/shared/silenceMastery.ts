@@ -398,6 +398,12 @@ export const EDGE_REFINE_MAX_S = 1.5
  *  Breaths sit ~15–25dB under voiced speech; soft word onsets sit well inside
  *  this margin and survive. */
 const EDGE_REFINE_VOICE_MARGIN_DB = 15
+/** Grace tail: when a walk stops at voice, this much of the walked audio is
+ *  GIVEN BACK next to it. A word ending doesn't stop dead — it decays over
+ *  ~50–150ms, and the tail of that fade sits below the voice cutoff, so the
+ *  walk would otherwise clip the word's natural die-off (heard live as "some
+ *  words at endings get cut"). The bulk of the breath is still removed. */
+export const EDGE_REFINE_KEEP_TAIL_S = 0.1
 
 /**
  * Breath-tail edge refinement — the adaptive answer to "even a 500ms trim
@@ -433,11 +439,15 @@ export function refineRegionEdgesByRms(
     framesDb[Math.min(framesDb.length - 1, Math.max(0, Math.floor(s / frameS)))]
   const out = regions.map((r) => ({ ...r }))
   for (const r of out) {
+    const origStart = r.start
     let ext = 0
     while (r.start > 0 && ext < EDGE_REFINE_MAX_S && frameAt(r.start - frameS / 2) < cutoffDb) {
       r.start = Math.max(0, r.start - frameS)
       ext += frameS
     }
+    // Give the word back its fade: keep a grace tail beside the voice frame
+    // the walk stopped at (never past the original detected edge).
+    if (ext > 0) r.start = Math.min(origStart, r.start + EDGE_REFINE_KEEP_TAIL_S)
   }
   // Extension can make neighbours touch — merge before handing back.
   out.sort((a, b) => a.start - b.start)

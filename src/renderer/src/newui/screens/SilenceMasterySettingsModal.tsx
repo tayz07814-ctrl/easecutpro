@@ -142,7 +142,7 @@ export default function SilenceMasterySettingsModal(): JSX.Element | null {
             </div>
             <div style={css('flex:1;min-width:0')}>
               <div style={css('font-size:12.5px;color:#ededf2;font-weight:550')}>Breath cleanup (sentence endings)</div>
-              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Walks each cut back over the exhale at the end of a sentence until the voice actually stops (max 1.5s). Endings only — the next sentence’s onset is never touched.</div>
+              <div style={css('font-size:11px;color:#9a9aae;margin-top:3px;line-height:1.45')}>Walks each cut back over the exhale at the end of a sentence until the voice actually stops (max 1.5s), keeping a 100ms fade so word endings stay natural. Endings only — the next sentence’s onset is never touched.</div>
             </div>
           </div>
         </div>
