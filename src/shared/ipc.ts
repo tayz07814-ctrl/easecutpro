@@ -18,7 +18,10 @@ export const IPC = {
   whisperModels: 'tools:whisperModels',
   waveform: 'media:waveform',
   thumbnails: 'media:thumbnails',
+  previewAudioWav: 'media:previewAudioWav', // desktop-only: native PCM for the preview audio engine
+  sttAudioWav: 'media:sttAudioWav', // desktop-only: 16k mono WAV for the cloud STT engines
   export: 'project:export',
+  revealPath: 'shell:revealPath', // show a finished export in the file manager
   saveProject: 'project:save',
   loadProject: 'project:load',
   // Project library (CapCut-style local projects)

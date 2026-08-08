@@ -24,6 +24,14 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    // Load VITE_SUPABASE_* from the repo-root .env (same file build:cloud uses)
+    // so the desktop renderer can reach the cloud backend (auth + edge AI).
+    envDir: __dirname,
+    define: {
+      // Desktop-cloud hybrid: native ffmpeg media + Supabase auth/edge AI.
+      // Baked here (not .env) — every Electron build IS the hybrid.
+      'import.meta.env.VITE_DESKTOP_CLOUD': JSON.stringify('1')
+    },
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/renderer/index.html') }

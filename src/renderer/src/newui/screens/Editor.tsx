@@ -14,6 +14,7 @@ import TextPresetStrip from './TextPresetStrip'
 import OverlayPanel from '../../components/OverlayPanel'
 import CutProgressOverlay from './CutProgressOverlay'
 import ExportModal from '../../components/ExportModal'
+import { UpgradeButton } from './PricingModal'
 import SettingsModal from '../../components/SettingsModal'
 import VideoPreview from '../../components/VideoPreview'
 // New-UI fork of the production timeline (newui/timeline/*). Same working code as
@@ -257,6 +258,7 @@ function TopBar(): JSX.Element {
         <div onClick={() => canRedo && redo()} style={css(`width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-size:14px;color:${canRedo ? '#9a9aae' : '#4a4a5c'};cursor:${canRedo ? 'pointer' : 'default'}`)}>↷</div>
       </div>
       <div style={css('width:1px;height:20px;background:rgba(255,255,255,.08)')} />
+      <UpgradeButton />
       <button onClick={importMedia} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:7px 13px;cursor:pointer')}>Import</button>
       <div onClick={() => setShowSettings(true)} style={css('width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#9a9aae;font-size:15px;cursor:pointer')}>···</div>
       <button onClick={() => setShowExportModal(true)} style={css('background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 16px;cursor:pointer')}>Export</button>

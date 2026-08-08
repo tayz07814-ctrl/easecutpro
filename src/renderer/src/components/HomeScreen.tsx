@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useStore, type BatchJob } from '../store'
-import { IS_WEB, IS_CLOUD } from '../platform'
+import { IS_WEB, IS_CLOUD_BACKEND, IS_DESKTOP_CLOUD } from '../platform'
 import { authLogout } from '../webapi'
 import { cloudLogout } from '../cloud/auth'
 import { listProjects, createProject, getProject, deleteProject, saveProject, type ProjectMeta } from '../projectsApi'
@@ -67,7 +67,7 @@ export default function HomeScreen(): JSX.Element {
   // Pro subscription (cloud only). Load current status, and after a Paddle
   // checkout completes, poll until the webhook flips entitlement on.
   useEffect(() => {
-    if (!IS_CLOUD || !checkoutConfigured()) return
+    if (!IS_CLOUD_BACKEND || !checkoutConfigured()) return
     let active = true
     void getSubscription().then((s) => {
       if (active) setSub(s)
@@ -126,7 +126,7 @@ export default function HomeScreen(): JSX.Element {
   }
 
   async function logout(): Promise<void> {
-    if (IS_CLOUD) await cloudLogout()
+    if (IS_CLOUD_BACKEND) await cloudLogout()
     else await authLogout()
     setUser(null)
     setView('auth')
@@ -141,10 +141,10 @@ export default function HomeScreen(): JSX.Element {
       <header className="home-top">
         <div className="home-brand">EaseCut<span>Pro</span></div>
         <span className="spacer" />
-        {IS_WEB && (
+        {(IS_WEB || IS_DESKTOP_CLOUD) && (
           <>
             <span className="home-user muted">{user?.email}</span>
-            {IS_CLOUD && checkoutConfigured() && user &&
+            {IS_CLOUD_BACKEND && checkoutConfigured() && user &&
               (isProNow(sub) ? (
                 <span
                   className="home-pro-badge"

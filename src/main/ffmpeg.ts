@@ -2,8 +2,8 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { tmpdir, homedir, cpus } from 'os'
 import { join } from 'path'
-import { randomUUID } from 'crypto'
-import { mkdir, readdir, readFile, rm, writeFile } from 'fs/promises'
+import { createHash, randomUUID } from 'crypto'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { existsSync, writeFileSync } from 'fs'
 import { FFMPEG, FFPROBE } from './binaries'
 import { computeKeepRanges, virtualKeepsToClipSegments, stitchMontageWaveform, baseClipSpans } from '../shared/edit'
@@ -26,6 +26,120 @@ const execFileP = promisify(execFile)
  *  large graph, write it to a temp file and use `-filter_complex_script`; short
  *  graphs stay inline (byte-identical to before). Returns the args + the temp file
  *  path to clean up afterwards ('' when inline). */
+/**
+ * FFMPEG CONCURRENCY GATE.
+ *
+ * ffmpeg already parallelises across cores internally, so running several at
+ * once doesn't finish sooner — it just multiplies context switching and
+ * memory. On low-end laptops creators saw 4-7 ffmpeg processes at a time
+ * (an export, plus waveform/thumbnail/audio extraction kicked off
+ * independently by the renderer) and the machine crawled.
+ *
+ * Every HEAVY ffmpeg call queues here. Kept deliberately at the leaf spawn
+ * sites: a caller must never hold a slot while awaiting another slot, or the
+ * queue would deadlock (exportProject calls extractWaveform, then the concat,
+ * then the render — each acquires and releases in turn).
+ *
+ * ffprobe is intentionally NOT gated: it's milliseconds, and stalling a probe
+ * behind a long render would freeze imports.
+ */
+const FFMPEG_SLOTS = 4
+let ffmpegBusy = 0
+const ffmpegWaiting: (() => void)[] = []
+
+async function withFfmpegSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (ffmpegBusy >= FFMPEG_SLOTS) await new Promise<void>((r) => ffmpegWaiting.push(r))
+  ffmpegBusy++
+  try {
+    return await fn()
+  } finally {
+    ffmpegBusy--
+    ffmpegWaiting.shift()?.()
+  }
+}
+
+/** Heavy ffmpeg work queued by the gate above (used by framestream.ts too). */
+export function runGated<T>(fn: () => Promise<T>): Promise<T> {
+  return withFfmpegSlot(fn)
+}
+
+/**
+ * Waveform / filmstrip cache, keyed by the file's identity (path+size+mtime).
+ *
+ * These were recomputed from scratch every time — on editor open, on reopen,
+ * and once more for each remount of the timeline — so the same ffmpeg pass ran
+ * over and over for media that hadn't changed. Caching lets the import wizard
+ * PREPARE a project's media up front and have the editor find it instantly
+ * instead of popping in seconds later.
+ *
+ * In memory and bounded: filmstrips are base64 data URLs and get large, so only
+ * a handful of sources are kept — enough for the open project.
+ */
+const CACHE_MAX = 8
+const waveCache = new Map<string, Waveform>()
+const thumbCache = new Map<string, Thumb[]>()
+
+async function mediaKey(path: string, extra = ''): Promise<string> {
+  try {
+    const st = await stat(path)
+    return `${path}|${st.size}|${Math.round(st.mtimeMs)}|${extra}`
+  } catch {
+    return `${path}|?|${extra}` // unstattable: still de-dupes within a session
+  }
+}
+
+function remember<T>(cache: Map<string, T>, key: string, value: T): T {
+  cache.set(key, value)
+  while (cache.size > CACHE_MAX) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
+  return value
+}
+
+// ---- disk tier -------------------------------------------------------------
+// The in-memory tier above dies with the process, so every restart re-decoded
+// media that hadn't changed. Persisting it means a project opens instantly the
+// second time too — the expensive part was never the reading, it was ffmpeg.
+// Keyed by the same file identity, so an edited source misses and re-decodes.
+const DISK_CACHE_DIR = join(homedir(), '.easecutpro', 'cache', 'media')
+const DISK_CACHE_KEEP = 120
+
+function diskFile(key: string, kind: 'wf' | 'th'): string {
+  return join(DISK_CACHE_DIR, `${createHash('sha1').update(key).digest('hex')}.${kind}.json`)
+}
+
+async function readDisk<T>(key: string, kind: 'wf' | 'th'): Promise<T | null> {
+  try {
+    const raw = await readFile(diskFile(key, kind), 'utf8')
+    return JSON.parse(raw) as T
+  } catch {
+    return null // absent or corrupt — recompute
+  }
+}
+
+/** Best-effort write + prune. Never blocks or fails the caller. */
+function writeDisk(key: string, kind: 'wf' | 'th', value: unknown): void {
+  void (async () => {
+    try {
+      await mkdir(DISK_CACHE_DIR, { recursive: true })
+      await writeFile(diskFile(key, kind), JSON.stringify(value), 'utf8')
+      const names = await readdir(DISK_CACHE_DIR)
+      if (names.length <= DISK_CACHE_KEEP) return
+      const withTimes = await Promise.all(
+        names.map(async (n) => ({ n, t: (await stat(join(DISK_CACHE_DIR, n))).mtimeMs }))
+      )
+      withTimes.sort((a, b) => a.t - b.t)
+      for (const { n } of withTimes.slice(0, withTimes.length - DISK_CACHE_KEEP)) {
+        await rm(join(DISK_CACHE_DIR, n)).catch(() => undefined)
+      }
+    } catch {
+      /* caching is an optimisation; a failure must never break a render */
+    }
+  })()
+}
+
 async function filterComplexArgs(fc: string): Promise<{ args: string[]; file: string }> {
   if (fc.length <= 6000) return { args: ['-filter_complex', fc], file: '' }
   const file = join(tmpdir(), `easecut-fc-${randomUUID()}.txt`)
@@ -54,11 +168,26 @@ export async function probe(path: string): Promise<MediaInfo> {
     if (d) fps = n / d
   }
 
+  // Rotation metadata (phone clips): ffmpeg auto-rotates on decode, so every
+  // consumer of these dimensions (canvas choice in combineClips/exportProject,
+  // the renderer's aspect math) needs the DISPLAY size, not the stored size.
+  // A portrait iPhone .mov stores 1920x1080 + a -90° display matrix; reporting
+  // it landscape picked a landscape canvas and pillarboxed the export.
+  let width = v?.width ?? 0
+  let height = v?.height ?? 0
+  let rotation = 0
+  const sd = (v?.side_data_list ?? []).find((s: any) => typeof s?.rotation === 'number')
+  if (sd) rotation = Number(sd.rotation)
+  else if (v?.tags?.rotate != null) rotation = Number(v.tags.rotate) || 0
+  if (Math.abs(((rotation % 360) + 360) % 360) % 180 === 90) {
+    ;[width, height] = [height, width]
+  }
+
   return {
     path,
     duration: parseFloat(data.format?.duration ?? '0'),
-    width: v?.width ?? 0,
-    height: v?.height ?? 0,
+    width,
+    height,
     fps,
     hasVideo: !!v,
     hasAudio: !!a
@@ -67,6 +196,7 @@ export async function probe(path: string): Promise<MediaInfo> {
 
 /** Extract a 16kHz mono WAV (what whisper.cpp expects) next to a temp path. */
 export async function extractAudioWav(path: string): Promise<string> {
+  return runGated(async () => {
   const out = join(tmpdir(), `easecut-${randomUUID()}.wav`)
   await execFileP(FFMPEG, [
     '-y',
@@ -83,6 +213,7 @@ export async function extractAudioWav(path: string): Promise<string> {
     out
   ], { maxBuffer: 1024 * 1024 * 16 })
   return out
+  })
 }
 
 /** Extract the audio stream as an .m4a (AAC 48k stereo) for BROWSER-side decode —
@@ -91,6 +222,7 @@ export async function extractAudioWav(path: string): Promise<string> {
  *  stream-copied) so first_pts=0 re-aligns phone .mov delayed audio to the video
  *  timeline and the result is always decodable by decodeAudioData. */
 export async function extractAudioM4a(path: string): Promise<string> {
+  return runGated(async () => {
   const out = join(tmpdir(), `easecut-${randomUUID()}.m4a`)
   await execFileP(FFMPEG, [
     '-y',
@@ -104,14 +236,26 @@ export async function extractAudioM4a(path: string): Promise<string> {
     out
   ], { maxBuffer: 1024 * 1024 * 16 })
   return out
+  })
 }
 
 /**
  * Decode audio to mono 8kHz PCM and reduce to amplitude peaks for a waveform.
  * Streams stdout so memory stays bounded even for long files.
  */
-export function extractWaveform(path: string, peaksPerSec = 60): Promise<Waveform> {
-  return new Promise((resolve, reject) => {
+export async function extractWaveform(path: string, peaksPerSec = 60): Promise<Waveform> {
+  const key = await mediaKey(path, `w${peaksPerSec}`)
+  const hit = waveCache.get(key)
+  if (hit) return hit
+  const onDisk = await readDisk<Waveform>(key, 'wf')
+  if (onDisk?.peaks?.length) return remember(waveCache, key, onDisk)
+  const fresh = await extractWaveformUncached(path, peaksPerSec)
+  writeDisk(key, 'wf', fresh)
+  return remember(waveCache, key, fresh)
+}
+
+function extractWaveformUncached(path: string, peaksPerSec = 60): Promise<Waveform> {
+  return runGated(() => new Promise<Waveform>((resolve, reject) => {
     const sampleRate = 8000
     const proc = spawn(FFMPEG, [
       '-i', path,
@@ -158,7 +302,7 @@ export function extractWaveform(path: string, peaksPerSec = 60): Promise<Wavefor
       if (code === 0 || peaks.length > 0) resolve({ peaksPerSec, peaks })
       else reject(new Error(`waveform failed (${code}): ${err.slice(-400)}`))
     })
-  })
+  }))
 }
 
 /**
@@ -169,6 +313,22 @@ export async function extractThumbnails(
   intervalSec = 2,
   height = 72
 ): Promise<Thumb[]> {
+  const key = await mediaKey(path, `t${intervalSec}x${height}`)
+  const hit = thumbCache.get(key)
+  if (hit) return hit
+  const onDisk = await readDisk<Thumb[]>(key, 'th')
+  if (onDisk?.length) return remember(thumbCache, key, onDisk)
+  const fresh = await extractThumbnailsUncached(path, intervalSec, height)
+  writeDisk(key, 'th', fresh)
+  return remember(thumbCache, key, fresh)
+}
+
+async function extractThumbnailsUncached(
+  path: string,
+  intervalSec = 2,
+  height = 72
+): Promise<Thumb[]> {
+  return runGated(async () => {
   const dir = join(tmpdir(), `easecut-th-${randomUUID()}`)
   await mkdir(dir, { recursive: true })
   try {
@@ -193,6 +353,7 @@ export async function extractThumbnails(
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined)
   }
+  })
 }
 
 
@@ -328,7 +489,7 @@ export function baseTransformFilter(
 
 /** Run ffmpeg with time= progress parsing; resolves on exit 0. */
 function runFfmpegProgress(args: string[], totalDur: number, onProgress?: (pct: number) => void): Promise<void> {
-  return new Promise((resolve, reject) => {
+  return withFfmpegSlot(() => new Promise<void>((resolve, reject) => {
     const proc = spawn(FFMPEG, args)
     let err = ''
     proc.stderr.on('data', (d) => {
@@ -342,7 +503,7 @@ function runFfmpegProgress(args: string[], totalDur: number, onProgress?: (pct: 
     })
     proc.on('error', reject)
     proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error('ffmpeg concat failed: ' + err.slice(-600)))))
-  })
+  }))
 }
 
 /** Concatenate trimmed segments (scale/pad to a common canvas, with audio) into one
@@ -364,13 +525,18 @@ async function concatSegmentsToFile(
     panX?: number
     panY?: number
   }[],
-  target: { w: number; h: number },
+  target: { w: number; h: number; fps?: number },
   onProgress?: (pct: number) => void,
   outPath?: string
 ): Promise<string> {
   const W = even(target.w || 1920)
   const H = even(target.h || 1080)
-  const FPS = 30
+  // Output frame grid = the (probed) source rate when the caller supplies one,
+  // 30 otherwise. A 60fps source conformed to 30 halves its motion smoothness;
+  // a 24fps film clip conformed to 30 judders. Clamped to a sane range — VFR
+  // phone .mov avg_frame_rate can report nonsense. The segDur pinning below is
+  // rate-agnostic: it only needs every segment quantized to the SAME grid.
+  const FPS = target.fps && target.fps >= 10 && target.fps <= 120 ? Number(target.fps.toFixed(3)) : 30
   const inArgs: string[] = []
   const seg: string[] = []
   const order: string[] = []
@@ -563,14 +729,14 @@ export async function combineClips(
   // srcW/srcH default to 1920x1080 when the browser couldn't probe the file —
   // flattening a PORTRAIT phone video into that landscape canvas produced a
   // tiny pillar-boxed export. Probe the actual file and trust it first.
-  let target = { w: clips[0].srcW || 0, h: clips[0].srcH || 0 }
+  let target: { w: number; h: number; fps?: number } = { w: clips[0].srcW || 0, h: clips[0].srcH || 0 }
   try {
     const info = await probe(clips[0].sourcePath)
-    if (info.width && info.height) target = { w: info.width, h: info.height }
+    if (info.width && info.height) target = { w: info.width, h: info.height, fps: info.fps }
   } catch {
     /* fall back to the stored fields */
   }
-  if (!target.w || !target.h) target = { w: 1920, h: 1080 }
+  if (!target.w || !target.h) target = { w: 1920, h: 1080, fps: target.fps }
   const out = join(dir, `combined-${randomUUID()}.mp4`)
   return concatSegmentsToFile(segs, target, onProgress, out)
 }
@@ -635,7 +801,17 @@ export async function exportProject(
   if (project.baseSequence && project.baseSequence.length > 0 && !project.media) {
     cameFromMontage = true
     const seq = project.baseSequence
-    const target = { w: seq[0].srcW || 1920, h: seq[0].srcH || 1080 }
+    // Probe the first clip for the canvas + frame grid rather than trusting the
+    // renderer's stored srcW/srcH (default 1920x1080 when the browser couldn't
+    // probe — the same portrait-pillarbox bug combineClips already fixed) —
+    // and pass the real fps so the montage isn't force-conformed to 30.
+    let target: { w: number; h: number; fps?: number } = { w: seq[0].srcW || 1920, h: seq[0].srcH || 1080 }
+    try {
+      const info = await probe(seq[0].sourcePath)
+      if (info.width && info.height) target = { w: info.width, h: info.height, fps: info.fps }
+    } catch {
+      /* fall back to the stored fields */
+    }
     // Virtual montage: apply the project-level cuts (transcript words + silences)
     // in montage time, then map the kept ranges back to concrete clip SOURCE
     // segments (split at clip boundaries) to concatenate. The stitched montage
@@ -720,8 +896,21 @@ export async function exportProject(
   if (keeps.length === 0) throw new Error('Nothing to export (all cut)')
 
   const totalKept = keeps.reduce((s, k) => s + (k.end - k.start), 0)
-  const baseW = base.width || 1920
-  const baseH = base.height || 1080
+  // Re-probe for the canvas rather than trusting stored dimensions: projects
+  // saved before probe() was rotation-aware carry the STORED (unrotated) size
+  // for portrait phone clips, which picks a landscape canvas and pillarboxes
+  // the whole export. Probe failure falls back to the stored values.
+  let baseW = base.width || 1920
+  let baseH = base.height || 1080
+  try {
+    const bp = await probe(base.path)
+    if (bp.width > 0 && bp.height > 0) {
+      baseW = bp.width
+      baseH = bp.height
+    }
+  } catch {
+    /* keep stored dims */
+  }
 
   // Collect overlay clips (tracks 1 & 2). Each becomes an extra ffmpeg input.
   // Skip any whose source file is missing so a broken/deleted overlay never

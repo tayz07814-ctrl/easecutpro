@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { probeEncodeCaps, whyNotLocal, planFromDoc, type EncodeCaps } from '../../export/localExport'
 import { useSharedEngineSnapshot } from '../../timelineEngine'
 import { useStore } from '../../store'
+import { IS_WEB } from '../../platform'
 import { Icon } from './Icon'
 
 const RES = [
@@ -59,10 +60,12 @@ export default function MobileExportDrawer(): JSX.Element | null {
   const close = useStore((s) => s.setShowExportModal)
   const project = useStore((s) => s.project)
   const exportVideoOnDevice = useStore((s) => s.exportVideoOnDevice)
+  const exportVideo = useStore((s) => s.exportVideo)
   const snap = useSharedEngineSnapshot()
 
   const [caps, setCaps] = useState<EncodeCaps | null>(null)
   useEffect(() => {
+    if (!IS_WEB) return // desktop exports through native ffmpeg — no caps probe
     let alive = true
     void probeEncodeCaps().then((c) => alive && setCaps(c))
     return () => {
@@ -98,9 +101,11 @@ export default function MobileExportDrawer(): JSX.Element | null {
   }, [snap, project])
   const estMB = ((bitrate * totalSec) / 8).toFixed(2)
 
-  const deviceOk = !!caps?.video
+  // A narrow Electron window mounts this drawer too; there the WebCodecs
+  // on-device path must never run — Export routes to the native ffmpeg export.
+  const deviceOk = IS_WEB && !!caps?.video
   const gate = deviceOk ? whyNotLocal(project) : ''
-  const canExport = deviceOk && !gate
+  const canExport = !IS_WEB || (deviceOk && !gate)
 
   if (!show) return null
 
@@ -108,7 +113,8 @@ export default function MobileExportDrawer(): JSX.Element | null {
   const run = (): void => {
     if (!canExport) return
     close(false)
-    void exportVideoOnDevice({ width: dims.w, height: dims.h, bitrateMbps: bitrate, filename })
+    if (IS_WEB) void exportVideoOnDevice({ width: dims.w, height: dims.h, bitrateMbps: bitrate, filename })
+    else void exportVideo({ width: dims.w, height: dims.h, bitrateMbps: bitrate })
   }
 
   return (
@@ -139,7 +145,7 @@ export default function MobileExportDrawer(): JSX.Element | null {
 
           <div className="mx-est">Estimated file size: {estMB} MB</div>
 
-          {!deviceOk && caps && (
+          {IS_WEB && !deviceOk && caps && (
             <div className="mx-note">This browser can’t encode video on-device — use Chrome/Edge on desktop or Android.</div>
           )}
           {deviceOk && gate && <div className="mx-note">Not available for this timeline yet: {gate}</div>}

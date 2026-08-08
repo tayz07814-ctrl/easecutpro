@@ -39,6 +39,7 @@ import { mainTrackId, documentDuration } from '@shared/timeline/model'
 import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
 import { WcPlayer, wcSupported } from '../preview/wcPlayer'
+import { FfPlayer, ffSupported } from '../preview/ffPlayer'
 import { useIsMobile } from '../useMobile'
 import { useNativePreview } from '../useNativePreview'
 import OverlayLayer from './OverlayLayer'
@@ -338,6 +339,37 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const swapHitsRef = useRef(0)
 
   // ---- refs the reconciler reads (fresh every render) ----
+  // POSTER FRAMES. The library already holds a decoded first-frame thumbnail per
+  // source (built at import, cached in the main process). Painting it while the
+  // decoder spins up is what stops a freshly opened project showing black —
+  // decoding a real first frame takes a keyframe seek, this takes nothing.
+  const library = useStore((s) => s.library)
+  const posterElsRef = useRef(new Map<string, HTMLImageElement>())
+  const posterFor = (src: string): HTMLImageElement | null => {
+    const cached = posterElsRef.current.get(src)
+    if (cached) return cached.complete && cached.naturalWidth > 0 ? cached : null
+    const url = library.find((it) => it.path === src)?.thumb
+    if (!url) return null
+    const img = new Image()
+    img.src = url
+    posterElsRef.current.set(src, img)
+    return null // available from the next frame on
+  }
+  const drawPoster = (ctx: CanvasRenderingContext2D, cw: number, ch: number, src: string): void => {
+    const img = posterFor(src)
+    if (!img) return
+    const aspect = img.naturalWidth / img.naturalHeight
+    const rw = cw / ch > aspect ? ch * aspect : cw
+    const rh = cw / ch > aspect ? ch : cw / aspect
+    try {
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, cw, ch)
+      ctx.drawImage(img, (cw - rw) / 2, (ch - rh) / 2, rw, rh)
+    } catch {
+      /* not decodable yet — the real frame will land shortly anyway */
+    }
+  }
+
   const segsRef = useRef(segs)
   segsRef.current = segs
   const totalRef = useRef(total)
@@ -379,12 +411,45 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // (the elements stay paused). Mobile keeps the element path (single hardware
   // decode pipeline), and ANY engine failure — including audio that won't start
   // — flips wcOn off, handing back to the untouched element machinery below.
-  const [wcOn, setWcOn] = useState(() => !isMobile && wcSupported())
+  // ENGINE LADDER (desktop): WebCodecs first, native ffmpeg second, elements last.
+  //
+  // WcPlayer decodes through Chromium's WebCodecs, which on Windows is HARDWARE
+  // decode (D3D11VA/QuickSync) — the frames never cost CPU, which is what keeps
+  // playback smooth on modest machines. FfPlayer decodes with the bundled ffmpeg
+  // in the MAIN process and copies raw frames over a pipe: that is real CPU work
+  // plus a process spawn per seek, so on an older laptop it stutters, races
+  // through cut footage instead of jumping, and holds the picture at every seam.
+  // It therefore runs ONLY where WebCodecs cannot open the file at all (exotic
+  // HEVC/ProRes) — the one thing it is genuinely better at.
+  //
+  // `wcOn` = "a canvas engine is driving"; `engineKind` = which one. A decode
+  // failure DEMOTES one rung (wc → ff → elements) instead of dropping straight
+  // to the element path, so an unsupported codec still gets a picture.
+  const [engineKind, setEngineKind] = useState<'wc' | 'ff'>(() => (wcSupported() ? 'wc' : 'ff'))
+  const engineKindRef = useRef(engineKind)
+  engineKindRef.current = engineKind
+  const [wcOn, setWcOn] = useState(() => !isMobile && (wcSupported() || ffSupported()))
   const wcOnRef = useRef(wcOn)
   wcOnRef.current = wcOn
-  const wcRef = useRef<WcPlayer | null>(null)
-  if (wcOn && !wcRef.current) wcRef.current = new WcPlayer()
+  const wcRef = useRef<WcPlayer | FfPlayer | null>(null)
+  if (wcOn && !wcRef.current) {
+    wcRef.current = engineKindRef.current === 'wc' && wcSupported() ? new WcPlayer() : new FfPlayer()
+  }
   useEffect(() => () => wcRef.current?.dispose(), [])
+  // Demote one rung. Held in a ref so the rAF reconciler can call it without
+  // re-subscribing every render.
+  const demoteRef = useRef<() => void>(() => undefined)
+  demoteRef.current = () => {
+    if (engineKindRef.current === 'wc' && ffSupported()) {
+      console.warn('[preview] WebCodecs could not decode — switching to native ffmpeg')
+      wcRef.current?.dispose()
+      wcRef.current = null
+      engineKindRef.current = 'ff'
+      setEngineKind('ff')
+      return
+    }
+    setWcOn(false)
+  }
   // Fallback frees the decoders immediately (the element path never reads them).
   useEffect(() => {
     if (!wcOn && wcRef.current) {
@@ -405,9 +470,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const srcSig = sources.join('|')
   useEffect(() => {
     if (!wcOn) return
+    // engineKind is a dep: a demotion builds a NEW player that owns no sources.
     wcRef.current?.setSources(segsRef.current.filter((s) => !s.isImage).map((s) => ({ src: s.src })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [srcSig, wcOn])
+  }, [srcSig, wcOn, engineKind])
 
   // POLISHING phase: executeCuts bumps polishReq. Decode every cut's landing
   // frame ONCE (the seam cache), driving the % bar, then clear it so the editor
@@ -463,7 +529,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       window.clearTimeout(safety)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [polishReq, wcOn])
+  }, [polishReq, wcOn, engineKind])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the
@@ -782,7 +848,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         // decode queues in the display section below, never seeked.
         const eng = audioEngineRef.current
         const wc = wcRef.current
-        if (wc?.failed) setWcOn(false) // decode broke → element path next tick
+        if (wc?.failed) demoteRef.current() // decode broke → next engine down the ladder
 
         // First prime the CURRENT source while the timeline is held. A paused
         // still is not sufficient: require one queued future frame so playback
@@ -1072,7 +1138,12 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             const ch = cv.height
             if (shown && !shown.isImage) {
               const tSrc = shown.sourceStart + clamp(t - shown.start, 0, shown.len) * shown.speed
-              wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying)
+              const painted = wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying)
+              // POSTER: nothing decoded yet (a freshly opened project, before the
+              // first keyframe lands). Paint the source's already-decoded library
+              // thumbnail so the preview opens on a picture instead of black —
+              // the real frame replaces it as soon as it arrives.
+              if (!painted) drawPoster(ctx, cw, ch, shown.src)
               // Decode-ahead: park the warm pipe on the upcoming seam's in-point.
               const up = ss[di + 1]
               if (up && !up.isImage && t >= shown.start + shown.len - 1.0) wc.prewarm(up.src, up.sourceStart)

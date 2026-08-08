@@ -9,6 +9,7 @@ import { shareProject, listSpaces, listSpaceFolders, type Space, type SpaceFolde
 import NewProjectWizard from './NewProjectWizard'
 import CoworkPanel from './CoworkPanel'
 import NotificationsBell from './NotificationsBell'
+import { UpgradeButton } from './PricingModal'
 import {
   getSubscription,
   isProNow,
@@ -539,6 +540,7 @@ export default function Dashboard(): JSX.Element {
             </span>
           )}
           <NotificationsBell onJoined={() => { setSrc('cloud'); setFilter(0) }} />
+          <UpgradeButton />
           <button onClick={() => void dash.batch()} style={css('flex:none;white-space:nowrap;background:transparent;border:1px solid rgba(255,255,255,.12);color:#D6D6E4;font-family:inherit;font-size:13px;font-weight:500;padding:8px 14px;border-radius:9px;cursor:pointer')}>Batch clean</button>
           <button onClick={(e) => { e.stopPropagation(); setWizardOpen(true) }} style={css('flex:none;white-space:nowrap;background:#7C6BFF;border:none;color:#fff;font-family:inherit;font-size:13px;font-weight:600;padding:9px 16px;border-radius:9px;cursor:pointer;box-shadow:0 4px 16px rgba(124,107,255,.32)')}>New project</button>
         </header>

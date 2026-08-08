@@ -81,11 +81,18 @@ const api = {
   openaiStatus: (): Promise<{ available: boolean }> => ipcRenderer.invoke(IPC.openaiStatus),
   whisperModels: (): Promise<WhisperModelInfo[]> => ipcRenderer.invoke(IPC.whisperModels),
   waveform: (path: string): Promise<Waveform> => ipcRenderer.invoke(IPC.waveform, path),
+  /** Desktop-only: full-source 48k stereo WAV extracted by the bundled ffmpeg
+   *  (elst offset baked in via first_pts=0) for the preview audio engine. */
+  previewAudioWav: (path: string): Promise<string> => ipcRenderer.invoke(IPC.previewAudioWav, path),
+  /** Desktop-only: 16k mono WAV (STT timebase) for the cloud edge engines. */
+  sttAudioWav: (path: string): Promise<string> => ipcRenderer.invoke(IPC.sttAudioWav, path),
   // `onPartial` streams thumbnails as they generate on the web build; Electron
   // returns the whole strip over IPC at once (callbacks can't cross IPC), so it
   // is accepted for a shared signature but ignored here.
   thumbnails: (path: string, intervalSec?: number, _onPartial?: (frames: Thumb[]) => void): Promise<Thumb[]> =>
     ipcRenderer.invoke(IPC.thumbnails, path, intervalSec),
+  /** Reveal a finished export in the OS file manager. */
+  revealPath: (p: string): Promise<void> => ipcRenderer.invoke(IPC.revealPath, p),
   exportProject: (
     project: Project,
     settings: ExportSettings,

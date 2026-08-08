@@ -12,6 +12,7 @@
 // gain ramp at each scheduled edge guards the splice click from a non-zero sample.
 
 import { getFile, isWebMediaId, mp4AudioStartOffset, padLeadingSilence } from './webmedia'
+import { IS_WEB, mediaSrc } from './platform'
 
 /** A main-lane segment as the audio engine needs it (subset of the preview Seg). */
 export interface AudioSeg {
@@ -70,6 +71,71 @@ export function planSchedule(segs: AudioSeg[], t0: number): ScheduledSource[] {
 const LEAD_S = 0.04 // tiny scheduling lead so the first start isn't in the past
 const EDGE_RAMP = 0.006 // 6ms click-guard ramp at each scheduled source edge
 
+/**
+ * Build an AudioBuffer straight from a PCM WAV we produced ourselves (the
+ * desktop preview path — see main/framestream.ts extractPreviewAudioWav).
+ *
+ * Deliberately NOT decodeAudioData: that always resamples to the context rate,
+ * so a deliberately low-rate preview WAV would balloon straight back to
+ * 48 kHz float in RAM and the whole saving would vanish. createBuffer keeps the
+ * file's own rate — AudioBufferSourceNode resamples during playback instead —
+ * which is what makes a long source affordable. It also skips the decode
+ * entirely (a typed-array copy instead), so first play is quicker.
+ *
+ * Returns null for anything that isn't 16-bit PCM; the caller then falls back
+ * to decodeAudioData, so an unexpected format still plays.
+ */
+function wavToAudioBuffer(ctx: AudioContext, bytes: ArrayBuffer): AudioBuffer | null {
+  try {
+    const dv = new DataView(bytes)
+    const tag = (o: number): string =>
+      String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3))
+    if (bytes.byteLength < 44 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') return null
+    let off = 12
+    let channels = 0
+    let rate = 0
+    let bits = 0
+    let format = 0
+    let dataOff = -1
+    let dataLen = 0
+    // Walk the chunks — ffmpeg writes a LIST/INFO chunk before `data`, so the
+    // canonical 44-byte header offset would land mid-metadata.
+    while (off + 8 <= bytes.byteLength) {
+      const id = tag(off)
+      const size = dv.getUint32(off + 4, true)
+      if (id === 'fmt ') {
+        format = dv.getUint16(off + 8, true)
+        channels = dv.getUint16(off + 10, true)
+        rate = dv.getUint32(off + 12, true)
+        bits = dv.getUint16(off + 22, true)
+      } else if (id === 'data') {
+        dataOff = off + 8
+        dataLen = Math.min(size, bytes.byteLength - dataOff)
+      }
+      off += 8 + size + (size & 1) // chunks are word-aligned
+    }
+    if (format !== 1 || bits !== 16 || !channels || !rate || dataOff < 0) return null
+    const frames = Math.floor(dataLen / 2 / channels)
+    if (frames < 1) return null
+    // Int16Array needs 2-byte alignment; copy the rare odd-offset case.
+    const pcm =
+      dataOff % 2 === 0
+        ? new Int16Array(bytes, dataOff, frames * channels)
+        : new Int16Array(bytes.slice(dataOff, dataOff + frames * channels * 2))
+    const buf = ctx.createBuffer(channels, frames, rate)
+    for (let c = 0; c < channels; c++) {
+      const ch = buf.getChannelData(c)
+      for (let i = 0; i < frames; i++) {
+        const s = pcm[i * channels + c]
+        ch[i] = s < 0 ? s / 0x8000 : s / 0x7fff
+      }
+    }
+    return buf
+  } catch {
+    return null // malformed — caller falls back to decodeAudioData
+  }
+}
+
 type AC = typeof AudioContext
 
 export class SeamlessAudio {
@@ -98,6 +164,29 @@ export class SeamlessAudio {
     this.failed.delete(src)
     const p = (async () => {
       const ctx = this.ensureCtx()
+      // DESKTOP: the bundled ffmpeg extracts the source's full audio to a mono
+      // PCM WAV (cached in the main process). `first_pts=0` bakes the phone
+      // .mov `elst` delay into the file itself, so the elst re-pad below is not
+      // needed on this path, and the browser never decodes AAC. We build the
+      // AudioBuffer from the PCM ourselves to keep the file's sample rate (see
+      // wavToAudioBuffer) — that is what bounds memory on long sources. Any
+      // failure (e.g. a video with no audio stream) falls through to the
+      // browser path, whose own failure sets `failed` and keeps element audio.
+      if (!IS_WEB && !isWebMediaId(src)) {
+        const api = (window as { api?: { previewAudioWav?: (p: string) => Promise<string> } }).api
+        if (api?.previewAudioWav) {
+          try {
+            const wavPath = await api.previewAudioWav(src)
+            const wav = await (await fetch(mediaSrc(wavPath))).arrayBuffer()
+            const direct = wavToAudioBuffer(ctx, wav)
+            // decodeAudioData detaches `wav`, so only reach for it as a fallback.
+            this.buffers.set(src, direct ?? (await ctx.decodeAudioData(wav)))
+            return
+          } catch {
+            /* fall through to the browser decode below */
+          }
+        }
+      }
       // Browser-local media is identified by a stable webmedia id while its
       // blob URL may be replaced/revoked after a timeline edit. Read the
       // registered File directly, just like the WebCodecs video path does.

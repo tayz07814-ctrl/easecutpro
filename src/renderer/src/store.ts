@@ -69,7 +69,8 @@ import {
 } from '@shared/silenceMastery'
 import { extractSttAudio } from './cloud/audio'
 import { detectSileroSilences } from './cloud/sileroVad'
-import { mediaSrc, IS_WEB, IS_CLOUD, IS_NEW_UI } from './platform'
+import { mediaSrc, IS_WEB, IS_CLOUD, IS_CLOUD_BACKEND, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
+import { aiApi, onDesktopCloudProgress } from './cloud/desktopHybrid'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'
 import { openSpaceProject, saveMyEdit, fmtBytes, type CoworkProject, type XferReporter } from './cloud/cowork'
@@ -928,6 +929,10 @@ interface AppState {
 
   // io
   exportVideo: (settings: ExportSettings) => Promise<void>
+  /** absolute path of the most recent desktop export ('' when none). */
+  lastExportPath: string
+  /** reveal that export in the OS file manager (desktop only). */
+  revealLastExport: () => void
   /** Render + encode entirely IN THIS BROWSER (WebCodecs) and save to the
    *  device — no upload. Falls back with a clear message when unsupported. */
   exportVideoOnDevice: (settings: ExportSettings) => Promise<void>
@@ -1061,12 +1066,15 @@ export const useStore = create<AppState>((set, get) => ({
   showSettings: false,
   showCropModal: false,
   showExportModal: false,
+  lastExportPath: '',
   batchJobs: [],
   wizardJob: null,
   pendingCaptions: false,
   pendingAutoZoom: false,
   autoZoomBusy: false,
-  view: IS_WEB ? 'loading' : 'home',
+  // Desktop-cloud hybrid boots to 'loading' too — main.tsx resolves the
+  // Supabase session and lands on auth/home (no flash of the signed-out home).
+  view: IS_WEB || IS_DESKTOP_CLOUD ? 'loading' : 'home',
   user: null,
   editingClipId: null,
   currentProjectId: null,
@@ -1107,9 +1115,13 @@ export const useStore = create<AppState>((set, get) => ({
         if (sel && !models.some((m) => m.name === sel)) set({ whisperModel: '' })
       })
       .catch(() => {})
-    window.api.onProgress((e: ProgressEvent) => {
+    const onJob = (e: ProgressEvent): void => {
       set({ job: { active: e.percent < 100, kind: e.kind, percent: e.percent, message: e.message } })
-    })
+    }
+    window.api.onProgress(onJob)
+    // Desktop hybrid: the cloud edge engines emit progress renderer-side (it
+    // never crosses IPC) — feed those events into the same job bar.
+    onDesktopCloudProgress(onJob)
   },
 
   addToLibrary: async () => {
@@ -1774,7 +1786,7 @@ export const useStore = create<AppState>((set, get) => ({
       try {
         const combined = await window.api.combineClips(clips, true) // audio-only = fast
         set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Cut Lord is listening…' } })
-        const transcript: Transcript = await window.api.transcribe(
+        const transcript: Transcript = await aiApi().transcribe(
           combined.path,
           backend,
           backend === 'local' ? whisperModel || undefined : undefined
@@ -1798,7 +1810,7 @@ export const useStore = create<AppState>((set, get) => ({
     const label = 'Cut Lord is listening…'
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: label } })
     try {
-      const transcript: Transcript = await window.api.transcribe(
+      const transcript: Transcript = await aiApi().transcribe(
         project.media.path,
         backend,
         backend === 'local' ? whisperModel || undefined : undefined
@@ -2115,7 +2127,10 @@ export const useStore = create<AppState>((set, get) => ({
     const effWords = settings.clampStretchedWords ? clampStretchedWords(words).words : words
 
     let audio: { float32: Float32Array; sampleRate: number } | null = null
-    const needAudio = (settings.sileroPass || settings.rmsPass) && IS_CLOUD
+    // Cloud backend (web OR desktop hybrid): the audio passes run in the
+    // renderer. On desktop, extractSttAudio's native branch pulls the WAV from
+    // the bundled ffmpeg, so this works on file paths too.
+    const needAudio = (settings.sileroPass || settings.rmsPass) && IS_CLOUD_BACKEND
     if (needAudio) {
       try {
         set({ job: { active: true, kind: 'silence', percent: 4, message: 'Listening to your audio…' } })
@@ -2263,7 +2278,7 @@ export const useStore = create<AppState>((set, get) => ({
       }
       // ProCut transcribes with its own OpenAI whisper-1 (inside cutCutPro) and pulls
       // it into the word selector below. Word cuts only — no silence pass exists.
-      const res = await window.api.cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, get().project.script || undefined)
+      const res = await aiApi().cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, get().project.script || undefined)
       // REVIEW-ONLY: adopt the transcript if the pipeline made one (ids must
       // match), HIGHLIGHT the words + stage the pause cuts — nothing is applied
       // until the user presses Execute cuts. ⚙ filler switch adds filler words.
@@ -2317,7 +2332,7 @@ export const useStore = create<AppState>((set, get) => ({
       } else {
         path = p0.media!.path
       }
-      const res = await window.api.retakeAwareCut(path)
+      const res = await aiApi().retakeAwareCut(path)
       const cur = get().project
       // REVIEW-STATE CONTRACT (the whole point of this fix):
       //  - ALWAYS show the beta's FULL raw/verbatim transcript. Its decisions
@@ -2361,7 +2376,10 @@ export const useStore = create<AppState>((set, get) => ({
       // Silence (this branch's sole, final silence engine). Never fatal: if
       // the model can't run, Find cuts still stages its word cuts.
       let silenceRegions: SilenceRegion[] = res.silenceRegions ?? []
-      if (IS_CLOUD) {
+      // Cloud backend: the edge judge stages word cuts only (silenceRegions is
+      // always empty on this branch), so the renderer runs the Silero silence
+      // step itself — web AND desktop hybrid (native audio via extractSttAudio).
+      if (IS_CLOUD_BACKEND) {
         try {
           set({ job: { active: true, kind: 'silence', percent: 88, message: 'Silero is listening for silence…' } })
           const smSettings = get().silenceMasterySettings
@@ -2479,7 +2497,7 @@ export const useStore = create<AppState>((set, get) => ({
       // The SAME AssemblyAI verbatim transcribe step Retake β runs (cloud:
       // window.api.transcribe -> transcribeCloud, cached by mediaId and sharing
       // Retake β's transcript cache) — NO judge, NO silence, NO word cuts.
-      const transcript = await window.api.transcribe(path)
+      const transcript = await aiApi().transcribe(path)
       const cur = get().project
       // Persist the folded doc base (identical rationale to runRetakeCutBeta) so the
       // transcript's word times live in the base's domain and later cuts align.
@@ -2669,7 +2687,7 @@ export const useStore = create<AppState>((set, get) => ({
     // ultracut-judge edge fn, OpenRouter GLM 5.2). Shares NOTHING with Retake Beta's
     // Opus judge, so its cuts can be compared against Retake Beta's in the app. Same
     // review-first contract (highlight + stage, apply on Execute cuts).
-    const runUltra = (window.api as { ultracutCut?: typeof window.api.retakeAwareCut }).ultracutCut
+    const runUltra = aiApi().ultracutCut
     if (!runUltra) {
       // Ultracut's judge only exists in the cloud build. Off-cloud (desktop /
       // self-host) fall back to Retake β rather than dead-ending with an error.
@@ -2740,7 +2758,7 @@ export const useStore = create<AppState>((set, get) => ({
     // premium-cut edge fn, Gemini 3.5 Flash multimodal). Gemini LISTENS to the raw
     // audio and returns the transcript + the word cuts itself — no STT. Same
     // review-first contract (highlight + stage, Execute cuts).
-    const runPremium = (window.api as { premiumCut?: typeof window.api.retakeAwareCut }).premiumCut
+    const runPremium = aiApi().premiumCut
     if (!runPremium) {
       // Premium's judge only exists in the cloud build. Off-cloud (desktop /
       // self-host) fall back to Retake β rather than dead-ending with an error.
@@ -2823,10 +2841,10 @@ export const useStore = create<AppState>((set, get) => ({
       }
       let transcript: Transcript
       try {
-        transcript = await window.api.transcribe(path, 'local', 'parakeet')
+        transcript = await aiApi().transcribe(path, 'local', 'parakeet')
       } catch {
         set((s) => ({ job: { ...s.job, message: 'Parakeet model missing — using local whisper…' } }))
-        transcript = await window.api.transcribe(path, 'local', undefined)
+        transcript = await aiApi().transcribe(path, 'local', undefined)
       }
       set((s) => ({ project: { ...s.project, transcript } }))
       return true
@@ -3013,7 +3031,7 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       await get().ensureOverlayDescriptions() // v1.5: cache vision descriptions first
       const freshAssets = get().project.overlayAssets ?? assets
-      const res = await window.api.generateOverlays(t, freshAssets, rules, { duration: dur, cuts })
+      const res = await aiApi().generateOverlays(t, freshAssets, rules, { duration: dur, cuts })
       const events = res.events as OverlayEvent[]
       const log = [...res.log]
       let placed = 0
@@ -3125,7 +3143,7 @@ export const useStore = create<AppState>((set, get) => ({
       const img = await imageToBase64(a.file)
       if (!img) continue // image bytes not loadable right now (e.g. not yet hydrated) — retry next run, don't cache
       try {
-        const r = await window.api.describeOverlayImage(img.base64, img.mediaType)
+        const r = await aiApi().describeOverlayImage(img.base64, img.mediaType)
         // Cache the API's answer — even '' — so a genuinely undescribable image (or a
         // no-key backend) isn't re-analyzed every run. Matching falls back to the name.
         get().updateOverlayAsset(a.id, { description: r.description || '' })
@@ -3169,7 +3187,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (assets.length > 0) {
         await get().ensureOverlayDescriptions() // v1.5: cache vision descriptions first
         const freshAssets = get().project.overlayAssets ?? assets
-        const res = await window.api.suggestOverlays(t, freshAssets, { duration: dur, cuts })
+        const res = await aiApi().suggestOverlays(t, freshAssets, { duration: dur, cuts })
         suggestions = [...res.suggestions]
         log.push(...res.log)
       }
@@ -3218,7 +3236,7 @@ export const useStore = create<AppState>((set, get) => ({
             let overlayId = ''
             let note = ''
             try {
-              const r = await window.api.matchMoment(frames, m.text, thumbs)
+              const r = await aiApi().matchMoment(frames, m.text, thumbs)
               overlayId = r.overlayId || ''
               note = r.note || ''
             } catch (e) {
@@ -3708,7 +3726,7 @@ export const useStore = create<AppState>((set, get) => ({
         } else {
           path = p0.media!.path
         }
-        const transcript: Transcript = await window.api.transcribe(path, backend, backend === 'local' ? whisperModel || undefined : undefined)
+        const transcript: Transcript = await aiApi().transcribe(path, backend, backend === 'local' ? whisperModel || undefined : undefined)
         // Captions only need the transcript — they place text clips, they do NOT
         // cut, so (unlike runRetakeCutBeta) we must NOT rewrite media/baseSequence
         // here; doing so desynced the project from the doc and could disturb the
@@ -3970,6 +3988,35 @@ export const useStore = create<AppState>((set, get) => ({
       )
       // Creator-chosen file name wins (sanitized, single .mp4); else the derived one.
       const dl = chosenName ? `${chosenName}.mp4` : name
+      // Ask WHERE to save now that the file actually exists. Deliberately after
+      // the render, not before: a picker up front would prompt even for an
+      // export that later fails, and the handle can go stale across a long one.
+      const picker = (
+        window as unknown as {
+          showSaveFilePicker?: (o: unknown) => Promise<{ createWritable: () => Promise<{ write: (b: Blob) => Promise<void>; close: () => Promise<void> }> }>
+        }
+      ).showSaveFilePicker
+      if (picker) {
+        try {
+          const handle = await picker({
+            suggestedName: dl,
+            types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }]
+          })
+          const w = await handle.createWritable()
+          await w.write(blob)
+          await w.close()
+          set({ job: { active: false, kind: 'export', percent: 100, message: `Saved ${dl}` } })
+          return
+        } catch (e) {
+          // Cancelled the picker: the render is finished and simply not saved.
+          // Anything else (permission, disk) falls through to a plain download
+          // so a long export is never thrown away over a picker failure.
+          if ((e as Error)?.name === 'AbortError') {
+            set({ job: { active: false, kind: 'export', percent: 100, message: 'Export finished — save cancelled' } })
+            return
+          }
+        }
+      }
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -3998,13 +4045,28 @@ export const useStore = create<AppState>((set, get) => ({
     const textOverlays = (project.texts ?? [])
       .filter((t) => t.end - t.start > 0.05 && t.text.trim())
       .map((t) => ({ png: renderTextPng(t, W, H), start: t.start, end: t.end }))
+    // Re-entrancy guard (same reason as exportVideoOnDevice): a second run
+    // while one is in flight puts TWO ffmpeg renders on the machine, and the
+    // shared progress bar then flips between them — which reads as a bar that
+    // climbs partway and restarts, forever.
+    const jb0 = get().job
+    if (jb0.active && jb0.kind === 'export') return
     set({ showExportModal: false, job: { active: true, kind: 'export', percent: 0, message: 'Exporting' } })
     try {
       const out = await window.api.exportProject(project, settings, textOverlays)
-      set({ job: { active: false, percent: 100, message: out ? `Exported: ${out}` : 'Export canceled' } })
+      set({
+        job: { active: false, kind: 'export', percent: 100, message: out ? `Exported to ${out}` : 'Export canceled' },
+        lastExportPath: out || ''
+      })
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `Export failed: ${safeErrMessage(e)}` } })
     }
+  },
+
+  /** Open the folder containing the most recent export (desktop only). */
+  revealLastExport: () => {
+    const p = get().lastExportPath
+    if (p) void window.api.revealPath(p)
   },
 
   setShowExportModal: (b) => set({ showExportModal: b }),
@@ -4279,6 +4341,54 @@ export const useStore = create<AppState>((set, get) => ({
       stagedSilenceSel: new Set()
     })
 
+    /**
+     * Decode everything the editor needs to look finished the moment it opens:
+     * each source's waveform and filmstrip. Results are cached main-side, so
+     * the editor's own (lazy) request for them returns immediately instead of
+     * re-running ffmpeg. Reports into `base..base+span` of the wizard bar.
+     *
+     * Never fatal: a source that won't decode just isn't pre-warmed, and the
+     * editor falls back to loading it lazily exactly as before.
+     */
+    const prepareMedia = async (clips: LibraryItem[], base: number, span: number): Promise<void> => {
+      const paths = [...new Set(clips.filter((c) => c.kind !== 'audio').map((c) => c.path))]
+      const videos = clips.filter((c) => c.kind === 'video').map((c) => c.path)
+      const steps = paths.length + videos.length || 1
+      let done = 0
+      const bump = (label: string): void => {
+        done++
+        set({
+          wizardJob: { active: true, label, base, span },
+          job: { active: true, kind: 'probe', percent: Math.round((done / steps) * 100), message: label }
+        })
+      }
+      set({
+        wizardJob: { active: true, label: 'Preparing your media…', base, span },
+        job: { active: true, kind: 'probe', percent: 1, message: 'Preparing your media…' }
+      })
+      for (const p of paths) {
+        await window.api
+          .waveform(p)
+          .then((wf) => {
+            // Single-clip projects show this waveform directly; a montage
+            // stitches per-clip peaks, and either way it is now cached.
+            if (paths.length === 1) set({ waveform: wf })
+          })
+          .catch(() => undefined)
+        bump('Reading audio…')
+      }
+      for (const p of videos) {
+        await window.api
+          .thumbnails(p)
+          .then((t) => {
+            if (videos.length === 1) set({ thumbnails: t })
+          })
+          .catch(() => undefined)
+        bump('Building the filmstrip…')
+      }
+      set({ job: { active: false, kind: 'probe', percent: 100, message: 'Media ready' } })
+    }
+
     const openInEditor = async (proj: Project): Promise<void> => {
       const rec = await createProject(name, proj)
       // Captions + Auto Zoom need the mounted timeline engine → the editor runs
@@ -4293,8 +4403,14 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
 
-    // 3) Nothing to run before opening → straight to the editor.
+    // 3) Nothing to run before opening → still PREPARE the media first.
+    //    Opening immediately dropped the creator into an editor with no
+    //    filmstrip, no waveform and a blank preview that filled in seconds
+    //    later. Decoding it here (behind the wizard's own 1-100 bar) means the
+    //    editor opens ready — and it costs nothing extra, since the results are
+    //    cached in the main process and the editor's own request now hits them.
     if (!opts.cutSilenceBadTakes && !opts.captions && !opts.autoZoom) {
+      await prepareMedia(bases, 0, 100)
       await openInEditor(project)
       return
     }
@@ -4319,6 +4435,10 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `Import enhancement failed: ${(e as Error).message}` } })
     }
+
+    // Prepare the media in the bar's last slice, so the editor opens with its
+    // filmstrip and waveform already there rather than filling in afterwards.
+    await prepareMedia(bases, 85, 15)
 
     // Finish: drive the bar to 100 and let it glide there BEFORE opening, so the
     // hand-off into the editor completes smoothly instead of jump-cutting at ~85%.
