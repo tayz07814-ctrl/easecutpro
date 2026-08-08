@@ -193,16 +193,41 @@ async function prunePreviewAudio(): Promise<void> {
   }
 }
 
+/** Past this duration a source uses the low-rate preview profile below. */
+const PREVIEW_AUDIO_LONG_S = 300
+
 /**
- * Extract a source's FULL audio as a 48k stereo s16 WAV for the preview engine.
+ * Extract a source's FULL audio as a MONO s16 WAV for the preview engine.
  * `aresample=async=1:first_pts=0` bakes in the phone-.mov `elst` audio delay, so
  * the renderer needs no mp4AudioStartOffset()/padLeadingSilence() on this path —
- * the WAV timeline IS the video timeline. Cached by (path,size,mtime); the WAV
- * streams back over ecmedia:// and decodeAudioData only unwraps the container.
+ * the WAV timeline IS the video timeline. Cached by (path,size,mtime,profile).
+ *
+ * SIZING (this is preview-only; the EXPORT keeps full-rate stereo). The renderer
+ * holds the whole decoded source in RAM to schedule gapless playback, so cost
+ * scales with length, and long-form is exactly what this app is for:
+ *
+ *            per minute of source   10-minute source
+ *   was      11.5 MB wav / 23 MB    115 MB wav / 230 MB RAM
+ *   now      2.9 MB wav / 5.8 MB    29 MB wav / 58 MB RAM   (>5 min sources)
+ *
+ * Mono because the main lane is camera/voice audio, where a stereo preview buys
+ * nothing; 24 kHz only past PREVIEW_AUDIO_LONG_S, so ordinary short clips keep
+ * full 48 kHz. The renderer builds the AudioBuffer at the WAV's own rate, so a
+ * lower rate really does cost less memory (decodeAudioData would resample it
+ * straight back up to the context rate).
  */
 export async function extractPreviewAudioWav(path: string): Promise<string> {
   const st = await stat(path)
-  const key = createHash('sha1').update(`${path}|${st.size}|${Math.round(st.mtimeMs)}`).digest('hex')
+  let rate = 48000
+  try {
+    const info = await probeCached(path)
+    if (info.duration > PREVIEW_AUDIO_LONG_S) rate = 24000
+  } catch {
+    /* unprobeable — keep the high-quality profile */
+  }
+  const key = createHash('sha1')
+    .update(`${path}|${st.size}|${Math.round(st.mtimeMs)}|mono${rate}`)
+    .digest('hex')
   const dir = previewAudioDir()
   await mkdir(dir, { recursive: true })
   const out = join(dir, `${key}.wav`)
@@ -215,8 +240,8 @@ export async function extractPreviewAudioWav(path: string): Promise<string> {
     '-i', path,
     '-vn',
     '-af', 'aresample=async=1:first_pts=0',
-    '-ar', '48000',
-    '-ac', '2',
+    '-ar', String(rate),
+    '-ac', '1',
     '-c:a', 'pcm_s16le',
     out
   ], { maxBuffer: 1024 * 1024 * 16 })
