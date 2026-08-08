@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../editor/audio_track.dart';
 import '../editor/text_overlay.dart';
@@ -144,6 +145,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
   int _grabIndex = -1; // index into the relevant list (clip index for 'clip')
   double _lpLastDx = 0; // last cumulative long-press dx (to derive per-frame deltas)
   double _grabDx = 0; // px the grabbed clip floats from its slot (follows the finger)
+  double _grabDy = 0; // vertical follow — the clip lifts out of the track under the finger
   int _dropIndex = -1; // where a grabbed clip would land if released now
 
   bool _isGrabbed(String kind, int index) => _grabKind == kind && _grabIndex == index;
@@ -683,10 +685,78 @@ class _MiniTimelineState extends State<MiniTimeline> {
     return false;
   }
 
+  /// The main video track. Laid out as a STACK (not a Row) so a picked-up clip
+  /// can float ABOVE its neighbours while the rest slide apart to open the gap
+  /// it would drop into — the desktop drag, on a finger.
   Widget _clipsRow(TimelineModel model) {
-    return Row(
+    final n = model.clips.length;
+    // Each clip's resting x (slots are contiguous and sum to the track width).
+    final slotX = List<double>.filled(n, 0);
+    var acc = 0.0;
+    for (var i = 0; i < n; i++) {
+      slotX[i] = acc;
+      acc += _clipW(i);
+    }
+    final dragging = _grabKind == 'clip' && _grabIndex >= 0 && _grabIndex < n;
+    final from = _grabIndex;
+    final to = _dropIndex;
+    final grabW = dragging ? _clipW(from) : 0.0;
+
+    // Where clip [i] sits RIGHT NOW: neighbours between the grabbed clip's slot
+    // and the drop slot shuffle over by its width to open the landing gap.
+    double restingX(int i) {
+      var x = slotX[i];
+      if (!dragging || to < 0 || i == from) return x;
+      if (from < to && i > from && i <= to) x -= grabW;
+      if (from > to && i >= to && i < from) x += grabW;
+      return x;
+    }
+
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        for (int i = 0; i < model.clips.length; i++) _clip(model, i),
+        for (int i = 0; i < n; i++)
+          if (i != from)
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOutCubic,
+              left: restingX(i),
+              width: _clipW(i),
+              top: 0,
+              bottom: 0,
+              child: _clip(model, i),
+            ),
+        // Landing marker: where the held clip will drop.
+        if (dragging && to >= 0 && to != from)
+          Positioned(
+            left: (to > from ? restingX(to) + _clipW(to) : restingX(to)) - 1.5,
+            width: 3,
+            top: -2,
+            bottom: -2,
+            child: IgnorePointer(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Ec.accentB,
+                  borderRadius: BorderRadius.circular(2),
+                  boxShadow: [BoxShadow(color: Ec.accentB.withValues(alpha: 0.7), blurRadius: 8)],
+                ),
+              ),
+            ),
+          ),
+        // The held clip LAST, so it paints over everything, lifted and scaled.
+        if (dragging)
+          Positioned(
+            left: slotX[from] + _grabDx,
+            width: grabW,
+            top: 0,
+            bottom: 0,
+            child: Transform.translate(
+              // Lifts out of the track and follows the finger vertically, damped
+              // and clamped so it stays legibly attached to its own lane.
+              offset: Offset(0, -10 + (_grabDy * 0.35).clamp(-22.0, 14.0)),
+              child: Transform.scale(scale: 1.06, child: _clip(model, from)),
+            ),
+          ),
       ],
     );
   }
@@ -1179,9 +1249,12 @@ class _MiniTimelineState extends State<MiniTimeline> {
   void _onClipHoldMove(LongPressMoveUpdateDetails d) {
     if (widget.onClipReorder == null) return;
     final dx = d.offsetFromOrigin.dx;
+    final next = _dropIndexFor(_grabIndex, dx);
+    if (next != _dropIndex) HapticFeedback.selectionClick(); // tick as it snaps
     setState(() {
       _grabDx = dx;
-      _dropIndex = _dropIndexFor(_grabIndex, dx);
+      _grabDy = d.offsetFromOrigin.dy;
+      _dropIndex = next;
     });
   }
 
@@ -1203,10 +1276,12 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 : (_) {
                     widget.onSelectClip(i);
                     widget.onClipReorderStart?.call();
+                    HapticFeedback.mediumImpact(); // "picked up"
                     setState(() {
                       _grabKind = 'clip';
                       _grabIndex = i;
                       _grabDx = 0;
+                      _grabDy = 0;
                       _dropIndex = i;
                     });
                   },
@@ -1220,10 +1295,12 @@ class _MiniTimelineState extends State<MiniTimeline> {
                       widget.onClipReorder!(from, to); // commit once
                       widget.onClipReorderEnd?.call();
                     }
+                    HapticFeedback.lightImpact(); // "dropped"
                     setState(() {
                       _grabKind = null;
                       _grabIndex = -1;
                       _grabDx = 0;
+                      _grabDy = 0;
                       _dropIndex = -1;
                     });
                   },
@@ -1239,7 +1316,14 @@ class _MiniTimelineState extends State<MiniTimeline> {
                   width: (grabbed || selected) ? 2 : 1,
                 ),
                 boxShadow: grabbed
-                    ? [BoxShadow(color: Ec.accentB.withValues(alpha: 0.6), blurRadius: 12, spreadRadius: 1)]
+                    ? [
+                        // A real cast shadow sells the lift, over the accent glow.
+                        BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.55),
+                            blurRadius: 18,
+                            offset: const Offset(0, 10)),
+                        BoxShadow(color: Ec.accentB.withValues(alpha: 0.6), blurRadius: 12, spreadRadius: 1),
+                      ]
                     : selected
                         ? [BoxShadow(color: Ec.accentB.withValues(alpha: 0.5), blurRadius: 0, spreadRadius: 1.5)]
                         : null,
@@ -1311,7 +1395,9 @@ class _MiniTimelineState extends State<MiniTimeline> {
       ),
     );
     // A grabbed clip floats under the finger (residual offset between swaps).
-    return grabbed ? Transform.translate(offset: Offset(_grabDx, 0), child: body) : body;
+    // Positioning + the lift are owned by _clipsRow's Stack, so the body is
+    // returned as-is here.
+    return body;
   }
 
   Widget _trimHandle(int i, {required bool left}) {
