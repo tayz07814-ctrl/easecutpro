@@ -65,9 +65,13 @@ class MiniTimeline extends StatefulWidget {
   final VoidCallback? onTrimStart;
   final VoidCallback? onTrimEnd;
 
-  /// CapCut-style track-head tiles, PINNED at the viewport's left edge (they
-  /// must stay reachable at any scrub position): mute-all-clips toggle, cover
-  /// tile, and the per-lane add shortcuts.
+  /// Cut regions previewed on the timeline before they are committed
+  /// (review-before-apply). TIMELINE ms, painted over the clips they'd remove.
+  final List<List<int>> stagedCuts;
+
+  /// CapCut-style track-head tiles — mute-all-clips plus the per-lane add
+  /// shortcuts. They sit in the track at scroll origin and STICK to the left
+  /// edge once scrolled past (see the sticky column in build).
   final bool muted;
   final VoidCallback? onToggleMute;
   final VoidCallback? onAddOverlay;
@@ -111,6 +115,7 @@ class MiniTimeline extends StatefulWidget {
     this.onTrim,
     this.onTrimStart,
     this.onTrimEnd,
+    this.stagedCuts = const [],
     this.muted = false,
     this.onToggleMute,
     this.onAddOverlay,
@@ -126,6 +131,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
   static const double _basePxPerMs = 0.09; // 90 px/s at zoom 1
   static const double _clipsH = 54;
   static const double _laneH = 22;
+  /// Track-head tile width — uniform so the sticky column lines up as one edge.
+  static const double _headW = 44;
 
   final ScrollController _sc = ScrollController();
   double _zoom = 1.0;
@@ -362,7 +369,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
               // Row specs: (height, pinned tile, scrolling content). Gap rows have
               // neither. Built once, then rendered twice — the content column and
               // the pinned tile column share the same heights, so they can't drift.
-              final rows = <(double, Widget?, Widget?)>[];
+              final rows = <(double, Widget?, Widget?, bool)>[];
               rows.add((
                 16,
                 null,
@@ -374,62 +381,70 @@ class _MiniTimelineState extends State<MiniTimeline> {
                     visibleToMs: ((_sc.hasClients ? _sc.offset : 0) / _pxPerMs) + _viewW / _pxPerMs,
                   ),
                   child: const SizedBox.expand(),
-                )
+                ),
+                false
               ));
-              rows.add((6, null, null));
-              rows.add((_clipsH, _muteTile(), _clipsRow(model)));
+              rows.add((6, null, null, false));
+              rows.add((_clipsH, _muteTile(), _stagedOverlay(_clipsRow(model)), false));
               // Overlay (image / PiP) lane — ALWAYS present, like the reference.
-              rows.add((4, null, null));
+              rows.add((4, null, null, false));
               if (widget.images.isNotEmpty) {
                 rows.add((
                   stackedH(lanesOfImages()),
                   _gutterIcon(Icons.photo_library_outlined, widget.onAddOverlay),
-                  _imageLane(tracksW)
+                  _imageLane(tracksW),
+                  true
                 ));
               } else {
                 rows.add((
                   _laneH,
                   _gutterIcon(Icons.photo_library_outlined, widget.onAddOverlay),
-                  _ghostRow('＋ Add overlay', widget.onAddOverlay)
+                  _ghostRow('＋ Add overlay', widget.onAddOverlay),
+                  true
                 ));
               }
               if (widget.texts.any((t) => t.isCaption)) {
-                rows.add((4, null, null));
+                rows.add((4, null, null, false));
                 rows.add((
                   stackedH(lanesOfTexts(true)),
                   _gutterIcon(Icons.closed_caption_outlined, null),
-                  _overlayLane(tracksW, captions: true)
+                  _overlayLane(tracksW, captions: true),
+                  true
                 ));
               }
-              rows.add((4, null, null));
+              rows.add((4, null, null, false));
               if (widget.texts.any((t) => !t.isCaption)) {
                 rows.add((
                   stackedH(lanesOfTexts(false)),
                   _gutterIcon(Icons.title, widget.onAddText),
-                  _overlayLane(tracksW, captions: false)
+                  _overlayLane(tracksW, captions: false),
+                  true
                 ));
               } else {
                 rows.add((
                   _laneH,
                   _gutterIcon(Icons.title, widget.onAddText),
-                  _ghostRow('＋ Add text', widget.onAddText)
+                  _ghostRow('＋ Add text', widget.onAddText),
+                  true
                 ));
               }
-              rows.add((4, null, null));
+              rows.add((4, null, null, false));
               if (widget.audios.isNotEmpty) {
                 rows.add((
                   widget.audios.length * (_laneH + 3.0),
                   _gutterIcon(Icons.music_note, widget.onAddAudio),
-                  _audioLane(tracksW)
+                  _audioLane(tracksW),
+                  true
                 ));
               } else {
                 rows.add((
                   _laneH,
                   _gutterIcon(Icons.music_note, widget.onAddAudio),
-                  _ghostRow('＋ Add audio', widget.onAddAudio)
+                  _ghostRow('＋ Add audio', widget.onAddAudio),
+                  true
                 ));
               }
-              rows.add((8, null, null));
+              rows.add((8, null, null, false));
 
               return Listener(
                 behavior: HitTestBehavior.translucent,
@@ -461,7 +476,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
                                   mainAxisSize: MainAxisSize.min,
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    for (final (h, _, content) in rows)
+                                    for (final (h, _, content, isLane) in rows)
                                       SizedBox(
                                         height: h,
                                         child: content == null
@@ -470,7 +485,24 @@ class _MiniTimelineState extends State<MiniTimeline> {
                                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                                 children: [
                                                   SizedBox(width: side),
-                                                  SizedBox(width: tracksW, child: content),
+                                                  SizedBox(
+                                                    width: tracksW,
+                                                    // Lane rows carry a background across the
+                                                    // WHOLE timeline so a track reads as one
+                                                    // continuous lane, not a strip that stops
+                                                    // where its last clip happens to end.
+                                                    child: isLane
+                                                        ? Container(
+                                                            decoration: BoxDecoration(
+                                                              color: const Color(0xFF101014),
+                                                              borderRadius: BorderRadius.circular(5),
+                                                              border: Border.all(
+                                                                  color: Colors.white.withValues(alpha: 0.04)),
+                                                            ),
+                                                            child: content,
+                                                          )
+                                                        : content,
+                                                  ),
                                                   SizedBox(width: side),
                                                 ],
                                               ),
@@ -480,18 +512,28 @@ class _MiniTimelineState extends State<MiniTimeline> {
                               ),
                             ),
                           ),
-                          // Track-head tiles — pinned to the viewport's left edge
-                          // (they scroll vertically with their rows, never
-                          // horizontally), so they stay reachable mid-clip.
+                          // Track-head tiles — STICKY, not permanently pinned.
+                          // Their natural home is the pre-roll gutter, just left
+                          // of t=0; as the view scrolls right they travel with it
+                          // until they hit the left edge and stick there, and
+                          // they slide back into place on the way home. (Native
+                          // horizontal scroll, so this is the plain
+                          // `position: sticky; left: 0` behaviour computed by
+                          // hand: max(edge, naturalLeft - scrollOffset).)
                           Positioned(
-                            left: 8,
+                            left: () {
+                              final natural = side - _headW - 8;
+                              final off = _sc.hasClients ? _sc.offset : 0.0;
+                              return natural - off < 8.0 ? 8.0 : natural - off;
+                            }(),
                             top: 0,
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                for (final (h, tile, _) in rows)
+                                for (final (h, tile, _, _) in rows)
                                   SizedBox(
                                     height: h,
+                                    width: _headW,
                                     child: tile == null
                                         ? const SizedBox.shrink()
                                         : Align(alignment: Alignment.topLeft, child: tile),
@@ -530,6 +572,34 @@ class _MiniTimelineState extends State<MiniTimeline> {
     );
   }
 
+  /// Paint the staged (not yet applied) cut regions over the clips row, so the
+  /// user can see exactly what "Apply" would remove before committing.
+  Widget _stagedOverlay(Widget clips) {
+    if (widget.stagedCuts.isEmpty) return clips;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        clips,
+        for (final r in widget.stagedCuts)
+          Positioned(
+            left: r[0].clamp(0, _total) * _pxPerMs,
+            width: ((r[1] - r[0]).clamp(1, _total)) * _pxPerMs,
+            top: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF5D6C).withValues(alpha: 0.34),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: const Color(0xFFFF5D6C).withValues(alpha: 0.85)),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   /// The "Mute clip audio" gutter tile — toggles every main clip's audio.
   /// Compact (icon-only) so it doesn't crowd the pinned track-head column.
   Widget _muteTile() {
@@ -538,7 +608,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
       onTap: widget.onToggleMute,
       behavior: HitTestBehavior.opaque,
       child: Container(
-        width: 43,
+        width: _headW,
         decoration: BoxDecoration(
           color: const Color(0xFF17171B),
           borderRadius: BorderRadius.circular(9),
@@ -565,7 +635,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Container(
-        width: 26,
+        width: _headW,
         height: _laneH,
         decoration: BoxDecoration(
           color: const Color(0xFF17171B),

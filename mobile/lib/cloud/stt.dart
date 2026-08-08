@@ -10,6 +10,16 @@ class Word {
   final double start;
   final double end;
   Word(this.text, this.start, this.end);
+
+  /// Persisted with the project so a transcript survives cuts, app restarts and
+  /// re-opens — re-running Speech Cleaner must never re-bill the same audio.
+  Map<String, dynamic> toJson() => {'t': text, 's': start, 'e': end};
+
+  static Word fromJson(Map j) => Word(
+        (j['t'] as String?) ?? '',
+        (j['s'] as num?)?.toDouble() ?? 0,
+        (j['e'] as num?)?.toDouble() ?? 0,
+      );
 }
 
 typedef Progress = void Function(double pct, String msg);

@@ -6,7 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../cloud/backend.dart';
-import '../cloud/stt.dart' show Word;
+import '../cloud/stt.dart' show Word, Progress;
 import '../editor/timeline_model.dart';
 import '../editor/text_overlay.dart';
 import '../editor/audio_track.dart';
@@ -23,7 +23,7 @@ import '../widgets/selected_toolbar.dart';
 import '../widgets/mini_timeline.dart';
 import '../widgets/editable_overlay.dart';
 import '../sheets/export_sheet.dart';
-import '../sheets/cutlord_sheet.dart';
+import '../sheets/ease_tools_sheet.dart';
 import '../sheets/captions_sheet.dart';
 import '../sheets/text_sheet.dart';
 import '../sheets/audio_sheet.dart';
@@ -37,7 +37,7 @@ import '../sheets/cut_review_sheet.dart';
 import '../local/fonts_store.dart';
 
 /// The EaseCut mobile editor. Everything (preview, export, split/trim/delete, and —
-/// next — Cut Lord) runs off a single [TimelineModel] of base-video clips fed to the
+/// next — EaseTools) runs off a single [TimelineModel] of base-video clips fed to the
 /// native ExoPlayer (preview) and Media3 Transformer (export).
 class EditorScreen extends StatefulWidget {
   /// When opened from New Project, the clip picked in the wizard so the editor
@@ -97,7 +97,42 @@ class _EditorScreenState extends State<EditorScreen> {
   ImageOverlay? _selectedImage;
   final List<_EditSnap> _undoStack = [];
   final List<_EditSnap> _redoStack = [];
-  List<Word>? _transcript; // cached STT (reused by Cut Lord + Captions)
+
+  // ---- staged cuts (review-before-apply) ----------------------------------
+  // With "Apply cuts immediately" OFF, a tool stages its result instead of
+  // committing: [_pendingKeeps] is what WOULD be kept, [_stagedCutsSrc] is what
+  // would be removed (source ms) and gets painted on the timeline for review.
+  List<List<int>>? _pendingKeeps;
+  List<List<int>> _stagedCutsSrc = const [];
+  String _stagedLabel = '';
+  /// STT cache keyed by a source's bare path — the FULL transcript of that file
+  /// in its OWN source time. Persisted with the project and never cleared by a
+  /// cut, so re-running any EaseTool reuses it: already-transcribed audio is
+  /// never uploaded (or billed) twice, and only a source we have not seen before
+  /// — a newly appended clip — is sent to the API.
+  final Map<String, List<Word>> _sttCache = {};
+
+  /// The base source's transcript, if we already have it.
+  List<Word>? get _transcript {
+    final p = _model.sourcePath;
+    return p == null ? null : _sttCache[_mediaKey(p)];
+  }
+
+  /// The base source's transcript, transcribing ONLY if it isn't cached yet.
+  Future<List<Word>> _ensureTranscript({Progress? onProgress}) async {
+    final path = _model.sourcePath;
+    if (path == null) return const [];
+    final key = _mediaKey(path);
+    final cached = _sttCache[key];
+    if (cached != null) {
+      onProgress?.call(100, 'Using the saved transcript…');
+      return cached;
+    }
+    final words = await extractAndTranscribe(_exporter, path, onProgress: onProgress);
+    _sttCache[key] = words;
+    _scheduleSave(); // survive an app restart too
+    return words;
+  }
   final List<AudioTrack> _audios = []; // imported music/voiceover (mixed on export)
   int _selectedAudio = -1; // audio block selected on the timeline
   // Per-source timeline art (filmstrip + waveform + duration), keyed by the media's
@@ -177,6 +212,11 @@ class _EditorScreenState extends State<EditorScreen> {
         'audio': _audios.map((a) => a.toJson()).toList(),
         // Stickers / PiP / Auto B-roll — base64 pixels, so they survive a reload.
         'images': _images.map((o) => o.toJson()).toList(),
+        // Transcripts per source file, so reopening a project never re-transcribes
+        // (and never re-bills) audio we have already sent once.
+        'stt': {
+          for (final e in _sttCache.entries) e.key: e.value.map((w) => w.toJson()).toList(),
+        },
       };
 
   /// Audio tracks as native-player maps (previewed alongside the video, placed at
@@ -234,6 +274,15 @@ class _EditorScreenState extends State<EditorScreen> {
     _selectedAudio = -1;
     for (final a in (m['audio'] as List?) ?? []) {
       _audios.add(AudioTrack.fromJson(a as Map));
+    }
+    _sttCache.clear();
+    final stt = m['stt'];
+    if (stt is Map) {
+      stt.forEach((k, v) {
+        if (v is List) {
+          _sttCache['$k'] = [for (final w in v) Word.fromJson(w as Map)];
+        }
+      });
     }
     _images.clear();
     _selectedImage = null;
@@ -339,7 +388,7 @@ class _EditorScreenState extends State<EditorScreen> {
         _positionMs = 0;
         _sourceDurationMs = 0;
         _playing = false;
-        _transcript = null;
+        _sttCache.clear(); // brand-new project — nothing transcribed yet
         _texts.clear();
         _media.clear();
         _mediaPending.clear();
@@ -858,15 +907,15 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  void _openCutLord() => _openSheet(CutLordSheet(
+  void _openEaseTools() => _openSheet(EaseToolsSheet(
         onOpenSilence: () {
           Navigator.of(context).pop();
           _openSilence();
         },
         onRun: _runCutLord,
         onCleanSilence: _cleanSilenceOnly,
-        onAutoZoom: _autoZoom,
-        onAutoBroll: _autoBroll,
+        onZoom: _autoZoom,
+        onOverlays: _autoBroll,
         onVariations: _openVariations,
       ));
 
@@ -919,7 +968,8 @@ class _EditorScreenState extends State<EditorScreen> {
       return;
     }
     _toast('Silero: ${regionsMs.length} region${regionsMs.length == 1 ? '' : 's'} cut · $stats');
-    // Apply directly: keeps = the timeline minus the regions (no words involved).
+    // keeps = the timeline minus the regions (no words involved). Applied now or
+    // staged for review, per the "Apply cuts immediately" toggle.
     final keeps = keepRanges(
       const [],
       const [],
@@ -927,10 +977,7 @@ class _EditorScreenState extends State<EditorScreen> {
       cutSilence: false,
       extraSilenceMs: regionsMs,
     );
-    _pushHistory();
-    _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
-    _model.applyKeepRanges(keeps);
-    await _reload(seekTo: 0);
+    await _commitOrStage(keeps, durS, 'Silence');
   }
 
   // ---- Variations: recut the same footage into a different edit ----
@@ -939,8 +986,8 @@ class _EditorScreenState extends State<EditorScreen> {
           if (!_hasBase || _model.sourcePath == null) {
             return const VariationParse([], warnings: ['Import a clip first.']);
           }
-          _transcript ??= await extractAndTranscribe(_exporter, _model.sourcePath!);
-          return generateVariations(_transcript!, _sourceDurationMs / 1000.0, count);
+          final words = await _ensureTranscript();
+          return generateVariations(words, _sourceDurationMs / 1000.0, count);
         },
         onParse: (text, name) =>
             parseVariation(text, _sourceDurationMs / 1000.0, fallbackName: name),
@@ -969,8 +1016,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final prog = ValueNotifier<String>('Preparing…');
     _showProgress(prog);
     try {
-      _transcript ??=
-          await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
+      await _ensureTranscript(onProgress: (p, m) => prog.value = m);
       final words = _transcript!;
       // One un-cut clip → split at sentence groups so Auto Zoom has segments.
       if (_model.clips.length < 2 && words.isNotEmpty) {
@@ -1099,7 +1145,7 @@ class _EditorScreenState extends State<EditorScreen> {
   }
   void _openCaptions() => _openSheet(CaptionsSheet(onGenerate: (style) => _generateCaptions(style)));
 
-  // ---- Cut Lord: transcribe → SHOW transcript → judge in background → apply ----
+  // ---- Speech Cleaner: transcribe → SHOW transcript → judge → apply/stage ----
   Future<void> _runCutLord(CutLordModel model, bool cutSilence) async {
     if (!_hasBase || _model.sourcePath == null) {
       _toast('Import a clip first');
@@ -1112,8 +1158,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _showProgress(prog);
     List<List<int>> aiCuts = const [];
     try {
-      _transcript ??=
-          await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
+      await _ensureTranscript(onProgress: (p, m) => prog.value = m);
       if (_transcript!.isEmpty) {
         if (mounted) Navigator.of(context).pop();
         prog.dispose();
@@ -1231,11 +1276,132 @@ class _EditorScreenState extends State<EditorScreen> {
       leadBeforeS: SilenceSettings.padBeforeS,
       extraSilenceMs: fsmn,
     );
+    await _commitOrStage(keeps, durS, label);
+  }
+
+  // ---- review-before-apply -------------------------------------------------
+
+  /// Everything inside [0, durS] that [keeps] does NOT keep — i.e. what a cut
+  /// would remove. Source ms.
+  List<List<int>> _removedBy(List<List<int>> keeps, double durS) {
+    final durMs = (durS * 1000).round();
+    final sorted = [for (final k in keeps) [k[0], k[1]]]..sort((a, b) => a[0].compareTo(b[0]));
+    final out = <List<int>>[];
+    var cursor = 0;
+    for (final k in sorted) {
+      if (k[0] > cursor) out.add([cursor, k[0]]);
+      cursor = k[1] > cursor ? k[1] : cursor;
+    }
+    if (durMs > cursor) out.add([cursor, durMs]);
+    return out.where((r) => r[1] - r[0] > 10).toList();
+  }
+
+  /// Apply [keeps] now, or stage them for review — per the "Apply cuts
+  /// immediately" toggle. Staging paints the removed regions on the timeline and
+  /// raises the confirm bar; nothing changes until the user taps Apply.
+  Future<void> _commitOrStage(List<List<int>> keeps, double durS, String label) async {
+    if (SilenceSettings.autoApplyCuts) {
+      _pushHistory();
+      _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
+      _model.applyKeepRanges(keeps);
+      await _reload(seekTo: 0);
+      return;
+    }
+    final removed = _removedBy(keeps, durS);
+    if (removed.isEmpty) {
+      _toast('$label: nothing to cut');
+      return;
+    }
+    setState(() {
+      _pendingKeeps = keeps;
+      _stagedCutsSrc = removed;
+      _stagedLabel = label;
+    });
+  }
+
+  /// The staged (source-time) cuts mapped onto the CURRENT timeline, so they can
+  /// be painted over the clips they would remove.
+  List<List<int>> get _stagedTimelineRanges {
+    final out = <List<int>>[];
+    for (final r in _stagedCutsSrc) {
+      final a = _model.sourceToEdited(r[0]);
+      final b = _model.sourceToEdited(r[1] - 1);
+      if (a == null || b == null || b <= a) continue;
+      out.add([a, b]);
+    }
+    return out;
+  }
+
+  Future<void> _applyStagedCuts() async {
+    final keeps = _pendingKeeps;
+    if (keeps == null) return;
     _pushHistory();
     _texts.removeWhere((t) => t.isCaption); // stale after a re-cut
     _model.applyKeepRanges(keeps);
+    setState(() {
+      _pendingKeeps = null;
+      _stagedCutsSrc = const [];
+      _stagedLabel = '';
+    });
     await _reload(seekTo: 0);
-    // No snackbar — the top-bar / transport undo buttons are the undo affordance.
+  }
+
+  void _discardStagedCuts() {
+    setState(() {
+      _pendingKeeps = null;
+      _stagedCutsSrc = const [];
+      _stagedLabel = '';
+    });
+  }
+
+  /// The review bar shown while cuts are staged.
+  Widget _stagedBar() {
+    final n = _stagedCutsSrc.length;
+    var removedMs = 0;
+    for (final r in _stagedCutsSrc) {
+      removedMs += r[1] - r[0];
+    }
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 9, 10, 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A1520),
+        border: Border(top: BorderSide(color: const Color(0xFFFF5D6C).withValues(alpha: 0.5))),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.visibility_outlined, size: 17, color: Color(0xFFFF9BA6)),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$_stagedLabel — $n cut${n == 1 ? '' : 's'} previewed',
+                    style: const TextStyle(color: Ec.text, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                Text('removes ${(removedMs / 1000).toStringAsFixed(1)}s · nothing changed yet',
+                    style: const TextStyle(color: Color(0xFFB08A93), fontSize: 10.5)),
+              ],
+            ),
+          ),
+          GestureDetector(
+            onTap: _discardStagedCuts,
+            behavior: HitTestBehavior.opaque,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Text('Discard', style: TextStyle(color: Ec.textMute, fontSize: 12.5)),
+            ),
+          ),
+          GestureDetector(
+            onTap: _applyStagedCuts,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(color: Ec.indigo, borderRadius: BorderRadius.circular(9)),
+              child: const Text('Apply',
+                  style: TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// "Enhance on import": after the initial clip loads, optionally auto-apply the
@@ -1282,8 +1448,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final prog = ValueNotifier<String>('Enhancing…');
     _showProgress(prog);
     try {
-      _transcript ??=
-          await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
+      await _ensureTranscript(onProgress: (p, m) => prog.value = m);
       final words = _transcript!;
       if (words.isEmpty) {
         if (mounted) Navigator.of(context).pop();
@@ -1321,8 +1486,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final prog = ValueNotifier<String>('Starting…');
     _showProgress(prog);
     try {
-      _transcript ??=
-          await extractAndTranscribe(_exporter, _model.sourcePath!, onProgress: (p, m) => prog.value = m);
+      await _ensureTranscript(onProgress: (p, m) => prog.value = m);
       final words = _transcript!;
       _pushHistory();
       _texts.removeWhere((t) => t.isCaption);
@@ -1522,6 +1686,7 @@ class _EditorScreenState extends State<EditorScreen> {
             _grip(),
             _transport(),
             Expanded(child: _timeline()),
+            if (_pendingKeeps != null) _stagedBar(),
             _selected
                 ? SelectedToolbar(
                     onCollapse: () {
@@ -1536,7 +1701,7 @@ class _EditorScreenState extends State<EditorScreen> {
                     onEdit: _onEdit,
                     onMusic: _openAudio,
                     onText: _openText,
-                    onCutLord: _openCutLord,
+                    onEaseTools: _openEaseTools,
                     onCaptions: _openCaptions,
                   ),
           ],
@@ -1989,6 +2154,7 @@ class _EditorScreenState extends State<EditorScreen> {
       child: MiniTimeline(
         model: _model,
         clipName: _clipName ?? '',
+        stagedCuts: _stagedTimelineRanges,
         muted: _clipsMuted,
         onToggleMute: _toggleMuteClips,
         onAddOverlay: _addOverlay,

@@ -31,6 +31,10 @@ class SilenceSettings {
   /// Cut Lord's "also clean silence" toggle.
   static bool cutSilence = true;
 
+  /// Review-before-apply. FALSE (default) stages the cuts on the timeline for
+  /// inspection; TRUE commits them the moment they are found.
+  static bool autoApplyCuts = false;
+
   // ---- Back-compat aliases: the transcript word-gap FALLBACK (used only when
   // the native engine fails) and Cut Lord's judge still consume the old names.
   static double get minGapS => minSilenceS;

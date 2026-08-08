@@ -2,16 +2,17 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 
-/// Bottom tool dock — the MAIN toolbar from MobileTools.tsx (nothing selected):
-/// exactly five tiles — Edit · Music · Text · Cut Lord · Captions — as solid
-/// #17171b tiles (70px tall, 13px radius) with a bare icon over a 10.5px label.
-/// Cut Lord is the accent tool (purple icon #b79bff).
+/// Bottom tool dock (nothing selected): five tiles — Edit · Music · Text ·
+/// EaseTools · Captions — as solid #17171b tiles (70px tall, 13px radius) with a
+/// bare icon over a 10.5px label. EaseTools is the accent tool (purple #b79bff)
+/// and opens the one panel every automation lives under (Speech Cleaner, Zoom,
+/// Overlays, Variations).
 class ToolDock extends StatelessWidget {
   final bool hasSelection; // reserved for the selected-clip toolbar (next milestone)
   final VoidCallback onEdit; // select main clip, else import
   final VoidCallback onMusic;
   final VoidCallback onText;
-  final VoidCallback onCutLord;
+  final VoidCallback onEaseTools;
   final VoidCallback onCaptions;
 
   const ToolDock({
@@ -20,7 +21,7 @@ class ToolDock extends StatelessWidget {
     required this.onEdit,
     required this.onMusic,
     required this.onText,
-    required this.onCutLord,
+    required this.onEaseTools,
     required this.onCaptions,
   });
 
@@ -41,7 +42,7 @@ class ToolDock extends StatelessWidget {
           const SizedBox(width: 7),
           _Tile(icon: Icons.text_fields, label: 'Text', onTap: onText),
           const SizedBox(width: 7),
-          _Tile(icon: Icons.bolt, label: 'Cut Lord', onTap: onCutLord, accent: true),
+          _Tile(icon: Icons.bolt, label: 'EaseTools', onTap: onEaseTools, accent: true),
           const SizedBox(width: 7),
           _Tile(icon: Icons.closed_caption, label: 'Captions', onTap: onCaptions),
         ],
