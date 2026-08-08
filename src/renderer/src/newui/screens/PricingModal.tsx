@@ -9,9 +9,10 @@
 // Reachable from anywhere via openPricingModal() (same global-host pattern as
 // AccountPanelHost); the topbar ★ Upgrade buttons in Dashboard + Editor use it.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { css } from '../css'
 import { useStore } from '../../store'
+import { IS_DESKTOP_CLOUD } from '../../platform'
 import {
   PLANS,
   openProCheckout,
@@ -20,7 +21,6 @@ import {
   isProNow,
   onBillingChange,
   emitBillingChange,
-  waitForPro,
   checkoutConfigured,
   openAccountPanel,
   type PlanId
@@ -65,6 +65,9 @@ export function useIsPro(): boolean {
   return pro
 }
 
+/** Longest we ever sit polling for the webhook before giving the sheet back. */
+const WAIT_LIMIT_MS = 10 * 60 * 1000
+
 const CARD_PLANS = PLANS.filter((p) => p.id !== 'test')
 
 /** Topbar ★ Upgrade button (Dashboard + Editor). Renders nothing when billing
@@ -93,6 +96,8 @@ export default function PricingModalHost(): JSX.Element | null {
   const [err, setErr] = useState('')
   const user = useStore((s) => s.user)
   const pro = useIsPro()
+  // Set to stop the checkout poll — closing the sheet, or saying "not now".
+  const cancelRef = useRef(false)
 
   useEffect(() => {
     registerPricingModal(() => {
@@ -109,7 +114,10 @@ export default function PricingModalHost(): JSX.Element | null {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') {
+        cancelRef.current = true
+        setOpen(false)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -129,24 +137,44 @@ export default function PricingModalHost(): JSX.Element | null {
       // then we poll until the webhook writes the subscription. Web: the page
       // navigates away and nothing below runs.
       await openProCheckout(user, plan)
-      setWaiting(true)
-      const ok = await waitForPro(5 * 60 * 1000, 3000)
-      setWaiting(false)
-      if (ok) {
-        emitBillingChange()
-        setDone(true)
-      }
     } catch (e) {
-      setWaiting(false)
-      setErr((e as Error).message || 'Could not start checkout — please try again.')
-    } finally {
       setBusy(null)
+      setErr((e as Error).message || 'Could not start checkout — please try again.')
+      return
+    }
+    // Checkout is OPEN now, so the button stops saying "Opening checkout…" and
+    // every plan becomes clickable again — abandoning the browser tab used to
+    // leave the whole sheet frozen with no way out but closing it.
+    setBusy(null)
+    if (!IS_DESKTOP_CLOUD) return // web navigated away; nothing to wait for
+
+    // Poll for the webhook, but CANCELLABLY: someone who closes the browser
+    // without paying (or just changes their mind) must be able to stop waiting.
+    cancelRef.current = false
+    setWaiting(true)
+    const deadline = Date.now() + WAIT_LIMIT_MS
+    try {
+      while (!cancelRef.current && Date.now() < deadline) {
+        if (isProNow(await getSubscription())) {
+          emitBillingChange()
+          setDone(true)
+          break
+        }
+        await new Promise((r) => setTimeout(r, 3000))
+      }
+    } catch {
+      /* a failed poll just means we keep showing the plans */
+    } finally {
+      setWaiting(false)
     }
   }
 
   return (
     <div
-      onClick={() => setOpen(false)}
+      onClick={() => {
+        cancelRef.current = true // don't keep polling behind a closed sheet
+        setOpen(false)
+      }}
       style={css('position:fixed;inset:0;z-index:120;background:rgba(6,6,10,.68);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px')}
     >
       <div
@@ -164,7 +192,10 @@ export default function PricingModalHost(): JSX.Element | null {
           </div>
           <div style={css('flex:1')} />
           <button
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              cancelRef.current = true
+              setOpen(false)
+            }}
             style={css('background:none;border:none;color:#9A9AAE;font-size:16px;cursor:pointer;padding:4px 8px;font-family:inherit')}
           >
             ✕
@@ -180,7 +211,15 @@ export default function PricingModalHost(): JSX.Element | null {
         {waiting && !done && (
           <div style={css('margin:12px 0 4px;padding:11px 14px;border-radius:11px;background:rgba(124,107,255,.09);border:1px solid rgba(124,107,255,.28);font-size:13px;color:#C4BAFF;display:flex;align-items:center;gap:9px')}>
             <span style={css('width:7px;height:7px;border-radius:50%;background:#7C6BFF;animation:ecPulse 1.4s infinite')} />
-            Finish your payment in the browser — this screen updates automatically once it goes through.
+            <span style={css('flex:1')}>Finish your payment in the browser — this screen updates automatically once it goes through.</span>
+            <button
+              onClick={() => {
+                cancelRef.current = true
+              }}
+              style={css('flex:none;background:none;border:1px solid rgba(255,255,255,.18);color:#C9C9DA;font-family:inherit;font-size:11.5px;border-radius:7px;padding:5px 10px;cursor:pointer')}
+            >
+              Not now
+            </button>
           </div>
         )}
         {err && (

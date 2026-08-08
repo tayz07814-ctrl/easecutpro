@@ -137,6 +137,7 @@ export default function CoworkPanel(): JSX.Element {
       setUsage(u)
       setMembers(m)
       setProjects(p)
+      useStore.getState().setCoworkCount(p.length)
       setRequests(r)
       setFolders(f)
     } catch (e) {

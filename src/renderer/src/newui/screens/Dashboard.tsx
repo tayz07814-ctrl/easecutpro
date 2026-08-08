@@ -361,6 +361,7 @@ function CoworkTransferDock(): JSX.Element | null {
 
 export default function Dashboard(): JSX.Element {
   const dash = useProjects()
+  const coworkCount = useStore((s) => s.coworkCount)
   const batchJobs = useStore((s) => s.batchJobs)
   const [acct, setAcct] = useState(false)
   const [sub, setSub] = useState<Subscription | null>(null)
@@ -455,7 +456,16 @@ export default function Dashboard(): JSX.Element {
         <div style={css('display:flex;flex-direction:column;gap:2px')}>
           {NAV.map((n) => {
             const on = src === n.id
-            const count = n.id === 'recents' ? Math.min(dash.metas.length, 12) : dash.metas.length
+            // Each row counts ITS OWN source. 'cloud' used to reuse the local
+            // total, so an empty space still read 282 — the dashboard claiming
+            // every local project was in the cloud. Blank until it has loaded,
+            // because a wrong number is worse than no number.
+            const count =
+              n.id === 'recents'
+                ? Math.min(dash.metas.length, 12)
+                : n.id === 'cloud'
+                  ? (coworkCount ?? '')
+                  : dash.metas.length
             return (
               <div key={n.id} onClick={(e) => { e.stopPropagation(); setSrc(n.id); setFilter(0) }} style={css(on ? NAV_ON : NAV_OFF)}>
                 <span>{n.label}</span>

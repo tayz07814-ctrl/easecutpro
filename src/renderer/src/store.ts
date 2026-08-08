@@ -931,6 +931,11 @@ interface AppState {
   exportVideo: (settings: ExportSettings) => Promise<void>
   /** absolute path of the most recent desktop export ('' when none). */
   lastExportPath: string
+  /** how many projects the open cowork space holds; null until it has loaded.
+   *  Published by CoworkPanel so the dashboard sidebar can show a REAL number
+   *  instead of reusing the local count. */
+  coworkCount: number | null
+  setCoworkCount: (n: number | null) => void
   /** reveal that export in the OS file manager (desktop only). */
   revealLastExport: () => void
   /** Render + encode entirely IN THIS BROWSER (WebCodecs) and save to the
@@ -1067,6 +1072,7 @@ export const useStore = create<AppState>((set, get) => ({
   showCropModal: false,
   showExportModal: false,
   lastExportPath: '',
+  coworkCount: null,
   batchJobs: [],
   wizardJob: null,
   pendingCaptions: false,
@@ -4068,6 +4074,8 @@ export const useStore = create<AppState>((set, get) => ({
     const p = get().lastExportPath
     if (p) void window.api.revealPath(p)
   },
+
+  setCoworkCount: (n) => set({ coworkCount: n }),
 
   setShowExportModal: (b) => set({ showExportModal: b }),
 
