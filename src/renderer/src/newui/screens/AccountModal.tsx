@@ -4,6 +4,7 @@
 // and flips to the active plan with a confirmation.
 import { useEffect, useState } from 'react'
 import { useStore } from '../../store'
+import { IS_CAPACITOR } from '../../platform'
 import {
   getBilling,
   openProCheckout,
@@ -277,7 +278,15 @@ export default function AccountModal({
             </div>
           )}
 
-          {isPro && (
+          {isPro && IS_CAPACITOR && (
+            // App Store guideline 3.1.1/3.1.3(b): no payment-management UI (billing
+            // portal = payment method + plan changes) may render inside the app.
+            <div style={{ fontSize: '13px', color: '#9BA0AC', marginTop: '18px' }}>
+              Manage your subscription — upgrade, downgrade, cancel, or update payment —
+              at <b style={{ color: '#EDEDF2' }}>easecutpro.com</b>.
+            </div>
+          )}
+          {isPro && !IS_CAPACITOR && (
             <button
               onClick={() => void manage()}
               disabled={managing}
@@ -299,7 +308,26 @@ export default function AccountModal({
             </button>
           )}
 
-          {!isPro && !finalizing && (
+          {!isPro && !finalizing && IS_CAPACITOR && (
+            // App Store guideline 3.1.1: this app has NO in-app purchase — it's a
+            // sign-in client for the multiplatform (web) service, per 3.1.3(b). No
+            // checkout UI may render here; subscribing happens on the website only.
+            <div
+              style={{
+                marginTop: '26px',
+                fontSize: '13px',
+                color: '#9BA0AC',
+                border: `1px solid ${HAIR}`,
+                borderRadius: '12px',
+                padding: '14px 16px'
+              }}
+            >
+              Subscribe at <b style={{ color: '#EDEDF2' }}>easecutpro.com</b> to unlock Pro features. Sign
+              in with the same account here once you&rsquo;ve subscribed.
+            </div>
+          )}
+
+          {!isPro && !finalizing && !IS_CAPACITOR && (
             <>
               <div
                 style={{

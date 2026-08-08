@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useStore, type BatchJob } from '../store'
-import { IS_WEB, IS_CLOUD } from '../platform'
+import { IS_WEB, IS_CLOUD, IS_CAPACITOR } from '../platform'
 import { authLogout } from '../webapi'
 import { cloudLogout } from '../cloud/auth'
 import { listProjects, createProject, getProject, deleteProject, saveProject, type ProjectMeta } from '../projectsApi'
@@ -83,6 +83,14 @@ export default function HomeScreen(): JSX.Element {
 
   async function upgrade(): Promise<void> {
     if (!user || upgrading) return
+    // App Store guideline 3.1.1/3.1.3(b): no checkout may run inside the native
+    // app — subscribing happens on the website only. (Belt-and-suspenders: this
+    // legacy screen shouldn't even mount in the Capacitor build, since
+    // VITE_FORCE_NEWUI routes it to Dashboard/AccountModal instead — see flag.ts.)
+    if (IS_CAPACITOR) {
+      window.alert('Subscribe at easecutpro.com — sign in here with the same account afterward.')
+      return
+    }
     setUpgrading(true)
     try {
       await openProCheckout({ id: user.id, email: user.email }, 'starter')

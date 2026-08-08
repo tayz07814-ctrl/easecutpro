@@ -17,6 +17,14 @@ export const IS_WEB =
 // self-hosted web build.
 export const IS_CLOUD = IS_WEB && import.meta.env.VITE_CLOUD === '1'
 
+// Bundled Capacitor app (iOS/Android) — the built cloud web app packaged INTO
+// the native shell, per capacitor.config.ts. Distinguishes "cloud build running
+// as a real website" from "cloud build running inside the App/Play Store app",
+// which matters for anything Apple/Google review would flag if shown inside the
+// native shell — most importantly: NO purchase/checkout UI may render here (App
+// Store guideline 3.1.1/3.1.3(b) — subscriptions are bought on the web only).
+export const IS_CAPACITOR = import.meta.env.VITE_CAPACITOR === '1'
+
 // Easecut premium redesign, gated behind an opt-in build flag. OFF by default:
 // the existing UI ships unchanged unless VITE_NEW_EASECUT_UI=true. When on,
 // main.tsx marks <html data-ec-ui="new"> and the scoped design-system CSS
