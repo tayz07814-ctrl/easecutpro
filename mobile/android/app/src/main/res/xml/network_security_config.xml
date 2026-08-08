@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The app uploads the user's own speech (transcription) and carries their
+  Supabase session, so every request must be TLS and must chain to a SYSTEM
+  trust anchor only.
+
+  Omitting user-installed CAs is the point: without it, anyone who can get a
+  certificate into the user's trust store — a corporate MDM profile, a proxy
+  app, someone with two minutes on an unlocked phone — can transparently read
+  and rewrite that traffic. Debug builds keep the user store so a local proxy
+  still works while developing.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

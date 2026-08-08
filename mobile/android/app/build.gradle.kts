@@ -1,3 +1,22 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+// Release signing. The upload key is supplied OUT of the repo — android/key.properties
+// locally, or KEYSTORE_* env vars in CI (the workflow writes the base64 secret to a
+// file). No keystore present -> fall back to the debug key so a dev/CI build still
+// produces an installable APK, but a debug-signed build must NEVER ship: the Android
+// debug key is a publicly known keypair, so anyone can forge an "update" that the OS
+// accepts as the same app.
+val keystorePropsFile = rootProject.file("key.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) FileInputStream(keystorePropsFile).use { load(it) }
+}
+val ksPath: String? = keystoreProps.getProperty("storeFile") ?: System.getenv("KEYSTORE_FILE")
+val ksPassword: String? = keystoreProps.getProperty("storePassword") ?: System.getenv("KEYSTORE_PASSWORD")
+val ksAlias: String? = keystoreProps.getProperty("keyAlias") ?: System.getenv("KEY_ALIAS")
+val ksKeyPassword: String? = keystoreProps.getProperty("keyPassword") ?: System.getenv("KEY_PASSWORD")
+val hasUploadKey = ksPath != null && file(ksPath).exists() && ksPassword != null && ksAlias != null
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -21,15 +40,29 @@ android {
         // native rebuild installs ALONGSIDE it while we develop.
         applicationId = "com.easecutpro.easecut"
         minSdk = 24
-        targetSdk = 34
+        // Play requires a current target API for new apps and updates; a higher
+        // target also opts the app into the newer platform security defaults.
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasUploadKey) {
+            create("upload") {
+                storeFile = file(ksPath!!)
+                storePassword = ksPassword
+                keyAlias = ksAlias
+                keyPassword = ksKeyPassword ?: ksPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Debug-signed for now so `flutter build apk` produces an installable APK.
-            signingConfig = signingConfigs.getByName("debug")
+            // Real upload key when one is supplied; debug key only as a dev fallback.
+            signingConfig = if (hasUploadKey) signingConfigs.getByName("upload")
+                            else signingConfigs.getByName("debug")
             // R8 was renaming ai.onnxruntime.* — whose native code resolves those
             // classes BY NAME — so every session.run() aborted the engine process
             // with "JNI DETECTED ERROR: java_class == null" (SIGABRT). Belt and

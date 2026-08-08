@@ -107,6 +107,29 @@ class EcExport(
     init {
         methodChannel.setMethodCallHandler(this)
         eventChannel.setStreamHandler(this)
+        purgeStaleCache()
+    }
+
+    /**
+     * Drop working files this class leaves in the cache — extracted speech WAVs,
+     * preview proxies, export passes and finished renders. They are copies of the
+     * user's own audio and video, and nothing deleted them, so they accumulated
+     * for the life of the install. Anything older than an hour is finished work
+     * (a live export or proxy is always newer than that), so this can never race
+     * a render in flight.
+     */
+    private fun purgeStaleCache() {
+        try {
+            val cutoff = System.currentTimeMillis() - 60L * 60L * 1000L
+            context.cacheDir.listFiles()?.forEach { f ->
+                val n = f.name
+                val ours = n.startsWith("ec_audio_") || n.startsWith("ec_proxy_") ||
+                    n.startsWith("ec_export_") || n.startsWith("ec_pass1_") ||
+                    n.startsWith("ec_silence_")
+                if (ours && f.lastModified() < cutoff) f.delete()
+            }
+        } catch (_: Exception) {
+        }
     }
 
     override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {

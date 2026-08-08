@@ -36,6 +36,12 @@ Future<List<Word>> transcribe(String audioPath, {Progress? onProgress}) async {
   if (providers.isEmpty) throw Exception('Transcription isn’t configured on the server.');
 
   final bytes = await File(audioPath).readAsBytes();
+  // The extracted WAV is a full uncompressed recording of the user speaking.
+  // Read it once, then delete it — leaving it in the cache means every run
+  // stockpiles private audio on disk for anything with file access to find.
+  try {
+    await File(audioPath).delete();
+  } catch (_) {}
   Object? lastErr;
   for (final p in providers) {
     String? path;
