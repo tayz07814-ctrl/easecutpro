@@ -12,7 +12,7 @@ export type RetakeState = 'idle' | 'analyzing' | 'results' | 'executed' | 'error
 
 export interface RetakeModel {
   state: RetakeState
-  job: { active: boolean; percent: number; message?: string }
+  job: { active: boolean; percent: number; message?: string; kind?: string }
   // summary tiles
   retakes: number // proxy: contiguous runs of staged word cuts (real count not stored — flagged)
   words: number // selectedWordIds.size  (real)

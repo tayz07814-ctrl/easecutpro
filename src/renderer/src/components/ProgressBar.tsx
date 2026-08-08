@@ -3,7 +3,7 @@ import { useSmoothProgress } from '../useSmoothProgress'
 
 export default function ProgressBar(): JSX.Element | null {
   const job = useStore((s) => s.job)
-  const shown = useSmoothProgress(job.active, job.percent)
+  const shown = useSmoothProgress(job.active, job.percent, job.kind)
   if (!job.active && !job.message) return null
   return (
     <div className={'statusbar' + (job.active ? ' active' : '')}>

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol, shell } from 'electron'
-import { join, extname } from 'path'
-import { createReadStream, existsSync } from 'fs'
-import { stat, readdir, mkdir, writeFile } from 'fs/promises'
+import { join, extname, dirname } from 'path'
+import { createReadStream, existsSync, constants as fsConstants } from 'fs'
+import { stat, readdir, mkdir, writeFile, access } from 'fs/promises'
 import { homedir } from 'os'
 import { Readable } from 'stream'
 import { randomUUID } from 'crypto'
@@ -151,6 +151,43 @@ function createWindow(): void {
   if (process.env['NODE_ENV'] === 'development') {
     mainWindow.webContents.openDevTools()
   }
+}
+
+/**
+ * Where exports go: an `outputs` folder in the app's own directory, so a
+ * creator always finds their renders in one predictable place next to
+ * EaseCutPro (no dialog, no hunting through Downloads).
+ *
+ * Falls back to Videos/EaseCutPro when that isn't writable — a per-machine
+ * install can land under Program Files, and failing an export at the very end
+ * because of a permission error would be the worst possible moment.
+ */
+async function outputsDir(): Promise<string> {
+  const beside = join(dirname(app.getPath('exe')), 'outputs')
+  try {
+    await mkdir(beside, { recursive: true })
+    await access(beside, fsConstants.W_OK)
+    return beside
+  } catch {
+    const fallback = join(app.getPath('videos'), 'EaseCutPro', 'outputs')
+    await mkdir(fallback, { recursive: true })
+    return fallback
+  }
+}
+
+/** Sanitized, collision-free `<outputs>/<name>.mp4`. Never overwrites a
+ *  previous render — silently replacing yesterday's export would be data loss. */
+async function exportTargetPath(rawName: string | undefined): Promise<string> {
+  const dir = await outputsDir()
+  const base =
+    (rawName ?? '')
+      .replace(/\.[^.]+$/, '')
+      .replace(/[\\/:*?"<>|]+/g, '_')
+      .trim()
+      .slice(0, 120) || 'export'
+  let candidate = join(dir, `${base}.mp4`)
+  for (let n = 2; existsSync(candidate); n++) candidate = join(dir, `${base} (${n}).mp4`)
+  return candidate
 }
 
 function emitProgress(
@@ -408,21 +445,30 @@ app.whenReady().then(() => {
   )
 
   // ---- Export ----
+  // Exports land in an `outputs` folder beside the app — no save dialog. The
+  // dialog used to open AFTER the renderer had already put a progress bar on
+  // screen, which read as "it exported, asked where to save, then exported
+  // again". Picking the destination up front removes that entirely, and the
+  // creator names the file in the export sheet instead.
   ipcMain.handle(
     IPC.export,
     async (_e, project: Project, settings: ExportSettings, textOverlays?: TextOverlayImage[]) => {
-      const res = await dialog.showSaveDialog(mainWindow!, {
-        title: 'Export video',
-        defaultPath: `${project.name || 'easecutpro-export'}.mp4`,
-        filters: [{ name: 'MP4 video', extensions: ['mp4'] }]
-      })
-      if (res.canceled || !res.filePath) return null
+      const outPath = await exportTargetPath(settings?.filename || project.name)
       const jobId = randomUUID()
-      return exportProject(project, res.filePath, settings, textOverlays, (pct) =>
+      return exportProject(project, outPath, settings, textOverlays, (pct) =>
         emitProgress('export', jobId, pct)
       )
     }
   )
+
+  // Reveal a finished export in File Explorer (the "Show in folder" action).
+  ipcMain.handle(IPC.revealPath, async (_e, p: string) => {
+    try {
+      shell.showItemInFolder(p)
+    } catch {
+      /* nothing to reveal */
+    }
+  })
 
   // ---- Save / Load project ----
   ipcMain.handle(IPC.saveProject, async (_e, project: Project) => {

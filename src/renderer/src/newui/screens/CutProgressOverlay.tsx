@@ -39,7 +39,7 @@ export default function CutProgressOverlay(): JSX.Element | null {
   }
   const busy = jobActive || cutJobActive || polishing.active
   // Hooks must run unconditionally — compute the smoothed value, then bail below.
-  const smoothPct = Math.round(useSmoothProgress(busy && !polishing.active, jobPct))
+  const smoothPct = Math.round(useSmoothProgress(busy && !polishing.active, jobPct, jobKind))
   if (!busy) return null
 
   const pct = polishing.active && !jobActive ? Math.max(2, polishing.percent) : Math.max(2, smoothPct)

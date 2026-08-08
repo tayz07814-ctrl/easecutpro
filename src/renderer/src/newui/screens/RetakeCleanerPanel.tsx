@@ -176,7 +176,7 @@ export default function RetakeCleanerPanel(): JSX.Element {
   const r = useRetake()
   // Glide the bar between real progress milestones (and creep during the opaque
   // transcribe step) so it never freezes at one number.
-  const shownPct = Math.round(useSmoothProgress(r.job.active, r.job.percent))
+  const shownPct = Math.round(useSmoothProgress(r.job.active, r.job.percent, r.job.kind))
 
   const shell = (children: JSX.Element): JSX.Element => (
     <div style={css('flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;padding:18px 18px 0')}>

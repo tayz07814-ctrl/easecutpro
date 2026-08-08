@@ -307,7 +307,7 @@ function MobileSheet({
 // ---- Centered progress widget for long-running jobs ----
 function ProgressWidget(): JSX.Element | null {
   const job = useStore((s) => s.job)
-  const shown = useSmoothProgress(job.active, job.percent)
+  const shown = useSmoothProgress(job.active, job.percent, job.kind)
   if (!job.active || (job.kind !== 'transcribe' && job.kind !== 'export' && job.kind !== 'silence'))
     return null
   // Cut Lord persona labels; explicit server upload wording ONLY for export.

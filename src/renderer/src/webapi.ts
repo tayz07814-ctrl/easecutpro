@@ -242,6 +242,8 @@ const webApi: Window['api'] = {
   sttAudioWav: async () => {
     throw new Error('sttAudioWav is desktop-only')
   },
+  // No file manager in a browser — the download already went to the user.
+  revealPath: async () => undefined,
   thumbnails: (path, intervalSec, onPartial) =>
     isWebMediaId(path) ? localThumbnails(path, intervalSec, onPartial) : call('/api/thumbnails', { path, intervalSec }),
   transcribe: async (path, backend, modelName) => {

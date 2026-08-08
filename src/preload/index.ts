@@ -91,6 +91,8 @@ const api = {
   // is accepted for a shared signature but ignored here.
   thumbnails: (path: string, intervalSec?: number, _onPartial?: (frames: Thumb[]) => void): Promise<Thumb[]> =>
     ipcRenderer.invoke(IPC.thumbnails, path, intervalSec),
+  /** Reveal a finished export in the OS file manager. */
+  revealPath: (p: string): Promise<void> => ipcRenderer.invoke(IPC.revealPath, p),
   exportProject: (
     project: Project,
     settings: ExportSettings,

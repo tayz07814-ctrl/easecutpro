@@ -17,15 +17,41 @@ const PRESETS: Preset[] = [
   { label: '1:1', ratio: [1, 1] }
 ]
 
-/** Pick width/height for a ratio, scaled to roughly match the source's pixel count. */
-function dimsFor(ratio: [number, number], srcW: number, srcH: number): { w: number; h: number } {
-  const longEdge = Math.max(srcW, srcH, 1080)
-  if (ratio[0] >= ratio[1]) {
-    const w = longEdge
-    return { w, h: Math.round((w * ratio[1]) / ratio[0]) }
-  }
-  const h = longEdge
-  return { w: Math.round((h * ratio[0]) / ratio[1]), h }
+/** Output size tiers, named by their SHORT edge (the way creators think about
+ *  it — "1080p" is 1080 tall in landscape and 1080 wide in portrait). */
+const RES_TIERS: { label: string; short: number }[] = [
+  { label: '480p', short: 480 },
+  { label: '720p', short: 720 },
+  { label: '1080p', short: 1080 },
+  { label: '2K', short: 1440 },
+  { label: '4K', short: 2160 }
+]
+
+/** Width/height from an aspect (null = the source's own) at a short-edge tier.
+ *  Even numbers — H.264 chroma requires it. */
+function dimsFrom(
+  ratio: [number, number] | null,
+  short: number,
+  srcW: number,
+  srcH: number
+): { w: number; h: number } {
+  const rw = ratio ? ratio[0] : srcW || 16
+  const rh = ratio ? ratio[1] : srcH || 9
+  const portrait = rh >= rw
+  let w = portrait ? short : Math.round((short * rw) / rh)
+  let h = portrait ? Math.round((short * rh) / rw) : short
+  w -= w % 2
+  h -= h % 2
+  return { w: Math.max(16, w), h: Math.max(16, h) }
+}
+
+/** The tier closest to the source, so the default export matches what the
+ *  creator shot instead of silently up- or down-scaling it. */
+function nearestTier(srcW: number, srcH: number): number {
+  const short = Math.min(srcW || 1080, srcH || 1920)
+  return RES_TIERS.reduce((best, t) =>
+    Math.abs(t.short - short) < Math.abs(best.short - short) ? t : best
+  ).short
 }
 
 export default function ExportModal(): JSX.Element {
@@ -61,27 +87,17 @@ export default function ExportModal(): JSX.Element {
   const canExport = !!media || !!(sequence && sequence.length) || hasBase
   const srcW = media?.width || sequence?.[0]?.srcW || 1920
   const srcH = media?.height || sequence?.[0]?.srcH || 1080
-  // Default to the preview's locked aspect if one is set.
-  const initial =
-    aspectW && aspectH ? dimsFor([aspectW, aspectH], srcW, srcH) : { w: srcW, h: srcH }
-  const [w, setW] = useState(initial.w)
-  const [h, setH] = useState(initial.h)
   const [bitrate, setBitrate] = useState(12)
+  // Aspect (shape) and size tier are independent choices; width/height are
+  // DERIVED from them. They used to be free-typed number boxes, which let a
+  // creator produce odd or mismatched output without meaning to.
   const [active, setActive] = useState(aspectW && aspectH ? `${aspectW}:${aspectH}` : 'Source')
+  const [tier, setTier] = useState(() => nearestTier(srcW, srcH))
+  const ratio: [number, number] | null =
+    active === 'Source' ? null : (PRESETS.find((p) => p.label === active)?.ratio ?? (aspectW && aspectH ? [aspectW, aspectH] : null))
+  const { w, h } = dimsFrom(ratio, tier, srcW, srcH)
   // Output file name — defaults to the project title, editable by the creator.
   const [filename, setFilename] = useState(() => (project.name || 'export').trim())
-
-  function applyPreset(p: Preset): void {
-    setActive(p.label)
-    if (!p.ratio) {
-      setW(srcW)
-      setH(srcH)
-    } else {
-      const d = dimsFor(p.ratio, srcW, srcH)
-      setW(d.w)
-      setH(d.h)
-    }
-  }
 
   const estMbPerMin = Math.round((bitrate * 60) / 8)
 
@@ -112,7 +128,7 @@ export default function ExportModal(): JSX.Element {
               <button
                 key={p.label}
                 className={'chip' + (active === p.label ? ' on' : '')}
-                onClick={() => applyPreset(p)}
+                onClick={() => setActive(p.label)}
               >
                 {p.label}
               </button>
@@ -122,12 +138,18 @@ export default function ExportModal(): JSX.Element {
 
         <div className="exp-row">
           <span className="exp-label">Resolution</span>
-          <input type="number" min={16} max={7680} step={2} value={w}
-            onChange={(e) => { setW(Number(e.target.value)); setActive('Custom') }} />
-          <span className="muted">×</span>
-          <input type="number" min={16} max={7680} step={2} value={h}
-            onChange={(e) => { setH(Number(e.target.value)); setActive('Custom') }} />
-          <span className="muted small">px</span>
+          <div className="exp-presets">
+            {RES_TIERS.map((t) => (
+              <button
+                key={t.label}
+                className={'chip' + (tier === t.short ? ' on' : '')}
+                onClick={() => setTier(t.short)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <span className="muted small">{w}×{h}</span>
         </div>
 
         <div className="exp-row">

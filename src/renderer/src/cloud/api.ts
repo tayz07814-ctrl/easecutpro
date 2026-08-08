@@ -202,6 +202,7 @@ const cloudApi: Window['api'] & {
   waveform: (path) => localWaveform(needLocal(path)),
   previewAudioWav: async () => desktopOnly('Native preview audio'),
   sttAudioWav: async () => desktopOnly('Native STT audio'),
+  revealPath: async () => undefined,
   thumbnails: (path, intervalSec) => localThumbnails(needLocal(path), intervalSec),
 
   // Verbatim STT via the edge functions (AssemblyAI -> Deepgram).

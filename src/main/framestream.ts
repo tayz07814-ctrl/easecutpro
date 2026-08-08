@@ -20,7 +20,7 @@ import { mkdir, readdir, rm, stat, utimes } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import { FFMPEG } from './binaries'
-import { probe } from './ffmpeg'
+import { probe, runGated } from './ffmpeg'
 import type { MediaInfo } from '../shared/types'
 
 const execFileP = promisify(execFile)
@@ -235,7 +235,7 @@ export async function extractPreviewAudioWav(path: string): Promise<string> {
     void utimes(out, new Date(), new Date()).catch(() => undefined) // refresh LRU
     return out
   }
-  await execFileP(FFMPEG, [
+  await runGated(() => execFileP(FFMPEG, [
     '-y', '-v', 'error',
     '-i', path,
     '-vn',
@@ -244,7 +244,7 @@ export async function extractPreviewAudioWav(path: string): Promise<string> {
     '-ac', '1',
     '-c:a', 'pcm_s16le',
     out
-  ], { maxBuffer: 1024 * 1024 * 16 })
+  ], { maxBuffer: 1024 * 1024 * 16 }))
   void prunePreviewAudio()
   return out
 }

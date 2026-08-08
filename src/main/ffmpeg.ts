@@ -26,6 +26,43 @@ const execFileP = promisify(execFile)
  *  large graph, write it to a temp file and use `-filter_complex_script`; short
  *  graphs stay inline (byte-identical to before). Returns the args + the temp file
  *  path to clean up afterwards ('' when inline). */
+/**
+ * FFMPEG CONCURRENCY GATE.
+ *
+ * ffmpeg already parallelises across cores internally, so running several at
+ * once doesn't finish sooner — it just multiplies context switching and
+ * memory. On low-end laptops creators saw 4-7 ffmpeg processes at a time
+ * (an export, plus waveform/thumbnail/audio extraction kicked off
+ * independently by the renderer) and the machine crawled.
+ *
+ * Every HEAVY ffmpeg call queues here. Kept deliberately at the leaf spawn
+ * sites: a caller must never hold a slot while awaiting another slot, or the
+ * queue would deadlock (exportProject calls extractWaveform, then the concat,
+ * then the render — each acquires and releases in turn).
+ *
+ * ffprobe is intentionally NOT gated: it's milliseconds, and stalling a probe
+ * behind a long render would freeze imports.
+ */
+const FFMPEG_SLOTS = 2
+let ffmpegBusy = 0
+const ffmpegWaiting: (() => void)[] = []
+
+async function withFfmpegSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (ffmpegBusy >= FFMPEG_SLOTS) await new Promise<void>((r) => ffmpegWaiting.push(r))
+  ffmpegBusy++
+  try {
+    return await fn()
+  } finally {
+    ffmpegBusy--
+    ffmpegWaiting.shift()?.()
+  }
+}
+
+/** Heavy ffmpeg work queued by the gate above (used by framestream.ts too). */
+export function runGated<T>(fn: () => Promise<T>): Promise<T> {
+  return withFfmpegSlot(fn)
+}
+
 async function filterComplexArgs(fc: string): Promise<{ args: string[]; file: string }> {
   if (fc.length <= 6000) return { args: ['-filter_complex', fc], file: '' }
   const file = join(tmpdir(), `easecut-fc-${randomUUID()}.txt`)
@@ -82,6 +119,7 @@ export async function probe(path: string): Promise<MediaInfo> {
 
 /** Extract a 16kHz mono WAV (what whisper.cpp expects) next to a temp path. */
 export async function extractAudioWav(path: string): Promise<string> {
+  return runGated(async () => {
   const out = join(tmpdir(), `easecut-${randomUUID()}.wav`)
   await execFileP(FFMPEG, [
     '-y',
@@ -98,6 +136,7 @@ export async function extractAudioWav(path: string): Promise<string> {
     out
   ], { maxBuffer: 1024 * 1024 * 16 })
   return out
+  })
 }
 
 /** Extract the audio stream as an .m4a (AAC 48k stereo) for BROWSER-side decode —
@@ -106,6 +145,7 @@ export async function extractAudioWav(path: string): Promise<string> {
  *  stream-copied) so first_pts=0 re-aligns phone .mov delayed audio to the video
  *  timeline and the result is always decodable by decodeAudioData. */
 export async function extractAudioM4a(path: string): Promise<string> {
+  return runGated(async () => {
   const out = join(tmpdir(), `easecut-${randomUUID()}.m4a`)
   await execFileP(FFMPEG, [
     '-y',
@@ -119,6 +159,7 @@ export async function extractAudioM4a(path: string): Promise<string> {
     out
   ], { maxBuffer: 1024 * 1024 * 16 })
   return out
+  })
 }
 
 /**
@@ -126,7 +167,7 @@ export async function extractAudioM4a(path: string): Promise<string> {
  * Streams stdout so memory stays bounded even for long files.
  */
 export function extractWaveform(path: string, peaksPerSec = 60): Promise<Waveform> {
-  return new Promise((resolve, reject) => {
+  return runGated(() => new Promise<Waveform>((resolve, reject) => {
     const sampleRate = 8000
     const proc = spawn(FFMPEG, [
       '-i', path,
@@ -173,7 +214,7 @@ export function extractWaveform(path: string, peaksPerSec = 60): Promise<Wavefor
       if (code === 0 || peaks.length > 0) resolve({ peaksPerSec, peaks })
       else reject(new Error(`waveform failed (${code}): ${err.slice(-400)}`))
     })
-  })
+  }))
 }
 
 /**
@@ -184,6 +225,7 @@ export async function extractThumbnails(
   intervalSec = 2,
   height = 72
 ): Promise<Thumb[]> {
+  return runGated(async () => {
   const dir = join(tmpdir(), `easecut-th-${randomUUID()}`)
   await mkdir(dir, { recursive: true })
   try {
@@ -208,6 +250,7 @@ export async function extractThumbnails(
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined)
   }
+  })
 }
 
 
@@ -343,7 +386,7 @@ export function baseTransformFilter(
 
 /** Run ffmpeg with time= progress parsing; resolves on exit 0. */
 function runFfmpegProgress(args: string[], totalDur: number, onProgress?: (pct: number) => void): Promise<void> {
-  return new Promise((resolve, reject) => {
+  return withFfmpegSlot(() => new Promise<void>((resolve, reject) => {
     const proc = spawn(FFMPEG, args)
     let err = ''
     proc.stderr.on('data', (d) => {
@@ -357,7 +400,7 @@ function runFfmpegProgress(args: string[], totalDur: number, onProgress?: (pct: 
     })
     proc.on('error', reject)
     proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error('ffmpeg concat failed: ' + err.slice(-600)))))
-  })
+  }))
 }
 
 /** Concatenate trimmed segments (scale/pad to a common canvas, with audio) into one

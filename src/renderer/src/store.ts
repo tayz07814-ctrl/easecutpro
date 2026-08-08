@@ -929,6 +929,10 @@ interface AppState {
 
   // io
   exportVideo: (settings: ExportSettings) => Promise<void>
+  /** absolute path of the most recent desktop export ('' when none). */
+  lastExportPath: string
+  /** reveal that export in the OS file manager (desktop only). */
+  revealLastExport: () => void
   /** Render + encode entirely IN THIS BROWSER (WebCodecs) and save to the
    *  device — no upload. Falls back with a clear message when unsupported. */
   exportVideoOnDevice: (settings: ExportSettings) => Promise<void>
@@ -1062,6 +1066,7 @@ export const useStore = create<AppState>((set, get) => ({
   showSettings: false,
   showCropModal: false,
   showExportModal: false,
+  lastExportPath: '',
   batchJobs: [],
   wizardJob: null,
   pendingCaptions: false,
@@ -3983,6 +3988,35 @@ export const useStore = create<AppState>((set, get) => ({
       )
       // Creator-chosen file name wins (sanitized, single .mp4); else the derived one.
       const dl = chosenName ? `${chosenName}.mp4` : name
+      // Ask WHERE to save now that the file actually exists. Deliberately after
+      // the render, not before: a picker up front would prompt even for an
+      // export that later fails, and the handle can go stale across a long one.
+      const picker = (
+        window as unknown as {
+          showSaveFilePicker?: (o: unknown) => Promise<{ createWritable: () => Promise<{ write: (b: Blob) => Promise<void>; close: () => Promise<void> }> }>
+        }
+      ).showSaveFilePicker
+      if (picker) {
+        try {
+          const handle = await picker({
+            suggestedName: dl,
+            types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }]
+          })
+          const w = await handle.createWritable()
+          await w.write(blob)
+          await w.close()
+          set({ job: { active: false, kind: 'export', percent: 100, message: `Saved ${dl}` } })
+          return
+        } catch (e) {
+          // Cancelled the picker: the render is finished and simply not saved.
+          // Anything else (permission, disk) falls through to a plain download
+          // so a long export is never thrown away over a picker failure.
+          if ((e as Error)?.name === 'AbortError') {
+            set({ job: { active: false, kind: 'export', percent: 100, message: 'Export finished — save cancelled' } })
+            return
+          }
+        }
+      }
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -4011,13 +4045,28 @@ export const useStore = create<AppState>((set, get) => ({
     const textOverlays = (project.texts ?? [])
       .filter((t) => t.end - t.start > 0.05 && t.text.trim())
       .map((t) => ({ png: renderTextPng(t, W, H), start: t.start, end: t.end }))
+    // Re-entrancy guard (same reason as exportVideoOnDevice): a second run
+    // while one is in flight puts TWO ffmpeg renders on the machine, and the
+    // shared progress bar then flips between them — which reads as a bar that
+    // climbs partway and restarts, forever.
+    const jb0 = get().job
+    if (jb0.active && jb0.kind === 'export') return
     set({ showExportModal: false, job: { active: true, kind: 'export', percent: 0, message: 'Exporting' } })
     try {
       const out = await window.api.exportProject(project, settings, textOverlays)
-      set({ job: { active: false, percent: 100, message: out ? `Exported: ${out}` : 'Export canceled' } })
+      set({
+        job: { active: false, kind: 'export', percent: 100, message: out ? `Exported to ${out}` : 'Export canceled' },
+        lastExportPath: out || ''
+      })
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `Export failed: ${safeErrMessage(e)}` } })
     }
+  },
+
+  /** Open the folder containing the most recent export (desktop only). */
+  revealLastExport: () => {
+    const p = get().lastExportPath
+    if (p) void window.api.revealPath(p)
   },
 
   setShowExportModal: (b) => set({ showExportModal: b }),

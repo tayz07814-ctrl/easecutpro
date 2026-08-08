@@ -49,6 +49,29 @@ if (IS_NEW_UI) document.documentElement.setAttribute('data-ec-ui', 'new')
 // localStorage) drops back to legacy. Independent of IS_NEW_UI above.
 const NEW_UI = isNewUi()
 
+// Job-bar recorder. ONE `job` slot is written by many producers (every IPC
+// progress event plus each action's own set()), and a progress bar that
+// restarts mid-run is always a fight between two of them. Recording every
+// transition centrally — rather than instrumenting each writer — is what makes
+// that diagnosable. Bounded; readable from DevTools as window.__jobLog.
+{
+  const log: { t: number; kind?: string; percent: number; active: boolean; msg?: string }[] = []
+  ;(window as unknown as { __jobLog?: typeof log }).__jobLog = log
+  let prev = useStore.getState().job
+  useStore.subscribe((s) => {
+    if (s.job === prev) return
+    prev = s.job
+    if (log.length >= 400) log.shift()
+    log.push({
+      t: Math.round(performance.now()),
+      kind: s.job.kind,
+      percent: s.job.percent,
+      active: s.job.active,
+      msg: s.job.message
+    })
+  })
+}
+
 // Desktop-cloud hybrid: settings sync boot. The AI routing itself happens at
 // the call sites via aiApi() (window.api is contextBridge read-only).
 if (IS_DESKTOP_CLOUD) initDesktopCloud()
