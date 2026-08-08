@@ -3,7 +3,7 @@ import { promisify } from 'util'
 import { tmpdir, homedir, cpus } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import { mkdir, readdir, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { existsSync, writeFileSync } from 'fs'
 import { FFMPEG, FFPROBE } from './binaries'
 import { computeKeepRanges, virtualKeepsToClipSegments, stitchMontageWaveform, baseClipSpans } from '../shared/edit'
@@ -43,7 +43,7 @@ const execFileP = promisify(execFile)
  * ffprobe is intentionally NOT gated: it's milliseconds, and stalling a probe
  * behind a long render would freeze imports.
  */
-const FFMPEG_SLOTS = 2
+const FFMPEG_SLOTS = 4
 let ffmpegBusy = 0
 const ffmpegWaiting: (() => void)[] = []
 
@@ -61,6 +61,41 @@ async function withFfmpegSlot<T>(fn: () => Promise<T>): Promise<T> {
 /** Heavy ffmpeg work queued by the gate above (used by framestream.ts too). */
 export function runGated<T>(fn: () => Promise<T>): Promise<T> {
   return withFfmpegSlot(fn)
+}
+
+/**
+ * Waveform / filmstrip cache, keyed by the file's identity (path+size+mtime).
+ *
+ * These were recomputed from scratch every time — on editor open, on reopen,
+ * and once more for each remount of the timeline — so the same ffmpeg pass ran
+ * over and over for media that hadn't changed. Caching lets the import wizard
+ * PREPARE a project's media up front and have the editor find it instantly
+ * instead of popping in seconds later.
+ *
+ * In memory and bounded: filmstrips are base64 data URLs and get large, so only
+ * a handful of sources are kept — enough for the open project.
+ */
+const CACHE_MAX = 8
+const waveCache = new Map<string, Waveform>()
+const thumbCache = new Map<string, Thumb[]>()
+
+async function mediaKey(path: string, extra = ''): Promise<string> {
+  try {
+    const st = await stat(path)
+    return `${path}|${st.size}|${Math.round(st.mtimeMs)}|${extra}`
+  } catch {
+    return `${path}|?|${extra}` // unstattable: still de-dupes within a session
+  }
+}
+
+function remember<T>(cache: Map<string, T>, key: string, value: T): T {
+  cache.set(key, value)
+  while (cache.size > CACHE_MAX) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) break
+    cache.delete(oldest)
+  }
+  return value
 }
 
 async function filterComplexArgs(fc: string): Promise<{ args: string[]; file: string }> {
@@ -166,7 +201,14 @@ export async function extractAudioM4a(path: string): Promise<string> {
  * Decode audio to mono 8kHz PCM and reduce to amplitude peaks for a waveform.
  * Streams stdout so memory stays bounded even for long files.
  */
-export function extractWaveform(path: string, peaksPerSec = 60): Promise<Waveform> {
+export async function extractWaveform(path: string, peaksPerSec = 60): Promise<Waveform> {
+  const key = await mediaKey(path, `w${peaksPerSec}`)
+  const hit = waveCache.get(key)
+  if (hit) return hit
+  return remember(waveCache, key, await extractWaveformUncached(path, peaksPerSec))
+}
+
+function extractWaveformUncached(path: string, peaksPerSec = 60): Promise<Waveform> {
   return runGated(() => new Promise<Waveform>((resolve, reject) => {
     const sampleRate = 8000
     const proc = spawn(FFMPEG, [
@@ -221,6 +263,17 @@ export function extractWaveform(path: string, peaksPerSec = 60): Promise<Wavefor
  * Extract evenly-spaced JPEG thumbnails as base64 data URLs for the filmstrip.
  */
 export async function extractThumbnails(
+  path: string,
+  intervalSec = 2,
+  height = 72
+): Promise<Thumb[]> {
+  const key = await mediaKey(path, `t${intervalSec}x${height}`)
+  const hit = thumbCache.get(key)
+  if (hit) return hit
+  return remember(thumbCache, key, await extractThumbnailsUncached(path, intervalSec, height))
+}
+
+async function extractThumbnailsUncached(
   path: string,
   intervalSec = 2,
   height = 72

@@ -4341,6 +4341,54 @@ export const useStore = create<AppState>((set, get) => ({
       stagedSilenceSel: new Set()
     })
 
+    /**
+     * Decode everything the editor needs to look finished the moment it opens:
+     * each source's waveform and filmstrip. Results are cached main-side, so
+     * the editor's own (lazy) request for them returns immediately instead of
+     * re-running ffmpeg. Reports into `base..base+span` of the wizard bar.
+     *
+     * Never fatal: a source that won't decode just isn't pre-warmed, and the
+     * editor falls back to loading it lazily exactly as before.
+     */
+    const prepareMedia = async (clips: LibraryItem[], base: number, span: number): Promise<void> => {
+      const paths = [...new Set(clips.filter((c) => c.kind !== 'audio').map((c) => c.path))]
+      const videos = clips.filter((c) => c.kind === 'video').map((c) => c.path)
+      const steps = paths.length + videos.length || 1
+      let done = 0
+      const bump = (label: string): void => {
+        done++
+        set({
+          wizardJob: { active: true, label, base, span },
+          job: { active: true, kind: 'probe', percent: Math.round((done / steps) * 100), message: label }
+        })
+      }
+      set({
+        wizardJob: { active: true, label: 'Preparing your media…', base, span },
+        job: { active: true, kind: 'probe', percent: 1, message: 'Preparing your media…' }
+      })
+      for (const p of paths) {
+        await window.api
+          .waveform(p)
+          .then((wf) => {
+            // Single-clip projects show this waveform directly; a montage
+            // stitches per-clip peaks, and either way it is now cached.
+            if (paths.length === 1) set({ waveform: wf })
+          })
+          .catch(() => undefined)
+        bump('Reading audio…')
+      }
+      for (const p of videos) {
+        await window.api
+          .thumbnails(p)
+          .then((t) => {
+            if (videos.length === 1) set({ thumbnails: t })
+          })
+          .catch(() => undefined)
+        bump('Building the filmstrip…')
+      }
+      set({ job: { active: false, kind: 'probe', percent: 100, message: 'Media ready' } })
+    }
+
     const openInEditor = async (proj: Project): Promise<void> => {
       const rec = await createProject(name, proj)
       // Captions + Auto Zoom need the mounted timeline engine → the editor runs
@@ -4355,8 +4403,14 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }
 
-    // 3) Nothing to run before opening → straight to the editor.
+    // 3) Nothing to run before opening → still PREPARE the media first.
+    //    Opening immediately dropped the creator into an editor with no
+    //    filmstrip, no waveform and a blank preview that filled in seconds
+    //    later. Decoding it here (behind the wizard's own 1-100 bar) means the
+    //    editor opens ready — and it costs nothing extra, since the results are
+    //    cached in the main process and the editor's own request now hits them.
     if (!opts.cutSilenceBadTakes && !opts.captions && !opts.autoZoom) {
+      await prepareMedia(bases, 0, 100)
       await openInEditor(project)
       return
     }
@@ -4381,6 +4435,10 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `Import enhancement failed: ${(e as Error).message}` } })
     }
+
+    // Prepare the media in the bar's last slice, so the editor opens with its
+    // filmstrip and waveform already there rather than filling in afterwards.
+    await prepareMedia(bases, 85, 15)
 
     // Finish: drive the bar to 100 and let it glide there BEFORE opening, so the
     // hand-off into the editor completes smoothly instead of jump-cutting at ~85%.
