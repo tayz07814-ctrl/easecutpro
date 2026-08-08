@@ -339,6 +339,37 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const swapHitsRef = useRef(0)
 
   // ---- refs the reconciler reads (fresh every render) ----
+  // POSTER FRAMES. The library already holds a decoded first-frame thumbnail per
+  // source (built at import, cached in the main process). Painting it while the
+  // decoder spins up is what stops a freshly opened project showing black —
+  // decoding a real first frame takes a keyframe seek, this takes nothing.
+  const library = useStore((s) => s.library)
+  const posterElsRef = useRef(new Map<string, HTMLImageElement>())
+  const posterFor = (src: string): HTMLImageElement | null => {
+    const cached = posterElsRef.current.get(src)
+    if (cached) return cached.complete && cached.naturalWidth > 0 ? cached : null
+    const url = library.find((it) => it.path === src)?.thumb
+    if (!url) return null
+    const img = new Image()
+    img.src = url
+    posterElsRef.current.set(src, img)
+    return null // available from the next frame on
+  }
+  const drawPoster = (ctx: CanvasRenderingContext2D, cw: number, ch: number, src: string): void => {
+    const img = posterFor(src)
+    if (!img) return
+    const aspect = img.naturalWidth / img.naturalHeight
+    const rw = cw / ch > aspect ? ch * aspect : cw
+    const rh = cw / ch > aspect ? ch : cw / aspect
+    try {
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, cw, ch)
+      ctx.drawImage(img, (cw - rw) / 2, (ch - rh) / 2, rw, rh)
+    } catch {
+      /* not decodable yet — the real frame will land shortly anyway */
+    }
+  }
+
   const segsRef = useRef(segs)
   segsRef.current = segs
   const totalRef = useRef(total)
@@ -1107,7 +1138,12 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             const ch = cv.height
             if (shown && !shown.isImage) {
               const tSrc = shown.sourceStart + clamp(t - shown.start, 0, shown.len) * shown.speed
-              wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying)
+              const painted = wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying)
+              // POSTER: nothing decoded yet (a freshly opened project, before the
+              // first keyframe lands). Paint the source's already-decoded library
+              // thumbnail so the preview opens on a picture instead of black —
+              // the real frame replaces it as soon as it arrives.
+              if (!painted) drawPoster(ctx, cw, ch, shown.src)
               // Decode-ahead: park the warm pipe on the upcoming seam's in-point.
               const up = ss[di + 1]
               if (up && !up.isImage && t >= shown.start + shown.len - 1.0) wc.prewarm(up.src, up.sourceStart)

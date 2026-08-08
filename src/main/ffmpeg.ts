@@ -2,7 +2,7 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { tmpdir, homedir, cpus } from 'os'
 import { join } from 'path'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { existsSync, writeFileSync } from 'fs'
 import { FFMPEG, FFPROBE } from './binaries'
@@ -96,6 +96,48 @@ function remember<T>(cache: Map<string, T>, key: string, value: T): T {
     cache.delete(oldest)
   }
   return value
+}
+
+// ---- disk tier -------------------------------------------------------------
+// The in-memory tier above dies with the process, so every restart re-decoded
+// media that hadn't changed. Persisting it means a project opens instantly the
+// second time too — the expensive part was never the reading, it was ffmpeg.
+// Keyed by the same file identity, so an edited source misses and re-decodes.
+const DISK_CACHE_DIR = join(homedir(), '.easecutpro', 'cache', 'media')
+const DISK_CACHE_KEEP = 120
+
+function diskFile(key: string, kind: 'wf' | 'th'): string {
+  return join(DISK_CACHE_DIR, `${createHash('sha1').update(key).digest('hex')}.${kind}.json`)
+}
+
+async function readDisk<T>(key: string, kind: 'wf' | 'th'): Promise<T | null> {
+  try {
+    const raw = await readFile(diskFile(key, kind), 'utf8')
+    return JSON.parse(raw) as T
+  } catch {
+    return null // absent or corrupt — recompute
+  }
+}
+
+/** Best-effort write + prune. Never blocks or fails the caller. */
+function writeDisk(key: string, kind: 'wf' | 'th', value: unknown): void {
+  void (async () => {
+    try {
+      await mkdir(DISK_CACHE_DIR, { recursive: true })
+      await writeFile(diskFile(key, kind), JSON.stringify(value), 'utf8')
+      const names = await readdir(DISK_CACHE_DIR)
+      if (names.length <= DISK_CACHE_KEEP) return
+      const withTimes = await Promise.all(
+        names.map(async (n) => ({ n, t: (await stat(join(DISK_CACHE_DIR, n))).mtimeMs }))
+      )
+      withTimes.sort((a, b) => a.t - b.t)
+      for (const { n } of withTimes.slice(0, withTimes.length - DISK_CACHE_KEEP)) {
+        await rm(join(DISK_CACHE_DIR, n)).catch(() => undefined)
+      }
+    } catch {
+      /* caching is an optimisation; a failure must never break a render */
+    }
+  })()
 }
 
 async function filterComplexArgs(fc: string): Promise<{ args: string[]; file: string }> {
@@ -205,7 +247,11 @@ export async function extractWaveform(path: string, peaksPerSec = 60): Promise<W
   const key = await mediaKey(path, `w${peaksPerSec}`)
   const hit = waveCache.get(key)
   if (hit) return hit
-  return remember(waveCache, key, await extractWaveformUncached(path, peaksPerSec))
+  const onDisk = await readDisk<Waveform>(key, 'wf')
+  if (onDisk?.peaks?.length) return remember(waveCache, key, onDisk)
+  const fresh = await extractWaveformUncached(path, peaksPerSec)
+  writeDisk(key, 'wf', fresh)
+  return remember(waveCache, key, fresh)
 }
 
 function extractWaveformUncached(path: string, peaksPerSec = 60): Promise<Waveform> {
@@ -270,7 +316,11 @@ export async function extractThumbnails(
   const key = await mediaKey(path, `t${intervalSec}x${height}`)
   const hit = thumbCache.get(key)
   if (hit) return hit
-  return remember(thumbCache, key, await extractThumbnailsUncached(path, intervalSec, height))
+  const onDisk = await readDisk<Thumb[]>(key, 'th')
+  if (onDisk?.length) return remember(thumbCache, key, onDisk)
+  const fresh = await extractThumbnailsUncached(path, intervalSec, height)
+  writeDisk(key, 'th', fresh)
+  return remember(thumbCache, key, fresh)
 }
 
 async function extractThumbnailsUncached(
