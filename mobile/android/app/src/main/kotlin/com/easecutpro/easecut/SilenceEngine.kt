@@ -66,6 +66,12 @@ object SilenceEngine {
     private const val RMS_MIN_RANGE_DB = 6.0
     private const val EDGE_REFINE_MAX_S = 1.5
     private const val EDGE_REFINE_VOICE_MARGIN_DB = 15.0
+    /** dB over the measured noise floor at which a SHORT burst counts as a word. */
+    private const val SHORT_WORD_MARGIN_DB = 9.0
+    /** A stretch of kept speech between two cuts never shrinks below this... */
+    private const val MIN_KEEP_ISLAND_S = 0.12
+    /** ...nor loses more than this fraction of itself to the trims. */
+    private const val ISLAND_MAX_EATEN = 0.5
 
     private const val TARGET_RATE = 16000
     private const val MAX_DURATION_US = 45L * 60L * 1_000_000L
@@ -118,7 +124,7 @@ object SilenceEngine {
         val sortedDb = allDb.copyOf().also { it.sort() }
         val levels = "audio floor ${percentile(sortedDb, 0.1).toInt()}dB / speech ${percentile(sortedDb, 0.9).toInt()}dB"
 
-        val (raw, sileroStats) = detectSileroSilences(context, pcm, count, durationS, minSilenceS)
+        val (raw, sileroStats) = detectSileroSilences(context, pcm, count, durationS, minSilenceS, allDb)
         val stats = "$sileroStats · $levels"
 
         val shaped = if (breathRefine) {
@@ -180,7 +186,8 @@ object SilenceEngine {
         pcm: ShortArray,
         count: Int,
         durationS: Double,
-        minSilenceS: Double
+        minSilenceS: Double,
+        framesDb: DoubleArray
     ): Pair<List<DoubleArray>, String> {
         val s = session ?: return emptyList<DoubleArray>() to "no session"
         val ortEnv = env ?: return emptyList<DoubleArray>() to "no env"
@@ -189,6 +196,52 @@ object SilenceEngine {
         var nBelow = 0 // prob < NEG (true silence to Silero)
         var nMid = 0 // NEG..POS (the dead zone — keeps a running segment open)
         var nAbove = 0 // ≥ POS (speech)
+        var rescued = 0 // short bursts kept because they are audibly speech
+        var dropped = 0 // short bursts at room-tone level — genuinely cuttable
+        // "Audibly above the room" — the bar a SHORT burst must clear to count as
+        // a word rather than nothing. No dynamic range at all -> keep everything.
+        val audibleDb = run {
+            val sorted = framesDb.copyOf().also { it.sort() }
+            val floorDb = percentile(sorted, 0.1)
+            val speechDb = percentile(sorted, 0.9)
+            if (speechDb - floorDb < RMS_MIN_RANGE_DB) -300.0 else floorDb + SHORT_WORD_MARGIN_DB
+        }
+
+        /** Loudest 20ms RMS inside a span of Silero frames. */
+        fun peakDb(fromFrame: Int, toFrame: Int): Double {
+            if (framesDb.isEmpty()) return 0.0
+            val a = ((fromFrame * FRAME_S) / RMS_FRAME_S).toInt().coerceIn(0, framesDb.size - 1)
+            val b = ((toFrame * FRAME_S) / RMS_FRAME_S).toInt().coerceIn(a, framesDb.size - 1)
+            var m = -300.0
+            for (i in a..b) if (framesDb[i] > m) m = framesDb[i]
+            return m
+        }
+
+        /**
+         * Does this speech segment survive?
+         *
+         * vad-web's minSpeechMs (250ms) rejects MISFIRES when you are EXTRACTING
+         * speech — dropping one costs nothing there. Here the segments are
+         * INVERTED into silence, so discarding a real short word ("yes", "no",
+         * "right") does not ignore it, it DELETES it: the silence on both sides
+         * merges straight through where the word was. That is the "……yes……"
+         * swallow.
+         *
+         * A long segment is therefore always kept, and a SHORT one is kept
+         * whenever it is audibly above the room. Only near-floor blips go. The
+         * asymmetry is deliberate: keeping a click costs ~96ms of dead air,
+         * deleting a word costs the sentence.
+         */
+        fun keepSegment(pos: Int, fromFrame: Int, toFrame: Int): Boolean {
+            if (pos >= MIN_SPEECH_FRAMES) return true
+            if (framesDb.isEmpty()) return true
+            if (peakDb(fromFrame, toFrame) >= audibleDb) {
+                rescued++
+                return true
+            }
+            dropped++
+            return false
+        }
 
         // Reused direct buffers: the audio frame and the LSTM h/c states.
         val frameBuf = ByteBuffer.allocateDirect(FRAME_SAMPLES * 4)
@@ -256,13 +309,13 @@ object SilenceEngine {
                     posCount++
                 } else if (speaking && prob < NEG_THRESHOLD) {
                     speaking = false
-                    if (posCount >= MIN_SPEECH_FRAMES) {
+                    if (keepSegment(posCount, segStartFrame, f + 1)) {
                         speech.add(doubleArrayOf(segStartFrame * FRAME_S, (f + 1) * FRAME_S))
                     }
                     posCount = 0
                 }
             }
-            if (speaking && posCount >= MIN_SPEECH_FRAMES) {
+            if (speaking && keepSegment(posCount, segStartFrame, frames)) {
                 speech.add(doubleArrayOf(segStartFrame * FRAME_S, frames * FRAME_S))
             }
         } finally {
@@ -297,7 +350,7 @@ object SilenceEngine {
         fun pct(n: Int) = if (frames > 0) (n * 100 / frames) else 0
         val stats = "probs <.40:${pct(nBelow)}% mid:${pct(nMid)}% ≥.55:${pct(nAbove)}% · " +
             "${speech.size} speech segs cover ${(covered * 100 / max(0.001, durationS)).toInt()}% " +
-            "of ${durationS.toInt()}s · ${kept.size} gaps ≥${minDur}s"
+            "of ${durationS.toInt()}s · ${kept.size} gaps ≥${minDur}s · short kept $rescued dropped $dropped"
         return kept to stats
     }
 
@@ -373,11 +426,35 @@ object SilenceEngine {
         durationS: Double
     ): List<DoubleArray> {
         val out = ArrayList<DoubleArray>()
-        for (r in regions) {
+        for (i in regions.indices) {
+            val r = regions[i]
             val atStart = r[0] <= 0.01
             val atEnd = durationS > 0 && r[1] >= durationS - 0.01
-            val a = if (atStart) 0.0 else r[0] + padLeftS - trimLeftS
-            val b = if (atEnd) r[1] else r[1] - padRightS + trimRightS
+            var a = if (atStart) 0.0 else r[0] + padLeftS - trimLeftS
+            var b = if (atEnd) r[1] else r[1] - padRightS + trimRightS
+
+            // ISLAND-CORE GUARD. A trim deliberately cuts PAST the detected edge
+            // into speech — but the speech either side of a cut may be a single
+            // short word, and two cuts bracketing it each bite from the same
+            // island. Unbounded, a "……yes……" island is nibbled to nothing (or the
+            // two cuts meet and unionCutRegions merges them straight through it,
+            // deleting the word). So each edge may eat at most half of what the
+            // island can spare: never past ISLAND_MAX_EATEN of it, and never
+            // below MIN_KEEP_ISLAND_S of kept audio.
+            val prevEnd = if (i > 0) regions[i - 1][1] else 0.0
+            val nextStart = if (i < regions.size - 1) regions[i + 1][0] else durationS
+            fun share(island: Double): Double =
+                if (island <= 0) 0.0
+                else max(0.0, min(island * ISLAND_MAX_EATEN, island - MIN_KEEP_ISLAND_S)) / 2.0
+            if (!atStart) {
+                val eaten = r[0] - a // >0 when the trim reaches back into speech
+                if (eaten > 0) a = r[0] - min(eaten, share(r[0] - prevEnd))
+            }
+            if (!atEnd) {
+                val eaten = b - r[1]
+                if (eaten > 0) b = r[1] + min(eaten, share(nextStart - r[1]))
+            }
+
             val start = max(0.0, a)
             val end = if (durationS > 0) min(b, durationS) else b
             if (end - start >= 0.03) out.add(doubleArrayOf(start, end))
