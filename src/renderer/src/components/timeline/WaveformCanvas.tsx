@@ -43,18 +43,23 @@ function paint(canvas: HTMLCanvasElement, peaks: number[], colors: Grad3, barW: 
     // Peaks arrive already source-normalized (see clipPeaks); a mild exponent
     // (>1) deepens the valleys so pauses read as clear dips, not a soft ripple.
     p = Math.pow(p, 1.15)
-    const bh = Math.max(1.5, p * amp)
+    const bh = Math.max(1, p * amp)
     ctx.fillRect(x, mid - bh / 2, barW, bh)
   }
 }
 
 /** `colors` (3-stop gradient), `barW` and `step` default to the desktop teal look;
- *  the mobile timeline passes a thin bright-purple variant. */
+ *  the mobile timeline passes a thin bright-purple variant.
+ *
+ *  Bars are 1px on a 2px pitch: at the old 2px/3px each bar swallowed half again
+ *  as much of the source and, because the height is the MAX over that range, a
+ *  single loud sample flattened the dip next to it. Thinner and denser keeps the
+ *  peaks and the valleys between them legible. */
 export function WaveformCanvas({
   peaks,
   colors = TEAL,
-  barW = 2,
-  step = 3
+  barW = 1,
+  step = 2
 }: {
   peaks: number[]
   color?: string

@@ -336,11 +336,26 @@ async function extractThumbnailsUncached(
     // with a huge N now yields ZERO frames in current ffmpeg, so grab a single
     // frame explicitly instead.
     const single = intervalSec >= 60
+    // WHY THE FILMSTRIP USED TO PIN A WEAK CPU.
+    //
+    // `-vf fps=1/N` is an OUTPUT filter: ffmpeg still has to DECODE EVERY FRAME
+    // and then throw away all but one per N seconds. A 10-minute 1080p30 clip
+    // meant fully decoding ~18,000 frames to show ~300 tiny stills — on a laptop
+    // without a fast decoder that is slower than watching the video.
+    //
+    // `-skip_frame nokey` moves the work into the DECODER: it decodes only
+    // keyframes and skips the rest, which is roughly 1 frame in 90 on phone
+    // footage. The fps filter still lands them on the requested N-second grid,
+    // so the strip keeps its even spacing and `time: i * intervalSec` stays
+    // right — where keyframes are sparser than N a still simply repeats, which
+    // is invisible at 72px and far better than freezing the machine.
+    //
+    // `-an` drops audio decoding entirely; the filmstrip never needed it.
     await execFileP(
       FFMPEG,
       single
-        ? ['-y', '-i', path, '-frames:v', '1', '-vf', `scale=-1:${height}`, '-q:v', '5', join(dir, 'th_0001.jpg')]
-        : ['-y', '-i', path, '-vf', `fps=1/${intervalSec},scale=-1:${height}`, '-q:v', '5', join(dir, 'th_%04d.jpg')],
+        ? ['-y', '-skip_frame', 'nokey', '-i', path, '-an', '-frames:v', '1', '-vf', `scale=-1:${height}`, '-q:v', '5', join(dir, 'th_0001.jpg')]
+        : ['-y', '-skip_frame', 'nokey', '-i', path, '-an', '-vf', `fps=1/${intervalSec},scale=-1:${height}`, '-q:v', '5', join(dir, 'th_%04d.jpg')],
       { maxBuffer: 1024 * 1024 * 16 }
     )
     const files = (await readdir(dir)).filter((f) => f.endsWith('.jpg')).sort()
