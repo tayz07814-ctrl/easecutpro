@@ -54,7 +54,11 @@ export function Filmstrip({
     const compute = (): void => {
       const w = el.clientWidth
       const h = el.clientHeight
-      if (w <= 0 || h <= 0 || frames.length === 0) {
+      // Zero-sized means "not laid out yet", not "nothing to draw" — keep any
+      // tiles already on screen and wait for the observer to fire again, so a
+      // transient measurement can never blank the strip for good.
+      if (w <= 0 || h <= 0) return
+      if (frames.length === 0) {
         setTiles([])
         return
       }
@@ -115,7 +119,7 @@ export function Filmstrip({
   }, [frames, srcIn, srcOut, aspect, onNeedDensity])
 
   return (
-    <div className="ec-tl-filmstrip" ref={ref} style={{ position: 'relative' }}>
+    <div className="ec-tl-filmstrip" ref={ref}>
       {tiles.map((t, i) => (
         <div
           key={i}
