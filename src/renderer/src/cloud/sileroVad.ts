@@ -11,8 +11,23 @@
 // (prepare-cloud-assets stages /vad/ — the Silero ONNX + onnxruntime WASM),
 // same redemption-frame correction; the old settings machinery is gone.
 
-import { NonRealTimeVAD } from '@ricky0123/vad-web'
 import { IS_WEB } from '../platform'
+
+// vad-web pulls the whole onnxruntime-web JS in with it. Imported statically it
+// landed in the STARTUP chunk, so every launch parsed and evaluated a neural VAD
+// that only runs when someone asks to clean silence — pure cost on a weak CPU,
+// paid before the first frame. Loaded on demand instead, once per session.
+type VadModule = typeof import('@ricky0123/vad-web')
+let vadModule: Promise<VadModule> | null = null
+function loadVad(): Promise<VadModule> {
+  if (!vadModule) {
+    vadModule = import('@ricky0123/vad-web').catch((e) => {
+      vadModule = null // a failed fetch must not poison later attempts
+      throw e
+    })
+  }
+  return vadModule
+}
 
 // Web builds serve the staged assets same-origin at /vad/. The Electron
 // desktop hybrid loads via file://, where fetch() of sibling files is blocked
@@ -60,6 +75,7 @@ export async function detectSileroSilences(
   durationS: number,
   minSilenceS: number
 ): Promise<{ start: number; end: number }[]> {
+  const { NonRealTimeVAD } = await loadVad()
   const vad = await NonRealTimeVAD.new({
     modelURL: VAD_ASSET_BASE + 'silero_vad_legacy.onnx',
     modelFetcher: cachedModelFetcher,

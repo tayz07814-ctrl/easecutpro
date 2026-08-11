@@ -75,6 +75,9 @@ export function runGated<T>(fn: () => Promise<T>): Promise<T> {
  * In memory and bounded: filmstrips are base64 data URLs and get large, so only
  * a handful of sources are kept — enough for the open project.
  */
+/** Most stills a filmstrip may ever hold, however long the clip is. */
+const MAX_STRIP_FRAMES = 240
+
 const CACHE_MAX = 8
 const waveCache = new Map<string, Waveform>()
 const thumbCache = new Map<string, Thumb[]>()
@@ -313,7 +316,25 @@ export async function extractThumbnails(
   intervalSec = 2,
   height = 72
 ): Promise<Thumb[]> {
-  const key = await mediaKey(path, `t${intervalSec}x${height}`)
+  // CAP THE STRIP. The interval alone is unbounded in clip length: at 2s a
+  // 30-minute recording asks for ~900 stills. Each one costs far more decoded
+  // than encoded (a 72px JPEG is ~2KB on the wire but tens of KB as a live
+  // bitmap), so a long clip quietly turned into tens of MB of images — for a
+  // strip only a few hundred pixels wide, where most of them can never be seen.
+  // Stretch the interval instead so the count stays bounded; `time` still
+  // carries the real timestamp, so the timeline maps frames exactly as before.
+  if (intervalSec < 60) {
+    try {
+      const info = await probe(path)
+      if (info.duration > 0) {
+        const needed = info.duration / intervalSec
+        if (needed > MAX_STRIP_FRAMES) intervalSec = info.duration / MAX_STRIP_FRAMES
+      }
+    } catch {
+      /* unprobeable — keep the requested interval */
+    }
+  }
+  const key = await mediaKey(path, `t${intervalSec.toFixed(3)}x${height}`)
   const hit = thumbCache.get(key)
   if (hit) return hit
   const onDisk = await readDisk<Thumb[]>(key, 'th')
@@ -355,7 +376,7 @@ async function extractThumbnailsUncached(
       FFMPEG,
       single
         ? ['-y', '-skip_frame', 'nokey', '-i', path, '-an', '-frames:v', '1', '-vf', `scale=-1:${height}`, '-q:v', '5', join(dir, 'th_0001.jpg')]
-        : ['-y', '-skip_frame', 'nokey', '-i', path, '-an', '-vf', `fps=1/${intervalSec},scale=-1:${height}`, '-q:v', '5', join(dir, 'th_%04d.jpg')],
+        : ['-y', '-skip_frame', 'nokey', '-i', path, '-an', '-vf', `fps=1/${intervalSec.toFixed(4)},scale=-1:${height}`, '-q:v', '5', join(dir, 'th_%04d.jpg')],
       { maxBuffer: 1024 * 1024 * 16 }
     )
     const files = (await readdir(dir)).filter((f) => f.endsWith('.jpg')).sort()
