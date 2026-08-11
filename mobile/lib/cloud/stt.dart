@@ -25,6 +25,23 @@ class Word {
 
 typedef Progress = void Function(double pct, String msg);
 
+/// What actually happened on the last transcription run. The provider choice is
+/// a preference, not a guarantee — the server may not have a key for it — so the
+/// app reports what really ran instead of leaving the user to guess.
+class SttOutcome {
+  /// 'assemblyai' | 'deepgram' — whichever produced the words.
+  static String? provider;
+
+  /// Set when the run did NOT use the requested provider, with the reason.
+  static String? note;
+
+  static String get label => switch (provider) {
+        'assemblyai' => 'AssemblyAI',
+        'deepgram' => 'Deepgram',
+        _ => 'unknown',
+      };
+}
+
 /// Transcribe an audio file via the `stt` edge function (AssemblyAI → Deepgram),
 /// mirroring cloud/stt.ts. Uploads to the private stt-audio bucket, transcribes,
 /// then deletes the temp object.
@@ -48,6 +65,11 @@ Future<List<Word>> transcribe(String audioPath, {Progress? onProgress}) async {
     if (preferred != null && available.contains(preferred)) preferred,
     ...available.where((p) => p != preferred),
   ];
+  SttOutcome.provider = null;
+  SttOutcome.note = preferred != null && !available.contains(preferred)
+      ? '${preferred == 'deepgram' ? 'Deepgram' : 'AssemblyAI'} has no API key on the '
+          'server — used ${available.first == 'deepgram' ? 'Deepgram' : 'AssemblyAI'} instead'
+      : null;
 
   final bytes = await File(audioPath).readAsBytes();
   // The extracted WAV is a full uncompressed recording of the user speaking.
@@ -69,7 +91,15 @@ Future<List<Word>> transcribe(String audioPath, {Progress? onProgress}) async {
       await client.storage.from('stt-audio').uploadBinaryToSignedUrl(path, token, bytes);
       final words = p == 'assemblyai' ? await _aai(path, onProgress) : await _deepgram(path);
       invokeEdge('stt', {'action': 'cleanup', 'path': path}).ignore();
-      if (words.isNotEmpty) return words;
+      if (words.isNotEmpty) {
+        SttOutcome.provider = p;
+        // Chosen provider errored and a later one succeeded — say so.
+        if (preferred != null && p != preferred && SttOutcome.note == null) {
+          SttOutcome.note = '${preferred == 'deepgram' ? 'Deepgram' : 'AssemblyAI'} failed '
+              '($lastErr) — used ${p == 'deepgram' ? 'Deepgram' : 'AssemblyAI'} instead';
+        }
+        return words;
+      }
     } catch (e) {
       lastErr = e;
       if (path != null) invokeEdge('stt', {'action': 'cleanup', 'path': path}).ignore();

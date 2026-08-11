@@ -6,7 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../cloud/backend.dart';
-import '../cloud/stt.dart' show Word, Progress;
+import '../cloud/stt.dart' show Word, Progress, SttOutcome;
 import '../editor/timeline_model.dart';
 import '../editor/text_overlay.dart';
 import '../editor/audio_track.dart';
@@ -131,6 +131,13 @@ class _EditorScreenState extends State<EditorScreen> {
       return cached;
     }
     final words = await extractAndTranscribe(_exporter, path, onProgress: onProgress);
+    // Say which provider actually ran — the setting is a preference, and a
+    // silent fallback is exactly how "is Deepgram even working?" becomes
+    // unanswerable.
+    final note = SttOutcome.note;
+    _toast(note != null
+        ? 'Transcribed via ${SttOutcome.label} · $note'
+        : 'Transcribed via ${SttOutcome.label} · ${words.length} words');
     _sttCache[key] = words;
     _scheduleSave(); // survive an app restart too
     return words;
