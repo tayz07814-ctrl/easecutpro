@@ -4,6 +4,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'cloud/backend.dart';
 import 'config.dart';
+import 'editor/silence_settings.dart';
+import 'local/app_settings.dart';
 import 'screens/auth_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'theme.dart';
@@ -14,6 +16,10 @@ Future<void> main() async {
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
+  // App preferences (STT provider, silence engine, seam fade) — loaded before
+  // the first frame so every read is a plain synchronous static.
+  await AppSettings.load();
+  SilenceSettings.seamOverlapMs = AppSettings.crossFadeMs;
   // Supabase is best-effort: the editor (import / preview / export) works fully
   // offline; login / sync / Cut Lord connect when online.
   try {

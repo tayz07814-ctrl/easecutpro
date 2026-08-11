@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../local/app_settings.dart';
 import 'edge.dart';
 
 /// A transcribed word with source-timeline seconds.
@@ -30,10 +31,23 @@ typedef Progress = void Function(double pct, String msg);
 Future<List<Word>> transcribe(String audioPath, {Progress? onProgress}) async {
   final client = Supabase.instance.client;
   final status = await invokeEdge('stt', {'action': 'status'});
-  final providers = <String>[];
-  if (status['assemblyai'] == true) providers.add('assemblyai');
-  if (status['deepgram'] == true) providers.add('deepgram');
-  if (providers.isEmpty) throw Exception('Transcription isn’t configured on the server.');
+  final available = <String>[];
+  if (status['assemblyai'] == true) available.add('assemblyai');
+  if (status['deepgram'] == true) available.add('deepgram');
+  if (available.isEmpty) throw Exception('Transcription isn’t configured on the server.');
+
+  // The user's chosen provider goes FIRST; the other stays as a fallback so a
+  // provider outage still transcribes rather than failing the whole run. On
+  // Automatic the order is the historical one (AssemblyAI, then Deepgram).
+  final preferred = switch (AppSettings.sttProvider) {
+    SttProvider.assemblyai => 'assemblyai',
+    SttProvider.deepgram => 'deepgram',
+    SttProvider.auto => null,
+  };
+  final providers = <String>[
+    if (preferred != null && available.contains(preferred)) preferred,
+    ...available.where((p) => p != preferred),
+  ];
 
   final bytes = await File(audioPath).readAsBytes();
   // The extracted WAV is a full uncompressed recording of the user speaking.

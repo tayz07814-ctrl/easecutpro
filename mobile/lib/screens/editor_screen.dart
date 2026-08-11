@@ -13,6 +13,8 @@ import '../editor/audio_track.dart';
 import '../editor/cutcutpro.dart';
 import '../editor/cutlord.dart';
 import '../editor/silence_settings.dart';
+import '../editor/transcript_silence.dart';
+import '../local/app_settings.dart';
 import '../editor/preview_proxy.dart';
 import '../native/exporter.dart';
 import '../native/player.dart';
@@ -928,6 +930,43 @@ class _EditorScreenState extends State<EditorScreen> {
       return;
     }
     final durS = _sourceDurationMs / 1000.0;
+
+    // TRANSCRIPT ENGINE — keep the word timestamps, cut everything else. Needs
+    // a transcript (cached, so this is usually free) and no audio analysis.
+    if (AppSettings.silenceEngine == SilenceEngineKind.transcript) {
+      final prog = ValueNotifier<String>('Reading the transcript…');
+      _showProgress(prog);
+      List<Word> words = const [];
+      String? err;
+      try {
+        words = await _ensureTranscript(onProgress: (p, m) => prog.value = m);
+      } catch (e) {
+        err = _cleanErr(e);
+      } finally {
+        if (mounted) Navigator.of(context).pop();
+        prog.dispose();
+      }
+      if (err != null) {
+        _toast('Transcript engine: $err — NO silence was cut');
+        return;
+      }
+      if (words.isEmpty) {
+        _toast('Transcript engine: no speech found — NO silence was cut');
+        return;
+      }
+      final keeps = TranscriptSilence.keepRanges(
+        words,
+        durS,
+        padS: AppSettings.transcriptPadMs / 1000.0,
+        minSpeechS: AppSettings.minSpeechS,
+      );
+      final removed = _removedBy(keeps, durS);
+      _toast('Transcript engine: ${removed.length} region${removed.length == 1 ? '' : 's'} '
+          'from ${words.length} words');
+      await _commitOrStage(keeps, durS, 'Silence (transcript)');
+      return;
+    }
+
     final prog = ValueNotifier<String>('Cleaning silence…');
     _showProgress(prog);
     var timedOut = false;
@@ -1226,7 +1265,18 @@ class _EditorScreenState extends State<EditorScreen> {
     // app's own snackbar — so a silent word-gap pass can never masquerade as
     // the engine.
     List<List<int>> fsmn = const [];
-    if (cutSilence && _model.sourcePath != null) {
+    if (cutSilence &&
+        _model.sourcePath != null &&
+        AppSettings.silenceEngine == SilenceEngineKind.transcript) {
+      // Transcript engine: the silence IS the complement of the word stamps.
+      fsmn = TranscriptSilence.cutRanges(
+        _transcript!,
+        durS,
+        padS: AppSettings.transcriptPadMs / 1000.0,
+        minSpeechS: AppSettings.minSpeechS,
+      );
+      _toast('Silence (transcript): ${fsmn.length} region${fsmn.length == 1 ? '' : 's'}');
+    } else if (cutSilence && _model.sourcePath != null) {
       final prog = ValueNotifier<String>('Cleaning silence…');
       _showProgress(prog);
       var timedOut = false;
