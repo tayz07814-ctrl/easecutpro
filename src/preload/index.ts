@@ -89,8 +89,13 @@ const api = {
   // `onPartial` streams thumbnails as they generate on the web build; Electron
   // returns the whole strip over IPC at once (callbacks can't cross IPC), so it
   // is accepted for a shared signature but ignored here.
-  thumbnails: (path: string, intervalSec?: number, _onPartial?: (frames: Thumb[]) => void): Promise<Thumb[]> =>
-    ipcRenderer.invoke(IPC.thumbnails, path, intervalSec),
+  thumbnails: (
+    path: string,
+    intervalSec?: number,
+    _onPartial?: (frames: Thumb[]) => void,
+    fromSec?: number,
+    toSec?: number
+  ): Promise<Thumb[]> => ipcRenderer.invoke(IPC.thumbnails, path, intervalSec, fromSec, toSec),
   /** Reveal a finished export in the OS file manager. */
   revealPath: (p: string): Promise<void> => ipcRenderer.invoke(IPC.revealPath, p),
   exportProject: (

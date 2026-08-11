@@ -314,7 +314,9 @@ function extractWaveformUncached(path: string, peaksPerSec = 60): Promise<Wavefo
 export async function extractThumbnails(
   path: string,
   intervalSec = 2,
-  height = 72
+  height = 72,
+  fromSec = 0,
+  toSec = 0
 ): Promise<Thumb[]> {
   // CAP THE STRIP. The interval alone is unbounded in clip length: at 2s a
   // 30-minute recording asks for ~900 stills. Each one costs far more decoded
@@ -323,7 +325,8 @@ export async function extractThumbnails(
   // strip only a few hundred pixels wide, where most of them can never be seen.
   // Stretch the interval instead so the count stays bounded; `time` still
   // carries the real timestamp, so the timeline maps frames exactly as before.
-  if (intervalSec < 60) {
+  const windowed = toSec > fromSec
+  if (intervalSec < 60 && !windowed) {
     try {
       const info = await probe(path)
       if (info.duration > 0) {
@@ -334,12 +337,17 @@ export async function extractThumbnails(
       /* unprobeable — keep the requested interval */
     }
   }
-  const key = await mediaKey(path, `t${intervalSec.toFixed(3)}x${height}`)
+  // A windowed request is bounded by its own span, but clamp it too so a caller
+  // asking for an absurd density over a long window can't melt the machine.
+  if (windowed && (toSec - fromSec) / intervalSec > MAX_STRIP_FRAMES) {
+    intervalSec = (toSec - fromSec) / MAX_STRIP_FRAMES
+  }
+  const key = await mediaKey(path, `t${intervalSec.toFixed(3)}x${height}@${fromSec.toFixed(2)}-${toSec.toFixed(2)}`)
   const hit = thumbCache.get(key)
   if (hit) return hit
   const onDisk = await readDisk<Thumb[]>(key, 'th')
   if (onDisk?.length) return remember(thumbCache, key, onDisk)
-  const fresh = await extractThumbnailsUncached(path, intervalSec, height)
+  const fresh = await extractThumbnailsUncached(path, intervalSec, height, fromSec, toSec)
   writeDisk(key, 'th', fresh)
   return remember(thumbCache, key, fresh)
 }
@@ -347,7 +355,9 @@ export async function extractThumbnails(
 async function extractThumbnailsUncached(
   path: string,
   intervalSec = 2,
-  height = 72
+  height = 72,
+  fromSec = 0,
+  toSec = 0
 ): Promise<Thumb[]> {
   return runGated(async () => {
   const dir = join(tmpdir(), `easecut-th-${randomUUID()}`)
@@ -376,14 +386,34 @@ async function extractThumbnailsUncached(
       FFMPEG,
       single
         ? ['-y', '-skip_frame', 'nokey', '-i', path, '-an', '-frames:v', '1', '-vf', `scale=-1:${height}`, '-q:v', '5', join(dir, 'th_0001.jpg')]
-        : ['-y', '-skip_frame', 'nokey', '-i', path, '-an', '-vf', `fps=1/${intervalSec.toFixed(4)},scale=-1:${height}`, '-q:v', '5', join(dir, 'th_%04d.jpg')],
+        : [
+            '-y',
+            '-skip_frame', 'nokey',
+            // Input seeking: only the requested window is decoded, which is what
+            // makes a high-zoom detail strip cheap — it never touches the rest.
+            ...(toSec > fromSec ? ['-ss', fromSec.toFixed(3), '-to', toSec.toFixed(3)] : []),
+            '-i', path,
+            '-an',
+            '-vf', `fps=1/${intervalSec.toFixed(4)},scale=-1:${height}`,
+            // Bound the count explicitly. `-to` alone overshot with
+            // -skip_frame nokey (sparse decoded timestamps let the fps filter
+            // run past the window), which put stills outside the range they
+            // were asked for — measured 60-71.8s for a 60-70s request.
+            ...(toSec > fromSec
+              ? ['-frames:v', String(Math.max(1, Math.ceil((toSec - fromSec) / intervalSec)))]
+              : []),
+            '-q:v', '5',
+            join(dir, 'th_%04d.jpg')
+          ],
       { maxBuffer: 1024 * 1024 * 16 }
     )
     const files = (await readdir(dir)).filter((f) => f.endsWith('.jpg')).sort()
     const out: Thumb[] = []
     for (let i = 0; i < files.length; i++) {
       const b = await readFile(join(dir, files[i]))
-      out.push({ time: i * intervalSec, url: `data:image/jpeg;base64,${b.toString('base64')}` })
+      const time = fromSec + i * intervalSec
+      if (toSec > fromSec && time > toSec + intervalSec * 0.5) break
+      out.push({ time, url: `data:image/jpeg;base64,${b.toString('base64')}` })
     }
     return out
   } finally {

@@ -440,8 +440,8 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.sttAudioWav, async (_e, path: string) => extractAudioWav(path))
 
   // ---- Filmstrip thumbnails ----
-  ipcMain.handle(IPC.thumbnails, async (_e, path: string, intervalSec?: number) =>
-    extractThumbnails(path, intervalSec ?? 2)
+  ipcMain.handle(IPC.thumbnails, async (_e, path: string, intervalSec?: number, fromSec?: number, toSec?: number) =>
+    extractThumbnails(path, intervalSec ?? 2, 72, fromSec ?? 0, toSec ?? 0)
   )
 
   // ---- Export ----
