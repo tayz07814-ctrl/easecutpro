@@ -91,6 +91,25 @@ async function mediaKey(path: string, extra = ''): Promise<string> {
   }
 }
 
+// IN-FLIGHT SHARING. The caches above are only consulted once work COMPLETES,
+// so callers that arrive together all miss and all start their own ffmpeg. The
+// renderer asks for the same source from several places (library, timeline,
+// preview, autosave thumbnail), so opening one project could put several
+// identical decodes of the SAME file on the machine at once — measured: 7
+// concurrent requests for one file spawned 4 processes.
+//
+// Now the FIRST caller does the work and everyone else awaits its promise. This
+// is the missing half of a cache: dedupe the work, not just the result.
+const inflight = new Map<string, Promise<unknown>>()
+
+function share<T>(key: string, make: () => Promise<T>): Promise<T> {
+  const running = inflight.get(key) as Promise<T> | undefined
+  if (running) return running
+  const p = make().finally(() => inflight.delete(key))
+  inflight.set(key, p)
+  return p
+}
+
 function remember<T>(cache: Map<string, T>, key: string, value: T): T {
   cache.set(key, value)
   while (cache.size > CACHE_MAX) {
@@ -250,11 +269,13 @@ export async function extractWaveform(path: string, peaksPerSec = 60): Promise<W
   const key = await mediaKey(path, `w${peaksPerSec}`)
   const hit = waveCache.get(key)
   if (hit) return hit
-  const onDisk = await readDisk<Waveform>(key, 'wf')
-  if (onDisk?.peaks?.length) return remember(waveCache, key, onDisk)
-  const fresh = await extractWaveformUncached(path, peaksPerSec)
-  writeDisk(key, 'wf', fresh)
-  return remember(waveCache, key, fresh)
+  return share(key, async () => {
+    const onDisk = await readDisk<Waveform>(key, 'wf')
+    if (onDisk?.peaks?.length) return remember(waveCache, key, onDisk)
+    const fresh = await extractWaveformUncached(path, peaksPerSec)
+    writeDisk(key, 'wf', fresh)
+    return remember(waveCache, key, fresh)
+  })
 }
 
 function extractWaveformUncached(path: string, peaksPerSec = 60): Promise<Waveform> {
@@ -345,11 +366,13 @@ export async function extractThumbnails(
   const key = await mediaKey(path, `t${intervalSec.toFixed(3)}x${height}@${fromSec.toFixed(2)}-${toSec.toFixed(2)}`)
   const hit = thumbCache.get(key)
   if (hit) return hit
-  const onDisk = await readDisk<Thumb[]>(key, 'th')
-  if (onDisk?.length) return remember(thumbCache, key, onDisk)
-  const fresh = await extractThumbnailsUncached(path, intervalSec, height, fromSec, toSec)
-  writeDisk(key, 'th', fresh)
-  return remember(thumbCache, key, fresh)
+  return share(key, async () => {
+    const onDisk = await readDisk<Thumb[]>(key, 'th')
+    if (onDisk?.length) return remember(thumbCache, key, onDisk)
+    const fresh = await extractThumbnailsUncached(path, intervalSec, height, fromSec, toSec)
+    writeDisk(key, 'th', fresh)
+    return remember(thumbCache, key, fresh)
+  })
 }
 
 async function extractThumbnailsUncached(
