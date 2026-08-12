@@ -775,10 +775,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     return false
   }
 
-  // Idle-throttle bookkeeping for the reconciler below.
-  const idleTRef = useRef(-1)
-  const idleAtRef = useRef(0)
-
   // ---- THE reconciler: one always-running rAF loop ----
   useEffect(() => {
     let raf = 0
@@ -813,26 +809,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         playClock.t = tRef.current
         raf = requestAnimationFrame(loop)
         return
-      }
-
-      // IDLE THROTTLE. This loop repaints the canvas and rewrites element styles
-      // every frame for as long as the editor is open — 60x a second while the
-      // creator is just reading their transcript. On a weak laptop that is a core
-      // spinning for nothing (and a laptop battery draining).
-      //
-      // While PAUSED the picture only needs to change when the playhead moves, so
-      // a still frame drops to ~10 checks a second. A scrub is exempt (the guard
-      // releases the moment the playhead differs), so scrubbing stays instant,
-      // and the 100ms ceiling still lets a late-arriving decoded frame land
-      // promptly. Playback is untouched — every frame, exactly as before.
-      if (!isPlaying) {
-        const moved = Math.abs(tRef.current - idleTRef.current) > 1e-4
-        if (!moved && now - idleAtRef.current < 100) {
-          raf = requestAnimationFrame(loop)
-          return
-        }
-        idleTRef.current = tRef.current
-        idleAtRef.current = now
       }
 
       // ADOPT-ON-PAUSE: on the play→pause edge, snap the PLAYHEAD to where the

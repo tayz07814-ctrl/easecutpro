@@ -4,7 +4,6 @@
 // waveform; images are filmstrip-only; text clips are a coloured label.
 // The body starts a move-drag; the edge handles start a trim.
 
-import { useCallback, useState } from 'react'
 import { frameToPx } from './geometry'
 import { WaveformCanvas } from './WaveformCanvas'
 import { Filmstrip } from './Filmstrip'
@@ -48,19 +47,7 @@ export function ClipView({
   const wavePct = Math.round(waveSize * 100)
   const media = useMediaData()
   const wf = showWave ? media?.getWaveform(clip) ?? null : null
-  // The filmstrip reports what density this zoom needs; the provider then
-  // fetches a finer strip for that window (see mediaManager detail tiers), so
-  // zooming in actually resolves more of the footage instead of repeating one
-  // still. Held in state so the request survives to the next render.
-  const [density, setDensity] = useState<{ interval: number; from: number; to: number } | undefined>(undefined)
-  const frames = isVideo || isImage ? media?.getFrames(clip, density) ?? null : null
-  const onNeedDensity = useCallback((need: { interval: number; from: number; to: number }) => {
-    setDensity((prev) =>
-      prev && Math.abs(prev.interval - need.interval) < prev.interval * 0.25 && Math.abs(prev.from - need.from) < 0.5
-        ? prev // same ask — don't churn renders while scrolling
-        : need
-    )
-  }, [])
+  const frames = isVideo || isImage ? media?.getFrames(clip) ?? null : null
 
   // Zoom badge: the peak Ken Burns zoom applied to this clip (Auto Zoom or manual)
   // — ovScale × the larger of the start/end ramp. Shown in the clip's title bar.
@@ -102,7 +89,6 @@ export function ClipView({
                   srcIn={clip.sourceIn}
                   srcOut={clip.sourceOut}
                   aspect={clip.srcW && clip.srcH ? clip.srcW / clip.srcH : 16 / 9}
-                  onNeedDensity={onNeedDensity}
                 />
               )}
             </div>

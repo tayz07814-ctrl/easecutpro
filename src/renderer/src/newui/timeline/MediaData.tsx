@@ -24,9 +24,7 @@ export interface MediaData {
   /** Peaks for the clip's audio, or null while loading / if silent. */
   getWaveform(clip: Clip): ClipWaveform | null
   /** Filmstrip frames for the clip's source, or null while loading. */
-  /** `want` is the density this zoom needs; providers may use it to fetch a
-   *  finer strip for that window, and may ignore it. */
-  getFrames(clip: Clip, want?: { interval: number; from: number; to: number }): ClipFrame[] | null
+  getFrames(clip: Clip): ClipFrame[] | null
 }
 
 // Robust per-SOURCE display reference: the ~95th-percentile peak, so a few loud
