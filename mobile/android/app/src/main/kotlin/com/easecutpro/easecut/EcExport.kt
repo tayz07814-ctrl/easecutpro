@@ -641,20 +641,28 @@ class EcExport(
      * pre-speed length, matching the timestamps this effect receives.
      */
     private fun fadeToBlack(fadeInUs: Long, fadeOutUs: Long, spanUs: Long): MatrixTransformation {
+        // Normalise against the FIRST frame this instance sees, exactly as kenBurns
+        // does: Media3 may hand out clip-relative OR sequence-cumulative timestamps,
+        // and on a cumulative clock a later clip's fade-in would never fire (its
+        // timestamps start far past fadeInUs) while its fade-out fired at the wrong
+        // moment. A fresh instance per clip makes `rel` run 0..span either way.
+        var baseUs = Long.MIN_VALUE
         return MatrixTransformation { presentationTimeUs ->
+            if (baseUs == Long.MIN_VALUE) baseUs = presentationTimeUs
+            val rel = presentationTimeUs - baseUs
             var k = 1f
-            if (fadeInUs > 0 && presentationTimeUs < fadeInUs) {
-                k = (presentationTimeUs.toFloat() / fadeInUs).coerceIn(0f, 1f)
+            if (fadeInUs > 0 && rel < fadeInUs) {
+                k = (rel.toFloat() / fadeInUs).coerceIn(0f, 1f)
             }
             if (fadeOutUs > 0 && spanUs > 0) {
-                val left = spanUs - presentationTimeUs
+                val left = spanUs - rel
                 if (left < fadeOutUs) {
                     val o = (left.toFloat() / fadeOutUs).coerceIn(0f, 1f)
                     if (o < k) k = o
                 }
             }
-            val m = android.graphics.Matrix()
             // Never fully zero — a degenerate matrix can upset the GL pipeline.
+            val m = Matrix()
             val scale = k.coerceAtLeast(0.001f)
             m.setScale(scale, scale)
             m

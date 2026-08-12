@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import '../widgets/controls.dart';
 import 'sheet_scaffold.dart';
 
 /// Per-clip Speed. Live-updates via [onChanged] (preview reloads on the editor side).
