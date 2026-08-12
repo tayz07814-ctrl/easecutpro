@@ -102,7 +102,9 @@ export async function retakeAwareCutCloud(
 
   // 3. WORD-CUT BRAIN — 0.01 Retake Beta judge over the FULL transcript:
   //    Gemma 4 31B via OpenRouter (ultracut-judge edge fn) on the 'sharp' word-list
-  //    prompt, reasoning effort 'medium' — Gemma reasons, and the judge wants it.
+  //    prompt, reasoning effort 'high' — the maximum the judge accepts (low |
+  //    medium | high). Raised from 'medium' on request after weak cuts; costs
+  //    more tokens and time per run, so watch the worker window on long inputs.
   //
   //    HISTORY — Gemma 4 31B was swapped OUT for GPT-5.6 Luna because its shared
   //    FREE provider rate-limited (HTTP 429) and returned empty completions often
@@ -127,7 +129,7 @@ export async function retakeAwareCutCloud(
       proposal: { word_cuts: [], pause_cuts: [] },
       model: 'google/gemma-4-31b-it',
       promptVariant: 'sharp',
-      reasoning: 'medium'
+      reasoning: 'high'
     } satisfies ProcutJudgeReq)
     claudeRaw = res.raw
     if (res.judge === 'none') {
@@ -206,7 +208,7 @@ export async function retakeAwareCutCloud(
 // 0.01 Ultracut judge. DeepSeek-V4-flash via OPENROUTER (the 'deepseek/' slug routes
 // through OpenRouter on the user's OpenRouter key/credit; the edge fn sends NO
 // provider preference, so routing follows the account's own enabled providers) WITH
-// reasoning:'medium'. Reverted from the DeepSeek first-party route (api.deepseek.com,
+// reasoning:'high'. Reverted from the DeepSeek first-party route (api.deepseek.com,
 // bare id) per request: that account ran out of balance, so OpenRouter v4-flash is
 // the single model for this button now. Paired with promptVariant:'sharp' (word-list
 // SYSTEM + Rules A/B). Scoped to the Ultracut Beta button only.
@@ -253,7 +255,7 @@ export async function ultracutCutCloud(
       proposal: { word_cuts: [], pause_cuts: [] },
       model: ULTRACUT_MODEL,
       promptVariant: 'sharp',
-      reasoning: 'medium'
+      reasoning: 'high'
     } satisfies ProcutJudgeReq)
     modelRaw = res.raw
     if (res.judge === 'none') {

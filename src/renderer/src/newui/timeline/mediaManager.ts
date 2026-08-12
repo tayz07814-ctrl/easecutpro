@@ -44,6 +44,12 @@ export function createMediaManager(fetcher?: Fetcher): MediaManager {
   // clip) and merge it over the base. Keyed by window bucket so panning and
   // re-zooming reuse what's already there.
   const detail = new Map<string, ClipFrame[]>()
+  // Merged (base + detail) results, kept so the SAME array reference comes back
+  // for the same inputs. getFrames runs on every render, and returning a fresh
+  // array each time changed the prop identity, which re-ran the filmstrip's
+  // effect, which set state, which rendered again — a loop that showed up as
+  // thumbnails flickering and a busy CPU.
+  const merged = new Map<string, { base: ClipFrame[]; fine: ClipFrame[]; out: ClipFrame[] }>()
   const inflight = new Set<string>()
   const listeners = new Set<() => void>()
   let version = 0
@@ -145,7 +151,18 @@ export function createMediaManager(fetcher?: Fetcher): MediaManager {
           const key = `d:${clip.sourcePath}|${want.interval.toFixed(3)}|${from.toFixed(1)}`
           const fine = detail.get(key)
           if (fine === undefined) ensureDetail(clip.sourcePath, key, from, to, want.interval)
-          else if (fine.length) return [...cached, ...fine].sort((a, b) => a.time - b.time)
+          else if (fine.length) {
+            const hit = merged.get(key)
+            if (hit && hit.base === cached && hit.fine === fine) return hit.out
+            const out = [...cached, ...fine].sort((a, b) => a.time - b.time)
+            merged.set(key, { base: cached, fine, out })
+            while (merged.size > 12) {
+              const oldest = merged.keys().next().value
+              if (oldest === undefined) break
+              merged.delete(oldest)
+            }
+            return out
+          }
         }
       }
       return cached

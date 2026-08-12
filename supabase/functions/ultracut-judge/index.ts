@@ -73,10 +73,12 @@ function reasoningConfig(): Record<string, unknown> {
     const n = parseInt(raw, 10)
     if (Number.isFinite(n)) return n > 0 ? { max_tokens: n } : { enabled: false }
   }
-  // Default effort for callers that send no `reasoning` of their own. 'medium'
-  // matches what the retake judge and the variations caster both ask for, so a
-  // caller that omits it gets the same quality rather than a quieter 'low'.
-  return { effort: 'medium' }
+  // Default effort for callers that send no `reasoning` of their own. 'high'
+  // matches what the retake judge, ultracut and the variations caster all ask
+  // for, so a caller that omits it gets the same quality rather than a quieter
+  // one. Raised from 'medium' after weak cuts; ULTRACUT_REASONING_EFFORT still
+  // overrides it server-side without a redeploy if runs start timing out.
+  return { effort: 'high' }
 }
 
 function reasoningOverride(v: unknown): Record<string, unknown> | null {

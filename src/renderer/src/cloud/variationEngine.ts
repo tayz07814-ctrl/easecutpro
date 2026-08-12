@@ -50,7 +50,7 @@ export async function generateVariationsCloud(
       // Gemma 4 31B at reasoning 'medium', matching the retake judge.
       model: 'google/gemma-4-31b-it',
       promptVariant: 'variations',
-      reasoning: 'medium'
+      reasoning: 'high'
     })
   } catch {
     return { variations: [], warnings: ['Couldn’t reach the AI — please try again.'] }
