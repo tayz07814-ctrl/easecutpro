@@ -531,7 +531,7 @@ export default function Dashboard(): JSX.Element {
 
       {/* ============ MAIN ============ */}
       <main style={css('flex:1;min-width:0;display:flex;flex-direction:column;position:relative')}>
-        <header style={css(`height:60px;flex:none;border-bottom:1px solid ${HAIR};display:flex;align-items:center;gap:16px;padding:0 26px`)}>
+        <header className="ec-drag" style={css(`height:60px;flex:none;border-bottom:1px solid ${HAIR};display:flex;align-items:center;gap:16px;padding:0 26px`)}>
           <div style={css('flex:0 1 380px;min-width:190px;height:36px;display:flex;align-items:center;gap:9px;background:#111116;border:1px solid rgba(255,255,255,.07);border-radius:9px;padding:0 11px;overflow:hidden')}>
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#71718A" strokeWidth="1.6"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
             <input

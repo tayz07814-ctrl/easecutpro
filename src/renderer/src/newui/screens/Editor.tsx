@@ -226,7 +226,7 @@ function TopBar(): JSX.Element {
   const sv = SAVE_UI[saveState] ?? SAVE_UI.saved
 
   return (
-    <div style={css(`display:flex;align-items:center;gap:12px;height:52px;padding:0 16px;border-bottom:1px solid ${HAIR};flex:none`)}>
+    <div className="ec-drag" style={css(`display:flex;align-items:center;gap:12px;height:52px;padding:0 16px;border-bottom:1px solid ${HAIR};flex:none`)}>
       <div onClick={goHome} style={css('display:flex;align-items:center;gap:7px;font-size:13px;color:#9a9aae;padding:6px 10px;border-radius:8px;cursor:pointer')}>
         <span style={css('font-size:14px')}>‹</span> Projects
       </div>

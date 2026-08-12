@@ -477,3 +477,33 @@
 .ec-nu-tl .ec-tl-cut-edge.r {
   right: -3px;
 }
+
+/* ---------------------------------------------------------------------------
+   CUSTOM TITLE BAR (desktop)
+
+   The native caption bar is hidden (titleBarStyle:'hidden') so the window stops
+   being painted in the Windows accent colour. That removes the OS drag handle
+   too, so the app has to provide one — without this the window cannot be moved.
+
+   `.ec-drag` marks a bar as draggable; every interactive thing inside it must
+   opt back out or it stops receiving clicks. The right-hand inset keeps our own
+   controls clear of the native minimise/maximise/close buttons, whose exact
+   width Chromium exposes as env(titlebar-area-width).
+--------------------------------------------------------------------------- */
+.ec-drag {
+  -webkit-app-region: drag;
+  /* !important because these bars set their padding INLINE (css`padding:0 26px`),
+     which beats a stylesheet rule — without it the reserved strip collapsed to
+     the inline value and our right-hand buttons sat under the window controls. */
+  padding-right: calc(100vw - env(titlebar-area-width, 100vw) + 26px) !important;
+}
+.ec-drag button,
+.ec-drag input,
+.ec-drag select,
+.ec-drag textarea,
+.ec-drag a,
+.ec-drag [role='button'],
+.ec-drag [contenteditable='true'],
+.ec-drag .ec-no-drag {
+  -webkit-app-region: no-drag;
+}

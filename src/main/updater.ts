@@ -11,8 +11,18 @@
 // a no-op rather than an error dialog. The only user-visible moment is a small
 // prompt AFTER a version has already downloaded, offering to restart.
 
+import { createRequire } from 'node:module'
 import { app, dialog, type BrowserWindow } from 'electron'
-import { autoUpdater } from 'electron-updater'
+import type { AppUpdater } from 'electron-updater'
+
+// electron-updater is CommonJS and the main bundle is ESM (deps are externalised
+// by electron-vite, so the import survives to runtime verbatim). A named import
+// typechecks and builds, then throws on launch:
+//   SyntaxError: Named export 'autoUpdater' not found
+// which crashes the app before the window ever opens. createRequire is the
+// interop that actually works in an ESM main process.
+const requireCjs = createRequire(import.meta.url)
+const { autoUpdater } = requireCjs('electron-updater') as { autoUpdater: AppUpdater }
 
 /** Wait a little after launch so updating never competes with opening a project. */
 const FIRST_CHECK_DELAY_MS = 15_000

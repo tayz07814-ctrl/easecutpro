@@ -116,6 +116,22 @@ function createWindow(): void {
     backgroundColor: '#0e0f13',
     title: 'EaseCutPro',
     icon: join(__dirname, '../../icons/icon.ico'),
+    // The File/Edit/View menu is developer furniture on a timeline editor, and
+    // it was the only thing making the app look like a stock Electron shell.
+    // Hidden, not REMOVED: deleting the menu also deletes the default edit
+    // accelerators (Ctrl+C/V/X/A/Z), which text fields need. Alt still reveals it.
+    autoHideMenuBar: true,
+    // Paint the caption bar in the app's own colours instead of the Windows
+    // accent (which is why it read bright orange). Native window buttons are
+    // kept — they behave correctly with snap layouts and high contrast — but
+    // drawn over our surface. The app supplies its own drag region; see
+    // `.ec-drag` in newui.css.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#12101A', // deep purple-tinted surface, sits with #0E0E13
+      symbolColor: '#C4BAFF', // the accent used for Pro / active UI
+      height: 36
+    },
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
@@ -135,7 +151,14 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
     // After the window is up, so a slow feed can never delay first paint.
-    initAutoUpdate(() => mainWindow)
+    // Wrapped because updating is a CONVENIENCE: if it throws, the editor must
+    // still open. (It threw once — a CJS/ESM import mismatch — and took the
+    // whole app down with it before the window existed.)
+    try {
+      initAutoUpdate(() => mainWindow)
+    } catch (e) {
+      console.warn('[updater] disabled:', (e as Error)?.message ?? e)
+    }
   })
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     console.error('Renderer process gone:', details)
