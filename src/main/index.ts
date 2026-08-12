@@ -9,6 +9,7 @@ import { IPC } from '../shared/ipc'
 import { checkTools, listWhisperModels } from './binaries'
 import { probe, exportProject, extractWaveform, extractThumbnails, combineClips, extractAudioWav } from './ffmpeg'
 import { handleFrameStream, extractPreviewAudioWav, killAllFrameStreams } from './framestream'
+import { initAutoUpdate } from './updater'
 import { transcribe } from './whisper'
 import { transcribeOpenAI } from './openai-transcribe'
 import { transcribeParakeet } from './parakeet'
@@ -131,7 +132,11 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  mainWindow.on('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('ready-to-show', () => {
+    mainWindow?.show()
+    // After the window is up, so a slow feed can never delay first paint.
+    initAutoUpdate(() => mainWindow)
+  })
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     console.error('Renderer process gone:', details)
   })

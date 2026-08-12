@@ -7,9 +7,9 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "predev": "npm run prepare:cloud",
+    "predev": "npm run prepare:cloud && npm run prepare:icon",
     "dev": "electron-vite dev",
-    "prebuild": "npm run prepare:cloud",
+    "prebuild": "npm run prepare:cloud && npm run prepare:icon",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
@@ -22,15 +22,16 @@
     "verify-retake-aware": "tsx scripts/verify-retakeaware.ts",
     "verify-silence-mastery": "tsx scripts/verify-silence-mastery.ts",
     "verify-retake-aware-fixtures": "tsx scripts/verify-retake-fixtures.ts",
-    "preweb": "npm run prepare:cloud",
+    "preweb": "npm run prepare:cloud && npm run prepare:icon",
     "web": "electron-vite build && tsx src/server/index.ts",
     "prepare:cloud": "node scripts/prepare-cloud-assets.mjs",
+    "prepare:icon": "node scripts/make-icon.mjs",
     "dev:cloud": "npm run prepare:cloud && vite --config vite.config.cloud.ts",
     "build:cloud": "npm run prepare:cloud && vite build --config vite.config.cloud.ts",
     "remote": "node scripts/remote.mjs",
     "remote:named": "node scripts/remote.mjs lt",
     "selfhost": "node scripts/selfhost.mjs",
-    "predist": "npm run prepare:cloud",
+    "predist": "npm run prepare:cloud && npm run prepare:icon",
     "dist": "electron-vite build && electron-builder --win",
     "dist:mac": "electron-builder -c electron-builder.cloud.json --mac",
     "dist:mac:dir": "electron-builder -c electron-builder.cloud.json --mac --dir -c.mac.identity=null",
@@ -46,6 +47,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@ricky0123/vad-web": "^0.0.30",
     "@supabase/supabase-js": "^2.110.2",
+    "electron-updater": "^6.8.9",
     "express": "^4.19.2",
     "mediabunny": "^1.50.8",
     "mp4-muxer": "^5.2.2",
@@ -100,6 +102,13 @@
         "nsis"
       ]
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "tayz07814-ctrl",
+        "repo": "easecutpro"
+      }
+    ],
     "nsis": {
       "oneClick": false,
       "perMachine": false,

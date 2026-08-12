@@ -35,3 +35,7 @@ dist-cloud/
 .cloud-public/
 .vercel/
 src/renderer/public/vad/
+
+# code-signing material — never commit
+*.pfx
+*.p12
