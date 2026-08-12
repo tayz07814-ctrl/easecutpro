@@ -49,6 +49,10 @@ class ExportSegment {
   // (kbToScale @ kbToCx,kbToCy) across the clip. scale ≥1; centres 0..1 (.5=mid).
   final bool kb;
   final double kbFromScale, kbToScale, kbFromCx, kbFromCy, kbToCx, kbToCy;
+  /// Colour adjust: brightness/contrast -1..1 (0 = off), saturation 0..2 (1 = off).
+  final double brightness, contrast, saturation;
+  /// Fade from / to black at this clip's own edges (ms).
+  final int fadeInMs, fadeOutMs;
   final int timelineStartMs; // audio: lead-in offset before the track plays
   const ExportSegment({
     required this.uri,
@@ -67,6 +71,11 @@ class ExportSegment {
     this.kbFromCy = 0.5,
     this.kbToCx = 0.5,
     this.kbToCy = 0.5,
+    this.brightness = 0.0,
+    this.contrast = 0.0,
+    this.saturation = 1.0,
+    this.fadeInMs = 0,
+    this.fadeOutMs = 0,
     this.timelineStartMs = 0,
   });
   Map<String, dynamic> toMap() => {
@@ -86,6 +95,11 @@ class ExportSegment {
         'kbFromCy': kbFromCy,
         'kbToCx': kbToCx,
         'kbToCy': kbToCy,
+        'brightness': brightness,
+        'contrast': contrast,
+        'saturation': saturation,
+        'fadeInMs': fadeInMs,
+        'fadeOutMs': fadeOutMs,
         'timelineStartMs': timelineStartMs,
       };
 }

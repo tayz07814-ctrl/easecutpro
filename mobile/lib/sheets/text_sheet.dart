@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../editor/text_overlay.dart';
 import '../local/fonts_store.dart';
 import '../local/text_presets_store.dart';
+import '../local/app_settings.dart';
 import '../theme.dart';
 import '../widgets/controls.dart';
 import 'sheet_scaffold.dart';
@@ -360,6 +361,7 @@ class _TextSheetState extends State<TextSheet> {
 
   void _snack(String m) {
     if (!mounted) return;
+    if (!AppSettings.showStatusMessages) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: Ec.card));
   }
 

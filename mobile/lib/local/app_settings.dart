@@ -34,11 +34,18 @@ class AppSettings {
   /// cut). Shared by both engines.
   static int crossFadeMs = 8;
 
+  /// Status messages (the transient banners at the bottom of the editor).
+  /// OFF by default — the app stays quiet. Every message is still GENERATED and
+  /// routed through the same gate, so turning this on restores the full
+  /// diagnostics (which engine ran, why something fell back) without a rebuild.
+  static bool showStatusMessages = false;
+
   static const _kStt = 'ec.sttProvider';
   static const _kEngine = 'ec.silenceEngine';
   static const _kMinSpeech = 'ec.minSpeechS';
   static const _kPad = 'ec.transcriptPadMs';
   static const _kFade = 'ec.crossFadeMs';
+  static const _kToasts = 'ec.showStatusMessages';
 
   static Future<void> load() async {
     try {
@@ -60,6 +67,7 @@ class AppSettings {
       minSpeechS = (p.getDouble(_kMinSpeech) ?? minSpeechS).clamp(0.0, 2.0);
       transcriptPadMs = (p.getInt(_kPad) ?? transcriptPadMs).clamp(0, 1000);
       crossFadeMs = (p.getInt(_kFade) ?? crossFadeMs).clamp(0, 120);
+      showStatusMessages = p.getBool(_kToasts) ?? showStatusMessages;
     } catch (_) {
       // defaults are already correct — a failed read must never block startup
     }
@@ -73,6 +81,7 @@ class AppSettings {
       await p.setDouble(_kMinSpeech, minSpeechS);
       await p.setInt(_kPad, transcriptPadMs);
       await p.setInt(_kFade, crossFadeMs);
+      await p.setBool(_kToasts, showStatusMessages);
     } catch (_) {}
   }
 

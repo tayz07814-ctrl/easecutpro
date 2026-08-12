@@ -23,6 +23,13 @@ class EcClip {
   // pan REPLACES any static crop on the same clip.
   bool kb;
   double kbFromScale, kbToScale, kbFromCx, kbFromCy, kbToCx, kbToCy;
+
+  /// Colour adjust: brightness/contrast are -1..1 (0 = untouched), saturation is
+  /// 0..2 (1 = untouched). Applied in the preview and baked on export.
+  double brightness, contrast, saturation;
+
+  /// Fade from / to black at this clip's own edges (ms, 0 = none).
+  int fadeInMs, fadeOutMs;
   EcClip(
     this.sourcePath,
     this.inMs,
@@ -40,6 +47,11 @@ class EcClip {
     this.kbFromCy = 0.5,
     this.kbToCx = 0.5,
     this.kbToCy = 0.5,
+    this.brightness = 0.0,
+    this.contrast = 0.0,
+    this.saturation = 1.0,
+    this.fadeInMs = 0,
+    this.fadeOutMs = 0,
   });
 
   int get lengthMs => (outMs - inMs) < 0 ? 0 : (outMs - inMs); // source span
@@ -64,7 +76,12 @@ class EcClip {
       kbFromCx: kbFromCx,
       kbFromCy: kbFromCy,
       kbToCx: kbToCx,
-      kbToCy: kbToCy);
+      kbToCy: kbToCy,
+      brightness: brightness,
+      contrast: contrast,
+      saturation: saturation,
+      fadeInMs: fadeInMs,
+      fadeOutMs: fadeOutMs);
 
   Map<String, dynamic> toJson() => {
         'src': sourcePath,
@@ -77,6 +94,11 @@ class EcClip {
         'cr': cropR,
         'cb': cropB,
         'kb': kb,
+        'br': brightness,
+        'ct': contrast,
+        'sa': saturation,
+        'fi': fadeInMs,
+        'fo': fadeOutMs,
         'kfs': kbFromScale,
         'kts': kbToScale,
         'kfx': kbFromCx,
@@ -96,6 +118,11 @@ class EcClip {
         cropR: (j['cr'] as num?)?.toDouble() ?? 0,
         cropB: (j['cb'] as num?)?.toDouble() ?? 0,
         kb: (j['kb'] as bool?) ?? false,
+        brightness: (j['br'] as num?)?.toDouble() ?? 0.0,
+        contrast: (j['ct'] as num?)?.toDouble() ?? 0.0,
+        saturation: (j['sa'] as num?)?.toDouble() ?? 1.0,
+        fadeInMs: (j['fi'] as num?)?.toInt() ?? 0,
+        fadeOutMs: (j['fo'] as num?)?.toInt() ?? 0,
         kbFromScale: (j['kfs'] as num?)?.toDouble() ?? 1.0,
         kbToScale: (j['kts'] as num?)?.toDouble() ?? 1.0,
         kbFromCx: (j['kfx'] as num?)?.toDouble() ?? 0.5,
@@ -178,6 +205,11 @@ class TimelineModel extends ChangeNotifier {
             kbFromCy: c.kbFromCy,
             kbToCx: c.kbToCx,
             kbToCy: c.kbToCy,
+            brightness: c.brightness,
+            contrast: c.contrast,
+            saturation: c.saturation,
+            fadeInMs: c.fadeInMs,
+            fadeOutMs: c.fadeOutMs,
           ))
       .toList();
 

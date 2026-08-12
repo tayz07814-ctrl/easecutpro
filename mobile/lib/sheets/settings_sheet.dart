@@ -148,6 +148,24 @@ class _SettingsSheetState extends State<SettingsSheet> {
           _hint('Blends the audio across every join on export. A few milliseconds '
               'removes the click a hard splice makes; too much smears the seam.'),
 
+          // ---- Diagnostics ----------------------------------------------
+          _sectionTitle('DIAGNOSTICS'),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+                color: Ec.card2, borderRadius: BorderRadius.circular(12), border: Border.all(color: Ec.hair)),
+            child: EcRow(
+              label: 'Show status messages',
+              trailing: EcToggle(
+                value: AppSettings.showStatusMessages,
+                onChanged: (v) => _commit(() => AppSettings.showStatusMessages = v),
+              ),
+            ),
+          ),
+          _hint('Off keeps the editor quiet. On brings back the banners that say '
+              'which engine ran, which provider transcribed, and why anything fell '
+              'back — turn it on when something misbehaves.'),
+
           // ---- About ----------------------------------------------------
           _sectionTitle('ABOUT'),
           Container(

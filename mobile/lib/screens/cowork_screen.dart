@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../cloud/backend.dart';
 import '../cloud/cowork.dart';
+import '../local/app_settings.dart';
 import '../theme.dart';
 import 'editor_screen.dart';
 
@@ -87,6 +88,7 @@ class _CoworkScreenState extends State<CoworkScreen> {
   String _err(Object e) => e.toString().replaceFirst('Exception: ', '');
   void _toast(String m) {
     if (!mounted) return;
+    if (!AppSettings.showStatusMessages) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: Ec.card));
   }
 
@@ -586,7 +588,10 @@ class _MembersSheetState extends State<_MembersSheet> {
     }
   }
 
-  void _toast(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: Ec.card));
+  void _toast(String m) {
+    if (!AppSettings.showStatusMessages) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: Ec.card));
+  }
 
   @override
   Widget build(BuildContext context) {

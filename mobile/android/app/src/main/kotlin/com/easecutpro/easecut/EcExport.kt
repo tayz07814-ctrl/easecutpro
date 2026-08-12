@@ -26,7 +26,10 @@ import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.audio.SonicAudioProcessor
+import androidx.media3.effect.Contrast
 import androidx.media3.effect.Crop
+import androidx.media3.effect.HslAdjustment
+import androidx.media3.effect.RgbAdjustment
 import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
@@ -527,6 +530,35 @@ class EcExport(
                 val spanUs = (if (endMs > startMs) (endMs - startMs) else 0L) * 1000.0
                 vfx.add(kenBurns(fs, ts, fx, fy, txc, tyc, spanUs))
             }
+            // Colour adjust — Media3's own effects, ordered the way a grade reads:
+            // exposure, then contrast, then saturation. Skipped entirely at the
+            // neutral values so an untouched clip keeps its bit-exact path.
+            val brightness = (seg["brightness"] as? Number)?.toFloat() ?: 0f
+            val contrast = (seg["contrast"] as? Number)?.toFloat() ?: 0f
+            val saturation = (seg["saturation"] as? Number)?.toFloat() ?: 1f
+            if (brightness != 0f) {
+                // RgbAdjustment scales each channel: >1 lifts, <1 darkens.
+                val k = (1f + brightness).coerceIn(0f, 2f)
+                vfx.add(RgbAdjustment.Builder().setRedScale(k).setGreenScale(k).setBlueScale(k).build())
+            }
+            if (contrast != 0f) vfx.add(Contrast(contrast.coerceIn(-1f, 1f)))
+            if (saturation != 1f) {
+                // HslAdjustment takes a saturation DELTA in [-100, 100].
+                vfx.add(
+                    HslAdjustment.Builder()
+                        .adjustSaturation(((saturation - 1f) * 100f).coerceIn(-100f, 100f))
+                        .build()
+                )
+            }
+            // Fade from / to black at this clip's own edges. AlphaScale is static,
+            // so the ramp is a time-varying MATRIX that scales the frame to nothing
+            // — visually a dip to black, and it needs no per-frame bitmaps.
+            val fadeInUs = ((seg["fadeInMs"] as? Number)?.toLong() ?: 0L) * 1000L
+            val fadeOutUs = ((seg["fadeOutMs"] as? Number)?.toLong() ?: 0L) * 1000L
+            if (fadeInUs > 0 || fadeOutUs > 0) {
+                val spanUs = (if (endMs > startMs) (endMs - startMs) else 0L) * 1000L
+                vfx.add(fadeToBlack(fadeInUs, fadeOutUs, spanUs))
+            }
             if (speed != 1f && speed > 0f) {
                 vfx.add(SpeedChangeEffect(speed))
                 val sonic = SonicAudioProcessor()
@@ -602,6 +634,33 @@ class EcExport(
      * [spanUs] is the clip's pre-speed duration; the effect runs before any speed
      * change, so frame timestamps arrive as 0..span.
      */
+    /**
+     * Fade from / to black at a clip's edges, as a time-varying scale matrix:
+     * the frame is scaled toward zero over the fade, which reads as a dip to
+     * black against the composition's background. [spanUs] is the clip's
+     * pre-speed length, matching the timestamps this effect receives.
+     */
+    private fun fadeToBlack(fadeInUs: Long, fadeOutUs: Long, spanUs: Long): MatrixTransformation {
+        return MatrixTransformation { presentationTimeUs ->
+            var k = 1f
+            if (fadeInUs > 0 && presentationTimeUs < fadeInUs) {
+                k = (presentationTimeUs.toFloat() / fadeInUs).coerceIn(0f, 1f)
+            }
+            if (fadeOutUs > 0 && spanUs > 0) {
+                val left = spanUs - presentationTimeUs
+                if (left < fadeOutUs) {
+                    val o = (left.toFloat() / fadeOutUs).coerceIn(0f, 1f)
+                    if (o < k) k = o
+                }
+            }
+            val m = android.graphics.Matrix()
+            // Never fully zero — a degenerate matrix can upset the GL pipeline.
+            val scale = k.coerceAtLeast(0.001f)
+            m.setScale(scale, scale)
+            m
+        }
+    }
+
     private fun kenBurns(
         fromScale: Float,
         toScale: Float,

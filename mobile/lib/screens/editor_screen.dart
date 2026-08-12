@@ -665,8 +665,12 @@ class _EditorScreenState extends State<EditorScreen> {
       case 'Overlay':
         _addOverlay();
         break;
-      default:
-        _toast('$tool — coming soon');
+      case 'Adjust':
+        _openAdjust();
+        break;
+      case 'Animation':
+        _openAnimation();
+        break;
     }
   }
 
@@ -824,20 +828,100 @@ class _EditorScreenState extends State<EditorScreen> {
     return best?.jpeg;
   }
 
+  /// Zoom is a MOVE (Ken Burns), not a punch: a start scale + focus glides to an
+  /// end scale + focus across the clip. It drives the SAME kb fields Auto Zoom
+  /// uses, which both the preview (`_cropped`) and the exporter already
+  /// interpolate — so what you set is what renders.
   void _openZoom() {
     final i = _selectedIndex();
     if (i < 0) return;
     final c = _model.clips[i];
-    // recover the current zoom from a symmetric crop (else start at 1.0×)
-    final sym = (c.cropL == c.cropR && c.cropT == c.cropB && c.cropL == c.cropT) ? c.cropL : 0.0;
-    final curZoom = (sym > 0 && sym < 0.49) ? 1.0 / (1.0 - 2 * sym) : 1.0;
+    // Seed from the existing move; a legacy static crop becomes its start+end
+    // scale so an older project opens showing what it actually does.
+    var fs = c.kb ? c.kbFromScale : 1.0;
+    var ts = c.kb ? c.kbToScale : 1.0;
+    if (!c.kb) {
+      final sym = (c.cropL == c.cropR && c.cropT == c.cropB && c.cropL == c.cropT) ? c.cropL : 0.0;
+      final z = (sym > 0 && sym < 0.49) ? 1.0 / (1.0 - 2 * sym) : 1.0;
+      fs = z;
+      ts = z;
+    }
     _pushHistory();
     _openSheet(ZoomSheet(
-      initial: curZoom,
-      onChanged: (z) {
-        final crop = z <= 1.0 ? 0.0 : (1.0 - 1.0 / z) / 2.0;
-        _model.setCrop(i, l: crop, t: crop, r: crop, b: crop); // centred punch = symmetric crop
-        setState(() {});
+      fromScale: fs,
+      toScale: ts,
+      fromCx: c.kb ? c.kbFromCx : 0.5,
+      fromCy: c.kb ? c.kbFromCy : 0.5,
+      toCx: c.kb ? c.kbToCx : 0.5,
+      toCy: c.kb ? c.kbToCy : 0.5,
+      onChanged: ({
+        required double fromScale,
+        required double toScale,
+        required double fromCx,
+        required double fromCy,
+        required double toCx,
+        required double toCy,
+      }) {
+        final none = fromScale <= 1.001 && toScale <= 1.001;
+        setState(() {
+          final clip = _model.clips[i];
+          clip.kb = !none;
+          clip.kbFromScale = fromScale;
+          clip.kbToScale = toScale;
+          clip.kbFromCx = fromCx;
+          clip.kbFromCy = fromCy;
+          clip.kbToCx = toCx;
+          clip.kbToCy = toCy;
+          // kb owns the framing — a leftover static crop would double up.
+          if (!none) {
+            clip.cropL = 0;
+            clip.cropT = 0;
+            clip.cropR = 0;
+            clip.cropB = 0;
+          }
+        });
+        _scheduleSave();
+      },
+    ));
+  }
+
+  void _openAdjust() {
+    final i = _selectedIndex();
+    if (i < 0) return;
+    final c = _model.clips[i];
+    _pushHistory();
+    _openSheet(AdjustSheet(
+      brightness: c.brightness,
+      contrast: c.contrast,
+      saturation: c.saturation,
+      onChanged: ({required double brightness, required double contrast, required double saturation}) {
+        setState(() {
+          final clip = _model.clips[i];
+          clip.brightness = brightness;
+          clip.contrast = contrast;
+          clip.saturation = saturation;
+        });
+        _scheduleSave();
+      },
+    ));
+  }
+
+  void _openAnimation() {
+    final i = _selectedIndex();
+    if (i < 0) return;
+    final c = _model.clips[i];
+    _pushHistory();
+    _openSheet(AnimationSheet(
+      fadeInMs: c.fadeInMs,
+      fadeOutMs: c.fadeOutMs,
+      maxMs: c.timelineLenMs,
+      onChanged: ({required int fadeInMs, required int fadeOutMs}) {
+        setState(() {
+          final clip = _model.clips[i];
+          clip.fadeInMs = fadeInMs;
+          clip.fadeOutMs = fadeOutMs;
+        });
+        _scheduleSave();
       },
     ));
   }
@@ -876,8 +960,11 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  /// Every status message in the editor funnels through here, so the
+  /// "Show status messages" setting silences the whole app in one place
+  /// instead of the messages being deleted and the diagnostics lost.
   void _toast(String msg) {
-    if (!mounted) return;
+    if (!mounted || !AppSettings.showStatusMessages) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Ec.card));
   }
 
@@ -1839,6 +1926,58 @@ class _EditorScreenState extends State<EditorScreen> {
 
   /// Cover-zoom the preview to the crop of the clip under the playhead (per-clip,
   /// matching the export Crop effect).
+  /// Colour adjust + fade-to-black for the clip under the playhead, wrapped
+  /// around the texture so the preview matches what the exporter bakes.
+  Widget _graded(Widget child) {
+    final idx = _model.clipIndexAt(_positionMs);
+    if (idx < 0 || idx >= _model.clips.length) return child;
+    final c = _model.clips[idx];
+    var out = child;
+
+    if (c.brightness != 0 || c.contrast != 0 || c.saturation != 1) {
+      // Contrast pivots around mid-grey, brightness is an offset, saturation is
+      // the standard luma-weighted mix — the same maths the export effects use.
+      final ct = (1.0 + c.contrast).clamp(0.0, 2.0);
+      final br = c.brightness * 255.0;
+      final off = (1.0 - ct) * 127.5 + br;
+      final sa = c.saturation.clamp(0.0, 2.0);
+      const lr = 0.2126, lg = 0.7152, lb = 0.0722;
+      double m(double w, bool diag) => ct * (w * (1 - sa) + (diag ? sa : 0));
+      out = ColorFiltered(
+        colorFilter: ColorFilter.matrix(<double>[
+          m(lr, true), m(lg, false), m(lb, false), 0, off,
+          m(lr, false), m(lg, true), m(lb, false), 0, off,
+          m(lr, false), m(lg, false), m(lb, true), 0, off,
+          0, 0, 0, 1, 0,
+        ]),
+        child: out,
+      );
+    }
+
+    // Fade in / out, measured against this clip's own span on the timeline.
+    if (c.fadeInMs > 0 || c.fadeOutMs > 0) {
+      final start = _model.clipStartMs(idx);
+      final len = c.timelineLenMs;
+      final into = _positionMs - start;
+      var dim = 0.0;
+      if (c.fadeInMs > 0 && into < c.fadeInMs) {
+        dim = (1.0 - into / c.fadeInMs).clamp(0.0, 1.0);
+      }
+      final left = len - into;
+      if (c.fadeOutMs > 0 && left < c.fadeOutMs) {
+        final d = (1.0 - left / c.fadeOutMs).clamp(0.0, 1.0);
+        if (d > dim) dim = d;
+      }
+      if (dim > 0) {
+        out = Stack(fit: StackFit.expand, children: [
+          out,
+          IgnorePointer(child: Container(color: Colors.black.withValues(alpha: dim))),
+        ]);
+      }
+    }
+    return out;
+  }
+
   Widget _cropped(Widget child) {
     // The flat proxy already has each clip's crop / Ken Burns pan baked in —
     // re-framing here would double it, so pass the texture straight through while
@@ -2006,7 +2145,7 @@ class _EditorScreenState extends State<EditorScreen> {
                             _selectedText = null;
                             _selectedImage = null;
                           }),
-                          child: _cropped(Texture(textureId: _textureId!)),
+                          child: _graded(_cropped(Texture(textureId: _textureId!))),
                         ),
                         for (final o in _images)
                           if (o.activeAt(_positionMs) || identical(o, _selectedImage))
