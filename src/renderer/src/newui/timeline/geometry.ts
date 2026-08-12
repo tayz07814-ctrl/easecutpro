@@ -3,6 +3,7 @@
 
 import { framesToSeconds, secondsToFrames, type Timebase } from '@shared/timeline/time'
 import type { TrackKind } from '@shared/timeline/types'
+import { MIN_PX_PER_SEC, MAX_PX_PER_SEC } from '@shared/timeline/model'
 
 export const HEADER_W = 72
 export const RULER_H = 30
@@ -18,8 +19,8 @@ export function laneHeight(t: { kind: TrackKind; height: number; clips: unknown[
   if (!t.clips.length && !t.isMain && t.kind !== 'audio') return EMPTY_LANE_H
   return t.height
 }
-export const MIN_ZOOM = 2
-export const MAX_ZOOM = 6000
+export const MIN_ZOOM = MIN_PX_PER_SEC
+export const MAX_ZOOM = MAX_PX_PER_SEC
 
 export function frameToPx(frame: number, zoom: number, tb: Timebase): number {
   return framesToSeconds(frame, tb) * zoom

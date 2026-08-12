@@ -16,25 +16,7 @@ import type {
   TimelineDocument,
   TimelineSettings
 } from './types'
-import {
-  createSession,
-  createTimeline,
-  normalizeDoc,
-  findClip,
-  findTrack,
-  moveClipSmartInDoc,
-  trimClipInInDoc,
-  trimClipOutInDoc,
-  magnetTrimInInDoc,
-  magnetTrimOutInDoc,
-  addTrackToDoc,
-  createTrack,
-  planDrop,
-  slipClipInDoc,
-  slideClipInDoc,
-  rollEditInDoc,
-  mainTrackId
-} from './model'
+import { createSession, createTimeline, normalizeDoc, findClip, findTrack, moveClipSmartInDoc, trimClipInInDoc, trimClipOutInDoc, magnetTrimInInDoc, magnetTrimOutInDoc, addTrackToDoc, createTrack, planDrop, slipClipInDoc, slideClipInDoc, rollEditInDoc, mainTrackId, MAX_PX_PER_SEC } from './model'
 import { secondsToFrames } from './time'
 import { uid } from './ids'
 import { collectSnapPoints, snapEdges } from './snap'
@@ -162,7 +144,9 @@ export class TimelineEngine {
   }
 
   setZoom(pxPerSec: number): void {
-    const z = Math.max(1, pxPerSec)
+    // Clamped HERE too, not just in the UI: a project saved before the ceiling
+    // came down would otherwise restore its old zoom and skip the guardrail.
+    const z = Math.min(MAX_PX_PER_SEC, Math.max(1, pxPerSec))
     if (z === this.session.zoom) return
     this.session = { ...this.session, zoom: z }
     this.commit()

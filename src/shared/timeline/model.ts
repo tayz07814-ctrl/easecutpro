@@ -247,6 +247,18 @@ export function createTimeline(timebase: Timebase = FPS_30): TimelineDocument {
   return { id: uid('tl'), timebase, tracks: [], markers: [], duration: 0 }
 }
 
+/**
+ * Zoom bounds in pixels-per-second, shared by the engine and the renderer so a
+ * restored session can't sit outside what the UI allows.
+ *
+ * The ceiling was 6000, which at 30fps stretched one frame across 200px — past
+ * the point where more zoom shows anything. Frame-accurate work wants a frame
+ * around 40-65px (~1200-2000 px/s), so 2000 keeps every precise edit and stops
+ * the timeline being scrolled into territory that only costs memory.
+ */
+export const MIN_PX_PER_SEC = 2
+export const MAX_PX_PER_SEC = 2000
+
 export function createSession(): SessionState {
   return {
     playhead: 0,
