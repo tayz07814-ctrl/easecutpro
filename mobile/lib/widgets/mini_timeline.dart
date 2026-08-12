@@ -24,6 +24,10 @@ class MiniTimeline extends StatefulWidget {
   final List<TextOverlay> texts; // text + caption overlays
   final List<ImageOverlay> images; // image / sticker (PiP) overlays
   final ImageOverlay? selectedImage; // image selected on the preview / timeline
+  /// The text/caption currently selected. Its trim handles are the ONLY ones
+  /// shown — an unselected block must not be grabbable, or scrubbing past a
+  /// caption catches its edge and retimes it by accident.
+  final TextOverlay? selectedText;
   final VoidCallback onScrubStart;
   final ValueChanged<int> onScrub;
   final ValueChanged<int> onScrubEnd;
@@ -91,6 +95,7 @@ class MiniTimeline extends StatefulWidget {
     this.texts = const [],
     this.images = const [],
     this.selectedImage,
+    this.selectedText,
     required this.onScrubStart,
     required this.onScrub,
     required this.onScrubEnd,
@@ -949,6 +954,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
 
   Widget _overlayBlock(TextOverlay t, Color accent, bool captions, double tracksW) {
     final grabbed = _grabKind == 'text' && _grabIndex == widget.texts.indexOf(t);
+    final sel = identical(t, widget.selectedText);
     return Positioned(
       left: (t.startMs.clamp(0, _total) * _pxPerMs),
       width: (((t.endMs - t.startMs).clamp(120, _total)) * _pxPerMs).clamp(16.0, tracksW),
@@ -996,8 +1002,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 color: captions ? const Color(0xFF2A2550) : const Color(0xFF3A2E12),
                 borderRadius: BorderRadius.circular(5),
                 border: Border.all(
-                  color: accent.withValues(alpha: grabbed ? 0.95 : 0.45),
-                  width: grabbed ? 2 : 1,
+                  color: accent.withValues(alpha: (grabbed || sel) ? 0.95 : 0.45),
+                  width: (grabbed || sel) ? 2 : 1,
                 ),
                 boxShadow: grabbed
                     ? [BoxShadow(color: accent.withValues(alpha: 0.5), blurRadius: 10, spreadRadius: 1)]
@@ -1017,8 +1023,12 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 ],
               ),
             ),
-            _overlayTrimGrip(t, accent, left: true),
-            _overlayTrimGrip(t, accent, left: false),
+            // Handles ONLY on the selected block — same rule the clips and audio
+            // blocks already follow.
+            if (sel && widget.onOverlayTrim != null) ...[
+              _overlayTrimGrip(t, accent, left: true),
+              _overlayTrimGrip(t, accent, left: false),
+            ],
           ],
         ),
       ),

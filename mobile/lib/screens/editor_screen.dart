@@ -2364,6 +2364,7 @@ class _EditorScreenState extends State<EditorScreen> {
         texts: _texts,
         images: _images,
         selectedImage: _selectedImage,
+        selectedText: _selectedText,
         onScrubStart: () => _scrubbing = true,
         onScrub: (ms) => setState(() => _positionMs = ms),
         onScrubEnd: (ms) async {
