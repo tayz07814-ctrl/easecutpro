@@ -69,7 +69,7 @@ import {
 } from '@shared/silenceMastery'
 import { extractSttAudio } from './cloud/audio'
 import { detectSileroSilences } from './cloud/sileroVad'
-import { mediaSrc, IS_WEB, IS_CLOUD, IS_CLOUD_BACKEND, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
+import { mediaSrc, IS_WEB, IS_CLOUD, IS_CLOUD_BACKEND, IS_DESKTOP_CLOUD } from './platform'
 import { aiApi, onDesktopCloudProgress } from './cloud/desktopHybrid'
 import { safeErrMessage } from './safeError'
 import { createProject, saveProject, serializeProject, serializeProjectLite } from './projectsApi'

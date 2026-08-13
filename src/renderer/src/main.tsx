@@ -1,15 +1,13 @@
 import React, { useEffect } from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App'
 import AuthScreen from './components/AuthScreen'
-import HomeScreen from './components/HomeScreen'
 import LandingScreen from './landing/LandingScreen'
 import { EcPromptHost } from './ui/ecPrompt'
 import LegalPage from './landing/LegalPage'
 import AccountPanelHost from './newui/screens/AccountPanelHost'
 import PricingModalHost from './newui/screens/PricingModal'
 import { useStore, firstVideoSourcePath } from './store'
-import { IS_WEB, IS_CLOUD, IS_DESKTOP_CLOUD, IS_NEW_UI } from './platform'
+import { IS_WEB, IS_CLOUD, IS_DESKTOP_CLOUD } from './platform'
 import { safeErrMessage } from './safeError'
 import { installWebApi, authMe } from './webapi'
 import { installCloudApi } from './cloud/api'
@@ -23,7 +21,6 @@ import MobileDashboard from './newui/screens/MobileDashboard'
 import AdminDashboard from './newui/screens/AdminDashboard'
 import Editor from './newui/screens/Editor'
 import MobileEditor from './newui/screens/MobileEditor'
-import { isNewUi } from './newui/flag'
 import { useIsMobile } from './useMobile'
 import './styles.css'
 // Design-system foundation (tokens + self-hosted fonts). Scoped under
@@ -43,11 +40,9 @@ import './newui/newui.css'
 // Opt-in premium redesign (P1–P6, gated by VITE_NEW_EASECUT_UI): mark the root
 // so the scoped design CSS applies. OFF by default → legacy UI unchanged. This
 // attempt is dormant in production (the env var is unset); kept inert, not removed.
-if (IS_NEW_UI) document.documentElement.setAttribute('data-ec-ui', 'new')
+document.documentElement.setAttribute('data-ec-ui', 'new')
 
 // The Stage A–C new UI, now the default on every host; ?newui=0 (persisted to
-// localStorage) drops back to legacy. Independent of IS_NEW_UI above.
-const NEW_UI = isNewUi()
 
 // Job-bar recorder. ONE `job` slot is written by many producers (every IPC
 // progress event plus each action's own set()), and a progress bar that
@@ -235,7 +230,7 @@ function Root(): JSX.Element {
   // Retake/transcribe/export progress events are emitted but never update the
   // bar (it just jumps from the action's own 1% to 100%). Register it once here.
   useEffect(() => {
-    if (NEW_UI) void useStore.getState().init()
+    void useStore.getState().init()
   }, [])
 
   // Marketing/legal routes: keep the view in sync with the URL on back/forward.
@@ -409,9 +404,8 @@ function Root(): JSX.Element {
   if (view === 'privacy') return <LegalPage kind="privacy" onNavigate={navigate} />
   if (view === 'refund') return <LegalPage kind="refund" onNavigate={navigate} />
   if (view === 'auth') return <AuthScreen />
-  if (view === 'home') return NEW_UI ? (isMobile ? <MobileDashboard /> : <Dashboard />) : <HomeScreen />
-  if (NEW_UI) return isMobile ? <MobileEditor /> : <Editor />
-  return <App />
+  if (view === 'home') return isMobile ? <MobileDashboard /> : <Dashboard />
+  return isMobile ? <MobileEditor /> : <Editor />
 }
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(

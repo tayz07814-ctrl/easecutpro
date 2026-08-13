@@ -31,7 +31,7 @@ import MobileTimeline from './MobileTimeline'
 // Reuse the ORIGINAL timeline.css (one shared stylesheet — no duplicate .ec-tl-*
 // rules). New-UI redesign overrides live scoped under .ec-newui in newui.css, so
 // main's timeline (not under .ec-newui) is unaffected.
-import '../../components/timeline/timeline.css'
+import './timeline.css'
 
 /** The removed (cut) ranges = the complement of the kept ranges within [0,dur]. */
 function removedRanges(keeps: { start: number; end: number }[], dur: number): { start: number; end: number }[] {
