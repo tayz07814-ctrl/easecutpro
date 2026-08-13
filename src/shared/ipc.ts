@@ -22,6 +22,7 @@ export const IPC = {
   sttAudioWav: 'media:sttAudioWav', // desktop-only: 16k mono WAV for the cloud STT engines
   buildPreviewProxy: 'media:buildPreviewProxy', // flatten the current edit for seamless preview
   existingPreviewProxy: 'media:existingPreviewProxy', // is a proxy for this edit already on disk?
+  conditionPreviewMedia: 'media:conditionPreviewMedia', // import-time edit-friendly copy (dense keyframes)
   export: 'project:export',
   revealPath: 'shell:revealPath', // show a finished export in the file manager
   saveProject: 'project:save',

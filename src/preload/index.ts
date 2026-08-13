@@ -91,6 +91,8 @@ const api = {
     ipcRenderer.invoke(IPC.buildPreviewProxy, project, signature),
   existingPreviewProxy: (signature: string): Promise<string> =>
     ipcRenderer.invoke(IPC.existingPreviewProxy, signature),
+  conditionPreviewMedia: (src: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.conditionPreviewMedia, src),
   // `onPartial` streams thumbnails as they generate on the web build; Electron
   // returns the whole strip over IPC at once (callbacks can't cross IPC), so it
   // is accepted for a shared signature but ignored here.

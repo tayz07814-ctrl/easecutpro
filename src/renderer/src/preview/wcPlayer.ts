@@ -372,6 +372,10 @@ export class WcPlayer {
   private sources = new Map<string, SourcePipes>()
   /** Identity of the current seam warm-up walk; bumping it abandons the old one. */
   private warmGen = 0
+  /** src -> conditioned preview copy (dense keyframes, ≤720p). Everything is
+   *  still keyed and requested by the ORIGINAL path; only the bytes the
+   *  demuxer opens change. Timestamps are identical, so cuts land the same. */
+  private conditioned = new Map<string, string>()
   /** Landing-frame cache: each cut's in-point decoded ONCE (downscaled, held as
    *  an ImageBitmap decoupled from the live decoders). Built PROACTIVELY during
    *  the "Polishing" phase after cuts apply, so the FIRST playback draws every
@@ -474,6 +478,22 @@ export class WcPlayer {
     return best
   }
 
+  /** Adopt a conditioned preview copy for `src`, reopening its pipes so the
+   *  demuxers switch to the edit-friendly file. Call while PAUSED: reopening
+   *  mid-playback would drop the live picture for the reopen duration. The
+   *  visible frame goes stale for a beat; the next draw repaints from the new
+   *  chain at identical timestamps. */
+  useConditioned(src: string, path: string): void {
+    if (!path || this.conditioned.get(src) === path) return
+    this.conditioned.set(src, path)
+    const sp = this.sources.get(src)
+    if (!sp) return
+    sp.pipes?.forEach((p) => p.dispose())
+    sp.inputs.forEach((i) => i.dispose())
+    this.sources.delete(src)
+    this.open(src)
+  }
+
   /** Declare the current set of base-video sources (idempotent; drops gone ones). */
   setSources(list: { src: string }[]): void {
     const want = new Set(list.map((l) => l.src))
@@ -497,10 +517,14 @@ export class WcPlayer {
           sp.dead = true
           this.fail(e)
         }
+        // Play the conditioned preview copy when one exists — dense keyframes
+        // make every seek a 1-3 frame decode, which is the whole reason cuts
+        // can be smooth on weak machines. The original path stays the key.
+        const eff = this.conditioned.get(src) ?? src
         // One fully independent demux+decode chain per pipe, so a warm-pipe
         // park can never block the live pipe's reads.
         const makePipe = async (): Promise<Pipe> => {
-          const input = new mb.Input({ source: await inputSourceFor(mb, src), formats: mb.ALL_FORMATS })
+          const input = new mb.Input({ source: await inputSourceFor(mb, eff), formats: mb.ALL_FORMATS })
           sp.inputs.push(input)
           const track: InputVideoTrack | null = await input.getPrimaryVideoTrack()
           if (!track || !(await track.canDecode())) throw new Error('undecodable video track: ' + src)

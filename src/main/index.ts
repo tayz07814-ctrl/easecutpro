@@ -10,6 +10,7 @@ import { checkTools, listWhisperModels } from './binaries'
 import { probe, exportProject, extractWaveform, extractThumbnails, combineClips, extractAudioWav } from './ffmpeg'
 import { handleFrameStream, extractPreviewAudioWav, killAllFrameStreams } from './framestream'
 import { buildPreviewProxy, existingProxy } from './previewProxy'
+import { conditionForPreview } from './previewMedia'
 import { initAutoUpdate } from './updater'
 import { transcribe } from './whisper'
 import { transcribeOpenAI } from './openai-transcribe'
@@ -475,6 +476,14 @@ app.whenReady().then(() => {
     return buildPreviewProxy(project, signature, (pct) =>
       emitProgress('probe', jobId, pct, 'Preparing smooth playback…')
     )
+  })
+
+  // Import-time conditioning: one edit-friendly copy per source (dense
+  // keyframes, ≤720p short edge). The preview plays this instead of the
+  // original, which is what makes seeks — and therefore cuts — cheap.
+  ipcMain.handle(IPC.conditionPreviewMedia, async (_e, src: string) => {
+    const jobId = randomUUID()
+    return conditionForPreview(src, (pct) => emitProgress('probe', jobId, pct, 'Optimizing media for editing…'))
   })
 
   // ---- Filmstrip thumbnails ----

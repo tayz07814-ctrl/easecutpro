@@ -468,12 +468,45 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const wcVideoReadyRef = useRef(false)
   const wcVideoWaitRef = useRef(0)
   const srcSig = sources.join('|')
+  // Conditioned copies that arrived while playing — adopted on the next pause,
+  // because adopting reopens the source's demuxers and would hold the live
+  // picture if done mid-playback.
+  const pendingConditionedRef = useRef(new Map<string, string>())
   useEffect(() => {
     if (!wcOn) return
     // engineKind is a dep: a demotion builds a NEW player that owns no sources.
     wcRef.current?.setSources(segsRef.current.filter((s) => !s.isImage).map((s) => ({ src: s.src })))
+    // IMPORT-TIME CONDITIONING (desktop): ask the main process for each
+    // source's edit-friendly copy — dense keyframes, ≤720p — and play THAT.
+    // This is what makes seeks (and therefore cuts and scrubs) cheap; it is
+    // the same move Descript and CapCut make at import. Web's shim returns ''
+    // (no local ffmpeg), so this is a no-op there. Failure leaves the
+    // original playing — today's behaviour, never worse.
+    if (typeof window.api?.conditionPreviewMedia === 'function') {
+      for (const s of segsRef.current.filter((x) => !x.isImage)) {
+        void window.api
+          .conditionPreviewMedia(s.src)
+          .then((p) => {
+            if (!p) return
+            const wc = wcRef.current
+            if (!wc || !('useConditioned' in wc)) return
+            if (playingRef.current) pendingConditionedRef.current.set(s.src, p)
+            else wc.useConditioned(s.src, p)
+          })
+          .catch(() => undefined)
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcSig, wcOn, engineKind])
+
+  // Adopt conditioned copies that finished during playback.
+  useEffect(() => {
+    if (playing || !wcOn) return
+    const wc = wcRef.current
+    if (!wc || !('useConditioned' in wc)) return
+    for (const [src, p] of pendingConditionedRef.current) wc.useConditioned(src, p)
+    pendingConditionedRef.current.clear()
+  }, [playing, wcOn])
 
   // POLISHING phase: executeCuts bumps polishReq. Decode every cut's landing
   // frame ONCE (the seam cache), driving the % bar, then clear it so the editor

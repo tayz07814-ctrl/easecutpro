@@ -204,6 +204,7 @@ const cloudApi: Window['api'] & {
   sttAudioWav: async () => desktopOnly('Native STT audio'),
   buildPreviewProxy: async () => '',
   existingPreviewProxy: async () => '',
+  conditionPreviewMedia: async () => '', // web: no local ffmpeg to condition with
   revealPath: async () => undefined,
   thumbnails: (path, intervalSec) => localThumbnails(needLocal(path), intervalSec),
 
