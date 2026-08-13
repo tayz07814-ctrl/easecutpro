@@ -242,6 +242,9 @@ const webApi: Window['api'] = {
   sttAudioWav: async () => {
     throw new Error('sttAudioWav is desktop-only')
   },
+  // Proxy rendering needs local ffmpeg; the browser keeps the live engine.
+  buildPreviewProxy: async () => '',
+  existingPreviewProxy: async () => '',
   // No file manager in a browser — the download already went to the user.
   revealPath: async () => undefined,
   thumbnails: (path, intervalSec, onPartial) =>

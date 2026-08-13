@@ -504,6 +504,14 @@
 .ec-drag a,
 .ec-drag [role='button'],
 .ec-drag [contenteditable='true'],
-.ec-drag .ec-no-drag {
+.ec-drag .ec-no-drag,
+/* SAFETY NET. A clickable `<div onClick>` matches none of the tag selectors
+   above, so it stayed part of the OS drag region: the click never reached React
+   and a double-click toggled maximise instead. That is exactly what "clicking
+   Projects makes the app big and small instead of going back" was. Anything
+   this app renders as clickable also carries cursor:pointer, so key off that —
+   a new clickable div is then safe by default rather than silently dead.
+   Prefer `ec-no-drag` explicitly; this only catches what someone forgot. */
+.ec-drag [style*='cursor: pointer'] {
   -webkit-app-region: no-drag;
 }

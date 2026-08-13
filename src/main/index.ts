@@ -9,6 +9,7 @@ import { IPC } from '../shared/ipc'
 import { checkTools, listWhisperModels } from './binaries'
 import { probe, exportProject, extractWaveform, extractThumbnails, combineClips, extractAudioWav } from './ffmpeg'
 import { handleFrameStream, extractPreviewAudioWav, killAllFrameStreams } from './framestream'
+import { buildPreviewProxy, existingProxy } from './previewProxy'
 import { initAutoUpdate } from './updater'
 import { transcribe } from './whisper'
 import { transcribeOpenAI } from './openai-transcribe'
@@ -466,6 +467,15 @@ app.whenReady().then(() => {
   // Cloud-hybrid STT: 16k mono WAV (same aresample=first_pts=0 alignment the
   // local engines use) for upload to the stt edge function.
   ipcMain.handle(IPC.sttAudioWav, async (_e, path: string) => extractAudioWav(path))
+
+  // Preview proxy: flatten the current edit so playback has no seams to seek.
+  ipcMain.handle(IPC.existingPreviewProxy, (_e, signature: string) => existingProxy(signature))
+  ipcMain.handle(IPC.buildPreviewProxy, async (_e, project: Project, signature: string) => {
+    const jobId = randomUUID()
+    return buildPreviewProxy(project, signature, (pct) =>
+      emitProgress('probe', jobId, pct, 'Preparing smooth playback…')
+    )
+  })
 
   // ---- Filmstrip thumbnails ----
   ipcMain.handle(IPC.thumbnails, async (_e, path: string, intervalSec?: number, fromSec?: number, toSec?: number) =>

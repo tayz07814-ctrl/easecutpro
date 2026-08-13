@@ -117,6 +117,80 @@ The import wizard pre-decodes them behind its 1-100 bar so the editor opens read
 
 ---
 
+### Seam stalls are the desktop stutter — and the proxy is NOT the fix
+
+Measured on a real 48-cut project (`IMG_gfh4739`, 38.5 s source → 17.5 s edit),
+12 s of playback on the WebCodecs engine:
+
+| | |
+|---|---|
+| decoder restarts | **68** (5.7/sec) |
+| cumulative restart stall | **4,289 ms — 35.7% of playback** |
+| restart latency | 55 ms median, 165 ms max |
+| skipped frames / stale paints | 184 / 115 (7.1%) |
+
+A restart is a decoder re-prime, and it is the only thing that stalls the
+picture. `CompositionPlayer` on mobile is smooth precisely because a cut never
+re-primes anything. **Closing that gap in `wcPlayer.ts` is the real work.**
+
+`STATS.restartWhy` (a per-branch counter on every `restart()` call site) and
+`STATS.seamJumpS` (how far each seam jumped vs `FORWARD_DECODE_S`) are in the
+build to say *which* rule is firing — read them off `window.__wcStats`. They had
+not been captured yet at the time of writing: a window launched detached from a
+background shell stops producing frames after a while (`rAF` → 0 while
+`document.hidden` is false and `IsWindowVisible` reports false), which zeroes
+every counter. **Run the app normally on the desktop, then attach over CDP.**
+
+### Preview proxy: built, then switched off — same call mobile made
+
+**`PROXY_ENABLED = false`.** `mobile/lib/screens/editor_screen.dart:477` shipped
+this identical proxy and hard-disabled it (`_proxyWorthwhile()` is `return false`
+with the old logic left as dead code) once the native preview moved to
+`CompositionPlayer`. A player that is seamless *immediately* beats a render that
+is seamless in twenty seconds, and not baking the picture also let crop and the
+Ken Burns pan composite live again. The desktop code below is kept, verified and
+switched off for the same reasons — it is a fallback for machines where the
+WebCodecs path can't keep up, not the answer.
+
+The rest of this section describes how it works when enabled.
+
+
+
+The live engine has to *make* a cut happen while playing: at every seam it moves
+source position, which is a seek (keyframe, decode forward, resync audio). The
+cost scales with the number of cuts, not with the CPU — which is why a 48-cut
+timeline stutters on a machine that plays the raw file fine. Mobile does not
+have this problem because Media3's `CompositionPlayer` treats the cut list as
+one composition.
+
+The desktop answer is to flatten: render the current edit to one small file
+(540p, `exportProject`, so it is frame-identical to the export) and play that.
+One decode, no seams. `src/main/previewProxy.ts` builds and caches it,
+`ProxyPlayer.tsx` plays it, `usePreviewProxy.ts` decides when.
+
+Three rules hold the design together:
+
+- **Signature or nothing.** A proxy is a render of ONE exact edit, so it is keyed
+  by a hash of the folded project + document and only played while that hash
+  still matches the screen. The hash includes everything except view-only fields
+  (playhead, zoom, track height…): over-invalidating costs one cheap rebuild,
+  under-invalidating shows the creator a cut they no longer have. Verified: a
+  Split took the doc 48→49 clips and the proxy dropped in the same tick.
+- **Sibling, never a modification of `DocPreview`.** It takes over completely or
+  does not mount. This is why the transport is duplicated in `ProxyPlayer` — a
+  deliberate trade after renderer edits caused the last regression. Change
+  `DocPreview`'s transport and this one has to follow.
+- **Additive by default.** Builds only on desktop, only at ≥8 main-lane clips,
+  only after 1.5 s of no edits, and only while paused. Failure is silent and
+  falls back to the live engine.
+
+Measured on a real 48-clip project: proxy engages ~10 s after open (cached: 1 ms),
+and playback traces `currentTime` advancing 0.50 s per 500 ms for 12 s at
+`readyState` 4 with **zero** `waiting`/`stalled` events. Signature is
+byte-identical across app restarts, so reopening a project reuses the render.
+
+---
+
 ## 3. Traps that cost real time here
 
 - **Never override a positioned element's `position`.** `.ec-tl-filmstrip` is
@@ -139,6 +213,19 @@ The import wizard pre-decodes them behind its 1-100 bar so the editor opens read
   `connect-src` entries.
 - **`file://` can't fetch siblings** — the VAD assets are served over a custom
   `ecvad://` scheme from `out/renderer/vad`.
+- **Never drive destructive UI over CDP against a real user project.** Testing
+  invalidation with a Split was fine; "undoing" it with two synthetic
+  `Ctrl+Z` keydowns wiped the document past the import, and autosave wrote the
+  empty timeline to disk within seconds — 48 clips gone. It was recoverable only
+  because a debug dump of the document happened to be sitting in the scratchpad.
+  Copy a project file before automating edits on it, or test on a scratch one.
+- **A `<video>` doesn't reliably appear in `Page.captureScreenshot`, and
+  `getImageData` on a GPU surface costs ~30 ms a call.** Both produced fake
+  "9-second picture freezes" that did not exist. For a media element use
+  `requestVideoFrameCallback`; counting `drawImage` calls page-wide is also
+  wrong here (49 filmstrip canvases paint into the same counter). The
+  trustworthy signal for the proxy is the element's own trace: `currentTime`
+  advance vs wall clock plus the absence of `waiting`/`stalled`.
 
 ---
 
@@ -151,6 +238,7 @@ The import wizard pre-decodes them behind its 1-100 bar so the editor opens read
 | `verify-progress-smoothing` | the export bar can never run away or reset |
 | `verify-export-progress` | real montage export: monotonic, no ffmpeg pile-up |
 | `verify-framestream` | rotation-aware probe, frame byte math, preview WAV format |
+| `verify-preview-proxy` | proxy renders the EDIT not the source, honours project aspect, caches, shares concurrent builds, and gives a different edit a different file |
 | `verify-silence-mastery`, `verify-retakeaware`, `verify-cutlord` | cut engines |
 | `verify-smoothseams`, `verify-clipkeep-parity`, `verify-timeline-exporttransform` | export parity |
 

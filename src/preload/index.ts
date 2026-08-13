@@ -86,6 +86,11 @@ const api = {
   previewAudioWav: (path: string): Promise<string> => ipcRenderer.invoke(IPC.previewAudioWav, path),
   /** Desktop-only: 16k mono WAV (STT timebase) for the cloud edge engines. */
   sttAudioWav: (path: string): Promise<string> => ipcRenderer.invoke(IPC.sttAudioWav, path),
+  /** Flat proxy of the current edit, for seamless preview playback. */
+  buildPreviewProxy: (project: Project, signature: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.buildPreviewProxy, project, signature),
+  existingPreviewProxy: (signature: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.existingPreviewProxy, signature),
   // `onPartial` streams thumbnails as they generate on the web build; Electron
   // returns the whole strip over IPC at once (callbacks can't cross IPC), so it
   // is accepted for a shared signature but ignored here.

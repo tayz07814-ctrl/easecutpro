@@ -21,6 +21,7 @@ import type { Input, BlobSource, UrlSource, InputVideoTrack, VideoSample, VideoS
 import { IS_WEB } from '../platform'
 import { isWebMediaId, getFile } from '../webmedia'
 import { resolveMedia } from '../media/resolver'
+import { shouldSupersedeScrub } from './scrubRule'
 
 // Mediabunny is DYNAMICALLY imported (repo convention — the exports do the
 // same) so mobile, which never runs this engine, pays nothing in the bundle.
@@ -66,7 +67,15 @@ const STATS = {
   paintGood: 0,
   paintSeamCache: 0,
   paintStale: 0,
-  paintNone: 0
+  paintNone: 0,
+  /** WHY each restart happened. A restart is the one thing that stalls the
+   *  picture, so the mix here is what tells you which rule to change — reading
+   *  only the total sends you fixing the wrong branch. */
+  restartWhy: {} as Record<string, number>,
+  /** For seam restarts: how far ahead (source seconds) the playhead jumped.
+   *  Compare against FORWARD_DECODE_S to see whether the threshold is the
+   *  problem or the jumps genuinely are. */
+  seamJumpS: [] as number[]
 }
 if (typeof window !== 'undefined') (window as { __wcStats?: typeof STATS }).__wcStats = STATS
 const COVER_SLACK = 0.4 // how far past the last queued frame we still count as "covered"
@@ -143,7 +152,8 @@ class Pipe {
 
   /** Restart the iterator at `t` (closing everything queued). The old `cur`
    *  keeps displaying until the first new frame lands — no black flash. */
-  restart(t: number): void {
+  restart(t: number, why = 'unknown'): void {
+    STATS.restartWhy[why] = (STATS.restartWhy[why] ?? 0) + 1
     this.gen++
     const old = this.iter
     this.iter = null
@@ -236,16 +246,18 @@ class Pipe {
     this.want = t
     if (this.pendingStart !== null) {
       // a restart is in flight; only abandon it if the playhead ran far past
-      if (Math.abs(t - this.pendingStart) > 2.5) this.restart(t)
+      if (Math.abs(t - this.pendingStart) > 2.5) this.restart(t, 'follow:abandonStalledRestart')
     } else if (!this.iter) {
-      this.restart(t) // first play after a paused still: begin decoding
+      this.restart(t, 'follow:noIterator') // first play after a paused still: begin decoding
     } else if (this.score(t) > 1.5) {
       // Jumped beyond the decoded window. A SHORT FORWARD jump is just a cut:
       // decode through it (skipUntil, armed above, keeps those frames off the
       // canvas) instead of seeking — see FORWARD_DECODE_S. Backward jumps and
       // long skips still seek, which is genuinely cheaper there.
       const ahead = this.cur ? t - this.cur.timestamp : Number.POSITIVE_INFINITY
-      if (!(ahead > 0 && ahead <= FORWARD_DECODE_S)) this.restart(t)
+      if (ahead > 0) STATS.seamJumpS.push(ahead)
+      if (!(ahead > 0 && ahead <= FORWARD_DECODE_S))
+        this.restart(t, ahead > 0 ? 'follow:forwardJumpTooFar' : 'follow:backwardJump')
     }
     let moved = false
     while (this.queue.length && this.queue[0].timestamp <= t) {
@@ -270,7 +282,7 @@ class Pipe {
     if (this.pendingStart !== null && Math.abs(t - this.pendingStart) < 0.5) return
     if (this.score(t) <= 0.25) return
     this.want = t
-    this.restart(t)
+    this.restart(t, 'park:seamPrewarm')
   }
 
   /** Paused/scrub: use the SAME sequential iterator playback will consume.
@@ -290,11 +302,18 @@ class Pipe {
       moved = true
     }
     if (this.pendingStart !== null) {
-      // A real scrub supersedes an older landing immediately; repeated rAF
-      // requests for the same target leave its decoder alone.
-      if (Math.abs(t - this.pendingStart) > 0.08) this.restart(t)
+      // A newer drag position supersedes an older landing — but only once that
+      // landing has had SCRUB_GRACE_MS to arrive. Superseding on sight (what
+      // this did before) means a drag issues one restart per animation frame,
+      // each killing the decode the last one started, so no frame EVER lands
+      // and the preview appears frozen until the drag stops. `want` is already
+      // recorded above, so the moment this restart delivers, the next tick
+      // re-targets to wherever the finger is by then.
+      if (shouldSupersedeScrub(performance.now(), this.restartAt, t, this.pendingStart)) {
+        this.restart(t, 'still:scrubSupersede')
+      }
     } else if (!this.iter || this.frameScore(t) > 0.08) {
-      this.restart(t)
+      this.restart(t, !this.iter ? 'still:noIterator' : 'still:uncovered')
     }
     if (moved || this.queue.length < QUEUE_AHEAD) void this.pump()
   }
@@ -346,6 +365,8 @@ export class WcPlayer {
   /** Flips true on ANY pipeline error — the preview falls back to elements. */
   failed = false
   private sources = new Map<string, SourcePipes>()
+  /** Identity of the current seam warm-up walk; bumping it abandons the old one. */
+  private warmGen = 0
   /** Landing-frame cache: each cut's in-point decoded ONCE (downscaled, held as
    *  an ImageBitmap decoupled from the live decoders). Built PROACTIVELY during
    *  the "Polishing" phase after cuts apply, so the FIRST playback draws every
@@ -499,6 +520,50 @@ export class WcPlayer {
     const own = sp.pipes[sp.owner].curTime
     if (own !== null && tSrc > own && tSrc - own <= FORWARD_DECODE_S) return
     sp.pipes[sp.owner ^ 1].park(tSrc)
+  }
+
+  /**
+   * FIRST-PASS SEAM WARM-UP, while paused.
+   *
+   * "The first two or three cuts freeze for a second, after that it's smooth."
+   * The element path already fixes this by visiting every landing point while
+   * paused; the WebCodecs path was skipped on the assumption it needed no
+   * warm-up. It does — just not an element seek. The FIRST decode at a landing
+   * point still pays mediabunny's demux/index walk, the OS paging the file's
+   * bytes in, and a keyframe decode. Every later visit is warm, which is
+   * exactly why pass two (and scrubbing back over a cut) is clean.
+   *
+   * So make that first visit here. Parks the NON-owner pipe on each landing
+   * point in turn, one at a time, awaiting each so two seeks never contend for
+   * the hardware decoder. The owner is never touched, so the visible paused
+   * frame cannot move. Any call supersedes the previous walk, and playback
+   * starting aborts it — a warm-up must never compete with the live picture.
+   */
+  warmSeams(landings: { src: string; tSrc: number }[], stillWanted: () => boolean): void {
+    this.warmGen++
+    const myGen = this.warmGen
+    void (async () => {
+      for (const { src, tSrc } of landings) {
+        if (myGen !== this.warmGen || !stillWanted()) return
+        const sp = this.sources.get(src)
+        if (!sp?.ready || !sp.pipes || sp.dead) continue
+        const warm = sp.pipes[sp.owner ^ 1]
+        if (warm.score(tSrc) <= 0.25) continue // already parked there
+        warm.park(tSrc)
+        // Let this landing actually decode before starting the next: firing
+        // them all at once would just be the seek storm under another name.
+        for (let i = 0; i < 40; i++) {
+          if (myGen !== this.warmGen || !stillWanted()) return
+          if (warm.curTime !== null && Math.abs(warm.curTime - tSrc) < 0.5) break
+          await new Promise((r) => setTimeout(r, 25))
+        }
+      }
+    })()
+  }
+
+  /** Abandon any in-flight seam warm-up (playback started, or the edit changed). */
+  cancelWarm(): void {
+    this.warmGen++
   }
 
   /** Prepare sequential playback at a source timestamp. Returns true only when

@@ -20,6 +20,8 @@ export const IPC = {
   thumbnails: 'media:thumbnails',
   previewAudioWav: 'media:previewAudioWav', // desktop-only: native PCM for the preview audio engine
   sttAudioWav: 'media:sttAudioWav', // desktop-only: 16k mono WAV for the cloud STT engines
+  buildPreviewProxy: 'media:buildPreviewProxy', // flatten the current edit for seamless preview
+  existingPreviewProxy: 'media:existingPreviewProxy', // is a proxy for this edit already on disk?
   export: 'project:export',
   revealPath: 'shell:revealPath', // show a finished export in the file manager
   saveProject: 'project:save',

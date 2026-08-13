@@ -701,6 +701,42 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buddySig, playing, isMobile, wcOn])
 
+  // ---- FIRST-PASS SEAM PRE-WARM (WebCodecs) ----
+  // The decoder twin of the element warm-up above, which skips this path on the
+  // assumption that a compositor needs no seek warm-up. It doesn't need an
+  // ELEMENT seek — but the first decode at a landing point still pays
+  // mediabunny's demux/index walk, the OS paging in that part of the file, and
+  // a keyframe decode. That is the reported "the first two or three cuts freeze
+  // for a second, after that it's smooth", and why pass two is always clean.
+  // Same shape as the element version: paused only, playback order from the
+  // playhead, one landing at a time, and the warm pipe only — never the one
+  // holding the visible frame.
+  useEffect(() => {
+    const wc = wcRef.current
+    if (isMobile || !wcOn || !wc || !('warmSeams' in wc)) return
+    if (playing) {
+      wc.cancelWarm()
+      return
+    }
+    const ss = segsRef.current
+    const seams: { src: string; tSrc: number; at: number }[] = []
+    for (let i = 1; i < ss.length; i++) {
+      const a = ss[i - 1]
+      const b = ss[i]
+      if (b.isImage) continue
+      const jump = b.sourceStart - a.sourceEnd
+      if (a.src === b.src && jump >= 0 && jump <= 0.12) continue // micro-join: plays through
+      seams.push({ src: b.src, tSrc: b.sourceStart, at: b.start })
+    }
+    const t = tRef.current
+    const ordered = [...seams.filter((s) => s.at >= t), ...seams.filter((s) => s.at < t)]
+    if (!ordered.length) return
+    wc.warmSeams(ordered, () => !playingRef.current)
+    return () => wc.cancelWarm()
+    // buddySig captures the seam content; the refs are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buddySig, playing, isMobile, wcOn])
+
   function segAtTime(t: number): number {
     return segsRef.current.findIndex((s) => t >= s.start && t < s.start + s.len)
   }

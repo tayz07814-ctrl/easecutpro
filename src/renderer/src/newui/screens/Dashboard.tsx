@@ -545,7 +545,7 @@ export default function Dashboard(): JSX.Element {
           </div>
           <div style={css('flex:1')} />
           {activeJobs.length > 0 && (
-            <span onClick={(e) => { e.stopPropagation(); setDockHidden(false) }} style={css('display:flex;align-items:center;gap:7px;flex:none;white-space:nowrap;font-size:13px;color:#9A9AAE;padding:8px 12px;border-radius:9px;cursor:pointer')}>
+            <span className="ec-no-drag" onClick={(e) => { e.stopPropagation(); setDockHidden(false) }} style={css('display:flex;align-items:center;gap:7px;flex:none;white-space:nowrap;font-size:13px;color:#9A9AAE;padding:8px 12px;border-radius:9px;cursor:pointer')}>
               <span style={css('width:6px;height:6px;border-radius:50%;background:#E6B26A;animation:ecPulse 1.4s infinite')} />Queue {activeJobs.length}
             </span>
           )}

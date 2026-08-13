@@ -6,6 +6,8 @@ import OverlayLayer from './OverlayLayer'
 import TextLayer from './TextLayer'
 import SequencePreview from './SequencePreview'
 import DocPreview from './DocPreview'
+import { ProxyPlayer } from './ProxyPlayer'
+import { usePreviewProxy } from '../preview/usePreviewProxy'
 import { useSharedEngineSnapshot } from '../timelineEngine'
 import { playClock, primePlayback } from '../clock'
 import { mediaSrc } from '../platform'
@@ -23,6 +25,7 @@ export default function VideoPreview(): JSX.Element {
   const setPlayhead = useStore((s) => s.setPlayhead)
   const setAspect = useStore((s) => s.setAspect)
   const docSnap = useSharedEngineSnapshot()
+  const proxy = usePreviewProxy(docSnap?.doc ?? null)
 
   // Keep ranges recomputed on edit changes; used to skip during playback.
   // The waveform makes cut edges snap to energy valleys (matches the export).
@@ -231,6 +234,14 @@ export default function VideoPreview(): JSX.Element {
   // wedges (undo/redrop/lane moves) that plagued the retrofitted legacy player.
   const docMain = docSnap?.doc?.tracks.find((t) => t.isMain)
   if (docSnap?.doc && docMain && docMain.clips.length > 0) {
+    // SEAMLESS PLAYBACK. When a flattened render of THIS EXACT edit exists, play
+    // that instead: the cuts are already baked in, so there are no seams to seek
+    // over and playback is one continuous decode. Any edit invalidates the
+    // signature and this falls straight back to the live engine below, which is
+    // also what happens while a proxy is still rendering or if it fails.
+    if (proxy.path) {
+      return <ProxyPlayer path={proxy.path} total={proxy.duration} onFailed={proxy.reject} />
+    }
     return <DocPreview doc={docSnap.doc} />
   }
   // Legacy montage mode (multi-clip baseSequence, no timeline document).
