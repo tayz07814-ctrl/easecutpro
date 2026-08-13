@@ -504,8 +504,12 @@ export class FfPlayer {
     }
   }
 
-  /** Park a source's non-owner pipe at an upcoming in-point (seam decode-ahead). */
-  prewarm(src: string, tSrc: number): void {
+  /** Park a source's non-owner pipe at an upcoming in-point (seam decode-ahead).
+   *  `fromTSrc` (the outgoing clip's sourceEnd) is accepted for signature parity
+   *  with WcPlayer but not used to skip: this engine seeks by respawning ffmpeg,
+   *  so it cannot cheaply decode through removed footage the way WebCodecs can —
+   *  parking ahead is still the better trade here. */
+  prewarm(src: string, tSrc: number, _fromTSrc?: number): void {
     const sp = this.sources.get(src)
     if (!sp || sp.dead) return
     sp.pipes[sp.owner ^ 1].park(tSrc)

@@ -509,14 +509,23 @@ export class WcPlayer {
   /** Park a source's non-owner pipe at an upcoming in-point (seam decode-ahead).
    *  NEVER the owner: on segments shorter than the prewarm lead this used to
    *  restart the pipe still decoding the CURRENT segment — a frozen picture. */
-  prewarm(src: string, tSrc: number): void {
+  prewarm(src: string, tSrc: number, fromTSrc?: number): void {
     const sp = this.sources.get(src)
     if (!sp?.ready || !sp.pipes) return
     // Don't park the warm pipe for a seam the LIVE pipe will simply decode
-    // through: parking is a seek, and on a densely cut timeline that doubled
-    // the seek storm (one park + one restart per cut). Only pays off for a
-    // different source, or a jump too long to walk. (For a different source
-    // this source's owner holds no frame, so `own` is null and we park.)
+    // through: parking is a seek, and both pipes share one demuxer, so every
+    // park stalls the live picture too. Measured on a real densely-cut project
+    // (CREATIVE 20, 42 restarts in 12s, 3.9s of stall = the reported freezing):
+    // ALL of them were these parks — the live pipe walked every actual seam
+    // without a single restart. The guard must therefore judge what the live
+    // pipe will face AT the seam: the removed span alone (`tSrc - fromTSrc`,
+    // where fromTSrc is the outgoing clip's sourceEnd). Judging from the
+    // owner's CURRENT frame (the old rule) silently added the un-played rest
+    // of the clip to the jump, pushing ~2s gaps past the 3s limit and firing
+    // a park at every seam.
+    if (fromTSrc !== undefined && tSrc > fromTSrc && tSrc - fromTSrc <= FORWARD_DECODE_S) return
+    // No fromTSrc (different source, or a caller that can't know it): fall back
+    // to judging from the owner's current position.
     const own = sp.pipes[sp.owner].curTime
     if (own !== null && tSrc > own && tSrc - own <= FORWARD_DECODE_S) return
     sp.pipes[sp.owner ^ 1].park(tSrc)

@@ -1181,8 +1181,16 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               // the real frame replaces it as soon as it arrives.
               if (!painted) drawPoster(ctx, cw, ch, shown.src)
               // Decode-ahead: park the warm pipe on the upcoming seam's in-point.
+              // For a same-source seam, pass where the live pipe will BE when it
+              // hits the seam (the outgoing clip's sourceEnd) so prewarm can judge
+              // the removed span itself — judged from the current frame instead,
+              // the un-played rest of this clip inflated every ~2s gap past the
+              // walk-through limit and fired a park (= a seek on the shared
+              // demuxer, = a picture stall) at every single seam.
               const up = ss[di + 1]
-              if (up && !up.isImage && t >= shown.start + shown.len - 1.0) wc.prewarm(up.src, up.sourceStart)
+              if (up && !up.isImage && t >= shown.start + shown.len - 1.0) {
+                wc.prewarm(up.src, up.sourceStart, up.src === shown.src ? shown.sourceEnd : undefined)
+              }
               cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
               cv.style.transform = kbTransform(shown)
             } else {
