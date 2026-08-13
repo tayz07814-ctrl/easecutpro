@@ -332,7 +332,12 @@ class Pipe {
 }
 
 interface SourcePipes {
-  input: Input | null
+  /** One demuxer PER PIPE. They used to share one Input, which made every warm
+   *  park a seek on the live pipe's demuxer — the parks meant to hide seam
+   *  latency were themselves the measured picture stalls. Two Inputs cost a
+   *  second sample-table in memory; independence of the live picture is worth
+   *  far more. */
+  inputs: Input[]
   pipes: [Pipe, Pipe] | null
   /** Which pipe OWNS the currently-displayed time (recomputed every render).
    *  prewarm() may only ever touch the other one — restarting the owner
@@ -475,7 +480,7 @@ export class WcPlayer {
     for (const [src, sp] of this.sources) {
       if (!want.has(src)) {
         sp.pipes?.forEach((p) => p.dispose())
-        sp.input?.dispose()
+        sp.inputs.forEach((i) => i.dispose())
         this.sources.delete(src)
       }
     }
@@ -483,20 +488,25 @@ export class WcPlayer {
   }
 
   private open(src: string): void {
-    const sp: SourcePipes = { input: null, pipes: null, owner: 0, ready: false, dead: false }
+    const sp: SourcePipes = { inputs: [], pipes: null, owner: 0, ready: false, dead: false }
     this.sources.set(src, sp)
     void (async () => {
       try {
         const mb = await loadMb()
-        const input = new mb.Input({ source: await inputSourceFor(mb, src), formats: mb.ALL_FORMATS })
-        sp.input = input
-        const track: InputVideoTrack | null = await input.getPrimaryVideoTrack()
-        if (!track || !(await track.canDecode())) throw new Error('undecodable video track: ' + src)
         const onErr = (e: unknown): void => {
           sp.dead = true
           this.fail(e)
         }
-        sp.pipes = [new Pipe(new mb.VideoSampleSink(track), onErr), new Pipe(new mb.VideoSampleSink(track), onErr)]
+        // One fully independent demux+decode chain per pipe, so a warm-pipe
+        // park can never block the live pipe's reads.
+        const makePipe = async (): Promise<Pipe> => {
+          const input = new mb.Input({ source: await inputSourceFor(mb, src), formats: mb.ALL_FORMATS })
+          sp.inputs.push(input)
+          const track: InputVideoTrack | null = await input.getPrimaryVideoTrack()
+          if (!track || !(await track.canDecode())) throw new Error('undecodable video track: ' + src)
+          return new Pipe(new mb.VideoSampleSink(track), onErr)
+        }
+        sp.pipes = [await makePipe(), await makePipe()]
         sp.ready = true
         console.info('[wc-preview] source ready:', src.slice(-24))
       } catch (e) {
@@ -512,22 +522,24 @@ export class WcPlayer {
   prewarm(src: string, tSrc: number, fromTSrc?: number): void {
     const sp = this.sources.get(src)
     if (!sp?.ready || !sp.pipes) return
-    // Don't park the warm pipe for a seam the LIVE pipe will simply decode
-    // through: parking is a seek, and both pipes share one demuxer, so every
-    // park stalls the live picture too. Measured on a real densely-cut project
-    // (CREATIVE 20, 42 restarts in 12s, 3.9s of stall = the reported freezing):
-    // ALL of them were these parks — the live pipe walked every actual seam
-    // without a single restart. The guard must therefore judge what the live
-    // pipe will face AT the seam: the removed span alone (`tSrc - fromTSrc`,
-    // where fromTSrc is the outgoing clip's sourceEnd). Judging from the
-    // owner's CURRENT frame (the old rule) silently added the un-played rest
-    // of the clip to the jump, pushing ~2s gaps past the 3s limit and firing
-    // a park at every seam.
-    if (fromTSrc !== undefined && tSrc > fromTSrc && tSrc - fromTSrc <= FORWARD_DECODE_S) return
-    // No fromTSrc (different source, or a caller that can't know it): fall back
-    // to judging from the owner's current position.
-    const own = sp.pipes[sp.owner].curTime
-    if (own !== null && tSrc > own && tSrc - own <= FORWARD_DECODE_S) return
+    // Park at EVERY real seam. This was rationed when the two pipes shared a
+    // demuxer — each park was a seek on the live pipe's Input, and a capture on
+    // a real densely-cut project (CREATIVE 20) showed ALL 42 measured restarts
+    // were these parks: the mechanism meant to hide seam latency WAS the
+    // reported freezing. The pipes now own independent demuxers, so a park
+    // costs the live picture nothing, and a parked landing turns the seam into
+    // an instant queue-swap — no decode-through hold, no seek at play time.
+    // This is the CompositionPlayer property: the next clip's frames already
+    // exist when the playhead arrives.
+    //
+    // The one seam not worth parking is a micro-join (removed span ~a frame or
+    // two): the live pipe plays straight through it with no visible jump, and
+    // parking for it would churn the warm pipe once per join on stutter-cut
+    // timelines. `fromTSrc` is the outgoing clip's sourceEnd — what the live
+    // pipe will actually face AT the seam. (Judging from the owner's current
+    // frame here is the bug this replaced: it silently added the un-played
+    // rest of the clip to the jump.)
+    if (fromTSrc !== undefined && tSrc > fromTSrc && tSrc - fromTSrc <= JUMP_S) return
     sp.pipes[sp.owner ^ 1].park(tSrc)
   }
 
@@ -648,7 +660,7 @@ export class WcPlayer {
     this.cacheGen++
     for (const [, sp] of this.sources) {
       sp.pipes?.forEach((p) => p.dispose())
-      sp.input?.dispose()
+      sp.inputs.forEach((i) => i.dispose())
     }
     this.sources.clear()
     for (const src of [...this.seamCache.keys()]) this.dropSeam(src)
