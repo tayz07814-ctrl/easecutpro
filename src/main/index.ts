@@ -460,7 +460,12 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.openaiStatus, async () => ({ available: openaiAvailable() }))
 
   // ---- Waveform peaks ----
-  ipcMain.handle(IPC.waveform, async (_e, path: string) => extractWaveform(path))
+  ipcMain.handle(IPC.waveform, async (_e, path: string, peaksPerSec?: number) => {
+    const density = typeof peaksPerSec === 'number' && Number.isFinite(peaksPerSec)
+      ? Math.min(60, Math.max(12, Math.round(peaksPerSec)))
+      : undefined
+    return extractWaveform(path, density)
+  })
 
   // Preview audio: whole-source 48k stereo WAV (elst offset baked in by ffmpeg).
   ipcMain.handle(IPC.previewAudioWav, async (_e, path: string) => extractPreviewAudioWav(path))

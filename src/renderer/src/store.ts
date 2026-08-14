@@ -364,7 +364,7 @@ async function buildLibraryItem(path: string, preferredName?: string): Promise<L
     thumb = mediaUrl(path) // the image streams straight from the ecmedia protocol
   } else if (info?.hasVideo) {
     try {
-      const ths = await window.api.thumbnails(path, Math.max(1, info.duration || 1))
+      const ths = await window.api.thumbnails(path, 60)
       thumb = ths[0]?.url
     } catch {
       /* no thumbnail is fine */
@@ -1456,8 +1456,8 @@ export const useStore = create<AppState>((set, get) => ({
         canRedo: false,
         job: { active: false, percent: 100, message: 'Combined into one base. Click 📝 Transcribe to caption/clean the whole video.' }
       }))
-      window.api.waveform(info.path).then((wf) => set({ waveform: wf })).catch(() => undefined)
-      window.api.thumbnails(info.path).then((t) => set({ thumbnails: t })).catch(() => undefined)
+      window.api.waveform(info.path, 30).then((wf) => set({ waveform: wf })).catch(() => undefined)
+      window.api.thumbnails(info.path, 60).then((t) => set({ thumbnails: t })).catch(() => undefined)
     } catch (e) {
       set({ job: { active: false, percent: 0, message: `Combine failed: ${safeErrMessage(e)}` } })
     }
@@ -1503,8 +1503,8 @@ export const useStore = create<AppState>((set, get) => ({
       canUndo: false,
       canRedo: false
     })
-    window.api.waveform(clip.sourcePath).then((wf) => set({ waveform: wf })).catch(() => undefined)
-    window.api.thumbnails(clip.sourcePath).then((t) => set({ thumbnails: t })).catch(() => undefined)
+    window.api.waveform(clip.sourcePath, 30).then((wf) => set({ waveform: wf })).catch(() => undefined)
+    window.api.thumbnails(clip.sourcePath, 60).then((t) => set({ thumbnails: t })).catch(() => undefined)
   },
 
   finishSequenceClipEdit: () => {
@@ -1621,9 +1621,9 @@ export const useStore = create<AppState>((set, get) => ({
     })
     // Waveform + filmstrip in the background. Transcription is NOT automatic —
     // the user clicks "Transcribe" when ready.
-    window.api.waveform(item.path).then((wf) => set({ waveform: wf })).catch(() => undefined)
+    window.api.waveform(item.path, 30).then((wf) => set({ waveform: wf })).catch(() => undefined)
     if (media.hasVideo) {
-      window.api.thumbnails(item.path).then((t) => set({ thumbnails: t })).catch(() => undefined)
+      window.api.thumbnails(item.path, 60).then((t) => set({ thumbnails: t })).catch(() => undefined)
     }
     set({ job: { active: false, percent: 100, message: `Loaded ${item.name}. Click Transcribe to generate the transcript.` } })
   },
@@ -1794,10 +1794,10 @@ export const useStore = create<AppState>((set, get) => ({
       const clips = p0.baseSequence!
       const { transcribeBackend, openaiAvailable, whisperModel } = get()
       const backend: TranscribeBackend = transcribeBackend === 'openai' && openaiAvailable ? 'openai' : 'local'
-      set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Cut Lord is working…' } })
+      set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Ease Lord is transcribing…' } })
       try {
         const combined = await window.api.combineClips(clips, true) // audio-only = fast
-        set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Cut Lord is listening…' } })
+        set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Ease Lord is transcribing…' } })
         const transcript: Transcript = await aiApi().transcribe(
           combined.path,
           backend,
@@ -1819,7 +1819,7 @@ export const useStore = create<AppState>((set, get) => ({
     const { project, transcribeBackend, openaiAvailable, whisperModel } = get()
     if (!project.media) return
     const backend: TranscribeBackend = transcribeBackend === 'openai' && openaiAvailable ? 'openai' : 'local'
-    const label = 'Cut Lord is listening…'
+    const label = 'Ease Lord is transcribing…'
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: label } })
     try {
       const transcript: Transcript = await aiApi().transcribe(
@@ -2161,7 +2161,7 @@ export const useStore = create<AppState>((set, get) => ({
     let sileroOk = false
     if (settings.sileroPass && audio) {
       try {
-        set({ job: { active: true, kind: 'silence', percent: 58, message: 'Silero is listening for speech…' } })
+        set({ job: { active: true, kind: 'silence', percent: 58, message: 'Ease Lord is judging true silence…' } })
         const raw = await detectSileroSilences(audio.float32, audio.sampleRate, durationS, settings.minSilenceS)
         // Breath cleanup (Flash/Cut Throat presets): walk each region's LEFT
         // edge back over low-energy breath frames so the cut lands where the
@@ -2279,7 +2279,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Import a video first' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Cut Lord is working (1/4)…' } })
+    set({ job: { active: true, kind: 'transcribe', percent: 4, message: 'Ease Lord is transcribing…' } })
     try {
       let path: string
       if (isMultiBase(p0)) {
@@ -2288,6 +2288,7 @@ export const useStore = create<AppState>((set, get) => ({
       } else {
         path = p0.media!.path
       }
+      set({ job: { active: true, kind: 'transcribe', percent: 28, message: 'Ease Lord is finding retakes…' } })
       // ProCut transcribes with its own OpenAI whisper-1 (inside cutCutPro) and pulls
       // it into the word selector below. Word cuts only — no silence pass exists.
       const res = await aiApi().cutCutPro(path, p0.transcript ?? null, get().whisperModel || undefined, get().project.script || undefined)
@@ -2335,7 +2336,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Import a video first' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Cut Lord…' }, cutJobActive: true })
+    set({ job: { active: true, kind: 'transcribe', percent: 4, message: 'Ease Lord is transcribing…' }, cutJobActive: true })
     try {
       let path: string
       if (isMultiBase(p0)) {
@@ -2344,6 +2345,7 @@ export const useStore = create<AppState>((set, get) => ({
       } else {
         path = p0.media!.path
       }
+      set({ job: { active: true, kind: 'transcribe', percent: 28, message: 'Ease Lord is finding retakes…' } })
       const res = await aiApi().retakeAwareCut(path)
       const cur = get().project
       // REVIEW-STATE CONTRACT (the whole point of this fix):
@@ -2382,6 +2384,7 @@ export const useStore = create<AppState>((set, get) => ({
         : { ...cur, transcript: res.transcript }
       const flagIds = res.deleteWordIds
       const wordsBefore = cur.transcript?.words.length ?? 0
+      set({ job: { active: true, kind: 'silence', percent: 72, message: 'Ease Lord is judging true silence…' } })
       // FINAL STEP — Silero VAD silence detection, wired into Find cuts: one
       // click stages the word cuts AND the silences together; nothing is
       // applied until Execute cuts. Same detector + pad/trim shaping as Clean
@@ -2393,7 +2396,7 @@ export const useStore = create<AppState>((set, get) => ({
       // step itself — web AND desktop hybrid (native audio via extractSttAudio).
       if (IS_CLOUD_BACKEND) {
         try {
-          set({ job: { active: true, kind: 'silence', percent: 88, message: 'Silero is listening for silence…' } })
+          set({ job: { active: true, kind: 'silence', percent: 82, message: 'Ease Lord is judging true silence…' } })
           const smSettings = get().silenceMasterySettings
           const tw = res.transcript.words
           const durationS = p0.media?.duration || baseTimelineDuration(p0) || (tw.length ? tw[tw.length - 1].end : 0)
@@ -2420,6 +2423,7 @@ export const useStore = create<AppState>((set, get) => ({
           console.warn('[retake-aware-beta] Silero silence step skipped:', (e as Error).message)
         }
       }
+      set({ job: { active: true, kind: 'transcribe', percent: 96, message: 'Ease Lord is finalizing…' } })
       set({
         project: nextProject,
         selectedWordIds: new Set(flagIds),
@@ -2463,9 +2467,9 @@ export const useStore = create<AppState>((set, get) => ({
           active: false,
           percent: 100,
           message:
-            `${res.summary} — ${flagIds.length} word(s) highlighted` +
+            `Ease Lord found ${flagIds.length} word(s)` +
             (silenceRegions.length ? ` + ${silenceRegions.length} pause(s)` : '') +
-            `, review then Execute cuts` +
+            ` — review then Execute cuts` +
             (!IS_CLOUD && res.debugPath ? ` · debug: ${res.debugPath.split(/[\\/]/).slice(-1)[0]}` : '') +
             (!IS_CLOUD && res.warnings.length ? ` · ${res.warnings.length} warning(s), see debug` : '') +
             (!IS_CLOUD && reviewBroken ? ' · ⚠ REVIEW-STATE ERROR — see console/debug' : '')

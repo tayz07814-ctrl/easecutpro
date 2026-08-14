@@ -80,7 +80,8 @@ const api = {
     ipcRenderer.invoke(IPC.matchMoment, frames, line, overlays),
   openaiStatus: (): Promise<{ available: boolean }> => ipcRenderer.invoke(IPC.openaiStatus),
   whisperModels: (): Promise<WhisperModelInfo[]> => ipcRenderer.invoke(IPC.whisperModels),
-  waveform: (path: string): Promise<Waveform> => ipcRenderer.invoke(IPC.waveform, path),
+  waveform: (path: string, peaksPerSec?: number): Promise<Waveform> =>
+    ipcRenderer.invoke(IPC.waveform, path, peaksPerSec),
   /** Desktop-only: full-source 48k stereo WAV extracted by the bundled ffmpeg
    *  (elst offset baked in via first_pts=0) for the preview audio engine. */
   previewAudioWav: (path: string): Promise<string> => ipcRenderer.invoke(IPC.previewAudioWav, path),

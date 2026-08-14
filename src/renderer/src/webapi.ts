@@ -234,7 +234,10 @@ const webApi: Window['api'] = {
     return runJob(() => call('/api/combine', { clips: uploaded, audioOnly: !!audioOnly }))
   },
   probe: (path) => (isWebMediaId(path) ? localProbe(path) : call('/api/probe', { path })),
-  waveform: (path) => (isWebMediaId(path) ? localWaveform(path) : call('/api/waveform', { path })),
+  waveform: (path, peaksPerSec) =>
+    isWebMediaId(path)
+      ? localWaveform(path, peaksPerSec ?? 30)
+      : call('/api/waveform', { path, peaksPerSec }),
   // Desktop-only (native ffmpeg preview audio); web preview decodes in-browser.
   previewAudioWav: async () => {
     throw new Error('previewAudioWav is desktop-only')

@@ -474,6 +474,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // so swapping the src is a drop-in change — no other logic differs. The
   // WebCodecs/FfPlayer paths use the conditioned copy through their own pipes.
   const conditionedUrlRef = useRef(new Map<string, string>())
+  const conditionedPendingRef = useRef(new Map<string, string>())
+  const [, bumpConditionedVersion] = useState(0)
   useEffect(() => {
     if (!wcOn) return
     // engineKind is a dep: a demotion builds a NEW player that owns no sources.
@@ -497,15 +499,15 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         .conditionPreviewMedia(src)
         .then((p) => {
           if (!p) return
-          // Store the ecmedia:// URL for the HTML <video> element path.
-          conditionedUrlRef.current.set(src, mediaSrc(p))
-          // Feed the WebCodecs/FfPlayer path. Adopt IMMEDIATELY, even mid-playback:
-          // one brief reopen freeze is far better than freezing at EVERY cut on the
-          // long-GOP original. The conditioned file has identical timestamps, so
-          // the playhead and audio clock stay perfectly aligned through the swap.
+          // Keep the optimized URL ready, but reopen WebCodecs only while paused.
+          // A source swap during playback is itself a visible freeze.
           const wc = wcRef.current
-          if (wc && 'useConditioned' in wc) {
-            wc.useConditioned(src, p)
+          if (playingRef.current) {
+            conditionedPendingRef.current.set(src, p)
+          } else {
+            conditionedUrlRef.current.set(src, mediaSrc(p))
+            bumpConditionedVersion((v) => v + 1)
+            if (wc && 'useConditioned' in wc) wc.useConditioned(src, p)
           }
         })
         .catch(() => undefined)
@@ -513,7 +515,21 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcSig])
 
-  // (Conditioned copies are now adopted immediately — no deferred adoption.)
+  // Apply any conditioned copies that finished while playback was active. This
+  // effect is intentionally pause-gated so source reopening never lands inside a
+  // live frame loop.
+  useEffect(() => {
+    if (playing) return
+    const wc = wcRef.current
+    let adopted = false
+    for (const [src, p] of conditionedPendingRef.current) {
+      conditionedUrlRef.current.set(src, mediaSrc(p))
+      if (wc && 'useConditioned' in wc) wc.useConditioned(src, p)
+      conditionedPendingRef.current.delete(src)
+      adopted = true
+    }
+    if (adopted) bumpConditionedVersion((v) => v + 1)
+  }, [playing, wcOn, engineKind])
 
   // POLISHING phase: executeCuts bumps polishReq. Decode every cut's landing
   // frame ONCE (the seam cache), driving the % bar, then clear it so the editor

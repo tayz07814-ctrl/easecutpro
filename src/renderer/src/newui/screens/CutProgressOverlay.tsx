@@ -30,8 +30,8 @@ export default function CutProgressOverlay(): JSX.Element | null {
   // place it had nothing to do with. One overlay, one bar, titled per tool.
   const TITLES: Record<string, [string, string]> = {
     export: ['Exporting video…', 'Rendering your edit. Keep this tab open until it finishes.'],
-    transcribe: ['Transcribing…', 'Reading the speech in your video.'],
-    silence: ['Finding silences…', 'Listening for dead air and long pauses.'],
+    transcribe: ['Ease Lord is transcribing…', 'Reading every word and its timing.'],
+    silence: ['Ease Lord is judging true silence…', 'Listening for pauses that are safe to remove.'],
     variations: ['Casting variations…', 'Rebuilding your edit into alternate cuts.'],
     zoom: ['Planning Auto Zoom…', 'Picking the moments worth punching in on.'],
     broll: ['Placing b-roll…', 'Matching your overlay cards to what you talk about.'],
@@ -43,16 +43,25 @@ export default function CutProgressOverlay(): JSX.Element | null {
   if (!busy) return null
 
   const pct = polishing.active && !jobActive ? Math.max(2, polishing.percent) : Math.max(2, smoothPct)
-  // A cut run reports untagged, so cutJobActive is what names it.
+  // A cut run reports through the shared transcribe/silence job kinds. The
+  // message emitted by the store supplies the active Ease Lord phase.
   const known = jobActive && jobKind ? TITLES[jobKind] : undefined
-  const [title, subFallback] = known
+  const easeLordPhase: [string, string] | undefined =
+    jobActive && jobMsg?.startsWith('Ease Lord is ')
+      ? [jobMsg, 'Ease Lord is preparing a reviewable edit.']
+      : undefined
+  const [title, subFallback] = easeLordPhase ?? (known
     ? known
     : cutJobActive
-      ? ['Finding cuts…', 'Analyzing your speech for retakes and dead air.']
+      ? ['Ease Lord is finding retakes…', 'Finding retakes, judging true silence, and preparing your review.']
       : polishing.active
-        ? ['Polishing cuts…', 'Adding the finishing touches so playback stays perfectly smooth.']
-        : ['Working…', '']
-  const sub = polishing.active && !jobActive ? subFallback : jobMsg || subFallback
+        ? ['Ease Lord is polishing playback…', 'Preloading cut boundaries so playback starts smoothly.']
+        : ['Working…', ''])
+  const sub = polishing.active && !jobActive
+    ? subFallback
+    : easeLordPhase
+      ? subFallback
+      : jobMsg || subFallback
 
   return (
     <div

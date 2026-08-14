@@ -57,6 +57,25 @@ export function clipPeaks(wf: ClipWaveform | null, sourceIn: number, sourceOut: 
   return slice.map((p) => (p * norm > 1 ? 1 : p * norm))
 }
 
+/**
+ * Immediate display-only envelope used while FFmpeg is decoding the real audio.
+ * It is deliberately subtle and deterministic: the user gets instant visual
+ * feedback without mistaking the placeholder for analysis data, then the real
+ * waveform replaces it through the media manager notification.
+ */
+export function loadingPeaks(sourceKey: string, count = 96): number[] {
+  let seed = 2166136261
+  for (let i = 0; i < sourceKey.length; i++) {
+    seed ^= sourceKey.charCodeAt(i)
+    seed = Math.imul(seed, 16777619)
+  }
+  return Array.from({ length: count }, (_, i) => {
+    seed = Math.imul(seed ^ (i + 1), 16777619)
+    const jitter = ((seed >>> 0) % 100) / 100
+    return 0.14 + jitter * 0.18
+  })
+}
+
 const MediaDataContext = createContext<MediaData | null>(null)
 
 export function MediaDataProvider({

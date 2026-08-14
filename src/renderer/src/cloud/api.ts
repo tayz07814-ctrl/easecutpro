@@ -199,7 +199,7 @@ const cloudApi: Window['api'] & {
   },
 
   probe: (path) => localProbe(needLocal(path)),
-  waveform: (path) => localWaveform(needLocal(path)),
+  waveform: (path, peaksPerSec) => localWaveform(needLocal(path), peaksPerSec ?? 30),
   previewAudioWav: async () => desktopOnly('Native preview audio'),
   sttAudioWav: async () => desktopOnly('Native STT audio'),
   buildPreviewProxy: async () => '',

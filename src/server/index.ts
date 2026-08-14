@@ -368,7 +368,12 @@ app.post('/api/probe', async (req, res) => {
 })
 app.post('/api/waveform', async (req, res) => {
   try {
-    res.json(await extractWaveform(assertAllowed(uid(req), req.body?.path)))
+    res.json(
+      await extractWaveform(
+        assertAllowed(uid(req), req.body?.path),
+        typeof req.body?.peaksPerSec === 'number' ? req.body.peaksPerSec : undefined
+      )
+    )
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }

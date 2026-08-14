@@ -42,7 +42,7 @@ check('clips sorted by start', clipsOf('V')[0].id === 'A' && clipsOf('V')[1].id 
 
 // --- negative-time clamp ---
 eng.dispatch(C.moveClip('B', 'V', -100))
-check('move to negative time clamps to 0', clip('B')!.start === 0)
+check('negative time clamps and resolves to nearest free start', clip('B')!.start === 150)
 eng.dispatch(C.moveClip('B', 'V', 150)) // put back
 
 // --- ripple delete + undo/redo ---

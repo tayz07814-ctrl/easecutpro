@@ -9,8 +9,8 @@ import type { ClipFrame, ClipWaveform, MediaData } from './MediaData'
 import { mediaSrc } from '../../platform'
 
 interface Fetcher {
-  waveform(path: string): Promise<ClipWaveform>
-  thumbnails(path: string, onPartial?: (frames: ClipFrame[]) => void): Promise<ClipFrame[]>
+  waveform(path: string, peaksPerSec?: number): Promise<ClipWaveform>
+  thumbnails(path: string, intervalSec?: number, onPartial?: (frames: ClipFrame[]) => void): Promise<ClipFrame[]>
 }
 
 export interface MediaManager extends MediaData {
@@ -22,8 +22,8 @@ export interface MediaManager extends MediaData {
 export function createMediaManager(fetcher?: Fetcher): MediaManager {
   const fx: Fetcher =
     fetcher ?? {
-      waveform: (p) => window.api.waveform(p),
-      thumbnails: (p, onPartial) => window.api.thumbnails(p, undefined, onPartial)
+      waveform: (p, peaksPerSec) => window.api.waveform(p, peaksPerSec),
+      thumbnails: (p, intervalSec, onPartial) => window.api.thumbnails(p, intervalSec, onPartial)
     }
 
   const waves = new Map<string, ClipWaveform>()
@@ -41,7 +41,10 @@ export function createMediaManager(fetcher?: Fetcher): MediaManager {
     const key = 'w:' + path
     if (waves.has(path) || inflight.has(key)) return
     inflight.add(key)
-    fx.waveform(path)
+    // The timeline only needs a display envelope. Keep the analysis/export path
+    // at its existing resolution, but halve the decoder work for this low-cost
+    // visual request on older CPUs.
+    fx.waveform(path, 30)
       .then((wf) => {
         waves.set(path, wf)
         inflight.delete(key)
@@ -59,21 +62,33 @@ export function createMediaManager(fetcher?: Fetcher): MediaManager {
     const key = 't:' + path
     if (frames.has(path) || inflight.has(key)) return
     inflight.add(key)
-    // Render the filmstrip PROGRESSIVELY: each frame that lands updates the cache
-    // and re-renders, so a long clip shows thumbnails as they generate instead of
-    // staying blank until the whole strip is done.
-    fx.thumbnails(path, (partial) => {
-      frames.set(path, partial)
-      notify()
-    })
+    // Two-stage filmstrip: a single keyframe arrives quickly and paints the clip
+    // immediately; the denser strip follows in the background. This is much more
+    // responsive than waiting for a complete FFmpeg pass on older Intel CPUs.
+    void fx.thumbnails(path, 60)
+      .then((first) => {
+        if (first.length) {
+          frames.set(path, first)
+          notify()
+        }
+      })
+      .catch(() => undefined)
+      .then(() =>
+        fx.thumbnails(path, undefined, (partial) => {
+          frames.set(path, partial)
+          notify()
+        })
+      )
       .then((th) => {
         frames.set(path, th)
         inflight.delete(key)
         notify()
       })
       .catch(() => {
-        frames.set(path, []) // cache the failure — no infinite retry
+        // Preserve a fast first frame if the refinement pass fails.
+        if (!frames.has(path)) frames.set(path, [])
         inflight.delete(key)
+        notify()
       })
   }
 

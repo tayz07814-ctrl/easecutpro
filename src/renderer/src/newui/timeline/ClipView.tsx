@@ -7,9 +7,10 @@
 import { frameToPx } from './geometry'
 import { WaveformCanvas } from './WaveformCanvas'
 import { Filmstrip } from './Filmstrip'
-import { useMediaData, clipPeaks } from './MediaData'
+import { useMediaData, clipPeaks, loadingPeaks } from './MediaData'
 import type { Clip } from '@shared/timeline/types'
 import type { Timebase } from '@shared/timeline/time'
+import { useMemo } from 'react'
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 export function ClipView({
@@ -48,6 +49,10 @@ export function ClipView({
   const media = useMediaData()
   const wf = showWave ? media?.getWaveform(clip) ?? null : null
   const frames = isVideo || isImage ? media?.getFrames(clip) ?? null : null
+  const pendingPeaks = useMemo(
+    () => (showWave && !wf ? loadingPeaks(clip.sourcePath || clip.id) : []),
+    [showWave, wf, clip.sourcePath, clip.id]
+  )
 
   // Zoom badge: the peak Ken Burns zoom applied to this clip (Auto Zoom or manual)
   // — ovScale × the larger of the start/end ramp. Shown in the clip's title bar.
@@ -105,12 +110,22 @@ export function ClipView({
           )}
           {showWave &&
             (isAudio ? (
-              <div className={`ec-tl-clip-wave audio ${wf ? 'has-canvas' : ''}`}>
-                {wf && <WaveformCanvas peaks={clipPeaks(wf, clip.sourceIn, clip.sourceOut)} color="rgba(255,255,255,0.82)" />}
+              <div className={`ec-tl-clip-wave audio ${wf ? 'has-canvas' : pendingPeaks.length ? 'is-loading' : ''}`}>
+                {(wf || pendingPeaks.length > 0) && (
+                  <WaveformCanvas
+                    peaks={wf ? clipPeaks(wf, clip.sourceIn, clip.sourceOut) : pendingPeaks}
+                    colors={wf ? undefined : ['rgba(255,255,255,0.28)', 'rgba(255,255,255,0.18)', 'rgba(255,255,255,0.28)']}
+                  />
+                )}
               </div>
             ) : (
-              <div className={`ec-tl-clip-wave ${wf ? 'has-canvas' : ''}`} style={{ height: `${wavePct}%` }}>
-                {wf && <WaveformCanvas peaks={clipPeaks(wf, clip.sourceIn, clip.sourceOut)} />}
+              <div className={`ec-tl-clip-wave ${wf ? 'has-canvas' : pendingPeaks.length ? 'is-loading' : ''}`} style={{ height: `${wavePct}%` }}>
+                {(wf || pendingPeaks.length > 0) && (
+                  <WaveformCanvas
+                    peaks={wf ? clipPeaks(wf, clip.sourceIn, clip.sourceOut) : pendingPeaks}
+                    colors={wf ? undefined : ['rgba(122,248,232,0.28)', 'rgba(52,214,200,0.16)', 'rgba(122,248,232,0.28)']}
+                  />
+                )}
               </div>
             ))}
         </>
