@@ -469,10 +469,6 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const wcVideoReadyRef = useRef(false)
   const wcVideoWaitRef = useRef(0)
   const srcSig = sources.join('|')
-  // Conditioned copies that arrived while playing — adopted on the next pause,
-  // because adopting reopens the source's demuxers and would hold the live
-  // picture if done mid-playback.
-  const pendingConditionedRef = useRef(new Map<string, string>())
   // Conditioned preview copy URLs for the HTML <video> element path. The
   // conditioned file has identical timestamps (same encode, just dense keyframes),
   // so swapping the src is a drop-in change — no other logic differs. The
@@ -503,11 +499,13 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           if (!p) return
           // Store the ecmedia:// URL for the HTML <video> element path.
           conditionedUrlRef.current.set(src, mediaSrc(p))
-          // Also feed the WebCodecs/FfPlayer path (if active).
+          // Feed the WebCodecs/FfPlayer path. Adopt IMMEDIATELY, even mid-playback:
+          // one brief reopen freeze is far better than freezing at EVERY cut on the
+          // long-GOP original. The conditioned file has identical timestamps, so
+          // the playhead and audio clock stay perfectly aligned through the swap.
           const wc = wcRef.current
           if (wc && 'useConditioned' in wc) {
-            if (playingRef.current) pendingConditionedRef.current.set(src, p)
-            else wc.useConditioned(src, p)
+            wc.useConditioned(src, p)
           }
         })
         .catch(() => undefined)
@@ -515,14 +513,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcSig])
 
-  // Adopt conditioned copies that finished during playback.
-  useEffect(() => {
-    if (playing || !wcOn) return
-    const wc = wcRef.current
-    if (!wc || !('useConditioned' in wc)) return
-    for (const [src, p] of pendingConditionedRef.current) wc.useConditioned(src, p)
-    pendingConditionedRef.current.clear()
-  }, [playing, wcOn])
+  // (Conditioned copies are now adopted immediately — no deferred adoption.)
 
   // POLISHING phase: executeCuts bumps polishReq. Decode every cut's landing
   // frame ONCE (the seam cache), driving the % bar, then clear it so the editor
@@ -533,8 +524,30 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // perceptible; a hard timeout guarantees the lock always releases.
   const polishReq = useStore((s) => s.polishReq)
   const setPolishing = useStore((s) => s.setPolishing)
+  // A signature of the CURRENT SEAM LIST — changes whenever clips are
+  // trimmed, split, moved, or AI-cut. Bumping polishReq alone missed manual
+  // edits, so the seam cache was stale and the first play through a manually
+  // trimmed clip froze at the cut. This fires the polish on ANY seam change.
+  const seamSig = useMemo(
+    () => {
+      const ss = docSegments(doc).segs
+      const parts: string[] = []
+      for (let i = 1; i < ss.length; i++) {
+        const a = ss[i - 1]
+        const b = ss[i]
+        if (b.isImage) continue
+        const contiguous = a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.05
+        if (!contiguous) parts.push(`${b.src}:${b.sourceStart.toFixed(3)}`)
+      }
+      return parts.join('|')
+    },
+    // doc is a fresh object on every mutation; this string only changes on real
+    // seam content (not on playhead/zoom/selection).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc]
+  )
   useEffect(() => {
-    if (!polishReq) return // initial mount (req 0) — nothing applied yet
+    if (!polishReq && !seamSig) return // initial mount — nothing applied yet
     let cancelled = false
     const MIN_MS = 900
     const start = performance.now()
@@ -546,8 +559,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       }, wait)
     }
     const wc = wcRef.current
-    // Seams from the post-cut doc prop (executeCuts bumped polishReq in the same
-    // update, so this render's `doc` is already the cut timeline).
+    // Seams from the post-cut doc prop.
     const ss = docSegments(doc).segs
     const seams: { src: string; t: number }[] = []
     if (ss[0] && !ss[0].isImage) seams.push({ src: ss[0].src, t: ss[0].sourceStart })
@@ -578,7 +590,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       window.clearTimeout(safety)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [polishReq, wcOn, engineKind])
+  }, [polishReq, seamSig, wcOn, engineKind])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the
