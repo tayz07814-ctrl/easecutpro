@@ -198,7 +198,7 @@ type RouteView = 'landing' | 'auth' | 'home' | 'terms' | 'privacy' | 'refund'
 
 // Cloud routing on top of the view-state machine. It's all one SPA (Vercel
 // serves index.html on every path), so this just maps the pathname to a view:
-//   /                        → public landing (marketing)
+//   /                        → public landing for signed-out visitors; authenticated ⇒ app
 //   /earlybetatesters        → the app; signed-out ⇒ auth screen
 //   /terms | /privacy | /refund → legal pages
 // `navigate` keeps URL and view in sync for the marketing/legal links.
@@ -209,6 +209,10 @@ function viewForPath(path: string, user: { id: string } | null): RouteView {
   if (path === '/privacy') return 'privacy'
   if (path === '/refund') return 'refund'
   if (path === APP_PATH || path.startsWith(`${APP_PATH}/`)) return user ? 'home' : 'auth'
+  // The root is the public marketing page for signed-out visitors, but an
+  // authenticated visitor should never be sent back to marketing after a
+  // refresh or by opening the canonical domain.
+  if (path === '/' && user) return 'home'
   return 'landing'
 }
 
@@ -295,7 +299,12 @@ function Root(): JSX.Element {
           return
         }
         const { user } = await cloudAuthMe()
-        if (!cancelled) useStore.setState({ user, view: viewForPath(window.location.pathname, user) })
+        if (!cancelled) {
+          const atPublicRoot = window.location.pathname === '/'
+          const nextPath = user && atPublicRoot ? APP_PATH : window.location.pathname
+          if (nextPath !== window.location.pathname) window.history.replaceState({}, '', nextPath)
+          useStore.setState({ user, view: viewForPath(nextPath, user) })
+        }
         return
       }
       const online = await probeServer()

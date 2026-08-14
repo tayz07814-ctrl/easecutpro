@@ -79,6 +79,39 @@ export function initLanding(root: HTMLElement, handlers: LandingHandlers): () =>
     })
   })
 
+  // ---- responsive navigation ----
+  const nav = root.querySelector<HTMLElement>('.ec-landing-nav')
+  const menuToggle = root.querySelector<HTMLButtonElement>('.ec-landing-menu-toggle')
+  const closeMenu = (): void => {
+    nav?.classList.remove('is-open')
+    menuToggle?.setAttribute('aria-expanded', 'false')
+    menuToggle?.setAttribute('aria-label', 'Open menu')
+  }
+  if (nav && menuToggle) {
+    const onToggle = (): void => {
+      const open = !nav.classList.contains('is-open')
+      nav.classList.toggle('is-open', open)
+      menuToggle.setAttribute('aria-expanded', String(open))
+      menuToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu')
+    }
+    const onKeyDown = (ev: KeyboardEvent): void => {
+      if (ev.key === 'Escape') closeMenu()
+    }
+    const onDocumentClick = (ev: MouseEvent): void => {
+      if (nav.classList.contains('is-open') && !nav.contains(ev.target as Node)) closeMenu()
+    }
+    menuToggle.addEventListener('click', onToggle)
+    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('click', onDocumentClick)
+    root.querySelectorAll<HTMLAnchorElement>('.ec-landing-nav-links a').forEach((link) => {
+      link.addEventListener('click', closeMenu)
+      cleanups.push(() => link.removeEventListener('click', closeMenu))
+    })
+    cleanups.push(() => menuToggle.removeEventListener('click', onToggle))
+    cleanups.push(() => document.removeEventListener('keydown', onKeyDown))
+    cleanups.push(() => document.removeEventListener('click', onDocumentClick))
+  }
+
   // ---- CTA + legal-link wiring (markup left verbatim; matched by label) ----
   const onClickRoot = (ev: MouseEvent): void => {
     const target = ev.target as HTMLElement | null
