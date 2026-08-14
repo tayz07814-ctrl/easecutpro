@@ -24,7 +24,7 @@ import { createHash } from 'crypto'
 import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import { mkdir, readdir, rename, rm, stat, utimes } from 'fs/promises'
-import { homedir } from 'os'
+import { homedir, cpus } from 'os'
 import { join } from 'path'
 import { FFMPEG } from './binaries'
 import { probe, runGated } from './ffmpeg'
@@ -33,9 +33,12 @@ const DIR = join(homedir(), '.easecutpro', 'cache', 'pvmedia')
 /** Preview copies are per-source and rewatched constantly — keep more than the
  *  edit proxies, but still bounded. */
 const KEEP = 12
-/** Short-edge cap. 720 keeps text legible in the preview pane; decode cost at
- *  720p all-but-intra is trivial even in software. */
-const SHORT_EDGE = 720
+/** Short-edge cap. On machines with ≤4 logical cores (integrated graphics,
+ *  low-end laptops), drop to 540 so the conditioned copy is cheaper to decode
+ *  and the original file is cheaper to fall back to. On 6+ cores keep 720.
+ *  The file is still the same edit-friendly intra-only shape; the only
+ *  difference is pixel count, and at preview-pane size it is invisible. */
+const SHORT_EDGE = (cpus().length || 4) <= 4 ? 540 : 720
 /** Keyframe every 15 frames (~0.5s at 30fps): any seek decodes ≤15 frames. */
 const GOP = 15
 

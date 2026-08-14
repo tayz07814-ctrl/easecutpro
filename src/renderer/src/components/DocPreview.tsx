@@ -38,6 +38,7 @@ import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId, documentDuration } from '@shared/timeline/model'
 import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
+import { mediaSrc } from '../platform'
 import { WcPlayer, wcSupported } from '../preview/wcPlayer'
 import { FfPlayer, ffSupported } from '../preview/ffPlayer'
 import { useIsMobile } from '../useMobile'
@@ -472,32 +473,47 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // because adopting reopens the source's demuxers and would hold the live
   // picture if done mid-playback.
   const pendingConditionedRef = useRef(new Map<string, string>())
+  // Conditioned preview copy URLs for the HTML <video> element path. The
+  // conditioned file has identical timestamps (same encode, just dense keyframes),
+  // so swapping the src is a drop-in change — no other logic differs. The
+  // WebCodecs/FfPlayer paths use the conditioned copy through their own pipes.
+  const conditionedUrlRef = useRef(new Map<string, string>())
   useEffect(() => {
     if (!wcOn) return
     // engineKind is a dep: a demotion builds a NEW player that owns no sources.
     wcRef.current?.setSources(segsRef.current.filter((s) => !s.isImage).map((s) => ({ src: s.src })))
-    // IMPORT-TIME CONDITIONING (desktop): ask the main process for each
-    // source's edit-friendly copy — dense keyframes, ≤720p — and play THAT.
-    // This is what makes seeks (and therefore cuts and scrubs) cheap; it is
-    // the same move Descript and CapCut make at import. Web's shim returns ''
-    // (no local ffmpeg), so this is a no-op there. Failure leaves the
-    // original playing — today's behaviour, never worse.
-    if (typeof window.api?.conditionPreviewMedia === 'function') {
-      for (const s of segsRef.current.filter((x) => !x.isImage)) {
-        void window.api
-          .conditionPreviewMedia(s.src)
-          .then((p) => {
-            if (!p) return
-            const wc = wcRef.current
-            if (!wc || !('useConditioned' in wc)) return
-            if (playingRef.current) pendingConditionedRef.current.set(s.src, p)
-            else wc.useConditioned(s.src, p)
-          })
-          .catch(() => undefined)
-      }
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srcSig, wcOn, engineKind])
+
+  // IMPORT-TIME CONDITIONING: request an edit-friendly copy of every source
+  // (dense keyframes, ≤720p) as soon as it appears. This is what makes seeks
+  // cheap — on the WebCodecs/FfPlayer path it replaces the demuxer source;
+  // on the HTML <video> path it replaces the element src. Both paths benefit
+  // because the conditioned file has a keyframe every 15 frames instead of
+  // every ~3 seconds. Runs regardless of wcOn so the element path also gets
+  // smooth seeks.
+  useEffect(() => {
+    if (typeof window.api?.conditionPreviewMedia !== 'function') return
+    for (const s of segsRef.current.filter((x) => !x.isImage)) {
+      const src = s.src
+      if (conditionedUrlRef.current.has(src)) continue // already have it
+      void window.api
+        .conditionPreviewMedia(src)
+        .then((p) => {
+          if (!p) return
+          // Store the ecmedia:// URL for the HTML <video> element path.
+          conditionedUrlRef.current.set(src, mediaSrc(p))
+          // Also feed the WebCodecs/FfPlayer path (if active).
+          const wc = wcRef.current
+          if (wc && 'useConditioned' in wc) {
+            if (playingRef.current) pendingConditionedRef.current.set(src, p)
+            else wc.useConditioned(src, p)
+          }
+        })
+        .catch(() => undefined)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srcSig])
 
   // Adopt conditioned copies that finished during playback.
   useEffect(() => {
@@ -1356,7 +1372,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               (buddySrcs.has(src) ? [0, 1] : [0]).map((slot) => (
                 <video
                   key={src + '#' + slot}
-                  src={urlOf.get(src)}
+                  src={conditionedUrlRef.current.get(src) ?? urlOf.get(src)}
                   preload="auto"
                   playsInline
                   data-ec-base

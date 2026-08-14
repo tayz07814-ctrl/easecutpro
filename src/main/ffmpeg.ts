@@ -43,7 +43,11 @@ const execFileP = promisify(execFile)
  * ffprobe is intentionally NOT gated: it's milliseconds, and stalling a probe
  * behind a long render would freeze imports.
  */
-const FFMPEG_SLOTS = 4
+/** Adaptive ffmpeg concurrency: 1 slot per 2 physical cores, clamped to [1,4].
+ *  On a 4-core laptop this is 2; on a 16-core workstation it is 4. Keeping
+ *  it low leaves headroom for the OS, the renderer, and other apps — the
+ *  ffmpeg work itself is already internally parallel (libx264 threads). */
+const FFMPEG_SLOTS = Math.max(1, Math.min(4, Math.ceil((cpus().length || 4) / 2)))
 let ffmpegBusy = 0
 const ffmpegWaiting: (() => void)[] = []
 

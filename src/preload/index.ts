@@ -89,6 +89,9 @@ const api = {
   /** Flat proxy of the current edit, for seamless preview playback. */
   buildPreviewProxy: (project: Project, signature: string): Promise<string> =>
     ipcRenderer.invoke(IPC.buildPreviewProxy, project, signature),
+  /** User-requested 720p preview proxy (manual trigger). */
+  buildPreviewProxyManual: (project: Project, signature: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.buildPreviewProxyManual, project, signature),
   existingPreviewProxy: (signature: string): Promise<string> =>
     ipcRenderer.invoke(IPC.existingPreviewProxy, signature),
   conditionPreviewMedia: (src: string): Promise<string> =>

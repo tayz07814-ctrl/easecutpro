@@ -17,7 +17,7 @@ import { promisify } from 'util'
 import { createHash } from 'crypto'
 import { existsSync } from 'fs'
 import { mkdir, readdir, rm, stat, utimes } from 'fs/promises'
-import { homedir } from 'os'
+import { homedir, cpus } from 'os'
 import { join } from 'path'
 import { FFMPEG } from './binaries'
 import { probe, runGated } from './ffmpeg'
@@ -25,10 +25,12 @@ import type { MediaInfo } from '../shared/types'
 
 const execFileP = promisify(execFile)
 
-// Longest output side. 1280 keeps a 1080p/4K source at 720p-class preview
-// quality while holding the stream near ~40 MB/s at 30fps — comfortably inside
-// what the protocol pipe moves on one machine.
-const MAX_LONG = 1280
+// Longest output side. On machines with ≤4 logical cores (integrated graphics,
+// low-end laptops), drop to 960 (540p-class) so the raw yuv420p pipe is ~22 MB/s
+// instead of ~40 MB/s — the decode AND the memcpy both cost real CPU. On 6+
+// cores keep 1280 (720p-class). The preview pane is a few hundred CSS pixels;
+// the difference is invisible but the decode cost is not.
+const MAX_LONG = (cpus().length || 4) <= 4 ? 960 : 1280
 const MAX_FPS = 30
 
 // probe() shells ffprobe (~50ms); the player restarts streams on every scrub,

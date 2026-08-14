@@ -478,6 +478,14 @@ app.whenReady().then(() => {
     )
   })
 
+  // User-requested 720p proxy (manual trigger from the preview pane).
+  ipcMain.handle(IPC.buildPreviewProxyManual, async (_e, project: Project, signature: string) => {
+    const jobId = randomUUID()
+    return buildPreviewProxy(project, signature, (pct) =>
+      emitProgress('probe', jobId, pct, 'Rendering preview proxy…')
+    , true)
+  })
+
   // Import-time conditioning: one edit-friendly copy per source (dense
   // keyframes, ≤720p short edge). The preview plays this instead of the
   // original, which is what makes seeks — and therefore cuts — cheap.

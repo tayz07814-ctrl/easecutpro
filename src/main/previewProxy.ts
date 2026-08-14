@@ -33,6 +33,10 @@ const PROXY_DIR = join(homedir(), '.easecutpro', 'cache', 'proxy')
 const KEEP = 6
 /** Short edge. 540p is plenty for a preview pane and renders fast. */
 const SHORT_EDGE = 540
+/** Short edge for a USER-REQUESTED proxy ("Make Preview Proxy" button).
+ *  720p is more than enough for the preview pane, renders fast enough on
+ *  any machine with a dedicated GPU, and the user explicitly asked for it. */
+const SHORT_EDGE_MANUAL = 720
 
 /** Live builds, so a second request for the same edit joins the first. */
 const inflight = new Map<string, Promise<string>>()
@@ -69,7 +73,8 @@ async function prune(): Promise<void> {
 export async function buildPreviewProxy(
   project: Project,
   signature: string,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  manualQuality = false
 ): Promise<string> {
   const out = proxyPath(signature)
   if (existsSync(out)) {
@@ -80,6 +85,8 @@ export async function buildPreviewProxy(
   const running = inflight.get(signature)
   if (running) return running
 
+  const shortEdge = manualQuality ? SHORT_EDGE_MANUAL : SHORT_EDGE
+
   const job = (async () => {
     await mkdir(PROXY_DIR, { recursive: true })
     const srcW = project.media?.width || project.baseSequence?.[0]?.srcW || 1080
@@ -89,8 +96,8 @@ export async function buildPreviewProxy(
     // wrong aspect would preview a crop that isn't in the edit.
     const aspect = project.aspectW && project.aspectH ? project.aspectW / project.aspectH : srcW / srcH
     const portrait = aspect <= 1
-    const w = portrait ? SHORT_EDGE : Math.round(SHORT_EDGE * aspect)
-    const h = portrait ? Math.round(SHORT_EDGE / aspect) : SHORT_EDGE
+    const w = portrait ? shortEdge : Math.round(shortEdge * aspect)
+    const h = portrait ? Math.round(shortEdge / aspect) : shortEdge
     // Written to a temp name first: a half-written file must never be picked up
     // as a valid proxy by a later run that only checks existence. The `.mp4`
     // stays LAST — ffmpeg picks its container from the extension, so a bare

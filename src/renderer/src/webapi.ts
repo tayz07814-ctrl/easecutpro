@@ -244,6 +244,7 @@ const webApi: Window['api'] = {
   },
   // Proxy rendering needs local ffmpeg; the browser keeps the live engine.
   buildPreviewProxy: async () => '',
+  buildPreviewProxyManual: async () => '', // web: no local ffmpeg
   existingPreviewProxy: async () => '',
   conditionPreviewMedia: async () => '', // web: no local ffmpeg to condition with
   // No file manager in a browser — the download already went to the user.

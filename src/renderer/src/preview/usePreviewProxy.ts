@@ -38,6 +38,10 @@ import { IS_WEB } from '../platform'
  * THAT seamless is the real fix; this file stays as a measured fallback for
  * machines where the WebCodecs path can't keep up, and is verified by
  * `scripts/verify-preview-proxy.ts` so it still works when switched on.
+ *
+ * MANUAL PROXY: even when auto-proxy is disabled, the user can trigger a one-shot
+ * 720p render via `buildNow()` (exported below). A button in the preview pane
+ * calls it; the proxy plays until the edit changes, then falls back to live.
  */
 const PROXY_ENABLED = false
 
@@ -53,6 +57,8 @@ export interface PreviewProxy {
   duration: number
   /** the file won't play — stop offering it for this edit */
   reject: () => void
+  /** manual trigger: render a 720p proxy now (user-requested, no debounce) */
+  buildNow: () => void
 }
 
 /**
@@ -117,6 +123,27 @@ export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
     setPath('')
   }, [])
 
+  /** Manual trigger: build a 720p proxy RIGHT NOW for the current edit.
+   *  The user asked for it — no debounce, no eligibility check, no waiting
+   *  for pause. The proxy plays until the edit changes. */
+  const buildNow = useCallback(() => {
+    if (!doc || IS_WEB || typeof window.api?.buildPreviewProxyManual !== 'function') return
+    const stored = useStore.getState().project
+    const folded = documentToProject(doc, stored)
+    const sig = editSignature(folded, doc)
+    sigRef.current = sig
+    setPath('')
+    setDuration(0)
+    void window.api
+      .buildPreviewProxyManual(folded, sig)
+      .then((p) => {
+        if (!p || sigRef.current !== sig) return
+        setPath(p)
+        setDuration(framesToSeconds(doc.duration, doc.timebase))
+      })
+      .catch(() => undefined)
+  }, [doc])
+
   // INVALIDATION — deliberately its own effect, depending on the document and
   // nothing else. `doc` is a fresh object on every mutation, so this fires on
   // every edit, and dropping the proxy before anything else runs is what makes
@@ -167,5 +194,5 @@ export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
     }
   }, [doc, eligible, playing])
 
-  return { path, duration, reject }
+  return { path, duration, reject, buildNow }
 }
