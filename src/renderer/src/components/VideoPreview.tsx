@@ -26,6 +26,14 @@ export default function VideoPreview(): JSX.Element {
   const setAspect = useStore((s) => s.setAspect)
   const docSnap = useSharedEngineSnapshot()
   const proxy = usePreviewProxy(docSnap?.doc ?? null)
+  const previewProxyMode = useStore((s) => s.previewProxyMode)
+
+  // When the user flips the header toggle to "Proxy", trigger a manual 720p
+  // render. The proxy plays until the edit changes or the toggle is flipped back.
+  useEffect(() => {
+    if (previewProxyMode && docSnap?.doc) proxy.buildNow()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewProxyMode])
 
   // Keep ranges recomputed on edit changes; used to skip during playback.
   // The waveform makes cut edges snap to energy valleys (matches the export).
@@ -234,12 +242,12 @@ export default function VideoPreview(): JSX.Element {
   // wedges (undo/redrop/lane moves) that plagued the retrofitted legacy player.
   const docMain = docSnap?.doc?.tracks.find((t) => t.isMain)
   if (docSnap?.doc && docMain && docMain.clips.length > 0) {
-    // SEAMLESS PLAYBACK. When a flattened render of THIS EXACT edit exists, play
-    // that instead: the cuts are already baked in, so there are no seams to seek
-    // over and playback is one continuous decode. Any edit invalidates the
-    // signature and this falls straight back to the live engine below, which is
-    // also what happens while a proxy is still rendering or if it fails.
-    if (proxy.path) {
+    // SEAMLESS PLAYBACK. When the user has toggled "Proxy" mode AND a flattened
+    // render of THIS EXACT edit exists, play that instead: the cuts are already
+    // baked in, so there are no seams to seek over. Any edit invalidates the
+    // signature and this falls back to the live engine. Flipping the toggle off
+    // returns to the live engine immediately.
+    if (previewProxyMode && proxy.path) {
       return <ProxyPlayer path={proxy.path} total={proxy.duration} onFailed={proxy.reject} />
     }
     return <DocPreview doc={docSnap.doc} />

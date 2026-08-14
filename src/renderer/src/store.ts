@@ -627,6 +627,10 @@ interface AppState {
   polishReq: number
   tools: { ffmpeg: boolean; ffprobe: boolean; whisper: boolean; whisperModel: boolean } | null
   playing: boolean
+  /** User toggled the preview-quality slider in the editor header to "Proxy".
+   *  When true, VideoPreview calls buildNow() and shows ProxyPlayer if the
+   *  render succeeds; when false, the live DocPreview engine runs. */
+  previewProxyMode: boolean
   scrubbing: boolean
   selectedClipId: string | null
   selectedSeg: BaseSegment | null
@@ -852,6 +856,7 @@ interface AppState {
   // timeline
   setPlayhead: (t: number) => void
   setPlaying: (p: boolean) => void
+  setPreviewProxyMode: (v: boolean) => void
   setScrubbing: (b: boolean) => void
   setZoom: (px: number) => void
   setTrackHeight: (h: number) => void
@@ -1037,6 +1042,7 @@ export const useStore = create<AppState>((set, get) => ({
   polishReq: 0,
   tools: null,
   playing: false,
+  previewProxyMode: false,
   scrubbing: false,
   selectedClipId: null,
   selectedSeg: null,
@@ -3429,6 +3435,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   setPlayhead: (t) => set((s) => ({ project: { ...s.project, playhead: Math.max(0, t) } })),
   setPlaying: (p) => set({ playing: p }),
+  setPreviewProxyMode: (v) => set({ previewProxyMode: v }),
   setScrubbing: (b) => set({ scrubbing: b }),
   setZoom: (px) => set((s) => ({ project: { ...s.project, pxPerSec: Math.min(400, Math.max(10, px)) } })),
   setTrackHeight: (h) =>

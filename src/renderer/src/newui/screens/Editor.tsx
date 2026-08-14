@@ -223,6 +223,8 @@ function TopBar(): JSX.Element {
   const rename = useStore((s) => s.renameCurrentProject)
   const setShowExportModal = useStore((s) => s.setShowExportModal)
   const setShowSettings = useStore((s) => s.setShowSettings)
+  const previewProxyMode = useStore((s) => s.previewProxyMode)
+  const setPreviewProxyMode = useStore((s) => s.setPreviewProxyMode)
   const sv = SAVE_UI[saveState] ?? SAVE_UI.saved
 
   return (
@@ -260,6 +262,14 @@ function TopBar(): JSX.Element {
       <div style={css('width:1px;height:20px;background:rgba(255,255,255,.08)')} />
       <UpgradeButton />
       <button onClick={importMedia} style={css('background:none;border:1px solid rgba(255,255,255,.1);color:#c9c9da;font-family:inherit;font-size:12.5px;font-weight:500;border-radius:9px;padding:7px 13px;cursor:pointer')}>Import</button>
+      {/* Preview quality toggle: Proxy (flattened 720p render) or Original (live engine). */}
+      <div className="ec-no-drag" onClick={() => setPreviewProxyMode(!previewProxyMode)} title={previewProxyMode ? 'Switch to live preview (original)' : 'Render a 720p proxy for seamless playback'} style={css('display:flex;align-items:center;gap:7px;font-size:12px;color:#c9c9da;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:9px;padding:6px 11px;cursor:pointer;white-space:nowrap')}>
+        <span style={css('font-size:11px;color:#8b8ba0')}>Preview</span>
+        <span style={css(`font-weight:600;color:${previewProxyMode ? '#7ed6a6' : '#9a9aae'}`)}>{previewProxyMode ? 'Proxy' : 'Original'}</span>
+        <div style={css(`width:32px;height:18px;border-radius:9px;background:${previewProxyMode ? 'rgba(124,107,255,.45)' : 'rgba(255,255,255,.12)'};position:relative;transition:background .2s`)}>
+          <div style={css(`position:absolute;top:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .2s;left:${previewProxyMode ? '16px' : '2px'}`)} />
+        </div>
+      </div>
       <div className="ec-no-drag" onClick={() => setShowSettings(true)} style={css('width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#9a9aae;font-size:15px;cursor:pointer')}>···</div>
       <button onClick={() => setShowExportModal(true)} style={css('background:#7c6bff;border:none;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 16px;cursor:pointer')}>Export</button>
     </div>
