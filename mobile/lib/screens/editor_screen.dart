@@ -86,6 +86,7 @@ class _EditorScreenState extends State<EditorScreen> {
   int _sourceDurationMs = 0;
   bool _playing = false;
   bool _scrubbing = false;
+  bool _previewExpanded = false;
 
   double _stageFrac = 0.46;
   bool _selected = false;
@@ -134,6 +135,60 @@ class _EditorScreenState extends State<EditorScreen> {
     } else if (widget.projectId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadProject());
     }
+  }
+
+  /// Keep the primary clip and overlay selections mutually exclusive. Timeline
+  /// gestures call these same methods as preview gestures, so a selection cannot
+  /// remain highlighted in a different track after tapping another item.
+  void _clearSelection() {
+    _model.select(-1);
+    if (!mounted) return;
+    setState(() {
+      _selected = false;
+      _selectedText = null;
+      _selectedImage = null;
+      _selectedAudio = -1;
+    });
+  }
+
+  void _selectClip(int index) {
+    _model.select(index);
+    setState(() {
+      _selected = index >= 0;
+      _selectedText = null;
+      _selectedImage = null;
+      _selectedAudio = -1;
+    });
+  }
+
+  void _selectText(TextOverlay text) {
+    _model.select(-1);
+    setState(() {
+      _selected = false;
+      _selectedText = text;
+      _selectedImage = null;
+      _selectedAudio = -1;
+    });
+  }
+
+  void _selectImage(ImageOverlay image) {
+    _model.select(-1);
+    setState(() {
+      _selected = false;
+      _selectedText = null;
+      _selectedImage = image;
+      _selectedAudio = -1;
+    });
+  }
+
+  void _selectAudio(int index) {
+    _model.select(-1);
+    setState(() {
+      _selected = false;
+      _selectedText = null;
+      _selectedImage = null;
+      _selectedAudio = index;
+    });
   }
 
   @override
@@ -669,6 +724,7 @@ class _EditorScreenState extends State<EditorScreen> {
       _images.add(o);
       _selectedImage = o;
       _selectedText = null;
+      _selectedAudio = -1;
       _selected = false;
     });
     _model.select(-1);
@@ -1349,6 +1405,9 @@ class _EditorScreenState extends State<EditorScreen> {
         setState(() {
           _texts.add(t);
           _selectedText = t; // ready to drag/resize on the preview
+          _selectedImage = null;
+          _selectedAudio = -1;
+          _selected = false;
         });
         _scheduleSave();
       }));
@@ -1394,8 +1453,7 @@ class _EditorScreenState extends State<EditorScreen> {
   // "Edit" tile: select the clip under the playhead, else import.
   void _onEdit() {
     if (_hasBase) {
-      _model.select(_model.clipIndexAt(_positionMs));
-      setState(() => _selected = true);
+      _selectClip(_model.clipIndexAt(_positionMs));
     } else {
       _import();
     }
@@ -1416,10 +1474,7 @@ class _EditorScreenState extends State<EditorScreen> {
             Expanded(child: _timeline()),
             _selected
                 ? SelectedToolbar(
-                    onCollapse: () {
-                      _model.select(-1);
-                      setState(() => _selected = false);
-                    },
+                    onCollapse: _clearSelection,
                     onTool: _onSelectedTool,
                     onDelete: _deleteSelected,
                   )
@@ -1565,53 +1620,21 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  /// Floating controls for the selected overlay: re-time to the playhead, edit,
-  /// or delete. Drag to move + pinch to resize are on the overlay itself.
+  /// Only the small edit affordance belongs over the preview. Timeline trim,
+  /// delete, and timing actions remain in the existing editor controls.
   Widget _textControlBar(TextOverlay t) {
-    Widget btn(IconData ic, String label, VoidCallback onTap, {Color? c}) => GestureDetector(
-          onTap: onTap,
-          behavior: HitTestBehavior.opaque,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(ic, size: 18, color: c ?? Ec.text),
-                const SizedBox(height: 2),
-                Text(label, style: TextStyle(fontSize: 9.5, color: c ?? Ec.textDim)),
-              ],
-            ),
-          ),
-        );
-    return Container(
-      decoration: BoxDecoration(
-        color: Ec.sheet.withValues(alpha: 0.92),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Ec.hair2),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          btn(Icons.login, 'Start', () {
-            setState(() => t.startMs = _positionMs);
-            _scheduleSave();
-          }),
-          btn(Icons.logout, 'End', () {
-            setState(() => t.endMs = _positionMs <= t.startMs ? t.startMs + 500 : _positionMs);
-            _scheduleSave();
-          }),
-          btn(Icons.edit_outlined, 'Edit', () => _editOverlayText(t)),
-          btn(Icons.delete_outline, 'Delete', () {
-            _pushHistory();
-            setState(() {
-              _texts.remove(t);
-              _selectedText = null;
-            });
-            _scheduleSave();
-          }, c: const Color(0xFFFF8A9A)),
-          // Deselect: clears the selection (and thus the purple outline + this bar).
-          btn(Icons.close, 'Done', () => setState(() => _selectedText = null)),
-        ],
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _editOverlayText(t),
+      child: Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          color: Ec.sheet.withValues(alpha: 0.94),
+          shape: BoxShape.circle,
+          border: Border.all(color: Ec.hair2),
+        ),
+        child: const Icon(Icons.edit_outlined, size: 17, color: Ec.text),
       ),
     );
   }
@@ -1666,7 +1689,7 @@ class _EditorScreenState extends State<EditorScreen> {
       );
 
   Widget _stage(double screenH) {
-    final h = (screenH * _stageFrac).clamp(160.0, screenH * 0.58);
+    final h = (screenH * (_previewExpanded ? 0.58 : _stageFrac)).clamp(160.0, screenH * 0.62);
     return SizedBox(
       height: h,
       width: double.infinity,
@@ -1681,13 +1704,11 @@ class _EditorScreenState extends State<EditorScreen> {
                     final frame = Size(c.maxWidth, c.maxHeight);
                     return Stack(
                       fit: StackFit.expand,
+                      clipBehavior: Clip.hardEdge,
                       children: [
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
-                          onTap: () => setState(() {
-                            _selectedText = null;
-                            _selectedImage = null;
-                          }),
+                          onTap: _clearSelection,
                           child: _cropped(Texture(textureId: _textureId!)),
                         ),
                         for (final o in _images)
@@ -1696,11 +1717,8 @@ class _EditorScreenState extends State<EditorScreen> {
                               o: o,
                               frame: frame,
                               selected: identical(o, _selectedImage),
-                              onSelect: () => setState(() {
-                                _selectedImage = o;
-                                _selectedText = null;
-                              }),
-                              onDeselect: () => setState(() => _selectedImage = null),
+                              onSelect: () => _selectImage(o),
+                              onDeselect: _clearSelection,
                               onChange: () {
                                 setState(() {});
                                 _scheduleSave();
@@ -1712,17 +1730,14 @@ class _EditorScreenState extends State<EditorScreen> {
                               t: t,
                               frame: frame,
                               selected: identical(t, _selectedText),
-                              onSelect: () => setState(() {
-                                _selectedText = t;
-                                _selectedImage = null;
-                              }),
-                              onDeselect: () => setState(() => _selectedText = null),
+                              onSelect: () => _selectText(t),
+                              onDeselect: _clearSelection,
                               onChange: () {
                                 setState(() {});
                                 _scheduleSave();
                               },
                             ),
-                        if (_selectedText != null && _selectedText!.activeAt(_positionMs))
+                        if (_selectedText != null)
                           Positioned(
                             left: 0,
                             right: 0,
@@ -1802,31 +1817,61 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Widget _transport() {
+    // Use a positioned center slot rather than spacers: the play control stays
+    // centered on this editor viewport even when the side controls differ in
+    // width, and it never participates in the horizontally scrolling timeline.
     return Container(
+      height: 58,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: const BoxDecoration(border: Border(top: BorderSide(color: Ec.hair))),
-      child: Row(
+      child: Stack(
+        fit: StackFit.expand,
         children: [
-          _icBtn(Icons.undo, _undo, enabled: _undoStack.isNotEmpty),
-          _icBtn(Icons.redo, _redo, enabled: _redoStack.isNotEmpty),
-          const Spacer(),
-          GestureDetector(
-            onTap: _togglePlay,
-            child: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _hasBase ? Colors.white.withValues(alpha: 0.08) : Colors.transparent,
-              ),
-              child: Icon(_playing ? Icons.pause : Icons.play_arrow, size: 30, color: _hasBase ? Colors.white : Ec.disabled),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _icBtn(
+                  _previewExpanded ? Icons.close_fullscreen : Icons.open_in_full,
+                  () => setState(() => _previewExpanded = !_previewExpanded),
+                  enabled: _hasBase,
+                ),
+              ],
             ),
           ),
-          const Spacer(),
-          // Split at the playhead (the scissors live here as the primary edit).
-          _icBtn(Icons.content_cut, _split, enabled: _hasBase),
-          const SizedBox(width: 6),
-          _icBtn(Icons.delete_outline, _deleteSelected, enabled: _hasBase && _model.clips.length > 1),
+          Align(
+            alignment: Alignment.center,
+            child: GestureDetector(
+              onTap: _togglePlay,
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _hasBase ? Colors.white.withValues(alpha: 0.08) : Colors.transparent,
+                ),
+                child: Icon(_playing ? Icons.pause : Icons.play_arrow,
+                    size: 30, color: _hasBase ? Colors.white : Ec.disabled),
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _icBtn(Icons.undo, _undo, enabled: _undoStack.isNotEmpty),
+                _icBtn(Icons.redo, _redo, enabled: _redoStack.isNotEmpty),
+                const SizedBox(width: 4),
+                _icBtn(Icons.content_cut, _split, enabled: _hasBase),
+                const SizedBox(width: 4),
+                _icBtn(Icons.delete_outline, _deleteSelected,
+                    enabled: _hasBase && _model.clips.length > 1),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1851,28 +1896,21 @@ class _EditorScreenState extends State<EditorScreen> {
         audios: _audios,
         selectedAudio: _selectedAudio,
         texts: _texts,
+        selectedText: _selectedText,
         images: _images,
         selectedImage: _selectedImage,
+        onClearSelection: _clearSelection,
         onScrubStart: () => _scrubbing = true,
         onScrub: (ms) => setState(() => _positionMs = ms),
         onScrubEnd: (ms) async {
           _scrubbing = false;
           await _seek(ms);
         },
-        onSelectClip: (i) {
-          _model.select(i);
-          setState(() => _selected = true);
-        },
+        onSelectClip: (i) => _selectClip(i),
         // Hold-drag a main clip to reorder it in the sequence. The grabbed clip
         // floats under the finger; the reorder is committed once, on release, then
         // the native player is rebuilt for the new order.
-        onClipReorderStart: () {
-          setState(() {
-            _selected = true;
-            _selectedText = null;
-            _selectedImage = null;
-          });
-        },
+        onClipReorderStart: () => _selectClip(_model.selected),
         onClipReorder: (from, to) {
           _pushHistory();
           _model.moveClip(from, to);
@@ -1884,30 +1922,21 @@ class _EditorScreenState extends State<EditorScreen> {
           }
         },
         onSelectText: (t) async {
-          setState(() {
-            _selectedText = t;
-            _selectedImage = null;
-          });
+          _selectText(t);
           await _seek(t.startMs.clamp(0, _totalMs > 0 ? _totalMs : t.startMs)); // jump so it's visible + editable
         },
         onSelectImage: (o) async {
-          setState(() {
-            _selectedImage = o;
-            _selectedText = null;
-          });
+          _selectImage(o);
           await _seek(o.startMs.clamp(0, _totalMs > 0 ? _totalMs : o.startMs));
         },
         onSelectAudio: (i) async {
-          setState(() {
-            _selectedAudio = i;
-            _selectedText = null;
-          });
+          _selectAudio(i);
           if (i >= 0 && i < _audios.length) {
             await _seek(_audios[i].timelineStartMs.clamp(0, _totalMs > 0 ? _totalMs : _audios[i].timelineStartMs));
           }
         },
-        onAudioEditStart: () {
-          setState(() => _selectedText = null);
+        onAudioEditStart: (i) {
+          if (_selectedAudio != i) _selectAudio(i);
           _pushHistory();
         },
         onAudioMove: (i, dMs) {
@@ -1938,8 +1967,10 @@ class _EditorScreenState extends State<EditorScreen> {
           _scheduleSave();
           if (_hasBase) await _reload(seekTo: _positionMs);
         },
-        onOverlayEditStart: () {
-          setState(() => _selectedText = null); // avoid preview-drag interference
+        onOverlayEditStart: (t) {
+          // Do not clear selection at gesture start: the selected block owns the
+          // handles, and clearing it rebuilds the row without the active grip.
+          if (!identical(_selectedText, t)) _selectText(t);
           _pushHistory();
         },
         onOverlayMove: (t, dMs) {
@@ -1968,11 +1999,8 @@ class _EditorScreenState extends State<EditorScreen> {
           });
         },
         onOverlayEditEnd: () => _scheduleSave(),
-        onImageEditStart: () {
-          setState(() {
-            _selectedText = null;
-            _selectedImage = null;
-          });
+        onImageEditStart: (o) {
+          if (!identical(_selectedImage, o)) _selectImage(o);
           _pushHistory();
         },
         onImageMove: (o, dMs) {

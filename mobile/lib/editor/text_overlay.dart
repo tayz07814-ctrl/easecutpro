@@ -246,7 +246,12 @@ class ImageOverlay {
     final drawH = iw > 0 ? drawW * ih / iw : drawW;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()));
-    final dst = Rect.fromCenter(center: Offset(x * width, y * height), width: drawW, height: drawH);
+    // Keep export placement inside the same composition bounds used by the
+    // interactive preview. This also normalises projects saved before the stage
+    // started clamping overlay centres.
+    final cx = x.clamp(drawW / (2 * width), 1.0 - drawW / (2 * width)).toDouble();
+    final cy = y.clamp(drawH / (2 * height), 1.0 - drawH / (2 * height)).toDouble();
+    final dst = Rect.fromCenter(center: Offset(cx * width, cy * height), width: drawW, height: drawH);
     canvas.drawImageRect(img, Rect.fromLTWH(0, 0, iw, ih), dst, Paint());
     final picture = recorder.endRecording();
     final out = await picture.toImage(width, height);

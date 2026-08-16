@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 
 import '../editor/text_overlay.dart';
@@ -27,17 +29,45 @@ class EditableImageOverlay extends StatefulWidget {
 
 class _EditableImageOverlayState extends State<EditableImageOverlay> {
   double _baseScale = 0.45;
+  double _imageAspect = 1.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadImageAspect();
+  }
+
+  @override
+  void didUpdateWidget(EditableImageOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.o.bytes, widget.o.bytes)) _loadImageAspect();
+  }
+
+  Future<void> _loadImageAspect() async {
+    try {
+      final image = await ui.decodeImageFromList(widget.o.bytes);
+      final aspect = image.width > 0 && image.height > 0 ? image.width / image.height : 1.0;
+      image.dispose();
+      if (mounted) setState(() => _imageAspect = aspect);
+    } catch (_) {
+      // Keep the square fallback; the stage clip still protects the composition.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final o = widget.o;
-    final w = (o.scale * widget.frame.width).clamp(24.0, widget.frame.width);
+    final w = (o.scale * widget.frame.width).clamp(24.0, widget.frame.width).toDouble();
+    final halfW = (w / (2 * widget.frame.width)).clamp(0.0, 0.5).toDouble();
+    final halfH = (w / _imageAspect / (2 * widget.frame.height)).clamp(0.0, 0.5).toDouble();
+    final cx = o.x.clamp(halfW, 1.0 - halfW).toDouble();
+    final cy = o.y.clamp(halfH, 1.0 - halfH).toDouble();
     // Position the CENTRE at (x,y)·frame via a top-left Positioned + half-size
     // translate, so a finger-drag maps 1:1 to movement (Align maps x→position by
     // child size, so overlays don't track the finger and pile up).
     return Positioned(
-      left: o.x * widget.frame.width,
-      top: o.y * widget.frame.height,
+      left: cx * widget.frame.width,
+      top: cy * widget.frame.height,
       child: FractionalTranslation(
         translation: const Offset(-0.5, -0.5),
         child: GestureDetector(
@@ -46,13 +76,24 @@ class _EditableImageOverlayState extends State<EditableImageOverlay> {
           behavior: HitTestBehavior.deferToChild,
           onTap: () => widget.selected ? widget.onDeselect?.call() : widget.onSelect(),
           onScaleStart: (_) {
+            // Normalise legacy/out-of-bounds positions before the first drag so
+            // the gesture starts at the same point that is actually painted.
+            o.x = cx;
+            o.y = cy;
             widget.onSelect();
             _baseScale = o.scale;
           },
           onScaleUpdate: (d) {
-            o.x = (o.x + d.focalPointDelta.dx / widget.frame.width).clamp(0.0, 1.0);
-            o.y = (o.y + d.focalPointDelta.dy / widget.frame.height).clamp(0.0, 1.0);
             if (d.scale != 1.0) o.scale = (_baseScale * d.scale).clamp(0.05, 1.0);
+            final nextW = (o.scale * widget.frame.width).clamp(24.0, widget.frame.width).toDouble();
+            final nextHalfW = (nextW / (2 * widget.frame.width)).clamp(0.0, 0.5).toDouble();
+            final nextHalfH = (nextW / _imageAspect / (2 * widget.frame.height)).clamp(0.0, 0.5).toDouble();
+            o.x = (o.x + d.focalPointDelta.dx / widget.frame.width)
+                .clamp(nextHalfW, 1.0 - nextHalfW)
+                .toDouble();
+            o.y = (o.y + d.focalPointDelta.dy / widget.frame.height)
+                .clamp(nextHalfH, 1.0 - nextHalfH)
+                .toDouble();
             widget.onChange();
           },
           child: Container(

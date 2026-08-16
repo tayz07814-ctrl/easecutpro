@@ -21,8 +21,10 @@ class MiniTimeline extends StatefulWidget {
   final List<AudioTrack> audios; // extra audio tracks (music / voiceover)
   final int selectedAudio; // -1 = none
   final List<TextOverlay> texts; // text + caption overlays
+  final TextOverlay? selectedText; // text/caption selected on the preview / timeline
   final List<ImageOverlay> images; // image / sticker (PiP) overlays
   final ImageOverlay? selectedImage; // image selected on the preview / timeline
+  final VoidCallback? onClearSelection;
   final VoidCallback onScrubStart;
   final ValueChanged<int> onScrub;
   final ValueChanged<int> onScrubEnd;
@@ -41,7 +43,7 @@ class MiniTimeline extends StatefulWidget {
 
   /// Trim an audio block edge (one of the deltas is set).
   final void Function(int index, {int? startDeltaMs, int? endDeltaMs})? onAudioTrim;
-  final VoidCallback? onAudioEditStart;
+  final ValueChanged<int>? onAudioEditStart;
   final VoidCallback? onAudioEditEnd;
 
   /// Drag a text/caption block along the time axis (shift start+end by deltaMs).
@@ -49,7 +51,7 @@ class MiniTimeline extends StatefulWidget {
 
   /// Trim a text/caption block edge (one of the deltas is set).
   final void Function(TextOverlay t, {int? startDeltaMs, int? endDeltaMs})? onOverlayTrim;
-  final VoidCallback? onOverlayEditStart;
+  final ValueChanged<TextOverlay>? onOverlayEditStart;
   final VoidCallback? onOverlayEditEnd;
 
   /// Hold-drag an image overlay block along the time axis (shift start+end by deltaMs).
@@ -57,7 +59,7 @@ class MiniTimeline extends StatefulWidget {
 
   /// Trim an image overlay block edge (one of the deltas is set).
   final void Function(ImageOverlay o, {int? startDeltaMs, int? endDeltaMs})? onImageTrim;
-  final VoidCallback? onImageEditStart;
+  final ValueChanged<ImageOverlay>? onImageEditStart;
   final VoidCallback? onImageEditEnd;
 
   /// Live trim of the selected clip (source ms). Committed on [onTrimEnd].
@@ -75,8 +77,10 @@ class MiniTimeline extends StatefulWidget {
     this.audios = const [],
     this.selectedAudio = -1,
     this.texts = const [],
+    this.selectedText,
     this.images = const [],
     this.selectedImage,
+    this.onClearSelection,
     required this.onScrubStart,
     required this.onScrub,
     required this.onScrubEnd,
@@ -335,43 +339,47 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 onPointerUp: _onPinchUp,
                 onPointerCancel: _onPinchUp,
                 child: Stack(
-                children: [
-                  NotificationListener<ScrollNotification>(
-                    onNotification: _onScroll,
-                      child: SingleChildScrollView(
-                        controller: _sc,
-                        scrollDirection: Axis.horizontal,
-                        physics: _pinching
-                            ? const NeverScrollableScrollPhysics()
-                            : const ClampingScrollPhysics(),
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(horizontal: side),
-                          child: SizedBox(
-                            width: tracksW,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                const SizedBox(height: 8),
-                                SizedBox(height: _clipsH, child: _clipsRow(model)),
-                                if (widget.audios.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  _audioLane(tracksW),
+                  children: [
+                    NotificationListener<ScrollNotification>(
+                      onNotification: _onScroll,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: widget.onClearSelection,
+                        child: SingleChildScrollView(
+                          controller: _sc,
+                          scrollDirection: Axis.horizontal,
+                          physics: _pinching
+                              ? const NeverScrollableScrollPhysics()
+                              : const ClampingScrollPhysics(),
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(horizontal: side),
+                            child: SizedBox(
+                              width: tracksW,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  const SizedBox(height: 8),
+                                  SizedBox(height: _clipsH, child: _clipsRow(model)),
+                                  if (widget.audios.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    _audioLane(tracksW),
+                                  ],
+                                  if (widget.texts.any((t) => t.isCaption)) ...[
+                                    const SizedBox(height: 4),
+                                    _overlayLane(tracksW, captions: true),
+                                  ],
+                                  if (widget.texts.any((t) => !t.isCaption)) ...[
+                                    const SizedBox(height: 4),
+                                    _overlayLane(tracksW, captions: false),
+                                  ],
+                                  if (widget.images.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    _imageLane(tracksW),
+                                  ],
+                                  const SizedBox(height: 8),
                                 ],
-                                if (widget.texts.any((t) => t.isCaption)) ...[
-                                  const SizedBox(height: 4),
-                                  _overlayLane(tracksW, captions: true),
-                                ],
-                                if (widget.texts.any((t) => !t.isCaption)) ...[
-                                  const SizedBox(height: 4),
-                                  _overlayLane(tracksW, captions: false),
-                                ],
-                                if (widget.images.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  _imageLane(tracksW),
-                                ],
-                                const SizedBox(height: 8),
-                              ],
+                              ),
                             ),
                           ),
                         ),
@@ -478,7 +486,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
                   : (_) {
                       // Grab (highlight + history) without seeking — a seek here would
                       // re-align/scroll the timeline mid-grab and fight the move.
-                      widget.onAudioEditStart?.call();
+                      widget.onAudioEditStart?.call(a);
                       setState(() {
                         _grabKind = 'audio';
                         _grabIndex = a;
@@ -572,7 +580,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
       bottom: 0,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onHorizontalDragStart: (_) => widget.onAudioEditStart?.call(),
+        onHorizontalDragStart: (_) => widget.onAudioEditStart?.call(a),
         onHorizontalDragUpdate: (d) {
           final dMs = (d.delta.dx / _pxPerMs).round();
           if (left) {
@@ -642,9 +650,9 @@ class _MiniTimelineState extends State<MiniTimeline> {
         onLongPressStart: widget.onOverlayMove == null
             ? null
             : (_) {
-                // Grab without seeking (see audio note) — onOverlayEditStart clears
-                // the preview selection so the on-video drag can't interfere.
-                widget.onOverlayEditStart?.call();
+                // Grab without seeking; selecting the block is handled by the
+                // edit-start callback without interrupting this gesture.
+                widget.onOverlayEditStart?.call(t);
                 setState(() {
                   _grabKind = 'text';
                   _grabIndex = widget.texts.indexOf(t);
@@ -678,8 +686,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 color: captions ? const Color(0xFF2A2550) : const Color(0xFF3A2E12),
                 borderRadius: BorderRadius.circular(5),
                 border: Border.all(
-                  color: accent.withValues(alpha: grabbed ? 0.95 : 0.45),
-                  width: grabbed ? 2 : 1,
+                  color: accent.withValues(alpha: (grabbed || sel) ? 0.95 : 0.45),
+                  width: (grabbed || sel) ? 2 : 1,
                 ),
                 boxShadow: grabbed
                     ? [BoxShadow(color: accent.withValues(alpha: 0.5), blurRadius: 10, spreadRadius: 1)]
@@ -699,8 +707,10 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 ],
               ),
             ),
-            _overlayTrimGrip(t, accent, left: true),
-            _overlayTrimGrip(t, accent, left: false),
+            if (identical(t, widget.selectedText) && widget.onOverlayTrim != null) ...[
+              _overlayTrimGrip(t, accent, left: true),
+              _overlayTrimGrip(t, accent, left: false),
+            ],
           ],
         ),
       ),
@@ -752,9 +762,9 @@ class _MiniTimelineState extends State<MiniTimeline> {
         onLongPressStart: widget.onImageMove == null
             ? null
             : (_) {
-                // Grab without seeking (see audio note); the move handler marks it
-                // selected so it still highlights.
-                widget.onImageEditStart?.call();
+                // Grab without seeking; the edit-start callback selects it without
+                // interrupting this gesture.
+                widget.onImageEditStart?.call(o);
                 setState(() {
                   _grabKind = 'image';
                   _grabIndex = widget.images.indexOf(o);
@@ -813,8 +823,10 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 ],
               ),
             ),
-            _imageTrimGrip(o, accent, left: true),
-            _imageTrimGrip(o, accent, left: false),
+            if (sel && widget.onImageTrim != null) ...[
+              _imageTrimGrip(o, accent, left: true),
+              _imageTrimGrip(o, accent, left: false),
+            ],
           ],
         ),
       ),
@@ -829,7 +841,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
       bottom: 0,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onHorizontalDragStart: (_) => widget.onImageEditStart?.call(),
+        onHorizontalDragStart: (_) => widget.onImageEditStart?.call(o),
         onHorizontalDragUpdate: (d) {
           final dMs = (d.delta.dx / _pxPerMs).round();
           if (left) {
@@ -864,7 +876,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
       bottom: 0,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onHorizontalDragStart: (_) => widget.onOverlayEditStart?.call(),
+        onHorizontalDragStart: (_) => widget.onOverlayEditStart?.call(t),
         onHorizontalDragUpdate: (d) {
           final dMs = (d.delta.dx / _pxPerMs).round();
           if (left) {
