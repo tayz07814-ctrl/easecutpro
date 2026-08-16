@@ -639,6 +639,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
 
   Widget _overlayBlock(TextOverlay t, Color accent, bool captions, double tracksW) {
     final grabbed = _grabKind == 'text' && _grabIndex == widget.texts.indexOf(t);
+    final sel = identical(t, widget.selectedText);
     return Positioned(
       left: (t.startMs.clamp(0, _total) * _pxPerMs),
       width: (((t.endMs - t.startMs).clamp(120, _total)) * _pxPerMs).clamp(16.0, tracksW),

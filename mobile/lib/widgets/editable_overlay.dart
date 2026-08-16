@@ -45,9 +45,12 @@ class _EditableImageOverlayState extends State<EditableImageOverlay> {
 
   Future<void> _loadImageAspect() async {
     try {
-      final image = await ui.decodeImageFromList(widget.o.bytes);
+      final codec = await ui.instantiateImageCodec(widget.o.bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
       final aspect = image.width > 0 && image.height > 0 ? image.width / image.height : 1.0;
       image.dispose();
+      codec.dispose();
       if (mounted) setState(() => _imageAspect = aspect);
     } catch (_) {
       // Keep the square fallback; the stage clip still protects the composition.
