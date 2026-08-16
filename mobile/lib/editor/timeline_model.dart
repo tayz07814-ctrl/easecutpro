@@ -392,6 +392,25 @@ class TimelineModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Move a primary clip into another track. A composition always retains one
+  /// primary segment; without it the editor has no base duration or canvas.
+  EcClip? takePrimaryClip(int index) {
+    if (index < 0 || index >= clips.length || clips.length <= 1) return null;
+    final clip = clips.removeAt(index);
+    selected = -1;
+    notifyListeners();
+    return clip;
+  }
+
+  /// Insert a video overlay into the contiguous primary sequence. Its requested
+  /// timeline time maps to an insertion boundary; neighbouring clips ripple.
+  void insertPrimaryClip(int index, EcClip clip) {
+    final target = index.clamp(0, clips.length).toInt();
+    clips.insert(target, clip);
+    selected = target;
+    notifyListeners();
+  }
+
   /// Replace the whole clip list (undo/redo, restore a snapshot).
   void restore(List<EcClip> next) {
     clips

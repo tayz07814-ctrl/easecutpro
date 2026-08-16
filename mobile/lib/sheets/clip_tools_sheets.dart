@@ -429,6 +429,8 @@ class CropSheet extends StatefulWidget {
 
 class _CropSheetState extends State<CropSheet> {
   late double _l = widget.initL, _t = widget.initT, _r = widget.initR, _b = widget.initB;
+  // -1 means Free. Every other preset remains locked while its corners move.
+  late double _targetAspect = -1;
   static const _minVis = 0.12; // never crop below 12% of a dimension
 
   // label → target aspect (w/h). -1 = Free (leave the box as-is), 0 = Original.
@@ -449,7 +451,10 @@ class _CropSheetState extends State<CropSheet> {
   }
 
   void _snap(double ta) {
-    if (ta < 0) return; // Free
+    if (ta < 0) {
+      setState(() => _targetAspect = -1);
+      return;
+    }
     final sa = widget.sourceAspect > 0 ? widget.sourceAspect : 16 / 9;
     List<double> c;
     if (ta == 0 || (ta - sa).abs() < 0.001) {
@@ -464,6 +469,7 @@ class _CropSheetState extends State<CropSheet> {
       c = [0, m, 0, m];
     }
     _apply(() {
+      _targetAspect = ta == 0 ? sa : ta;
       _l = c[0];
       _t = c[1];
       _r = c[2];
@@ -474,16 +480,36 @@ class _CropSheetState extends State<CropSheet> {
   void _dragCorner(bool left, bool top, Offset delta, double mw, double mh) {
     _apply(() {
       final dx = delta.dx / mw, dy = delta.dy / mh;
-      if (left) {
-        _l = (_l + dx).clamp(0.0, 1 - _r - _minVis).toDouble();
-      } else {
-        _r = (_r - dx).clamp(0.0, 1 - _l - _minVis).toDouble();
+      if (_targetAspect <= 0) {
+        if (left) {
+          _l = (_l + dx).clamp(0.0, 1 - _r - _minVis).toDouble();
+        } else {
+          _r = (_r - dx).clamp(0.0, 1 - _l - _minVis).toDouble();
+        }
+        if (top) {
+          _t = (_t + dy).clamp(0.0, 1 - _b - _minVis).toDouble();
+        } else {
+          _b = (_b - dy).clamp(0.0, 1 - _t - _minVis).toDouble();
+        }
+        return;
       }
-      if (top) {
-        _t = (_t + dy).clamp(0.0, 1 - _b - _minVis).toDouble();
-      } else {
-        _b = (_b - dy).clamp(0.0, 1 - _t - _minVis).toDouble();
-      }
+      // Crop dimensions are normalized, while aspect is physical w/h. Keep the
+      // corner opposite the dragged one pinned and derive both dimensions together.
+      final sa = widget.sourceAspect > 0 ? widget.sourceAspect : 16 / 9;
+      final oldW = 1 - _l - _r;
+      final oldH = 1 - _t - _b;
+      final horizontal = dx.abs() >= dy.abs();
+      var w = horizontal
+          ? oldW + (left ? -dx : dx)
+          : (oldH + (top ? -dy : dy)) * _targetAspect / sa;
+      final maxW = [
+        left ? 1 - _r : 1 - _l,
+        (top ? 1 - _b : 1 - _t) * _targetAspect / sa,
+      ].reduce((a, b) => a < b ? a : b);
+      w = w.clamp(_minVis, maxW).toDouble();
+      final h = w * sa / _targetAspect;
+      if (left) _l = 1 - _r - w; else _r = 1 - _l - w;
+      if (top) _t = 1 - _b - h; else _b = 1 - _t - h;
     });
   }
 

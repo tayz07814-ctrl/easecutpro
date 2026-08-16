@@ -150,6 +150,7 @@ class EcExport(
             "proxy" -> renderProxy(call, result)
             "extractAudio" -> extractAudio(call, result)
             "thumbnails" -> thumbnails(call, result)
+            "frame" -> frame(call, result)
             "waveform" -> waveform(call, result)
             "duration" -> duration(call, result)
             else -> result.notImplemented()
@@ -253,6 +254,41 @@ class EcExport(
                 }
             }
             main.post { result.success(mapOf("frames" to frames)) }
+        }.start()
+    }
+
+    /** High-detail crop-sheet still. The 1920px cap preserves a sharp source frame
+     * while preventing a 4K decode from exhausting the Flutter UI process. */
+    private fun frame(call: MethodCall, result: MethodChannel.Result) {
+        val uri = call.argument<String>("uri")
+        val timeMs = (call.argument<Number>("timeMs"))?.toLong() ?: 0L
+        if (uri == null) {
+            result.error("ec_export", "no uri", null)
+            return
+        }
+        Thread {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(context, Uri.parse(uri))
+                val source = retriever.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST)
+                    ?: throw IllegalStateException("no frame")
+                val longest = maxOf(source.width, source.height)
+                val bitmap = if (longest > 1920) {
+                    val scale = 1920.0 / longest
+                    Bitmap.createScaledBitmap(source, (source.width * scale).toInt(), (source.height * scale).toInt(), true)
+                } else source
+                val bytes = ByteArrayOutputStream().use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                    out.toByteArray()
+                }
+                if (bitmap !== source) bitmap.recycle()
+                source.recycle()
+                main.post { result.success(mapOf("jpeg" to Base64.encodeToString(bytes, Base64.NO_WRAP))) }
+            } catch (t: Throwable) {
+                main.post { result.error("ec_export", "frame failed: ${t.message}", null) }
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
+            }
         }.start()
     }
 

@@ -41,6 +41,8 @@ class MiniTimeline extends StatefulWidget {
   final VoidCallback? onClipReorderStart;
   final void Function(int from, int to)? onClipReorder;
   final VoidCallback? onClipReorderEnd;
+  /// Long-drag a primary clip downward to convert it into a timed video overlay.
+  final ValueChanged<int>? onClipDemote;
 
   /// Drag an audio block along the time axis (shift its timeline start by deltaMs).
   final void Function(int index, int deltaMs)? onAudioMove;
@@ -60,6 +62,12 @@ class MiniTimeline extends StatefulWidget {
 
   /// Hold-drag an image overlay block along the time axis (shift start+end by deltaMs).
   final void Function(ImageOverlay o, int deltaMs)? onImageMove;
+
+  /// Move an overlay to a visual track. Tracks are created by dropping into a
+  /// new lane and compacted by the editor when their last item leaves.
+  final void Function(ImageOverlay o, int lane)? onImageLaneChange;
+  /// Long-drag a video overlay upward from its top lane to insert it into main.
+  final ValueChanged<ImageOverlay>? onImagePromote;
 
   /// Trim an image overlay block edge (one of the deltas is set).
   final void Function(ImageOverlay o, {int? startDeltaMs, int? endDeltaMs})? onImageTrim;
@@ -108,6 +116,7 @@ class MiniTimeline extends StatefulWidget {
     this.onClipReorderStart,
     this.onClipReorder,
     this.onClipReorderEnd,
+    this.onClipDemote,
     this.onAudioMove,
     this.onAudioTrim,
     this.onAudioEditStart,
@@ -117,6 +126,8 @@ class MiniTimeline extends StatefulWidget {
     this.onOverlayEditStart,
     this.onOverlayEditEnd,
     this.onImageMove,
+    this.onImageLaneChange,
+    this.onImagePromote,
     this.onImageTrim,
     this.onImageEditStart,
     this.onImageEditEnd,
@@ -151,6 +162,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
   String? _grabKind; // 'clip' | 'text' | 'image' | 'audio'
   int _grabIndex = -1; // index into the relevant list (clip index for 'clip')
   double _lpLastDx = 0; // last cumulative long-press dx (to derive per-frame deltas)
+  int _grabStartLane = 0;
+  bool _trackTransferRequested = false;
   double _grabDx = 0; // px the grabbed clip floats from its slot (follows the finger)
   double _grabDy = 0; // vertical follow — the clip lifts out of the track under the finger
   int _dropIndex = -1; // where a grabbed clip would land if released now
@@ -1090,6 +1103,8 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 setState(() {
                   _grabKind = 'image';
                   _grabIndex = widget.images.indexOf(o);
+                  _grabStartLane = o.lane;
+                  _trackTransferRequested = false;
                   _lpLastDx = 0;
                 });
               },
@@ -1099,6 +1114,14 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 final dx = d.offsetFromOrigin.dx;
                 widget.onImageMove!(o, ((dx - _lpLastDx) / _pxPerMs).round());
                 _lpLastDx = dx;
+                final targetLane =
+                    (_grabStartLane + (d.offsetFromOrigin.dy / (_laneH + 3)).round()).clamp(0, 99).toInt();
+                if (targetLane != o.lane) widget.onImageLaneChange?.call(o, targetLane);
+                if (!_trackTransferRequested && _grabStartLane == 0 &&
+                    d.offsetFromOrigin.dy < -(_laneH + 3)) {
+                  _trackTransferRequested = true;
+                  if (o.isVideo) widget.onImagePromote?.call(o);
+                }
               },
         onLongPressEnd: widget.onImageMove == null
             ? null
@@ -1268,6 +1291,17 @@ class _MiniTimelineState extends State<MiniTimeline> {
     if (widget.onClipReorder == null) return;
     final dx = d.offsetFromOrigin.dx;
     final next = _dropIndexFor(_grabIndex, dx);
+    if (!_trackTransferRequested && d.offsetFromOrigin.dy > _clipsH * .75) {
+      final index = _grabIndex;
+      _trackTransferRequested = true;
+      setState(() {
+        _grabKind = null;
+        _grabIndex = -1;
+        _dropIndex = -1;
+      });
+      widget.onClipDemote?.call(index);
+      return;
+    }
     if (next != _dropIndex) HapticFeedback.selectionClick(); // tick as it snaps
     setState(() {
       _grabDx = dx;
@@ -1298,6 +1332,7 @@ class _MiniTimelineState extends State<MiniTimeline> {
                     setState(() {
                       _grabKind = 'clip';
                       _grabIndex = i;
+                      _trackTransferRequested = false;
                       _grabDx = 0;
                       _grabDy = 0;
                       _dropIndex = i;

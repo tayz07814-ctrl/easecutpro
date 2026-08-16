@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -788,12 +789,18 @@ class _EditorScreenState extends State<EditorScreen> {
     _scheduleSave();
   }
 
-  void _openOverlayCrop() {
+  Future<void> _openOverlayCrop() async {
     final o = _selectedVisual;
     if (o == null) return;
     _pushHistory();
+    final localMs = (_positionMs - o.startMs).clamp(0, o.endMs - o.startMs).toInt();
+    final frame = o.isVideo
+        ? await _exporter.frame('file://${o.videoPath}', (localMs * o.speed).round())
+        : o.bytes;
+    if (!mounted) return;
     _openSheet(CropSheet(
-      sourceAspect: 1,
+      sourceAspect: await _frameAspect(frame),
+      frame: frame,
       initL: o.cropL,
       initT: o.cropT,
       initR: o.cropR,
@@ -805,6 +812,40 @@ class _EditorScreenState extends State<EditorScreen> {
         o.cropB = b;
       }),
     ));
+  }
+
+  Future<void> _openOverlayZoom() async {
+    final o = _selectedVisual;
+    if (o == null) return;
+    _pushHistory();
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ec.sheet,
+      builder: (_) => StatefulBuilder(
+        builder: (context, sheetSetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text('Overlay zoom', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Text('${(o.scale * 100).round()}%', style: const TextStyle(color: Ec.textDim)),
+              Slider(
+                value: o.scale.clamp(0.05, 1.0).toDouble(),
+                min: 0.05,
+                max: 1.0,
+                onChanged: (v) {
+                  setState(() => o.scale = v);
+                  sheetSetState(() {});
+                },
+              ),
+              const Text('You can also pinch the overlay directly in the preview.',
+                  style: TextStyle(color: Ec.textFaint, fontSize: 12)),
+            ]),
+          ),
+        ),
+      ),
+    );
+    _scheduleSave();
   }
 
   void _changeSelectedLayer(int delta, {bool edge = false}) {
@@ -862,6 +903,54 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  Future<void> _demotePrimaryClip(int index) async {
+    if (_model.clips.length <= 1) {
+      _toast('Keep one clip on the main track');
+      return;
+    }
+    if (index < 0 || index >= _model.clips.length) return;
+    _pushHistory();
+    final start = _model.clipStartMs(index);
+    final clip = _model.takePrimaryClip(index);
+    if (clip == null) return;
+    final overlay = ImageOverlay(
+      videoPath: clip.sourcePath,
+      startMs: start,
+      endMs: start + clip.timelineLenMs,
+      speed: clip.speed,
+      volume: clip.volume,
+      cropL: clip.cropL,
+      cropT: clip.cropT,
+      cropR: clip.cropR,
+      cropB: clip.cropB,
+      lane: 0,
+    );
+    setState(() {
+      _images.add(overlay);
+      _selectedImage = overlay;
+      _selected = false;
+    });
+    await _loadSource(seekTo: _positionMs, resumePlaying: _playing);
+  }
+
+  Future<void> _promoteVideoOverlay(ImageOverlay overlay) async {
+    if (!overlay.isVideo || overlay.videoPath == null) {
+      _toast('Only video overlays can move to the main track');
+      return;
+    }
+    _pushHistory();
+    final sourceLen = ((overlay.endMs - overlay.startMs) * overlay.speed).round().clamp(100, 1 << 30).toInt();
+    final insertAt = _model.clipIndexAt(overlay.startMs).clamp(0, _model.clips.length).toInt();
+    _model.insertPrimaryClip(insertAt, EcClip(overlay.videoPath!, 0, sourceLen, mediaDurationMs: sourceLen,
+        speed: overlay.speed, volume: overlay.volume));
+    setState(() {
+      _images.remove(overlay);
+      _selectedImage = null;
+      _selected = true;
+    });
+    await _loadSource(seekTo: _positionMs, resumePlaying: _playing);
+  }
+
   void _onOverlayTool(String tool) {
     switch (tool) {
       case 'Split':
@@ -883,7 +972,7 @@ class _EditorScreenState extends State<EditorScreen> {
         _toast('Drag or pinch the selected overlay in the preview');
         break;
       case 'Zoom':
-        _toast('Pinch the selected overlay to resize it');
+        _openOverlayZoom();
         break;
       case 'Adjust':
         _toast('Overlay adjustment controls are available from Transform');
@@ -1016,14 +1105,32 @@ class _EditorScreenState extends State<EditorScreen> {
     await _reload(seekTo: _model.clipStartMs(i));
   }
 
-  void _openCrop() {
+  Future<double> _frameAspect(Uint8List? bytes, [double fallback = 1]) async {
+    if (bytes == null) return fallback;
+    try {
+      final image = await ui.decodeImageFromList(bytes);
+      final aspect = image.width / image.height;
+      image.dispose();
+      return aspect > 0 ? aspect : fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  Future<void> _openCrop() async {
     final i = _selectedIndex();
     if (i < 0) return;
     _pushHistory();
     final c = _model.clips[i];
+    final start = _model.clipStartMs(i);
+    final sourceMs = c.inMs + ((
+      (_positionMs - start).clamp(0, c.timelineLenMs) * (c.speed <= 0 ? 1 : c.speed)
+    ).round());
+    final frame = await _exporter.frame('file://${c.sourcePath}', sourceMs) ?? _cropFrame(i);
+    if (!mounted) return;
     _openSheet(CropSheet(
-      sourceAspect: _aspect,
-      frame: _cropFrame(i),
+      sourceAspect: await _frameAspect(frame, _aspect),
+      frame: frame,
       initL: c.cropL,
       initT: c.cropT,
       initR: c.cropR,
@@ -2633,6 +2740,7 @@ class _EditorScreenState extends State<EditorScreen> {
           _pushHistory();
           _model.moveClip(from, to);
         },
+        onClipDemote: _demotePrimaryClip,
         onClipReorderEnd: () async {
           // Reordering changes which primary frame occupies a composition time;
           // it must not retime independent overlays or jump the user's playhead to
@@ -2728,16 +2836,25 @@ class _EditorScreenState extends State<EditorScreen> {
           setState(() {
             _selectedImage = o;
             final len = o.endMs - o.startMs;
-            final spans = [
-              for (final x in _images)
-                if (!identical(x, o)) [x.startMs, x.endMs, x.lane]
-            ];
-            final p = _freeMove(spans, o.startMs + dMs, len, o.lane, _totalMs);
-            o.startMs = p.start;
-            o.endMs = p.start + len;
-            o.lane = p.lane;
+            // Overlay tracks are independent timed layers: horizontal movement
+            // changes only this overlay's global composition interval. It must not
+            // move it to another track or modify the primary sequence.
+            final start = (o.startMs + dMs).clamp(0, (_totalMs - len).clamp(0, 1 << 30)).toInt();
+            o.startMs = start;
+            o.endMs = start + len;
           });
         },
+        onImageLaneChange: (o, lane) {
+          setState(() {
+            _selectedImage = o;
+            o.lane = lane;
+            // Remove empty visual lanes while preserving the relative order of
+            // every remaining overlay track.
+            final used = _images.map((x) => x.lane).toSet().toList()..sort();
+            for (final x in _images) x.lane = used.indexOf(x.lane);
+          });
+        },
+        onImagePromote: _promoteVideoOverlay,
         onImageTrim: (o, {startDeltaMs, endDeltaMs}) {
           setState(() {
             _selectedImage = o;

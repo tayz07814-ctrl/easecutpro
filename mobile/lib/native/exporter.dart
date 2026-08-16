@@ -183,6 +183,18 @@ class NativeExporter {
     }
   }
 
+  /// Decode a sharp source still for crop editing (native caps only extreme 4K
+  /// sources to keep the UI process safe). Null means the sheet uses its fallback.
+  Future<Uint8List?> frame(String uri, int timeMs) async {
+    try {
+      final r = await _m.invokeMethod<Map<dynamic, dynamic>>('frame', {'uri': uri, 'timeMs': timeMs});
+      final jpeg = r?['jpeg'] as String?;
+      return jpeg == null ? null : base64Decode(jpeg);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Probe a media file's duration (ms), 0 if unknown.
   Future<int> duration(String uri) async {
     try {

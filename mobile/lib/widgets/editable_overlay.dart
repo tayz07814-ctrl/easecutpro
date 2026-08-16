@@ -7,6 +7,16 @@ import 'package:video_player/video_player.dart';
 import '../editor/text_overlay.dart';
 import '../theme.dart';
 
+Widget _cropOverlay(ImageOverlay o, Widget child) {
+  final visibleW = (1 - o.cropL - o.cropR).clamp(0.12, 1.0).toDouble();
+  final visibleH = (1 - o.cropT - o.cropB).clamp(0.12, 1.0).toDouble();
+  if (visibleW >= .999 && visibleH >= .999) return child;
+  final scale = (1 / visibleW) > (1 / visibleH) ? 1 / visibleW : 1 / visibleH;
+  final ax = ((o.cropL + visibleW / 2) * 2 - 1).clamp(-1.0, 1.0).toDouble();
+  final ay = ((o.cropT + visibleH / 2) * 2 - 1).clamp(-1.0, 1.0).toDouble();
+  return ClipRect(child: Transform.scale(scale: scale, alignment: Alignment(ax, ay), child: child));
+}
+
 /// An image overlay on the preview: drag to move, pinch to resize, tap to select.
 class EditableImageOverlay extends StatefulWidget {
   final ImageOverlay o;
@@ -110,7 +120,7 @@ class _EditableImageOverlayState extends State<EditableImageOverlay> {
               opacity: o.opacity.clamp(0.0, 1.0).toDouble(),
               child: Transform.rotate(
                 angle: o.rotation,
-                child: Image.memory(o.bytes!, fit: BoxFit.contain, gaplessPlayback: true),
+                child: _cropOverlay(o, Image.memory(o.bytes!, fit: BoxFit.contain, gaplessPlayback: true)),
               ),
             ),
           ),
@@ -268,7 +278,7 @@ class _EditableVideoOverlayState extends State<EditableVideoOverlay> {
                 : null,
             child: Opacity(
               opacity: o.opacity.clamp(0.0, 1.0).toDouble(),
-              child: Transform.rotate(angle: o.rotation, child: child),
+              child: Transform.rotate(angle: o.rotation, child: _cropOverlay(o, child)),
             ),
           ),
         ),
