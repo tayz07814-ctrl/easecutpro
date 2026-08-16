@@ -1108,7 +1108,9 @@ class _EditorScreenState extends State<EditorScreen> {
   Future<double> _frameAspect(Uint8List? bytes, [double fallback = 1]) async {
     if (bytes == null) return fallback;
     try {
-      final image = await ui.decodeImageFromList(bytes);
+      final decoded = Completer<ui.Image>();
+      ui.decodeImageFromList(bytes, decoded.complete);
+      final image = await decoded.future;
       final aspect = image.width / image.height;
       image.dispose();
       return aspect > 0 ? aspect : fallback;
