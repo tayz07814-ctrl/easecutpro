@@ -1131,12 +1131,14 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(3),
-                    child: Image.memory(o.bytes,
-                        width: 16, height: 16, fit: BoxFit.cover, gaplessPlayback: true),
+                    child: o.isVideo
+                        ? const Icon(Icons.videocam_outlined, size: 16, color: Color(0xFFCDEFEB))
+                        : Image.memory(o.bytes!,
+                            width: 16, height: 16, fit: BoxFit.cover, gaplessPlayback: true),
                   ),
                   const SizedBox(width: 5),
-                  const Expanded(
-                    child: Text('Image',
+                  Expanded(
+                    child: Text(o.isVideo ? 'Video' : 'Image',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(

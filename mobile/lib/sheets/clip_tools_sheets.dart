@@ -187,6 +187,7 @@ class _ZoomSheetState extends State<ZoomSheet> {
   late double _fy = widget.fromCy.clamp(0.0, 1.0);
   late double _tx = widget.toCx.clamp(0.0, 1.0);
   late double _ty = widget.toCy.clamp(0.0, 1.0);
+  String? _draggingFocus;
 
   void _emit() => widget.onChanged(
         fromScale: _fs,
@@ -249,7 +250,8 @@ class _ZoomSheetState extends State<ZoomSheet> {
   }
 
   /// A draggable focus pad — where in the frame that end of the move is centred.
-  Widget _focusPad(String label, double cx, double cy, double scale, void Function(double, double) onMove) {
+  Widget _focusPad(String label, String id, double cx, double cy, double scale,
+      void Function(double, double) onMove) {
     return Expanded(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -263,9 +265,10 @@ class _ZoomSheetState extends State<ZoomSheet> {
             child: LayoutBuilder(
               builder: (_, bc) {
                 void handle(Offset local) {
+                  double snap(double value) => (value - 0.5).abs() <= 0.06 ? 0.5 : value;
                   onMove(
-                    (local.dx / bc.maxWidth).clamp(0.0, 1.0),
-                    (local.dy / bc.maxHeight).clamp(0.0, 1.0),
+                    snap((local.dx / bc.maxWidth).clamp(0.0, 1.0).toDouble()),
+                    snap((local.dy / bc.maxHeight).clamp(0.0, 1.0).toDouble()),
                   );
                 }
 
@@ -277,8 +280,14 @@ class _ZoomSheetState extends State<ZoomSheet> {
                 final top = (cy * bc.maxHeight - h / 2).clamp(0.0, bc.maxHeight - h);
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTapDown: (d) => handle(d.localPosition),
+                  onTapDown: (d) {
+                    setState(() => _draggingFocus = id);
+                    handle(d.localPosition);
+                  },
+                  onPanStart: (_) => setState(() => _draggingFocus = id),
                   onPanUpdate: (d) => handle(d.localPosition),
+                  onPanEnd: (_) => setState(() => _draggingFocus = null),
+                  onTap: () => setState(() => _draggingFocus = null),
                   child: Container(
                     decoration: BoxDecoration(
                       color: const Color(0xFF101015),
@@ -287,6 +296,22 @@ class _ZoomSheetState extends State<ZoomSheet> {
                     ),
                     child: Stack(
                       children: [
+                        if (_draggingFocus == id) ...[
+                          Positioned(
+                            left: bc.maxWidth / 2 - 0.75,
+                            top: 0,
+                            bottom: 0,
+                            width: 1.5,
+                            child: IgnorePointer(child: Container(color: Ec.indigo)),
+                          ),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            top: bc.maxHeight / 2 - 0.75,
+                            height: 1.5,
+                            child: IgnorePointer(child: Container(color: Ec.indigo)),
+                          ),
+                        ],
                         Positioned(
                           left: left,
                           top: top,
@@ -349,7 +374,7 @@ class _ZoomSheetState extends State<ZoomSheet> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _focusPad('Start', _fx, _fy, _fs, (x, y) {
+                _focusPad('Start', 'start', _fx, _fy, _fs, (x, y) {
                   setState(() {
                     _fx = x;
                     _fy = y;
@@ -357,7 +382,7 @@ class _ZoomSheetState extends State<ZoomSheet> {
                   _emit();
                 }),
                 const SizedBox(width: 12),
-                _focusPad('End', _tx, _ty, _ts, (x, y) {
+                _focusPad('End', 'end', _tx, _ty, _ts, (x, y) {
                   setState(() {
                     _tx = x;
                     _ty = y;

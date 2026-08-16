@@ -9,11 +9,15 @@ class SelectedToolbar extends StatelessWidget {
   final VoidCallback onCollapse;
   final void Function(String tool) onTool;
   final VoidCallback onDelete;
+  final bool overlay;
+  final bool video;
   const SelectedToolbar({
     super.key,
     required this.onCollapse,
     required this.onTool,
     required this.onDelete,
+    this.overlay = false,
+    this.video = false,
   });
 
   @override
@@ -41,15 +45,21 @@ class SelectedToolbar extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  _tool(Icons.content_cut, 'Split', () => onTool('Split')), // ]|[ approximated
+                  _tool(Icons.content_cut, 'Split', () => onTool('Split')),
                   _tool(Icons.crop, 'Crop', () => onTool('Crop')),
                   _tool(Icons.zoom_in, 'Zoom', () => onTool('Zoom')),
-                  _tool(Icons.speed, 'Speed', () => onTool('Speed')),
-                  _tool(Icons.volume_up, 'Volume', () => onTool('Volume')),
+                  if (!overlay || video) _tool(Icons.speed, 'Speed', () => onTool('Speed')),
+                  if (!overlay || video) _tool(Icons.volume_up, 'Volume', () => onTool('Volume')),
                   _tool(Icons.tune, 'Adjust', () => onTool('Adjust')),
-                  _tool(Icons.animation, 'Animation', () => onTool('Animation')),
-                  _tool(Icons.graphic_eq, 'Extract', () => onTool('Extract')),
-                  _tool(Icons.picture_in_picture_alt, 'Overlay', () => onTool('Overlay')),
+                  if (!overlay) ...[
+                    _tool(Icons.animation, 'Animation', () => onTool('Animation')),
+                    _tool(Icons.graphic_eq, 'Extract', () => onTool('Extract')),
+                    _tool(Icons.picture_in_picture_alt, 'Overlay', () => onTool('Overlay')),
+                  ],
+                  if (overlay) ...[
+                    _tool(Icons.open_with, 'Transform', () => onTool('Transform')),
+                    _tool(Icons.layers, 'Layers', () => onTool('Layers')),
+                  ],
                   _tool(Icons.delete_outline, 'Delete', onDelete, danger: true),
                 ],
               ),

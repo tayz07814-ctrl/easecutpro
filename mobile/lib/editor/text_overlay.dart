@@ -21,6 +21,7 @@ class TextOverlay {
   int endMs;
   bool isCaption; // generated caption line (replaced on regenerate)
   int lane; // vertical lane on its timeline track (0 = first), so same-track items never overlap
+  int zIndex; // visual stacking order; timing lanes and visual layers are independent
   String? fontFamily; // null = the app's default font (InstrumentSans)
   // Karaoke captions: when both are set, the overlay renders [lineWords] joined
   // with the word at [highlightWord] drawn in an accent colour (the rest dimmed)
@@ -43,6 +44,7 @@ class TextOverlay {
     required this.endMs,
     this.isCaption = false,
     this.lane = 0,
+    this.zIndex = 100,
     this.fontFamily,
     this.lineWords,
     this.highlightWord,
@@ -65,6 +67,7 @@ class TextOverlay {
         endMs: endMs,
         isCaption: isCaption,
         lane: lane,
+        zIndex: zIndex,
         fontFamily: fontFamily,
         lineWords: lineWords == null ? null : List<String>.from(lineWords!),
         highlightWord: highlightWord,
@@ -85,6 +88,7 @@ class TextOverlay {
         'e': endMs,
         'cap': isCaption,
         'lane': lane,
+        'z': zIndex,
         if (fontFamily != null) 'ff': fontFamily,
         if (lineWords != null) 'lw': lineWords,
         if (highlightWord != null) 'hw': highlightWord,
@@ -105,6 +109,7 @@ class TextOverlay {
         endMs: (j['e'] as num?)?.toInt() ?? 0,
         isCaption: (j['cap'] as bool?) ?? false,
         lane: (j['lane'] as num?)?.toInt() ?? 0,
+        zIndex: (j['z'] as num?)?.toInt() ?? 100,
         fontFamily: j['ff'] as String?,
         lineWords: (j['lw'] as List?)?.map((e) => e.toString()).toList(),
         highlightWord: (j['hw'] as num?)?.toInt(),
@@ -190,55 +195,114 @@ class TextOverlay {
 }
 
 /// An image (PiP / sticker) overlay shown over the preview and baked into export.
+/// Common visual overlay model. Images and videos share timing, transforms,
+/// timeline lanes and visual z-order; only their media payload differs.
 class ImageOverlay {
-  final Uint8List bytes;
+  final Uint8List? bytes;
+  final String? videoPath;
   double x; // 0..1 (center)
   double y; // 0..1 (center)
   double scale; // width as a fraction of the frame width
+  double rotation;
+  double opacity;
+  double volume;
+  double speed;
+  double cropL, cropT, cropR, cropB;
   int startMs;
   int endMs;
-  int lane; // vertical lane on the timeline image track (0 = first)
+  int lane; // vertical lane on the timeline visual track
+  int zIndex;
 
   ImageOverlay({
-    required this.bytes,
+    this.bytes,
+    this.videoPath,
     this.x = 0.5,
     this.y = 0.5,
     this.scale = 0.45,
+    this.rotation = 0,
+    this.opacity = 1,
+    this.volume = 1,
+    this.speed = 1,
+    this.cropL = 0,
+    this.cropT = 0,
+    this.cropR = 0,
+    this.cropB = 0,
     required this.startMs,
     required this.endMs,
     this.lane = 0,
+    this.zIndex = 0,
   });
+
+  bool get isVideo => videoPath != null && videoPath!.isNotEmpty;
 
   bool activeAt(int ms) => ms >= startMs && ms < endMs;
 
-  ImageOverlay copy() =>
-      ImageOverlay(bytes: bytes, x: x, y: y, scale: scale, startMs: startMs, endMs: endMs, lane: lane);
+  ImageOverlay copy() => ImageOverlay(
+        bytes: bytes,
+        videoPath: videoPath,
+        x: x,
+        y: y,
+        scale: scale,
+        rotation: rotation,
+        opacity: opacity,
+        volume: volume,
+        speed: speed,
+        cropL: cropL,
+        cropT: cropT,
+        cropR: cropR,
+        cropB: cropB,
+        startMs: startMs,
+        endMs: endMs,
+        lane: lane,
+        zIndex: zIndex,
+      );
 
   /// The pixels ride along base64 — an overlay is picked from the device gallery,
   /// so there is no stable path to point at on reload.
   Map<String, dynamic> toJson() => {
-        'img': base64Encode(bytes),
+        if (bytes != null) 'img': base64Encode(bytes!),
+        if (videoPath != null) 'video': videoPath,
         'x': x,
         'y': y,
         'scale': scale,
+        'rotation': rotation,
+        'opacity': opacity,
+        'volume': volume,
+        'speed': speed,
+        'cropL': cropL,
+        'cropT': cropT,
+        'cropR': cropR,
+        'cropB': cropB,
         'start': startMs,
         'end': endMs,
         'lane': lane,
+        'z': zIndex,
       };
 
   factory ImageOverlay.fromJson(Map j) => ImageOverlay(
-        bytes: base64Decode((j['img'] as String?) ?? ''),
+        bytes: (j['img'] as String?) == null ? null : base64Decode(j['img'] as String),
+        videoPath: j['video'] as String?,
         x: (j['x'] as num?)?.toDouble() ?? 0.5,
         y: (j['y'] as num?)?.toDouble() ?? 0.5,
         scale: (j['scale'] as num?)?.toDouble() ?? 0.45,
+        rotation: (j['rotation'] as num?)?.toDouble() ?? 0,
+        opacity: (j['opacity'] as num?)?.toDouble() ?? 1,
+        volume: (j['volume'] as num?)?.toDouble() ?? 1,
+        speed: (j['speed'] as num?)?.toDouble() ?? 1,
+        cropL: (j['cropL'] as num?)?.toDouble() ?? 0,
+        cropT: (j['cropT'] as num?)?.toDouble() ?? 0,
+        cropR: (j['cropR'] as num?)?.toDouble() ?? 0,
+        cropB: (j['cropB'] as num?)?.toDouble() ?? 0,
         startMs: (j['start'] as num?)?.toInt() ?? 0,
         endMs: (j['end'] as num?)?.toInt() ?? 0,
         lane: (j['lane'] as num?)?.toInt() ?? 0,
+        zIndex: (j['z'] as num?)?.toInt() ?? 0,
       );
 
   /// Bake to a full-frame transparent PNG at the OUTPUT resolution (base64, no prefix).
   Future<String> bakePngBase64(int width, int height) async {
-    final codec = await ui.instantiateImageCodec(bytes);
+    if (bytes == null) return '';
+    final codec = await ui.instantiateImageCodec(bytes!);
     final img = (await codec.getNextFrame()).image;
     final iw = img.width.toDouble();
     final ih = img.height.toDouble();

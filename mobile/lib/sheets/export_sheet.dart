@@ -95,7 +95,9 @@ class _ExportSheetState extends State<ExportSheet> {
       }
       final imgs = <ExportOverlay>[];
       for (final o in widget.imageOverlays) {
-        if (o.endMs <= o.startMs) continue;
+        // Video overlays are previewed live; the current Media3 export pass only
+        // accepts bitmap overlays, so never send an empty bitmap for a video.
+        if (o.isVideo || o.endMs <= o.startMs) continue;
         final b = await o.bakePngBase64(w, h);
         imgs.add(ExportOverlay(base64: b, startMs: o.startMs, endMs: o.endMs));
       }

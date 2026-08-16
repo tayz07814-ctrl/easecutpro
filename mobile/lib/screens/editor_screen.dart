@@ -728,6 +728,169 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  ImageOverlay? get _selectedVisual => _selectedImage;
+
+  void _deleteSelectedOverlay() {
+    final o = _selectedVisual;
+    if (o == null) return;
+    _pushHistory();
+    setState(() {
+      _images.remove(o);
+      _selectedImage = null;
+    });
+    _scheduleSave();
+  }
+
+  void _splitSelectedOverlay() {
+    final o = _selectedVisual;
+    if (o == null || _positionMs <= o.startMs || _positionMs >= o.endMs) return;
+    _pushHistory();
+    final right = o.copy()
+      ..startMs = _positionMs
+      ..endMs = o.endMs;
+    setState(() {
+      o.endMs = _positionMs;
+      _images.add(right);
+      _selectedImage = right;
+    });
+    _scheduleSave();
+  }
+
+  Future<void> _openOverlaySpeed() async {
+    final o = _selectedVisual;
+    if (o == null || !o.isVideo) return;
+    _pushHistory();
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SpeedSheet(
+        initial: o.speed,
+        onChanged: (v) => setState(() => o.speed = v),
+      ),
+    );
+    _scheduleSave();
+  }
+
+  Future<void> _openOverlayVolume() async {
+    final o = _selectedVisual;
+    if (o == null || !o.isVideo) return;
+    _pushHistory();
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => VolumeSheet(
+        initial: o.volume,
+        onChanged: (v) => setState(() => o.volume = v),
+      ),
+    );
+    _scheduleSave();
+  }
+
+  void _openOverlayCrop() {
+    final o = _selectedVisual;
+    if (o == null) return;
+    _pushHistory();
+    _openSheet(CropSheet(
+      sourceAspect: 1,
+      initL: o.cropL,
+      initT: o.cropT,
+      initR: o.cropR,
+      initB: o.cropB,
+      onChange: (l, t, r, b) => setState(() {
+        o.cropL = l;
+        o.cropT = t;
+        o.cropR = r;
+        o.cropB = b;
+      }),
+    ));
+  }
+
+  void _changeSelectedLayer(int delta, {bool edge = false}) {
+    final selectedImage = _selectedImage;
+    final selectedText = _selectedText;
+    if (selectedImage == null && selectedText == null) return;
+    final all = <int>[
+      ..._images.map((o) => o.zIndex),
+      ..._texts.map((t) => t.zIndex),
+    ];
+    final max = all.isEmpty ? 0 : all.reduce((a, b) => a > b ? a : b);
+    final min = all.isEmpty ? 0 : all.reduce((a, b) => a < b ? a : b);
+    setState(() {
+      final next = edge ? (delta > 0 ? max + 1 : min - 1) : null;
+      if (selectedImage != null) {
+        selectedImage.zIndex = next ?? selectedImage.zIndex + delta;
+      } else {
+        selectedText!.zIndex = next ?? selectedText.zIndex + delta;
+      }
+    });
+    _scheduleSave();
+  }
+
+  void _openLayers() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ec.sheet,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Wrap(
+            runSpacing: 8,
+            children: [
+              const ListTile(leading: Icon(Icons.layers, color: Ec.indigoText), title: Text('Layers')),
+              ListTile(leading: const Icon(Icons.vertical_align_top), title: const Text('Bring to Front'), onTap: () {
+                Navigator.pop(context);
+                _changeSelectedLayer(1, edge: true);
+              }),
+              ListTile(leading: const Icon(Icons.arrow_upward), title: const Text('Bring Forward'), onTap: () {
+                Navigator.pop(context);
+                _changeSelectedLayer(1);
+              }),
+              ListTile(leading: const Icon(Icons.arrow_downward), title: const Text('Send Backward'), onTap: () {
+                Navigator.pop(context);
+                _changeSelectedLayer(-1);
+              }),
+              ListTile(leading: const Icon(Icons.vertical_align_bottom), title: const Text('Send to Back'), onTap: () {
+                Navigator.pop(context);
+                _changeSelectedLayer(-1, edge: true);
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _onOverlayTool(String tool) {
+    switch (tool) {
+      case 'Split':
+        _splitSelectedOverlay();
+        break;
+      case 'Crop':
+        _openOverlayCrop();
+        break;
+      case 'Speed':
+        _openOverlaySpeed();
+        break;
+      case 'Volume':
+        _openOverlayVolume();
+        break;
+      case 'Layers':
+        _openLayers();
+        break;
+      case 'Transform':
+        _toast('Drag or pinch the selected overlay in the preview');
+        break;
+      case 'Zoom':
+        _toast('Pinch the selected overlay to resize it');
+        break;
+      case 'Adjust':
+        _toast('Overlay adjustment controls are available from Transform');
+        break;
+    }
+  }
+
   // ---- lane packing (Task 5): items on the SAME track never overlap in time ----
 
   /// Lowest free lane (0-based) on which [startMs,endMs] doesn't overlap any span
@@ -773,16 +936,29 @@ class _EditorScreenState extends State<EditorScreen> {
     return (start: start, lane: curLane);
   }
 
-  /// Overlay tool: pick an image and drop it on the video as a PiP / sticker
-  /// (draggable + pinch-resizable on the preview, baked into export).
+  /// Overlay tool: pick an image or video and drop it on the visual overlay lane.
+  /// Both media types use the same timed transform/layer model.
   Future<void> _addOverlay() async {
-    final res = await FilePicker.pickFiles(type: FileType.image, withData: true);
-    final bytes = (res != null && res.files.isNotEmpty) ? res.files.first.bytes : null;
-    if (bytes == null) return;
+    final res = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'mov', 'm4v', 'webm'],
+      withData: true,
+    );
+    if (res == null || res.files.isEmpty) return;
+    final file = res.files.first;
+    final path = file.path;
+    final ext = (file.extension ?? '').toLowerCase();
+    final isVideo = {'mp4', 'mov', 'm4v', 'webm'}.contains(ext);
+    if (isVideo && path == null) return;
+    if (!isVideo && file.bytes == null) return;
+    final sourceDuration = isVideo && path != null ? await _exporter.duration('file://$path') : 0;
+    final end = (_positionMs + (sourceDuration > 0 ? sourceDuration : 4000))
+        .clamp(0, _totalMs > 0 ? _totalMs : _positionMs + (sourceDuration > 0 ? sourceDuration : 4000));
     final o = ImageOverlay(
-      bytes: bytes,
+      bytes: isVideo ? null : file.bytes,
+      videoPath: isVideo ? path : null,
       startMs: _positionMs,
-      endMs: (_positionMs + 4000).clamp(0, _totalMs > 0 ? _totalMs : _positionMs + 4000),
+      endMs: end.toInt(),
     );
     // Drop onto the lowest free lane at the playhead so it never lands on top of
     // an existing image (respecting each item's own duration).
@@ -1888,11 +2064,13 @@ class _EditorScreenState extends State<EditorScreen> {
             _transport(),
             Expanded(child: _timeline()),
             if (_pendingKeeps != null) _stagedBar(),
-            _selected
+            (_selected || _selectedImage != null)
                 ? SelectedToolbar(
+                    overlay: _selectedImage != null,
+                    video: _selectedImage?.isVideo == true,
                     onCollapse: _clearSelection,
-                    onTool: _onSelectedTool,
-                    onDelete: _deleteSelected,
+                    onTool: _selectedImage != null ? _onOverlayTool : _onSelectedTool,
+                    onDelete: _selectedImage != null ? _deleteSelectedOverlay : _deleteSelected,
                   )
                 : ToolDock(
                     hasSelection: false,
@@ -1944,6 +2122,16 @@ class _EditorScreenState extends State<EditorScreen> {
                 ),
               ),
               const Spacer(),
+              GestureDetector(
+                onTap: _openLayers,
+                behavior: HitTestBehavior.opaque,
+                child: const SizedBox(
+                  width: 34,
+                  height: 34,
+                  child: Icon(Icons.layers_outlined, size: 20, color: Color(0xFFBDBDC4)),
+                ),
+              ),
+              const SizedBox(width: 4),
               GestureDetector(
                 onTap: _openSettings,
                 child: const SizedBox(
@@ -2144,6 +2332,65 @@ class _EditorScreenState extends State<EditorScreen> {
         ),
       );
 
+  List<Widget> _visualOverlayWidgets(Size frame) {
+    final layers = <_VisualLayer>[];
+    for (final o in _images) {
+      if (!o.activeAt(_positionMs) && !identical(o, _selectedImage)) continue;
+      final selected = identical(o, _selectedImage);
+      final key = ValueKey('${o.videoPath ?? 'image'}:${identityHashCode(o)}');
+      layers.add(_VisualLayer(
+        o.zIndex,
+        o.isVideo
+            ? EditableVideoOverlay(
+                key: key,
+                o: o,
+                frame: frame,
+                selected: selected,
+                playing: _playing,
+                positionMs: _positionMs,
+                onSelect: () => _selectImage(o),
+                onDeselect: _clearSelection,
+                onChange: () {
+                  setState(() {});
+                  _scheduleSave();
+                },
+              )
+            : EditableImageOverlay(
+                key: key,
+                o: o,
+                frame: frame,
+                selected: selected,
+                onSelect: () => _selectImage(o),
+                onDeselect: _clearSelection,
+                onChange: () {
+                  setState(() {});
+                  _scheduleSave();
+                },
+              ),
+      ));
+    }
+    for (final t in _texts) {
+      if (!t.activeAt(_positionMs) && !identical(t, _selectedText)) continue;
+      layers.add(_VisualLayer(
+        t.zIndex,
+        EditableOverlay(
+          key: ValueKey('text:${identityHashCode(t)}'),
+          t: t,
+          frame: frame,
+          selected: identical(t, _selectedText),
+          onSelect: () => _selectText(t),
+          onDeselect: _clearSelection,
+          onChange: () {
+            setState(() {});
+            _scheduleSave();
+          },
+        ),
+      ));
+    }
+    layers.sort((a, b) => a.z.compareTo(b.z));
+    return [for (final layer in layers) layer.widget];
+  }
+
   Widget _stage(double screenH, {bool fill = false}) {
     final h = (screenH * _stageFrac).clamp(160.0, screenH * 0.58);
     return SizedBox(
@@ -2167,32 +2414,7 @@ class _EditorScreenState extends State<EditorScreen> {
                           onTap: _clearSelection,
                           child: _graded(_cropped(Texture(textureId: _textureId!))),
                         ),
-                        for (final o in _images)
-                          if (o.activeAt(_positionMs) || identical(o, _selectedImage))
-                            EditableImageOverlay(
-                              o: o,
-                              frame: frame,
-                              selected: identical(o, _selectedImage),
-                              onSelect: () => _selectImage(o),
-                              onDeselect: _clearSelection,
-                              onChange: () {
-                                setState(() {});
-                                _scheduleSave();
-                              },
-                            ),
-                        for (final t in _texts)
-                          if (t.activeAt(_positionMs) || identical(t, _selectedText))
-                            EditableOverlay(
-                              t: t,
-                              frame: frame,
-                              selected: identical(t, _selectedText),
-                              onSelect: () => _selectText(t),
-                              onDeselect: _clearSelection,
-                              onChange: () {
-                                setState(() {});
-                                _scheduleSave();
-                              },
-                            ),
+                        ..._visualOverlayWidgets(frame),
                         if (_selectedText != null)
                           Positioned(
                             left: 0,
@@ -2543,6 +2765,12 @@ class _EditorScreenState extends State<EditorScreen> {
 
 /// An immutable snapshot of the editable state (clips + text/image overlays +
 /// audio tracks) for undo/redo.
+class _VisualLayer {
+  final int z;
+  final Widget widget;
+  const _VisualLayer(this.z, this.widget);
+}
+
 class _EditSnap {
   final List<EcClip> clips;
   final List<TextOverlay> texts;

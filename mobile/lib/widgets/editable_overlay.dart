@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 
 import '../editor/text_overlay.dart';
 import '../theme.dart';
@@ -45,7 +47,7 @@ class _EditableImageOverlayState extends State<EditableImageOverlay> {
 
   Future<void> _loadImageAspect() async {
     try {
-      final codec = await ui.instantiateImageCodec(widget.o.bytes);
+      final codec = await ui.instantiateImageCodec(widget.o.bytes!);
       final frame = await codec.getNextFrame();
       final image = frame.image;
       final aspect = image.width > 0 && image.height > 0 ? image.width / image.height : 1.0;
@@ -104,7 +106,170 @@ class _EditableImageOverlayState extends State<EditableImageOverlay> {
             decoration: widget.selected
                 ? BoxDecoration(border: Border.all(color: Ec.accentB, width: 1.5))
                 : null,
-            child: Image.memory(o.bytes, fit: BoxFit.contain, gaplessPlayback: true),
+            child: Opacity(
+              opacity: o.opacity.clamp(0.0, 1.0).toDouble(),
+              child: Transform.rotate(
+                angle: o.rotation,
+                child: Image.memory(o.bytes!, fit: BoxFit.contain, gaplessPlayback: true),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Native video overlay. The controller is intentionally owned by the overlay
+/// widget: it gives every video its own hardware decoder while the editor keeps
+/// one shared timing/layer model for all visual media.
+class EditableVideoOverlay extends StatefulWidget {
+  final ImageOverlay o;
+  final Size frame;
+  final bool selected;
+  final bool playing;
+  final int positionMs;
+  final VoidCallback onSelect;
+  final VoidCallback onChange;
+  final VoidCallback? onDeselect;
+
+  const EditableVideoOverlay({
+    super.key,
+    required this.o,
+    required this.frame,
+    required this.selected,
+    required this.playing,
+    required this.positionMs,
+    required this.onSelect,
+    required this.onChange,
+    this.onDeselect,
+  });
+
+  @override
+  State<EditableVideoOverlay> createState() => _EditableVideoOverlayState();
+}
+
+class _EditableVideoOverlayState extends State<EditableVideoOverlay> {
+  VideoPlayerController? _controller;
+  double _baseScale = 0.45;
+  bool _syncing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _open();
+  }
+
+  Future<void> _open() async {
+    final path = widget.o.videoPath;
+    if (path == null || path.isEmpty) return;
+    final c = VideoPlayerController.file(File(path));
+    _controller = c;
+    try {
+      await c.initialize();
+      await c.setLooping(false);
+      await c.setPlaybackSpeed(widget.o.speed.clamp(0.1, 4.0).toDouble());
+      await c.setVolume(widget.o.volume.clamp(0.0, 4.0).toDouble());
+      if (!mounted) {
+        await c.dispose();
+        return;
+      }
+      setState(() {});
+      await _sync(force: true);
+    } catch (_) {
+      await c.dispose();
+      if (identical(_controller, c)) _controller = null;
+      if (mounted) setState(() {});
+    }
+  }
+
+  @override
+  void didUpdateWidget(EditableVideoOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.o.videoPath != widget.o.videoPath) {
+      _controller?.dispose();
+      _controller = null;
+      _open();
+      return;
+    }
+    _sync();
+  }
+
+  Future<void> _sync({bool force = false}) async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized || _syncing) return;
+    _syncing = true;
+    try {
+      final localMs = (widget.positionMs - widget.o.startMs).clamp(0, widget.o.endMs - widget.o.startMs);
+      final sourceMs = (localMs * widget.o.speed.clamp(0.1, 4.0)).round();
+      if (force || (c.value.position.inMilliseconds - sourceMs).abs() > 180) {
+        await c.seekTo(Duration(milliseconds: sourceMs));
+      }
+      await c.setPlaybackSpeed(widget.o.speed.clamp(0.1, 4.0).toDouble());
+      await c.setVolume(widget.o.volume.clamp(0.0, 4.0).toDouble());
+      if (widget.playing && !c.value.isPlaying) {
+        await c.play();
+      } else if (!widget.playing && c.value.isPlaying) {
+        await c.pause();
+      }
+    } catch (_) {
+      // A disposed/temporarily unavailable controller must not interrupt the base preview.
+    } finally {
+      _syncing = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final o = widget.o;
+    final w = (o.scale * widget.frame.width).clamp(24.0, widget.frame.width).toDouble();
+    final cx = o.x.clamp(o.scale / 2, 1 - o.scale / 2).toDouble();
+    final c = _controller;
+    final child = c == null || !c.value.isInitialized
+        ? SizedBox(width: w, height: w, child: const Center(child: CircularProgressIndicator(strokeWidth: 1.5)))
+        : SizedBox(
+            width: w,
+            child: AspectRatio(
+              aspectRatio: c.value.aspectRatio <= 0 ? 1 : c.value.aspectRatio,
+              child: VideoPlayer(c),
+            ),
+          );
+    return Positioned(
+      left: cx * widget.frame.width,
+      top: o.y.clamp(0.0, 1.0).toDouble() * widget.frame.height,
+      child: FractionalTranslation(
+        translation: const Offset(-0.5, -0.5),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => widget.selected ? widget.onDeselect?.call() : widget.onSelect(),
+          onScaleStart: (_) {
+            o.x = cx;
+            widget.onSelect();
+            _baseScale = o.scale;
+          },
+          onScaleUpdate: (d) {
+            if (d.scale != 1.0) o.scale = (_baseScale * d.scale).clamp(0.05, 1.0).toDouble();
+            o.x = (o.x + d.focalPointDelta.dx / widget.frame.width)
+                .clamp(o.scale / 2, 1 - o.scale / 2)
+                .toDouble();
+            o.y = (o.y + d.focalPointDelta.dy / widget.frame.height).clamp(0.0, 1.0).toDouble();
+            widget.onChange();
+          },
+          child: Container(
+            width: w,
+            decoration: widget.selected
+                ? BoxDecoration(border: Border.all(color: Ec.accentB, width: 1.5))
+                : null,
+            child: Opacity(
+              opacity: o.opacity.clamp(0.0, 1.0).toDouble(),
+              child: Transform.rotate(angle: o.rotation, child: child),
+            ),
           ),
         ),
       ),
