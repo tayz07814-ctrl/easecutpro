@@ -315,8 +315,23 @@ class ImageOverlay {
     // started clamping overlay centres.
     final cx = x.clamp(drawW / (2 * width), 1.0 - drawW / (2 * width)).toDouble();
     final cy = y.clamp(drawH / (2 * height), 1.0 - drawH / (2 * height)).toDouble();
-    final dst = Rect.fromCenter(center: Offset(cx * width, cy * height), width: drawW, height: drawH);
-    canvas.drawImageRect(img, Rect.fromLTWH(0, 0, iw, ih), dst, Paint());
+    final source = Rect.fromLTRB(
+      iw * cropL.clamp(0.0, 0.88),
+      ih * cropT.clamp(0.0, 0.88),
+      iw * (1 - cropR.clamp(0.0, 0.88)),
+      ih * (1 - cropB.clamp(0.0, 0.88)),
+    );
+    final centre = Offset(cx * width, cy * height);
+    canvas.save();
+    canvas.translate(centre.dx, centre.dy);
+    canvas.rotate(rotation);
+    canvas.drawImageRect(
+      img,
+      source,
+      Rect.fromCenter(center: Offset.zero, width: drawW, height: drawH),
+      Paint()..color = Color.fromARGB((opacity.clamp(0.0, 1.0) * 255).round(), 255, 255, 255),
+    );
+    canvas.restore();
     final picture = recorder.endRecording();
     final out = await picture.toImage(width, height);
     final bd = await out.toByteData(format: ui.ImageByteFormat.png);
