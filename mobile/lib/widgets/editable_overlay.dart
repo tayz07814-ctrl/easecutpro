@@ -17,6 +17,66 @@ Widget _cropOverlay(ImageOverlay o, Widget child) {
   return ClipRect(child: Transform.scale(scale: scale, alignment: Alignment(ax, ay), child: child));
 }
 
+/// Wraps any child with a background-removal mask (PNG with alpha: white = keep,
+/// transparent = remove). Uses [ShaderMask] with [BlendMode.dstIn] so it works for
+/// both image and video overlay widgets.
+class _MaskedWidget extends StatefulWidget {
+  final String? maskPath;
+  final Widget child;
+  const _MaskedWidget({this.maskPath, required this.child});
+
+  @override
+  State<_MaskedWidget> createState() => _MaskedWidgetState();
+}
+
+class _MaskedWidgetState extends State<_MaskedWidget> {
+  ui.Image? _mask;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(_MaskedWidget old) {
+    super.didUpdateWidget(old);
+    if (old.maskPath != widget.maskPath) _load();
+  }
+
+  void _load() async {
+    if (widget.maskPath == null || widget.maskPath!.isEmpty) {
+      if (mounted && _mask != null) setState(() => _mask = null);
+      return;
+    }
+    try {
+      final bytes = await File(widget.maskPath!).readAsBytes();
+      ui.decodeImageFromList(bytes, (img) {
+        if (mounted) setState(() => _mask = img);
+      });
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_mask == null) return widget.child;
+    return ShaderMask(
+      shaderCallback: (rect) {
+        final sx = rect.width / _mask!.width;
+        final sy = rect.height / _mask!.height;
+        return ui.ImageShader(
+          _mask!,
+          TileMode.clamp,
+          TileMode.clamp,
+          (Matrix4.identity()..scale(sx, sy)).storage,
+        );
+      },
+      blendMode: BlendMode.dstIn,
+      child: widget.child,
+    );
+  }
+}
+
 /// An image overlay on the preview: drag to move, pinch to resize, tap to select.
 class EditableImageOverlay extends StatefulWidget {
   final ImageOverlay o;
@@ -120,7 +180,7 @@ class _EditableImageOverlayState extends State<EditableImageOverlay> {
               opacity: o.opacity.clamp(0.0, 1.0).toDouble(),
               child: Transform.rotate(
                 angle: o.rotation,
-                child: _cropOverlay(o, Image.memory(o.bytes!, fit: BoxFit.contain, gaplessPlayback: true)),
+                child: _cropOverlay(o, _MaskedWidget(maskPath: o.bgMode > 0 ? o.maskPath : null, child: Image.memory(o.bytes!, fit: BoxFit.contain, gaplessPlayback: true))),
               ),
             ),
           ),
@@ -278,7 +338,7 @@ class _EditableVideoOverlayState extends State<EditableVideoOverlay> {
                 : null,
             child: Opacity(
               opacity: o.opacity.clamp(0.0, 1.0).toDouble(),
-              child: Transform.rotate(angle: o.rotation, child: _cropOverlay(o, child)),
+              child: Transform.rotate(angle: o.rotation, child: _cropOverlay(o, _MaskedWidget(maskPath: o.bgMode > 0 ? o.maskPath : null, child: child))),
             ),
           ),
         ),

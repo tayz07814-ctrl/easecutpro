@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -208,6 +209,10 @@ class ImageOverlay {
   double volume;
   double speed;
   double cropL, cropT, cropR, cropB;
+  /// Background removal: 0 = off, 1 = auto (ML person segmentation), 2 = manual brush.
+  int bgMode;
+  /// Path to a manual brush mask PNG (white = keep, transparent = remove).
+  String? maskPath;
   int startMs;
   int endMs;
   int lane; // vertical lane on the timeline visual track
@@ -227,6 +232,8 @@ class ImageOverlay {
     this.cropT = 0,
     this.cropR = 0,
     this.cropB = 0,
+    this.bgMode = 0,
+    this.maskPath,
     required this.startMs,
     required this.endMs,
     this.lane = 0,
@@ -251,6 +258,8 @@ class ImageOverlay {
         cropT: cropT,
         cropR: cropR,
         cropB: cropB,
+        bgMode: bgMode,
+        maskPath: maskPath,
         startMs: startMs,
         endMs: endMs,
         lane: lane,
@@ -273,6 +282,8 @@ class ImageOverlay {
         'cropT': cropT,
         'cropR': cropR,
         'cropB': cropB,
+        'bg': bgMode,
+        if (maskPath != null) 'mask': maskPath,
         'start': startMs,
         'end': endMs,
         'lane': lane,
@@ -293,6 +304,8 @@ class ImageOverlay {
         cropT: (j['cropT'] as num?)?.toDouble() ?? 0,
         cropR: (j['cropR'] as num?)?.toDouble() ?? 0,
         cropB: (j['cropB'] as num?)?.toDouble() ?? 0,
+        bgMode: (j['bg'] as num?)?.toInt() ?? 0,
+        maskPath: j['mask'] as String?,
         startMs: (j['start'] as num?)?.toInt() ?? 0,
         endMs: (j['end'] as num?)?.toInt() ?? 0,
         lane: (j['lane'] as num?)?.toInt() ?? 0,
@@ -332,6 +345,26 @@ class ImageOverlay {
       Paint()..color = Color.fromARGB((opacity.clamp(0.0, 1.0) * 255).round(), 255, 255, 255),
     );
     canvas.restore();
+    // Apply background removal mask: draw the mask with [BlendMode.dstIn] so
+    // only pixels where the mask is opaque survive — the rest becomes transparent.
+    if (bgMode > 0 && maskPath != null) {
+      try {
+        final maskBytes = await File(maskPath!).readAsBytes();
+        final maskCodec = await ui.instantiateImageCodec(maskBytes);
+        final maskImg = (await maskCodec.getNextFrame()).image;
+        canvas.save();
+        canvas.translate(centre.dx, centre.dy);
+        canvas.rotate(rotation);
+        canvas.drawImageRect(
+          maskImg,
+          Rect.fromLTWH(0, 0, maskImg.width.toDouble(), maskImg.height.toDouble()),
+          Rect.fromCenter(center: Offset.zero, width: drawW, height: drawH),
+          Paint()..blendMode = BlendMode.dstIn,
+        );
+        canvas.restore();
+        maskImg.dispose();
+      } catch (_) {}
+    }
     final picture = recorder.endRecording();
     final out = await picture.toImage(width, height);
     final bd = await out.toByteData(format: ui.ImageByteFormat.png);

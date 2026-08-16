@@ -3,6 +3,7 @@ package com.easecutpro.easecut
 import android.content.Context
 import android.content.ContentValues
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.MediaCodec
 import android.media.MediaExtractor
@@ -151,6 +152,7 @@ class EcExport(
             "extractAudio" -> extractAudio(call, result)
             "thumbnails" -> thumbnails(call, result)
             "frame" -> frame(call, result)
+            "removeBackground" -> removeBackground(call, result)
             "waveform" -> waveform(call, result)
             "duration" -> duration(call, result)
             else -> result.notImplemented()
@@ -290,6 +292,87 @@ class EcExport(
                 try { retriever.release() } catch (_: Exception) {}
             }
         }.start()
+    }
+
+    /** Auto background removal via ML Kit Selfie Segmentation. Returns the path to
+     * a mask PNG (white = person/foreground, transparent = background). For video
+     * overlays, [timeMs] selects the frame to segment. */
+    private fun removeBackground(call: MethodCall, result: MethodChannel.Result) {
+        val uri = call.argument<String>("uri")
+        val timeMs = (call.argument<Number>("timeMs"))?.toLong() ?: 0L
+        if (uri == null) {
+            result.error("ec_export", "no uri", null)
+            return
+        }
+        Thread {
+            try {
+                val bitmap = loadBitmap(uri, timeMs)
+                    ?: throw IllegalStateException("could not load frame")
+                val segmenter = com.google.mlkit.segmentation.selfie.Segmenter.create(
+                    com.google.mlkit.segmentation.selfie.SelfieSegmenterOptions.Builder()
+                        .setDetectorMode(
+                            com.google.mlkit.segmentation.selfie.SelfieSegmenterOptions.SINGLE_MODE
+                        )
+                        .build()
+                )
+                val input = com.google.mlkit.vision.common.InputImage.fromBitmap(bitmap, 0)
+                val latch = java.util.concurrent.CountDownLatch(1)
+                var maskResult: com.google.mlkit.segmentation.Mask? = null
+                var maskError: Exception? = null
+                segmenter.process(input)
+                    .addOnSuccessListener { m -> maskResult = m; latch.countDown() }
+                    .addOnFailureListener { e -> maskError = e; latch.countDown() }
+                latch.await(15, java.util.concurrent.TimeUnit.SECONDS)
+                segmenter.close()
+                if (maskError != null) throw maskError!!
+                val mask =
+                    maskResult ?: throw IllegalStateException("segmentation timed out")
+                val srcW = bitmap.width
+                val srcH = bitmap.height
+                val maskW = mask.width
+                val maskH = mask.height
+                val fb = mask.buffer.asFloatBuffer()
+                val smallMask = Bitmap.createBitmap(maskW, maskH, Bitmap.Config.ARGB_8888)
+                val smallPixels = IntArray(maskW * maskH)
+                fb.rewind()
+                for (i in 0 until maskW * maskH) {
+                    val conf = if (fb.remaining() > 0) fb.get() else 0f
+                    val a = (conf.coerceIn(0f, 1f) * 255).toInt()
+                    // White with alpha = confidence (smooth soft edges)
+                    smallPixels[i] = (a shl 24) or 0x00FFFFFF
+                }
+                smallMask.setPixels(smallPixels, 0, maskW, 0, 0, maskW, maskH)
+                val fullMask = Bitmap.createScaledBitmap(smallMask, srcW, srcH, true)
+                if (smallMask !== fullMask) smallMask.recycle()
+                val out =
+                    File(context.cacheDir, "ec_cutout_${System.currentTimeMillis()}.png")
+                FileOutputStream(out).use { fullMask.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                fullMask.recycle()
+                bitmap.recycle()
+                main.post { result.success(mapOf("path" to out.absolutePath)) }
+            } catch (t: Throwable) {
+                main.post {
+                    result.error("ec_export", "removeBackground failed: ${t.message}", null)
+                }
+            }
+        }.start()
+    }
+
+    private fun loadBitmap(uri: String, timeMs: Long): Bitmap? {
+        val isVideo = uri.endsWith(".mp4") || uri.endsWith(".mov") ||
+            uri.endsWith(".m4v") || uri.endsWith(".webm")
+        return if (isVideo) {
+            val r = MediaMetadataRetriever()
+            try {
+                r.setDataSource(context, Uri.parse(uri))
+                r.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST)
+            } finally {
+                try { r.release() } catch (_: Exception) {}
+            }
+        } else {
+            val path = if (uri.startsWith("file://")) uri.substring(7) else uri
+            BitmapFactory.decodeFile(path)
+        }
     }
 
     /** Probe a media file's duration (ms) — cheap, for multi-clip sequencing. */

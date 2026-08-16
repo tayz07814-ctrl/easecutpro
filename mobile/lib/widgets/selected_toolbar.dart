@@ -59,6 +59,7 @@ class SelectedToolbar extends StatelessWidget {
                   if (overlay) ...[
                     _tool(Icons.open_with, 'Transform', () => onTool('Transform')),
                     _tool(Icons.layers, 'Layers', () => onTool('Layers')),
+                    _tool(Icons.content_cut, 'Cutout', () => onTool('Cutout')),
                   ],
                   _tool(Icons.delete_outline, 'Delete', onDelete, danger: true),
                 ],

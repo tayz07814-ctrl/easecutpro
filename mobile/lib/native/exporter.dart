@@ -195,6 +195,17 @@ class NativeExporter {
     }
   }
 
+  /// Auto background removal via ML Kit. Returns a mask PNG path (white =
+  /// person, transparent = background) at source resolution.
+  Future<String?> removeBackground(String uri, int timeMs) async {
+    try {
+      final r = await _m.invokeMethod<Map<dynamic, dynamic>>('removeBackground', {'uri': uri, 'timeMs': timeMs});
+      return r?['path'] as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Probe a media file's duration (ms), 0 if unknown.
   Future<int> duration(String uri) async {
     try {

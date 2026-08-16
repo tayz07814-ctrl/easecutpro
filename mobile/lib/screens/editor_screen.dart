@@ -38,6 +38,7 @@ import '../editor/autozoom.dart';
 import '../editor/variations.dart';
 import '../sheets/variations_sheet.dart';
 import '../sheets/cut_review_sheet.dart';
+import '../sheets/cutout_sheet.dart';
 import '../local/fonts_store.dart';
 
 /// The EaseCut mobile editor. Everything (preview, export, split/trim/delete, and —
@@ -967,6 +968,28 @@ class _EditorScreenState extends State<EditorScreen> {
     await _loadSource(seekTo: _positionMs, resumePlaying: _playing);
   }
 
+  Future<void> _openCutout() async {
+    final o = _selectedVisual;
+    if (o == null) return;
+    _pushHistory();
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => CutoutSheet(
+        overlay: o,
+        exporter: _exporter,
+        onApply: (mode, maskPath) {
+          setState(() {
+            o.bgMode = mode;
+            o.maskPath = maskPath;
+          });
+          _scheduleSave();
+        },
+      ),
+    );
+  }
+
   void _onOverlayTool(String tool) {
     switch (tool) {
       case 'Split':
@@ -986,6 +1009,9 @@ class _EditorScreenState extends State<EditorScreen> {
         break;
       case 'Transform':
         _toast('Drag or pinch the selected overlay in the preview');
+        break;
+      case 'Cutout':
+        _openCutout();
         break;
       case 'Zoom':
         _openOverlayZoom();
