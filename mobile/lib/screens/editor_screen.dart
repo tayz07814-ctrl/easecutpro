@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -299,11 +300,26 @@ class _EditorScreenState extends State<EditorScreen> {
   Future<void> _saveNow() async {
     if (widget.projectId == null || !_model.hasBase) return;
     _projectDoc['mobile'] = _serialize();
+    String? thumb;
     try {
-      await Backend.saveProject(widget.projectId!, _projectDoc);
+      thumb = _projectThumb();
+    } catch (_) {}
+    try {
+      await Backend.saveProject(widget.projectId!, _projectDoc, thumb: thumb);
     } catch (_) {
       // best-effort; a later edit retries
     }
+  }
+
+  /// Small base64 JPEG from the filmstrip frame nearest the playhead, so the
+  /// dashboard grid can preview the project. The filmstrip is already decoded;
+  /// no extra native call is needed.
+  String? _projectThumb() {
+    if (!_model.hasBase) return null;
+    final i = _model.clipIndexAt(_positionMs);
+    if (i < 0) return null;
+    final jpeg = _cropFrame(i);
+    return jpeg == null ? null : base64Encode(jpeg);
   }
 
   Future<void> _loadProject() async {

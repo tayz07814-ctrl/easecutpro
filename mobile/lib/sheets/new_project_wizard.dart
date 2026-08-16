@@ -19,7 +19,9 @@ class NewProjectWizard extends StatefulWidget {
 
 class _NewProjectWizardState extends State<NewProjectWizard> {
   final List<PlatformFile> _files = [];
+  final _nameCtrl = TextEditingController();
   EnhanceOptions _opts = const EnhanceOptions();
+  bool _nameTouched = false;
 
   Future<void> _pick() async {
     final res = await FilePicker.pickFiles(type: FileType.video, allowMultiple: true);
@@ -28,8 +30,17 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
       _files
         ..clear()
         ..addAll(res.files);
+      if (!_nameTouched && _files.isNotEmpty) {
+        final base = _files.first.name;
+        final dot = base.lastIndexOf('.');
+        _nameCtrl.text = dot > 0 ? base.substring(0, dot) : base;
+      }
     });
   }
+
+  String get _projectName => _nameTouched && _nameCtrl.text.trim().isNotEmpty
+      ? _nameCtrl.text.trim()
+      : (_files.isNotEmpty ? (_files.first.name) : 'New project');
 
   @override
   Widget build(BuildContext context) {
@@ -63,6 +74,33 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
             ),
           ),
           if (_files.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Container(
+              decoration: BoxDecoration(
+                color: Ec.card,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Ec.border),
+              ),
+              child: TextField(
+                controller: _nameCtrl,
+                onTap: () => _nameTouched = true,
+                onChanged: (_) => _nameTouched = true,
+                style: const TextStyle(color: Ec.text, fontSize: 14),
+                decoration: InputDecoration(
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                  border: InputBorder.none,
+                  hintText: 'Project name (optional)',
+                  hintStyle: const TextStyle(color: Ec.textFaint, fontSize: 14),
+                  suffixIcon: _nameTouched
+                      ? IconButton(
+                          icon: const Icon(Icons.close, size: 16, color: Ec.textFaint),
+                          onPressed: () => setState(() { _nameCtrl.clear(); _nameTouched = false; }),
+                        )
+                      : null,
+                ),
+              ),
+            ),
             const SizedBox(height: 10),
             ..._files.asMap().entries.map((e) => Padding(
                   padding: const EdgeInsets.only(bottom: 6),
@@ -105,7 +143,7 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
               ),
               const Spacer(),
               GestureDetector(
-                onTap: ready ? () => widget.onCreate(_files.first.path, _files.first.name, _opts) : null,
+                onTap: ready ? () => widget.onCreate(_files.first.path, _projectName, _opts) : null,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                   decoration: BoxDecoration(

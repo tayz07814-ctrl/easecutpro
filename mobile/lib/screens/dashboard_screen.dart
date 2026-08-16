@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../cloud/backend.dart';
@@ -209,7 +211,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   )
                 else
-                  ...filtered.map((p) => _projectCard(p, now)),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: filtered.length,
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      childAspectRatio: 0.78,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                    ),
+                    itemBuilder: (_, i) => _projectGridCard(filtered[i], now),
+                  ),
               ],
             ),
           ),
@@ -396,52 +409,70 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _projectCard(ProjectMeta p, DateTime now) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: GestureDetector(
-        onTap: () => _openEditor(projectId: p.id),
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(color: Ec.card, borderRadius: BorderRadius.circular(13), border: Border.all(color: Ec.border)),
-          child: Row(
-            children: [
-              Container(
-                width: 76,
-                height: 50,
-                decoration: BoxDecoration(color: Ec.chip, borderRadius: BorderRadius.circular(8)),
-                alignment: Alignment.center,
-                child: const Icon(Icons.play_arrow, color: Ec.textFaint, size: 22),
+  Widget _projectGridCard(ProjectMeta p, DateTime now) {
+    final hasThumb = p.thumb != null && p.thumb!.isNotEmpty;
+    ImageProvider? thumbImg;
+    if (hasThumb) {
+      try {
+        thumbImg = MemoryImage(base64Decode(p.thumb!));
+      } catch (_) {
+        thumbImg = null;
+      }
+    }
+    return GestureDetector(
+      onTap: () => _openEditor(projectId: p.id),
+      child: Container(
+        decoration: BoxDecoration(color: Ec.card, borderRadius: BorderRadius.circular(13), border: Border.all(color: Ec.border)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                child: hasThumb && thumbImg != null
+                    ? Image(image: thumbImg, fit: BoxFit.cover, gaplessPlayback: true)
+                    : Container(
+                        color: Ec.chip,
+                        alignment: Alignment.center,
+                        child: const Icon(Icons.play_arrow, color: Ec.textFaint, size: 28),
+                      ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(p.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Ec.text, fontSize: 14, fontWeight: FontWeight.w500)),
-                    const SizedBox(height: 2),
-                    Text(p.relative(now), style: const TextStyle(color: Color(0xFF9BA0AC), fontSize: 12)),
-                  ],
-                ),
-              ),
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_horiz, color: Ec.textFaint, size: 20),
-                color: const Color(0xFF262932),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                onSelected: (v) {
-                  if (v == 'rename') _rename(p);
-                  if (v == 'delete') _delete(p);
-                },
-                itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'rename', child: Text('Rename', style: TextStyle(color: Ec.text))),
-                  const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Color(0xFFD9686E)))),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(p.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Ec.text, fontSize: 13, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 1),
+                        Text(p.relative(now), style: const TextStyle(color: Color(0xFF9BA0AC), fontSize: 10.5)),
+                      ],
+                    ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_horiz, color: Ec.textFaint, size: 18),
+                    color: const Color(0xFF262932),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.all(2),
+                    onSelected: (v) {
+                      if (v == 'rename') _rename(p);
+                      if (v == 'delete') _delete(p);
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(value: 'rename', child: Text('Rename', style: TextStyle(color: Ec.text))),
+                      const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Color(0xFFD9686E)))),
+                    ],
+                  ),
                 ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
