@@ -13,6 +13,9 @@ class EcClip {
   final String sourcePath; // absolute file path (no file:// prefix)
   int inMs; // source in-point
   int outMs; // source out-point (exclusive)
+  /// Duration of this clip's own source. This must not use the project's first
+  /// imported source: appended clips may be from entirely different media.
+  int mediaDurationMs;
   double speed;
   double volume;
   double cropL, cropT, cropR, cropB; // fractions cropped from each edge (0..~0.9)
@@ -34,6 +37,7 @@ class EcClip {
     this.sourcePath,
     this.inMs,
     this.outMs, {
+    this.mediaDurationMs = 0,
     this.speed = 1.0,
     this.volume = 1.0,
     this.cropL = 0,
@@ -64,6 +68,7 @@ class EcClip {
   bool get hasKenBurns => kb;
 
   EcClip copy() => EcClip(sourcePath, inMs, outMs,
+      mediaDurationMs: mediaDurationMs,
       speed: speed,
       volume: volume,
       cropL: cropL,
@@ -87,15 +92,16 @@ class EcClip {
         'src': sourcePath,
         'in': inMs,
         'out': outMs,
+        'dur': mediaDurationMs,
         'speed': speed,
         'vol': volume,
         'cl': cropL,
-        'ct': cropT,
+        'cropT': cropT,
         'cr': cropR,
         'cb': cropB,
         'kb': kb,
         'br': brightness,
-        'ct': contrast,
+        'contrast': contrast,
         'sa': saturation,
         'fi': fadeInMs,
         'fo': fadeOutMs,
@@ -111,15 +117,18 @@ class EcClip {
         j['src'] as String,
         (j['in'] as num).toInt(),
         (j['out'] as num).toInt(),
+        mediaDurationMs: (j['dur'] as num?)?.toInt() ?? (j['out'] as num?)?.toInt() ?? 0,
         speed: (j['speed'] as num?)?.toDouble() ?? 1.0,
         volume: (j['vol'] as num?)?.toDouble() ?? 1.0,
         cropL: (j['cl'] as num?)?.toDouble() ?? 0,
-        cropT: (j['ct'] as num?)?.toDouble() ?? 0,
+        cropT: (j['cropT'] as num?)?.toDouble() ?? 0,
         cropR: (j['cr'] as num?)?.toDouble() ?? 0,
         cropB: (j['cb'] as num?)?.toDouble() ?? 0,
         kb: (j['kb'] as bool?) ?? false,
         brightness: (j['br'] as num?)?.toDouble() ?? 0.0,
-        contrast: (j['ct'] as num?)?.toDouble() ?? 0.0,
+        // `ct` was unfortunately shared by crop-top and contrast in old saves;
+        // it therefore persisted contrast only. Keep that value for compatibility.
+        contrast: (j['contrast'] as num?)?.toDouble() ?? (j['ct'] as num?)?.toDouble() ?? 0.0,
         saturation: (j['sa'] as num?)?.toDouble() ?? 1.0,
         fadeInMs: (j['fi'] as num?)?.toInt() ?? 0,
         fadeOutMs: (j['fo'] as num?)?.toInt() ?? 0,
@@ -150,7 +159,7 @@ class TimelineModel extends ChangeNotifier {
     sourceDurationMs = durationMs;
     clips
       ..clear()
-      ..add(EcClip(path, 0, durationMs));
+      ..add(EcClip(path, 0, durationMs, mediaDurationMs: durationMs));
     selected = -1;
     notifyListeners();
   }
@@ -161,28 +170,41 @@ class TimelineModel extends ChangeNotifier {
     if (durationMs <= 0) return;
     sourceDurationMs = durationMs;
     if (clips.length == 1 && clips[0].outMs <= 0) {
-      clips[0].outMs = durationMs;
+      clips[0]
+        ..outMs = durationMs
+        ..mediaDurationMs = durationMs;
       notifyListeners();
     }
   }
 
   int get totalMs => clips.fold(0, (a, c) => a + c.timelineLenMs);
 
+  /// The only placement authority for the primary track. Base clips deliberately
+  /// do not carry independently editable start positions: their list order creates
+  /// one contiguous composition, so UI, native preview and export cannot disagree
+  /// about where a primary clip belongs or accidentally create a black hole.
+  Iterable<({EcClip clip, int startMs, int endMs})> get primarySpans sync* {
+    var start = 0;
+    for (final clip in clips) {
+      final end = start + clip.timelineLenMs;
+      yield (clip: clip, startMs: start, endMs: end);
+      start = end;
+    }
+  }
+
   List<PlayerSegment> playerSegments() {
     final out = <PlayerSegment>[];
-    int t = 0;
-    for (final c in clips) {
-      final len = c.timelineLenMs > 0 ? c.timelineLenMs : 0;
+    for (final span in primarySpans) {
+      final c = span.clip;
       out.add(PlayerSegment(
         uri: 'file://${c.sourcePath}',
         startMs: c.inMs,
         endMs: c.outMs, // 0 = to end (unknown duration)
-        timelineStartMs: t,
-        timelineEndMs: t + len,
+        timelineStartMs: span.startMs,
+        timelineEndMs: span.endMs,
         speed: c.speed,
         volume: c.volume,
       ));
-      t += len;
     }
     return out;
   }
@@ -215,21 +237,23 @@ class TimelineModel extends ChangeNotifier {
 
   /// Clip index containing the given timeline position.
   int clipIndexAt(int timelineMs) {
-    int t = 0;
-    for (int i = 0; i < clips.length; i++) {
-      if (timelineMs >= t && timelineMs < t + clips[i].timelineLenMs) return i;
-      t += clips[i].timelineLenMs;
+    var i = 0;
+    for (final span in primarySpans) {
+      if (timelineMs >= span.startMs && timelineMs < span.endMs) return i;
+      i++;
     }
     return clips.isEmpty ? -1 : clips.length - 1;
   }
 
   /// Timeline start (ms) of a clip.
   int clipStartMs(int index) {
-    int t = 0;
-    for (int i = 0; i < index && i < clips.length; i++) {
-      t += clips[i].timelineLenMs;
+    if (index <= 0) return 0;
+    if (index >= clips.length) return totalMs;
+    var start = 0;
+    for (var i = 0; i < index; i++) {
+      start += clips[i].timelineLenMs;
     }
-    return t;
+    return start;
   }
 
   /// Map a SOURCE-time (ms) to the EDITED timeline position; null if it lies in a
@@ -341,14 +365,17 @@ class TimelineModel extends ChangeNotifier {
     if (index < 0 || index >= clips.length) return;
     final c = clips[index];
     if (inMs != null) c.inMs = inMs.clamp(0, c.outMs - 100);
-    if (outMs != null) c.outMs = outMs.clamp(c.inMs + 100, sourceDurationMs > 0 ? sourceDurationMs : outMs);
+    if (outMs != null) {
+      final max = c.mediaDurationMs > 0 ? c.mediaDurationMs : outMs;
+      c.outMs = outMs.clamp(c.inMs + 100, max);
+    }
     notifyListeners();
   }
 
   /// Append another source as a clip at the end of the timeline (multi-clip sequencing).
   void appendClip(String path, int durationMs) {
     if (durationMs <= 0) return;
-    clips.add(EcClip(path, 0, durationMs));
+    clips.add(EcClip(path, 0, durationMs, mediaDurationMs: durationMs));
     notifyListeners();
   }
 

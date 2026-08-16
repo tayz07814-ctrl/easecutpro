@@ -2634,9 +2634,14 @@ class _EditorScreenState extends State<EditorScreen> {
           _model.moveClip(from, to);
         },
         onClipReorderEnd: () async {
+          // Reordering changes which primary frame occupies a composition time;
+          // it must not retime independent overlays or jump the user's playhead to
+          // the moved clip. Reload the native composition at the same global time.
+          final compositionTime = _positionMs.clamp(0, _totalMs).toInt();
+          final resumePlaying = _playing;
           _scheduleSave();
           if (_hasBase) {
-            await _reload(seekTo: _model.clipStartMs(_model.selected < 0 ? 0 : _model.selected));
+            await _loadSource(seekTo: compositionTime, resumePlaying: resumePlaying);
           }
         },
         onSelectText: (t) async {
