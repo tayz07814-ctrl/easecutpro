@@ -47,7 +47,7 @@ import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.segmentation.Mask
+import com.google.mlkit.vision.segmentation.SegmentationMask
 import com.google.mlkit.vision.segmentation.Segmentation
 import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
 import com.google.common.collect.ImmutableList
@@ -319,7 +319,7 @@ class EcExport(
                 )
                 val input = InputImage.fromBitmap(bitmap, 0)
                 val latch = java.util.concurrent.CountDownLatch(1)
-                var maskResult: Mask? = null
+                var maskResult: SegmentationMask? = null
                 var maskError: Exception? = null
                 segmenter.process(input)
                     .addOnSuccessListener { m -> maskResult = m; latch.countDown() }
