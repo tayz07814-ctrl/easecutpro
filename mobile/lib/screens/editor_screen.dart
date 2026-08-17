@@ -987,10 +987,15 @@ class _EditorScreenState extends State<EditorScreen> {
         exporter: _exporter,
         sourceEndMs: sourceEnd,
         onApply: (mode, masks) {
+          final speed = o.speed <= 0 ? 1.0 : o.speed;
+          final timelineMasks = [
+            for (final mask in masks)
+              BackgroundMaskFrame((mask.timeMs / speed).round(), mask.path),
+          ];
           setState(() {
             o.bgMode = mode;
-            o.maskFrames = masks;
-            o.maskPath = masks.length == 1 ? masks.first.path : null;
+            o.maskFrames = timelineMasks;
+            o.maskPath = timelineMasks.length == 1 ? timelineMasks.first.path : null;
           });
           _scheduleSave();
         },
@@ -1019,10 +1024,15 @@ class _EditorScreenState extends State<EditorScreen> {
         sourceStartMs: clip.inMs,
         sourceEndMs: clip.outMs,
         onApply: (mode, masks) {
+          final speed = clip.speed <= 0 ? 1.0 : clip.speed;
+          final timelineMasks = [
+            for (final mask in masks)
+              BackgroundMaskFrame((mask.timeMs / speed).round(), mask.path),
+          ];
           setState(() {
             clip.bgMode = mode;
-            clip.maskFrames = masks;
-            clip.maskPath = masks.length == 1 ? masks.first.path : null;
+            clip.maskFrames = timelineMasks;
+            clip.maskPath = timelineMasks.length == 1 ? timelineMasks.first.path : null;
           });
           _scheduleSave();
           _loadSource(seekTo: _positionMs, resumePlaying: _playing);
