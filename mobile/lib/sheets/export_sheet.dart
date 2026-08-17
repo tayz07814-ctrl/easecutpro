@@ -95,11 +95,47 @@ class _ExportSheetState extends State<ExportSheet> {
       }
       final imgs = <ExportOverlay>[];
       for (final o in widget.imageOverlays) {
-        // Video overlays are previewed live; the current Media3 export pass only
-        // accepts bitmap overlays, so never send an empty bitmap for a video.
-        if (o.isVideo || o.endMs <= o.startMs) continue;
-        final b = await o.bakePngBase64(w, h);
-        imgs.add(ExportOverlay(base64: b, startMs: o.startMs, endMs: o.endMs));
+        if (o.endMs <= o.startMs) continue;
+        if (!o.isVideo) {
+          final b = await o.bakePngBase64(w, h);
+          if (b.isNotEmpty) imgs.add(ExportOverlay(base64: b, startMs: o.startMs, endMs: o.endMs));
+          continue;
+        }
+        // Media3's bitmap overlay pass cannot directly sample a second video
+        // stream. Rasterise that stream at a bounded cadence into timed PNGs;
+        // this keeps export deterministic and applies the matching moving mask
+        // frame when Cutout has generated a sequence.
+        const stepMs = 400;
+        final duration = o.endMs - o.startMs;
+        for (var localMs = 0; localMs < duration; localMs += stepMs) {
+          final sourceMs = (localMs * o.speed.clamp(0.1, 4.0)).round();
+          final bytes = await widget.exporter.frame('file://${o.videoPath}', sourceMs);
+          if (bytes == null) continue;
+          final snapshot = ImageOverlay(
+            bytes: bytes,
+            x: o.x,
+            y: o.y,
+            scale: o.scale,
+            rotation: o.rotation,
+            opacity: o.opacity,
+            cropL: o.cropL,
+            cropT: o.cropT,
+            cropR: o.cropR,
+            cropB: o.cropB,
+            bgMode: o.bgMode,
+            maskPath: o.maskAt(localMs),
+            startMs: 0,
+            endMs: stepMs,
+          );
+          final png = await snapshot.bakePngBase64(w, h);
+          if (png.isNotEmpty) {
+            imgs.add(ExportOverlay(
+              base64: png,
+              startMs: o.startMs + localMs,
+              endMs: (o.startMs + localMs + stepMs).clamp(o.startMs, o.endMs).toInt(),
+            ));
+          }
+        }
       }
       final res = await widget.exporter.export(
         ExportSpec(
