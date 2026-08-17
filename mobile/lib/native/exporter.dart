@@ -53,6 +53,7 @@ class ExportSegment {
   final double brightness, contrast, saturation;
   /// Fade from / to black at this clip's own edges (ms).
   final int fadeInMs, fadeOutMs;
+  final List<Map<String, dynamic>> maskFrames;
   final int timelineStartMs; // audio: lead-in offset before the track plays
   const ExportSegment({
     required this.uri,
@@ -76,6 +77,7 @@ class ExportSegment {
     this.saturation = 1.0,
     this.fadeInMs = 0,
     this.fadeOutMs = 0,
+    this.maskFrames = const [],
     this.timelineStartMs = 0,
   });
   Map<String, dynamic> toMap() => {
@@ -100,6 +102,7 @@ class ExportSegment {
         'saturation': saturation,
         'fadeInMs': fadeInMs,
         'fadeOutMs': fadeOutMs,
+        'maskFrames': maskFrames,
         'timelineStartMs': timelineStartMs,
       };
 }
@@ -195,14 +198,35 @@ class NativeExporter {
     }
   }
 
-  /// Auto background removal via ML Kit. Returns a mask PNG path (white =
-  /// person, transparent = background) at source resolution.
+  /// Auto background removal for one representative frame.
   Future<String?> removeBackground(String uri, int timeMs) async {
     try {
       final r = await _m.invokeMethod<Map<dynamic, dynamic>>('removeBackground', {'uri': uri, 'timeMs': timeMs});
       return r?['path'] as String?;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Segment a video at regular intervals. Returned times are local to [startMs]
+  /// so the same mask sequence can be used by preview and export.
+  Future<List<({int timeMs, String path})>> removeBackgroundSequence(
+      String uri, int startMs, int endMs, {int stepMs = 400}) async {
+    try {
+      final r = await _m.invokeMethod<Map<dynamic, dynamic>>('removeBackgroundSequence', {
+        'uri': uri,
+        'startMs': startMs,
+        'endMs': endMs,
+        'stepMs': stepMs,
+      });
+      final rows = (r?['masks'] as List?) ?? const [];
+      return [
+        for (final row in rows)
+          if (row is Map && row['path'] is String)
+            (timeMs: (row['timeMs'] as num?)?.toInt() ?? 0, path: row['path'] as String),
+      ];
+    } catch (_) {
+      return const [];
     }
   }
 

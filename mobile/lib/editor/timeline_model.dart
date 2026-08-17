@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../native/exporter.dart';
 import '../native/player.dart';
+import 'background_mask.dart';
 
 /// A trimmed slice of the source video placed on the base track.
 ///
@@ -16,6 +17,10 @@ class EcClip {
   /// Duration of this clip's own source. This must not use the project's first
   /// imported source: appended clips may be from entirely different media.
   int mediaDurationMs;
+  /// Cutout: 0 = off, 1 = auto, 2 = manual. Masks are local to this clip.
+  int bgMode;
+  String? maskPath;
+  List<BackgroundMaskFrame> maskFrames;
   double speed;
   double volume;
   double cropL, cropT, cropR, cropB; // fractions cropped from each edge (0..~0.9)
@@ -38,6 +43,9 @@ class EcClip {
     this.inMs,
     this.outMs, {
     this.mediaDurationMs = 0,
+    this.bgMode = 0,
+    this.maskPath,
+    this.maskFrames = const [],
     this.speed = 1.0,
     this.volume = 1.0,
     this.cropL = 0,
@@ -66,9 +74,13 @@ class EcClip {
 
   bool get hasCrop => cropL > 0 || cropT > 0 || cropR > 0 || cropB > 0;
   bool get hasKenBurns => kb;
+  String? maskAt(int localMs) => maskFrames.isEmpty ? maskPath : nearestMaskPath(maskFrames, localMs);
 
   EcClip copy() => EcClip(sourcePath, inMs, outMs,
       mediaDurationMs: mediaDurationMs,
+      bgMode: bgMode,
+      maskPath: maskPath,
+      maskFrames: List<BackgroundMaskFrame>.from(maskFrames),
       speed: speed,
       volume: volume,
       cropL: cropL,
@@ -93,6 +105,9 @@ class EcClip {
         'in': inMs,
         'out': outMs,
         'dur': mediaDurationMs,
+        'bg': bgMode,
+        if (maskPath != null) 'mask': maskPath,
+        if (maskFrames.isNotEmpty) 'masks': maskFrames.map((m) => m.toJson()).toList(),
         'speed': speed,
         'vol': volume,
         'cl': cropL,
@@ -118,6 +133,9 @@ class EcClip {
         (j['in'] as num).toInt(),
         (j['out'] as num).toInt(),
         mediaDurationMs: (j['dur'] as num?)?.toInt() ?? (j['out'] as num?)?.toInt() ?? 0,
+        bgMode: (j['bg'] as num?)?.toInt() ?? 0,
+        maskPath: j['mask'] as String?,
+        maskFrames: maskFramesFromJson(j['masks']),
         speed: (j['speed'] as num?)?.toDouble() ?? 1.0,
         volume: (j['vol'] as num?)?.toDouble() ?? 1.0,
         cropL: (j['cl'] as num?)?.toDouble() ?? 0,
@@ -204,6 +222,7 @@ class TimelineModel extends ChangeNotifier {
         timelineEndMs: span.endMs,
         speed: c.speed,
         volume: c.volume,
+        maskFrames: c.maskFrames.map((m) => m.toJson()).toList(),
       ));
     }
     return out;
@@ -232,6 +251,7 @@ class TimelineModel extends ChangeNotifier {
             saturation: c.saturation,
             fadeInMs: c.fadeInMs,
             fadeOutMs: c.fadeOutMs,
+            maskFrames: c.maskFrames.map((m) => m.toJson()).toList(),
           ))
       .toList();
 

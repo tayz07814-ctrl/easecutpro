@@ -47,6 +47,7 @@ class SelectedToolbar extends StatelessWidget {
                 children: [
                   _tool(Icons.content_cut, 'Split', () => onTool('Split')),
                   _tool(Icons.crop, 'Crop', () => onTool('Crop')),
+                  _tool(Icons.content_cut, 'Cutout', () => onTool('Cutout')),
                   _tool(Icons.zoom_in, 'Zoom', () => onTool('Zoom')),
                   if (!overlay || video) _tool(Icons.speed, 'Speed', () => onTool('Speed')),
                   if (!overlay || video) _tool(Icons.volume_up, 'Volume', () => onTool('Volume')),
@@ -59,7 +60,6 @@ class SelectedToolbar extends StatelessWidget {
                   if (overlay) ...[
                     _tool(Icons.open_with, 'Transform', () => onTool('Transform')),
                     _tool(Icons.layers, 'Layers', () => onTool('Layers')),
-                    _tool(Icons.content_cut, 'Cutout', () => onTool('Cutout')),
                   ],
                   _tool(Icons.delete_outline, 'Delete', onDelete, danger: true),
                 ],

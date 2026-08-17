@@ -11,6 +11,7 @@ import '../cloud/backend.dart';
 import '../cloud/stt.dart' show Word, Progress, SttOutcome;
 import '../editor/timeline_model.dart';
 import '../editor/text_overlay.dart';
+import '../editor/background_mask.dart';
 import '../editor/audio_track.dart';
 import '../editor/cutcutpro.dart';
 import '../editor/cutlord.dart';
@@ -728,6 +729,9 @@ class _EditorScreenState extends State<EditorScreen> {
       case 'Crop':
         _openCrop();
         break;
+      case 'Cutout':
+        _openMainCutout();
+        break;
       case 'Zoom':
         _openZoom();
         break;
@@ -972,6 +976,8 @@ class _EditorScreenState extends State<EditorScreen> {
     final o = _selectedVisual;
     if (o == null) return;
     _pushHistory();
+    final sourceEnd = o.isVideo ? await _exporter.duration('file://${o.videoPath}') : 0;
+    if (!mounted) return;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -979,12 +985,47 @@ class _EditorScreenState extends State<EditorScreen> {
       builder: (_) => CutoutSheet(
         overlay: o,
         exporter: _exporter,
-        onApply: (mode, maskPath) {
+        sourceEndMs: sourceEnd,
+        onApply: (mode, masks) {
           setState(() {
             o.bgMode = mode;
-            o.maskPath = maskPath;
+            o.maskFrames = masks;
+            o.maskPath = masks.length == 1 ? masks.first.path : null;
           });
           _scheduleSave();
+        },
+      ),
+    );
+  }
+
+  Future<void> _openMainCutout() async {
+    final i = _selectedIndex();
+    if (i < 0 || i >= _model.clips.length) return;
+    final clip = _model.clips[i];
+    _pushHistory();
+    final target = ImageOverlay(
+      videoPath: clip.sourcePath,
+      startMs: 0,
+      endMs: clip.timelineLenMs,
+      speed: clip.speed,
+    );
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => CutoutSheet(
+        overlay: target,
+        exporter: _exporter,
+        sourceStartMs: clip.inMs,
+        sourceEndMs: clip.outMs,
+        onApply: (mode, masks) {
+          setState(() {
+            clip.bgMode = mode;
+            clip.maskFrames = masks;
+            clip.maskPath = masks.length == 1 ? masks.first.path : null;
+          });
+          _scheduleSave();
+          _loadSource(seekTo: _positionMs, resumePlaying: _playing);
         },
       ),
     );
@@ -1011,7 +1052,7 @@ class _EditorScreenState extends State<EditorScreen> {
         _toast('Drag or pinch the selected overlay in the preview');
         break;
       case 'Cutout':
-        _openCutout();
+        _openMainCutout();
         break;
       case 'Zoom':
         _openOverlayZoom();
@@ -2556,6 +2597,12 @@ class _EditorScreenState extends State<EditorScreen> {
                 child: LayoutBuilder(
                   builder: (context, c) {
                     final frame = Size(c.maxWidth, c.maxHeight);
+                    final mainIndex = _model.clipIndexAt(_positionMs);
+                    final mainClip = mainIndex >= 0 ? _model.clips[mainIndex] : null;
+                    final mainMask = mainClip == null || mainClip.bgMode == 0
+                        ? null
+                        : mainClip.maskAt(_positionMs - _model.clipStartMs(mainIndex));
+                    final basePreview = _graded(_cropped(Texture(textureId: _textureId!)));
                     return Stack(
                       fit: StackFit.expand,
                       clipBehavior: Clip.hardEdge,
@@ -2563,7 +2610,9 @@ class _EditorScreenState extends State<EditorScreen> {
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: _clearSelection,
-                          child: _graded(_cropped(Texture(textureId: _textureId!))),
+                          child: mainMask == null
+                              ? basePreview
+                              : MaskedMedia(maskPath: mainMask, child: basePreview),
                         ),
                         ..._visualOverlayWidgets(frame),
                         if (_selectedText != null)

@@ -5,6 +5,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import 'background_mask.dart';
+
 /// A timed text overlay shown over the preview and baked into the export.
 class TextOverlay {
   String text;
@@ -213,6 +215,7 @@ class ImageOverlay {
   int bgMode;
   /// Path to a manual brush mask PNG (white = keep, transparent = remove).
   String? maskPath;
+  List<BackgroundMaskFrame> maskFrames;
   int startMs;
   int endMs;
   int lane; // vertical lane on the timeline visual track
@@ -234,6 +237,7 @@ class ImageOverlay {
     this.cropB = 0,
     this.bgMode = 0,
     this.maskPath,
+    this.maskFrames = const [],
     required this.startMs,
     required this.endMs,
     this.lane = 0,
@@ -241,6 +245,8 @@ class ImageOverlay {
   });
 
   bool get isVideo => videoPath != null && videoPath!.isNotEmpty;
+
+  String? maskAt(int localMs) => maskFrames.isEmpty ? maskPath : nearestMaskPath(maskFrames, localMs);
 
   bool activeAt(int ms) => ms >= startMs && ms < endMs;
 
@@ -260,6 +266,7 @@ class ImageOverlay {
         cropB: cropB,
         bgMode: bgMode,
         maskPath: maskPath,
+        maskFrames: List<BackgroundMaskFrame>.from(maskFrames),
         startMs: startMs,
         endMs: endMs,
         lane: lane,
@@ -284,6 +291,7 @@ class ImageOverlay {
         'cropB': cropB,
         'bg': bgMode,
         if (maskPath != null) 'mask': maskPath,
+        if (maskFrames.isNotEmpty) 'masks': maskFrames.map((m) => m.toJson()).toList(),
         'start': startMs,
         'end': endMs,
         'lane': lane,
@@ -306,6 +314,7 @@ class ImageOverlay {
         cropB: (j['cropB'] as num?)?.toDouble() ?? 0,
         bgMode: (j['bg'] as num?)?.toInt() ?? 0,
         maskPath: j['mask'] as String?,
+        maskFrames: maskFramesFromJson(j['masks']),
         startMs: (j['start'] as num?)?.toInt() ?? 0,
         endMs: (j['end'] as num?)?.toInt() ?? 0,
         lane: (j['lane'] as num?)?.toInt() ?? 0,

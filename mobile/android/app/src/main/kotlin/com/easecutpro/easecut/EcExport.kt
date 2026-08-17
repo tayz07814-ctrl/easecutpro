@@ -49,6 +49,7 @@ import androidx.media3.transformer.VideoEncoderSettings
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.segmentation.SegmentationMask
 import com.google.mlkit.vision.segmentation.Segmentation
+import com.google.mlkit.vision.segmentation.Segmenter
 import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
 import com.google.common.collect.ImmutableList
 import io.flutter.plugin.common.BinaryMessenger
@@ -157,6 +158,7 @@ class EcExport(
             "thumbnails" -> thumbnails(call, result)
             "frame" -> frame(call, result)
             "removeBackground" -> removeBackground(call, result)
+            "removeBackgroundSequence" -> removeBackgroundSequence(call, result)
             "waveform" -> waveform(call, result)
             "duration" -> duration(call, result)
             else -> result.notImplemented()
@@ -298,9 +300,7 @@ class EcExport(
         }.start()
     }
 
-    /** Auto background removal via ML Kit Selfie Segmentation. Returns the path to
-     * a mask PNG (white = person/foreground, transparent = background). For video
-     * overlays, [timeMs] selects the frame to segment. */
+    /** Auto background removal via ML Kit Selfie Segmentation. */
     private fun removeBackground(call: MethodCall, result: MethodChannel.Result) {
         val uri = call.argument<String>("uri")
         val timeMs = (call.argument<Number>("timeMs"))?.toLong() ?: 0L
@@ -312,52 +312,109 @@ class EcExport(
             try {
                 val bitmap = loadBitmap(uri, timeMs)
                     ?: throw IllegalStateException("could not load frame")
-                val segmenter = Segmentation.getClient(
-                    SelfieSegmenterOptions.Builder()
-                        .setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE)
-                        .build()
-                )
-                val input = InputImage.fromBitmap(bitmap, 0)
-                val latch = java.util.concurrent.CountDownLatch(1)
-                var maskResult: SegmentationMask? = null
-                var maskError: Exception? = null
-                segmenter.process(input)
-                    .addOnSuccessListener { m -> maskResult = m; latch.countDown() }
-                    .addOnFailureListener { e -> maskError = e; latch.countDown() }
-                latch.await(15, java.util.concurrent.TimeUnit.SECONDS)
+                val segmenter = newSegmenter()
+                val mask = segmentBitmap(bitmap, segmenter)
                 segmenter.close()
-                if (maskError != null) throw maskError!!
-                val mask =
-                    maskResult ?: throw IllegalStateException("segmentation timed out")
-                val srcW = bitmap.width
-                val srcH = bitmap.height
-                val maskW = mask.width
-                val maskH = mask.height
-                val fb = mask.buffer.asFloatBuffer()
-                val smallMask = Bitmap.createBitmap(maskW, maskH, Bitmap.Config.ARGB_8888)
-                val smallPixels = IntArray(maskW * maskH)
-                fb.rewind()
-                for (i in 0 until maskW * maskH) {
-                    val conf = if (fb.remaining() > 0) fb.get() else 0f
-                    val a = (conf.coerceIn(0f, 1f) * 255).toInt()
-                    // White with alpha = confidence (smooth soft edges)
-                    smallPixels[i] = (a shl 24) or 0x00FFFFFF
-                }
-                smallMask.setPixels(smallPixels, 0, maskW, 0, 0, maskW, maskH)
-                val fullMask = Bitmap.createScaledBitmap(smallMask, srcW, srcH, true)
-                if (smallMask !== fullMask) smallMask.recycle()
-                val out =
-                    File(context.cacheDir, "ec_cutout_${System.currentTimeMillis()}.png")
-                FileOutputStream(out).use { fullMask.compress(Bitmap.CompressFormat.PNG, 100, it) }
-                fullMask.recycle()
+                val out = saveMask(mask)
+                mask.recycle()
                 bitmap.recycle()
                 main.post { result.success(mapOf("path" to out.absolutePath)) }
             } catch (t: Throwable) {
-                main.post {
-                    result.error("ec_export", "removeBackground failed: ${t.message}", null)
-                }
+                main.post { result.error("ec_export", "removeBackground failed: ${t.message}", null) }
             }
         }.start()
+    }
+
+    /** Segment sampled frames so a moving person gets a moving mask instead of a
+     * single mask copied from the first frame. Times returned to Dart are local to
+     * [startMs]. */
+    private fun removeBackgroundSequence(call: MethodCall, result: MethodChannel.Result) {
+        val uri = call.argument<String>("uri")
+        val startMs = (call.argument<Number>("startMs"))?.toLong() ?: 0L
+        val endMs = (call.argument<Number>("endMs"))?.toLong() ?: startMs
+        val stepMs = ((call.argument<Number>("stepMs"))?.toLong() ?: 400L).coerceIn(200L, 1000L)
+        if (uri == null || endMs <= startMs) {
+            result.error("ec_export", "invalid segmentation range", null)
+            return
+        }
+        Thread {
+            try {
+                val segmenter = newSegmenter()
+                val masks = ArrayList<Map<String, Any>>()
+                var sourceMs = startMs
+                while (sourceMs < endMs) {
+                    val bitmap = loadBitmap(uri, sourceMs)
+                    if (bitmap != null) {
+                        val mask = segmentBitmap(bitmap, segmenter)
+                        val file = saveMask(mask)
+                        masks.add(mapOf("timeMs" to (sourceMs - startMs), "path" to file.absolutePath))
+                        mask.recycle()
+                        bitmap.recycle()
+                    }
+                    sourceMs += stepMs
+                }
+                // Always include the final frame when the range is short or the
+                // last sample landed before the end.
+                if (masks.isEmpty() || sourceMs - stepMs < endMs - stepMs) {
+                    val bitmap = loadBitmap(uri, (endMs - 1L).coerceAtLeast(startMs))
+                    if (bitmap != null) {
+                        val mask = segmentBitmap(bitmap, segmenter)
+                        val file = saveMask(mask)
+                        masks.add(mapOf("timeMs" to (endMs - startMs - 1L).coerceAtLeast(0L), "path" to file.absolutePath))
+                        mask.recycle()
+                        bitmap.recycle()
+                    }
+                }
+                segmenter.close()
+                main.post { result.success(mapOf("masks" to masks)) }
+            } catch (t: Throwable) {
+                main.post { result.error("ec_export", "segmentation sequence failed: ${t.message}", null) }
+            }
+        }.start()
+    }
+
+    private fun newSegmenter(): Segmenter = Segmentation.getClient(
+        SelfieSegmenterOptions.Builder()
+            .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE)
+            .build()
+    )
+
+    private fun segmentBitmap(bitmap: Bitmap, segmenter: Segmenter): Bitmap {
+        val input = InputImage.fromBitmap(bitmap, 0)
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var maskResult: SegmentationMask? = null
+        var maskError: Exception? = null
+        segmenter.process(input)
+            .addOnSuccessListener { m -> maskResult = m; latch.countDown() }
+            .addOnFailureListener { e -> maskError = e; latch.countDown() }
+        if (!latch.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
+            throw IllegalStateException("segmentation timed out")
+        }
+        if (maskError != null) throw maskError!!
+        val mask = maskResult ?: throw IllegalStateException("segmentation returned no mask")
+        val maskW = mask.width
+        val maskH = mask.height
+        val fb = mask.buffer.asFloatBuffer()
+        val small = Bitmap.createBitmap(maskW, maskH, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(maskW * maskH)
+        fb.rewind()
+        for (i in pixels.indices) {
+            val confidence = if (fb.hasRemaining()) fb.get() else 0f
+            val alpha = (confidence.coerceIn(0f, 1f) * 255f).toInt()
+            pixels[i] = (alpha shl 24) or 0x00FFFFFF
+        }
+        small.setPixels(pixels, 0, maskW, 0, 0, maskW, maskH)
+        return Bitmap.createScaledBitmap(small, bitmap.width, bitmap.height, true).also {
+            if (it !== small) small.recycle()
+        }
+    }
+
+    private fun saveMask(mask: Bitmap): File {
+        val dir = File(context.filesDir, "cutout_masks")
+        dir.mkdirs()
+        return File(dir, "mask_${System.currentTimeMillis()}_${kotlin.random.Random.nextInt(10000)}.png").also { file ->
+            FileOutputStream(file).use { mask.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
     }
 
     private fun loadBitmap(uri: String, timeMs: Long): Bitmap? {
@@ -688,6 +745,8 @@ class EcExport(
             }
             // Force output size (every clip normalised so the concat is uniform).
             vfx.add(Presentation.createForWidthAndHeight(outW, outH, Presentation.LAYOUT_SCALE_TO_FIT))
+            val maskFrames = parseMaskFrames(seg["maskFrames"])
+            if (maskFrames.isNotEmpty()) vfx.add(BackgroundMaskEffect(maskFrames))
 
             if (volume <= 0.001f) {
                 builder.setRemoveAudio(true)
@@ -1097,6 +1156,16 @@ class EcExport(
         putShortLE(32, blockAlign); putShortLE(34, bytesPerSample * 8)
         putStr(36, "data"); putIntLE(40, dataSize)
         return h
+    }
+
+    private fun parseMaskFrames(raw: Any?): List<BackgroundMaskEffect.MaskFrame> {
+        if (raw !is List<*>) return emptyList()
+        return raw.mapNotNull { item ->
+            if (item !is Map<*, *>) return@mapNotNull null
+            val path = item["p"] as? String ?: return@mapNotNull null
+            val time = (item["t"] as? Number)?.toLong() ?: 0L
+            if (path.isEmpty()) null else BackgroundMaskEffect.MaskFrame(time, path)
+        }
     }
 
     /** A baked overlay PNG with its window on the OUTPUT timeline (ms). */

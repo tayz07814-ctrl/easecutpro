@@ -11,6 +11,7 @@ class PlayerSegment {
   final int timelineEndMs;
   final double speed; // playback speed (timeline span = source span / speed)
   final double volume; // 0..4 gain
+  final List<Map<String, dynamic>> maskFrames;
 
   const PlayerSegment({
     required this.uri,
@@ -20,6 +21,7 @@ class PlayerSegment {
     required this.timelineEndMs,
     this.speed = 1.0,
     this.volume = 1.0,
+    this.maskFrames = const [],
   });
 
   Map<String, dynamic> toMap() => {
@@ -30,6 +32,7 @@ class PlayerSegment {
         'timelineEndMs': timelineEndMs,
         'speed': speed,
         'volume': volume,
+        'maskFrames': maskFrames,
       };
 }
 

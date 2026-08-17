@@ -378,6 +378,9 @@ class EcPlayer(
                     override fun getNextSpeedChangeTimeUs(timeUs: Long): Long = C.TIME_UNSET
                 })
             }
+            val videoEffects = ArrayList<Effect>()
+            val maskFrames = parseMaskFrames(seg["maskFrames"])
+            if (maskFrames.isNotEmpty()) videoEffects.add(BackgroundMaskEffect(maskFrames))
             if (volume != 1f) {
                 // Muted clips get a ZERO-GAIN mix rather than setRemoveAudio: with the
                 // whole timeline muted, removeAudio would strip the composition's audio
@@ -387,9 +390,9 @@ class EcPlayer(
                 val mix = ChannelMixingAudioProcessor()
                 mix.putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(gain))
                 mix.putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(gain))
-                b.setEffects(
-                    Effects(ImmutableList.of<AudioProcessor>(mix), ImmutableList.of<Effect>())
-                )
+                b.setEffects(Effects(ImmutableList.of<AudioProcessor>(mix), videoEffects))
+            } else if (videoEffects.isNotEmpty()) {
+                b.setEffects(Effects(ImmutableList.of<AudioProcessor>(), videoEffects))
             }
             items.add(b.build())
             totalMs += timelineMs
@@ -398,6 +401,16 @@ class EcPlayer(
         @Suppress("DEPRECATION")
         val seq = EditedMediaItemSequence.Builder(items).build()
         return Composition.Builder(listOf(seq)).build() to totalMs
+    }
+
+    private fun parseMaskFrames(raw: Any?): List<BackgroundMaskEffect.MaskFrame> {
+        if (raw !is List<*>) return emptyList()
+        return raw.mapNotNull { item ->
+            if (item !is Map<*, *>) return@mapNotNull null
+            val path = item["p"] as? String ?: return@mapNotNull null
+            val time = (item["t"] as? Number)?.toLong() ?: 0L
+            if (path.isEmpty()) null else BackgroundMaskEffect.MaskFrame(time, path)
+        }
     }
 
     /** Source duration (ms) via metadata, 0 if unknown. */

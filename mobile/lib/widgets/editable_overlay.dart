@@ -20,16 +20,16 @@ Widget _cropOverlay(ImageOverlay o, Widget child) {
 /// Wraps any child with a background-removal mask (PNG with alpha: white = keep,
 /// transparent = remove). Uses [ShaderMask] with [BlendMode.dstIn] so it works for
 /// both image and video overlay widgets.
-class _MaskedWidget extends StatefulWidget {
+class MaskedMedia extends StatefulWidget {
   final String? maskPath;
   final Widget child;
-  const _MaskedWidget({this.maskPath, required this.child});
+  const MaskedMedia({super.key, this.maskPath, required this.child});
 
   @override
-  State<_MaskedWidget> createState() => _MaskedWidgetState();
+  State<MaskedMedia> createState() => _MaskedMediaState();
 }
 
-class _MaskedWidgetState extends State<_MaskedWidget> {
+class _MaskedMediaState extends State<MaskedMedia> {
   ui.Image? _mask;
 
   @override
@@ -39,7 +39,7 @@ class _MaskedWidgetState extends State<_MaskedWidget> {
   }
 
   @override
-  void didUpdateWidget(_MaskedWidget old) {
+  void didUpdateWidget(MaskedMedia old) {
     super.didUpdateWidget(old);
     if (old.maskPath != widget.maskPath) _load();
   }
@@ -62,8 +62,11 @@ class _MaskedWidgetState extends State<_MaskedWidget> {
     if (_mask == null) return widget.child;
     return ShaderMask(
       shaderCallback: (rect) {
-        final sx = rect.width / _mask!.width;
-        final sy = rect.height / _mask!.height;
+        // ImageShader maps local widget coordinates into source-image
+        // coordinates, so this is source/display (the previous code used the
+        // inverse and sampled only a small corner of most masks).
+        final sx = _mask!.width / rect.width;
+        final sy = _mask!.height / rect.height;
         return ui.ImageShader(
           _mask!,
           TileMode.clamp,
@@ -180,7 +183,7 @@ class _EditableImageOverlayState extends State<EditableImageOverlay> {
               opacity: o.opacity.clamp(0.0, 1.0).toDouble(),
               child: Transform.rotate(
                 angle: o.rotation,
-                child: _cropOverlay(o, _MaskedWidget(maskPath: o.bgMode > 0 ? o.maskPath : null, child: Image.memory(o.bytes!, fit: BoxFit.contain, gaplessPlayback: true))),
+                child: _cropOverlay(o, MaskedMedia(maskPath: o.bgMode > 0 ? o.maskAt(0) : null, child: Image.memory(o.bytes!, fit: BoxFit.contain, gaplessPlayback: true))),
               ),
             ),
           ),
@@ -338,7 +341,7 @@ class _EditableVideoOverlayState extends State<EditableVideoOverlay> {
                 : null,
             child: Opacity(
               opacity: o.opacity.clamp(0.0, 1.0).toDouble(),
-              child: Transform.rotate(angle: o.rotation, child: _cropOverlay(o, _MaskedWidget(maskPath: o.bgMode > 0 ? o.maskPath : null, child: child))),
+              child: Transform.rotate(angle: o.rotation, child: _cropOverlay(o, MaskedMedia(maskPath: o.bgMode > 0 ? o.maskAt(widget.positionMs - o.startMs) : null, child: child))),
             ),
           ),
         ),

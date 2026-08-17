@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../editor/background_mask.dart';
 import '../editor/text_overlay.dart';
 import '../native/exporter.dart';
 import '../theme.dart';
@@ -19,15 +20,20 @@ import 'sheet_scaffold.dart';
 class CutoutSheet extends StatefulWidget {
   final ImageOverlay overlay;
   final NativeExporter exporter;
+  /// Source time range used for a main-track trim. Overlay videos use 0..duration.
+  final int sourceStartMs;
+  final int sourceEndMs;
 
-  /// Called with (mode, maskPath) when the user applies the cutout.
+  /// Called with (mode, masks) when the user applies the cutout.
   /// mode: 1 = auto, 2 = manual.
-  final void Function(int mode, String maskPath) onApply;
+  final void Function(int mode, List<BackgroundMaskFrame> masks) onApply;
 
   const CutoutSheet({
     super.key,
     required this.overlay,
     required this.exporter,
+    this.sourceStartMs = 0,
+    this.sourceEndMs = 0,
     required this.onApply,
   });
 
@@ -39,6 +45,7 @@ class _CutoutSheetState extends State<CutoutSheet> {
   int _tab = 0; // 0 = auto, 1 = manual
   bool _processing = false;
   String? _autoMaskPath;
+  List<({int timeMs, String path})> _autoMaskRows = const [];
   String? _error;
 
   // Manual brush state
@@ -58,8 +65,9 @@ class _CutoutSheetState extends State<CutoutSheet> {
   Future<void> _loadFrame() async {
     final o = widget.overlay;
     if (o.isVideo && o.videoPath != null) {
-      final localMs = 0; // middle frame is best for representative mask
-      final bytes = await widget.exporter.frame('file://${o.videoPath}', localMs);
+      final sourceMs = widget.sourceStartMs +
+          ((widget.sourceEndMs - widget.sourceStartMs).clamp(0, 1 << 30) ~/ 2);
+      final bytes = await widget.exporter.frame('file://${o.videoPath}', sourceMs);
       if (bytes != null) _setFrameBytes(bytes);
     } else if (o.bytes != null) {
       _setFrameBytes(o.bytes!);
@@ -85,12 +93,24 @@ class _CutoutSheetState extends State<CutoutSheet> {
     });
     final o = widget.overlay;
     final uri = o.isVideo ? 'file://${o.videoPath}' : 'file://${_overlayImagePath(o)}';
-    final maskPath = await widget.exporter.removeBackground(uri, 0);
+    List<({int timeMs, String path})> rows;
+    if (o.isVideo) {
+      final end = widget.sourceEndMs > widget.sourceStartMs
+          ? widget.sourceEndMs
+          : widget.sourceStartMs + 1;
+      rows = await widget.exporter.removeBackgroundSequence(
+          uri, widget.sourceStartMs, end,
+          stepMs: 400);
+    } else {
+      final path = await widget.exporter.removeBackground(uri, 0);
+      rows = path == null ? const [] : [(timeMs: 0, path: path)];
+    }
     if (!mounted) return;
     setState(() {
       _processing = false;
-      if (maskPath != null) {
-        _autoMaskPath = maskPath;
+      if (rows.isNotEmpty) {
+        _autoMaskPath = rows.first.path;
+        _autoMaskRows = rows;
       } else {
         _error = 'Could not remove background. Try manual brush mode.';
       }
@@ -107,7 +127,9 @@ class _CutoutSheetState extends State<CutoutSheet> {
 
   void _applyAuto() {
     if (_autoMaskPath == null) return;
-    widget.onApply(1, _autoMaskPath!);
+    widget.onApply(1, [
+      for (final row in _autoMaskRows) BackgroundMaskFrame(row.timeMs, row.path),
+    ]);
     Navigator.of(context).pop();
   }
 
@@ -147,7 +169,7 @@ class _CutoutSheetState extends State<CutoutSheet> {
     await File(path).writeAsBytes(bd.buffer.asUint8List());
     img.dispose();
     if (!mounted) return;
-    widget.onApply(2, path);
+    widget.onApply(2, [BackgroundMaskFrame(0, path)]);
     Navigator.of(context).pop();
   }
 
