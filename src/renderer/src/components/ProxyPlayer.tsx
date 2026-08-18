@@ -201,7 +201,13 @@ export function ProxyPlayer({
           max={Math.max(total, 0.1)}
           step={0.01}
           value={t}
-          onChange={(e) => setPlayhead(parseFloat(e.currentTarget.value))}
+          onPointerDown={() => setPlaying(false)}
+          onChange={(e) => {
+            // Scrubbing takes ownership from transport immediately; otherwise
+            // the proxy keeps advancing while the pointer is setting its time.
+            setPlaying(false)
+            setPlayhead(parseFloat(e.currentTarget.value))
+          }}
         />
       </div>
     </div>

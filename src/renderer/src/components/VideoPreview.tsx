@@ -12,6 +12,27 @@ import { useSharedEngineSnapshot } from '../timelineEngine'
 import { playClock, primePlayback } from '../clock'
 import { mediaSrc } from '../platform'
 
+function ProxyIndicator({ building, ready }: { building: boolean; ready: boolean }): JSX.Element | null {
+  if (!building && !ready) return null
+  return (
+    <div
+      aria-label={building ? 'Preview proxy is generating' : 'Preview proxy ready'}
+      title={building ? 'Preview proxy is generating' : 'Preview proxy ready'}
+      style={{ position: 'absolute', top: 10, right: 10, zIndex: 40, pointerEvents: 'none', color: '#fff', opacity: 0.52, fontFamily: 'ui-monospace, monospace', fontSize: 11, lineHeight: 1 }}
+    >
+      {building ? (
+        <span style={{ display: 'block', position: 'relative', width: 15, height: 15, border: '1.5px solid rgba(255,255,255,.8)', borderRadius: '50%' }}>
+          <span style={{ position: 'absolute', left: 6.5, top: 2, width: 1, height: 5, background: '#fff', transformOrigin: '50% 5px', animation: 'ec-proxy-clock .9s linear infinite' }} />
+          <span style={{ position: 'absolute', left: 6.5, top: 6.5, width: 4, height: 1, background: '#fff', transformOrigin: '0 50%', transform: 'rotate(25deg)' }} />
+          <style>{'@keyframes ec-proxy-clock{to{transform:rotate(360deg)}}'}</style>
+        </span>
+      ) : (
+        <span style={{ display: 'block', padding: '4px 5px', border: '1px solid rgba(255,255,255,.7)', borderRadius: 4 }}>(P)</span>
+      )}
+    </div>
+  )
+}
+
 /**
  * Plays the source media but skips over cut (deleted/removed-silence) regions,
  * so the preview reflects the edited result. Playhead is tracked in SOURCE time.
@@ -248,9 +269,19 @@ export default function VideoPreview(): JSX.Element {
     // signature and this falls back to the live engine. Flipping the toggle off
     // returns to the live engine immediately.
     if (previewProxyMode && proxy.path) {
-      return <ProxyPlayer path={proxy.path} total={proxy.duration} onFailed={proxy.reject} />
+      return (
+        <div style={{ position: 'relative' }}>
+          <ProxyPlayer path={proxy.path} total={proxy.duration} onFailed={proxy.reject} />
+          <ProxyIndicator building={proxy.building} ready={!!proxy.path} />
+        </div>
+      )
     }
-    return <DocPreview doc={docSnap.doc} />
+    return (
+      <div style={{ position: 'relative' }}>
+        <DocPreview doc={docSnap.doc} />
+        <ProxyIndicator building={proxy.building} ready={!!proxy.path} />
+      </div>
+    )
   }
   // Legacy montage mode (multi-clip baseSequence, no timeline document).
   if (project.timeline || isMultiBase(project)) {

@@ -55,6 +55,8 @@ export interface PreviewProxy {
   path: string
   /** edited duration in seconds (proxy time == timeline time) */
   duration: number
+  /** true while the current edit's proxy is being rendered */
+  building: boolean
   /** the file won't play — stop offering it for this edit */
   reject: () => void
   /** manual trigger: render a 720p proxy now (user-requested, no debounce) */
@@ -101,6 +103,7 @@ function mainClipCount(doc: TimelineDocument): number {
 export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
   const [path, setPath] = useState('')
   const [duration, setDuration] = useState(0)
+  const [building, setBuilding] = useState(false)
   // Signatures whose proxy failed to play; never offered again this session.
   const rejected = useRef(new Set<string>())
   const sigRef = useRef('')
@@ -121,6 +124,7 @@ export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
   const reject = useCallback(() => {
     if (sigRef.current) rejected.current.add(sigRef.current)
     setPath('')
+    setBuilding(false)
   }, [])
 
   /** Manual trigger: build a 720p proxy RIGHT NOW for the current edit.
@@ -134,14 +138,18 @@ export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
     sigRef.current = sig
     setPath('')
     setDuration(0)
+    setBuilding(true)
     void window.api
       .buildPreviewProxyManual(folded, sig)
       .then((p) => {
         if (!p || sigRef.current !== sig) return
         setPath(p)
         setDuration(framesToSeconds(doc.duration, doc.timebase))
+        setBuilding(false)
       })
-      .catch(() => undefined)
+      .catch(() => {
+        if (sigRef.current === sig) setBuilding(false)
+      })
   }, [doc])
 
   // INVALIDATION — deliberately its own effect, depending on the document and
@@ -152,6 +160,7 @@ export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
   useEffect(() => {
     setPath('')
     setDuration(0)
+    setBuilding(false)
     sigRef.current = ''
   }, [doc])
 
@@ -174,18 +183,25 @@ export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
         if (!alive || !p || sigRef.current !== sig) return
         setPath(p)
         setDuration(framesToSeconds(doc.duration, doc.timebase))
+        setBuilding(false)
       }
 
       // Already rendered this exact edit (an undo back to it, say) — instant.
-      void window.api
-        .existingPreviewProxy(sig)
-        .then((p) => {
-          if (p) return adopt(p)
-          if (requested.current.has(sig)) return // already rendering for us
-          requested.current.add(sig)
-          return window.api.buildPreviewProxy(folded, sig).then(adopt)
-        })
-        .catch(() => undefined) // silent by design: the live engine is still playing
+        void window.api
+          .existingPreviewProxy(sig)
+          .then((p) => {
+            if (p) return adopt(p)
+            if (requested.current.has(sig)) return // already rendering for us
+            requested.current.add(sig)
+            setBuilding(true)
+            return window.api.buildPreviewProxy(folded, sig).then(adopt)
+          })
+          .catch(() => {
+            // A newer edit aborts this disposable build. Allow the signature to
+            // be requested again if the user later undoes back to it.
+            requested.current.delete(sig)
+            if (sigRef.current === sig) setBuilding(false)
+          }) // silent by design: the live engine is still playing
     }, SETTLE_MS)
 
     return () => {
@@ -194,5 +210,5 @@ export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
     }
   }, [doc, eligible, playing])
 
-  return { path, duration, reject, buildNow }
+  return { path, duration, building, reject, buildNow }
 }

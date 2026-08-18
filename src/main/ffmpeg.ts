@@ -50,21 +50,47 @@ const execFileP = promisify(execFile)
 const FFMPEG_SLOTS = Math.max(1, Math.min(4, Math.ceil((cpus().length || 4) / 2)))
 let ffmpegBusy = 0
 const ffmpegWaiting: (() => void)[] = []
+const ffmpegLowWaiting: (() => void)[] = []
 
-async function withFfmpegSlot<T>(fn: () => Promise<T>): Promise<T> {
-  if (ffmpegBusy >= FFMPEG_SLOTS) await new Promise<void>((r) => ffmpegWaiting.push(r))
+async function withFfmpegSlot<T>(fn: () => Promise<T>, lowPriority = false, signal?: AbortSignal): Promise<T> {
+  if (ffmpegBusy >= FFMPEG_SLOTS || (lowPriority && ffmpegWaiting.length > 0)) {
+    await new Promise<void>((resolve, reject) => {
+      const queue = lowPriority ? ffmpegLowWaiting : ffmpegWaiting
+      const wake = (): void => {
+        signal?.removeEventListener('abort', cancel)
+        resolve()
+      }
+      const cancel = (): void => {
+        const i = queue.indexOf(wake)
+        if (i >= 0) queue.splice(i, 1)
+        reject(new DOMException('ffmpeg work cancelled', 'AbortError'))
+      }
+      if (signal?.aborted) {
+        cancel()
+        return
+      }
+      signal?.addEventListener('abort', cancel, { once: true })
+      queue.push(wake)
+    })
+  }
+  if (signal?.aborted) throw new DOMException('ffmpeg work cancelled', 'AbortError')
   ffmpegBusy++
   try {
     return await fn()
   } finally {
     ffmpegBusy--
-    ffmpegWaiting.shift()?.()
+    ffmpegWaiting.shift()?.() ?? ffmpegLowWaiting.shift()?.()
   }
 }
 
 /** Heavy ffmpeg work queued by the gate above (used by framestream.ts too). */
 export function runGated<T>(fn: () => Promise<T>): Promise<T> {
   return withFfmpegSlot(fn)
+}
+
+/** Disposable preview work. Normal media/edit work always gets the next slot. */
+export function runGatedLowPriority<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  return withFfmpegSlot(fn, true, signal)
 }
 
 /**

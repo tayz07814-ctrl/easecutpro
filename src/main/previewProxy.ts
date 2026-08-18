@@ -17,15 +17,16 @@
 //   • the editor stays fully usable while it builds; the existing engine plays
 //     until a matching proxy exists, and keeps playing if this ever fails
 //
-// It reuses exportProject, so the proxy is frame-identical to what will be
-// exported — the preview and the render can't disagree about where cuts land.
+// It uses a dedicated fast renderer. Kept ranges still come from the shared edit
+// model, but disposable preview encoding never pays export-level filter/quality
+// costs.
 
 import { createHash } from 'crypto'
 import { existsSync } from 'fs'
 import { mkdir, readdir, rename, rm, stat, utimes } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
-import { exportProject } from './ffmpeg'
+import { buildFastPreviewProxy } from './fastPreviewProxy'
 import type { Project } from '../shared/types'
 
 const PROXY_DIR = join(homedir(), '.easecutpro', 'cache', 'proxy')
@@ -40,6 +41,7 @@ const SHORT_EDGE_MANUAL = 720
 
 /** Live builds, so a second request for the same edit joins the first. */
 const inflight = new Map<string, Promise<string>>()
+const controllers = new Map<string, AbortController>()
 
 function proxyPath(signature: string): string {
   return join(PROXY_DIR, `${createHash('sha1').update(signature).digest('hex')}.mp4`)
@@ -85,35 +87,43 @@ export async function buildPreviewProxy(
   const running = inflight.get(signature)
   if (running) return running
 
+  // A changed edit supersedes obsolete disposable work. The renderer already
+  // refuses stale results by signature; aborting here also stops wasting CPU.
+  for (const [oldSignature, controller] of controllers) {
+    if (oldSignature !== signature) controller.abort()
+  }
+
   const shortEdge = manualQuality ? SHORT_EDGE_MANUAL : SHORT_EDGE
+  const controller = new AbortController()
+  controllers.set(signature, controller)
 
   const job = (async () => {
     await mkdir(PROXY_DIR, { recursive: true })
-    const srcW = project.media?.width || project.baseSequence?.[0]?.srcW || 1080
-    const srcH = project.media?.height || project.baseSequence?.[0]?.srcH || 1920
-    // Frame it the way the creator framed it: an explicit aspect (9:16, 1:1, …)
-    // wins over the source's, exactly as the export does. A proxy shot at the
-    // wrong aspect would preview a crop that isn't in the edit.
-    const aspect = project.aspectW && project.aspectH ? project.aspectW / project.aspectH : srcW / srcH
-    const portrait = aspect <= 1
-    const w = portrait ? shortEdge : Math.round(shortEdge * aspect)
-    const h = portrait ? Math.round(shortEdge / aspect) : shortEdge
     // Written to a temp name first: a half-written file must never be picked up
     // as a valid proxy by a later run that only checks existence. The `.mp4`
     // stays LAST — ffmpeg picks its container from the extension, so a bare
     // `.part` suffix would fail with "unable to find a suitable output format".
     const tmp = out.replace(/\.mp4$/, '.part.mp4')
-    await exportProject(
-      project,
-      tmp,
-      { width: w - (w % 2), height: h - (h % 2), bitrateMbps: 2 },
-      undefined, // no baked text — the preview draws overlays itself, live
-      onProgress
-    )
-    await rename(tmp, out)
+    try {
+      await buildFastPreviewProxy(
+        project,
+        tmp,
+        { shortEdge, bitrateMbps: manualQuality ? 2 : 1.25 },
+        onProgress ?? (() => undefined),
+        controller.signal
+      )
+      if (controller.signal.aborted) throw new Error('preview proxy superseded')
+      await rename(tmp, out)
+    } catch (e) {
+      await rm(tmp).catch(() => undefined)
+      throw e
+    }
     void prune()
     return out
-  })().finally(() => inflight.delete(signature))
+  })().finally(() => {
+    inflight.delete(signature)
+    controllers.delete(signature)
+  })
 
   inflight.set(signature, job)
   return job

@@ -235,6 +235,10 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
   const onRulerPointerDown = useCallback(
     (e: ReactPointerEvent) => {
       e.stopPropagation()
+      // Scrubbing is an explicit transport takeover. Pause synchronously before
+      // the first coalesced seek so playback cannot advance the playhead between
+      // pointerdown and the next rAF flush.
+      if (useStore.getState().playing) useStore.getState().setPlaying(false)
       // rAF-coalesced, latest-position-wins. pointermove can fire faster than
       // the frame rate, and every event used to become an engine setPlayhead →
       // store write → preview adopt — i.e. the seek flood downstream. One write

@@ -734,6 +734,7 @@ export default function SequencePreview(): JSX.Element {
           max={Math.max(0.1, editedTotal)}
           step={0.05}
           value={Math.min(editedT, editedTotal)}
+          onPointerDown={() => setPlaying(false)}
           onChange={(e) => {
             setPlaying(false)
             const v = Number(e.target.value)

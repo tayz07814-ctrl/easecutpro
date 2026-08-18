@@ -403,34 +403,79 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // reconciler can tell a LIVE decoder (new frames arriving) from a stalled/seeking one
   // and keep the playhead advancing on the wall clock instead of freezing on a stall.
   const ctTrackRef = useRef<{ src: string; ct: number; wall: number }>({ src: '', ct: -1, wall: 0 })
+  // Actual presentation diagnostics. `requestVideoFrameCallback` measures frames
+  // reaching the video surface, not merely decoder queue progress or rAF timing.
+  // Inspect `window.__ecPlaybackMetrics` while reproducing a cut on a low-end
+  // machine; set localStorage `ec.previewMetrics` to `1` first. The important
+  // number is max/p95 frame gap, especially at seams. It is disabled by default
+  // so diagnostics cannot affect normal playback.
+  const frameMetricIdsRef = useRef(new WeakMap<HTMLVideoElement, number>())
+  const frameMetricsRef = useRef({ last: 0, frames: 0, maxGapMs: 0, gaps: [] as number[] })
+  const metricsEnabled = (): boolean => {
+    try {
+      return localStorage.getItem('ec.previewMetrics') === '1'
+    } catch {
+      return false
+    }
+  }
+  type MetricVideo = HTMLVideoElement & {
+    requestVideoFrameCallback?: (cb: (now: number) => void) => number
+    cancelVideoFrameCallback?: (id: number) => void
+  }
+  const publishFrameMetrics = (): void => {
+    if (typeof window === 'undefined') return
+    const m = frameMetricsRef.current
+    const sorted = [...m.gaps].sort((a, b) => a - b)
+    const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : 0
+    ;(window as unknown as { __ecPlaybackMetrics?: unknown }).__ecPlaybackMetrics = {
+      presentedFrames: m.frames,
+      maxFrameGapMs: Math.round(m.maxGapMs),
+      p95FrameGapMs: Math.round(p95),
+      lastFrameGapMs: Math.round(m.last ? performance.now() - m.last : 0)
+    }
+  }
+  const trackPresentedFrames = (video: HTMLVideoElement): void => {
+    if (!metricsEnabled()) return
+    const v = video as MetricVideo
+    if (!v.requestVideoFrameCallback || frameMetricIdsRef.current.has(video)) return
+    const tick = (now: number): void => {
+      if (!frameMetricIdsRef.current.has(video)) return
+      const m = frameMetricsRef.current
+      if (m.last > 0) {
+        const gap = Math.max(0, now - m.last)
+        m.maxGapMs = Math.max(m.maxGapMs, gap)
+        m.gaps.push(gap)
+        if (m.gaps.length > 600) m.gaps.shift()
+      }
+      m.last = now
+      m.frames++
+      if (m.frames % 30 === 0) publishFrameMetrics()
+      const id = v.requestVideoFrameCallback?.(tick)
+      if (id !== undefined) frameMetricIdsRef.current.set(video, id)
+    }
+    const id = v.requestVideoFrameCallback(tick)
+    frameMetricIdsRef.current.set(video, id)
+  }
+  const untrackPresentedFrames = (video: HTMLVideoElement): void => {
+    const id = frameMetricIdsRef.current.get(video)
+    const v = video as MetricVideo
+    if (id !== undefined) v.cancelVideoFrameCallback?.(id)
+    frameMetricIdsRef.current.delete(video)
+  }
 
-  // WEBCODECS canvas compositor (desktop): the promised rVFC/WebCodecs redo of
-  // the old (removed) drawImage-a-hidden-<video> canvas path, which returned
-  // BLACK frames from hardware-decoded elements. Mediabunny demuxes each source
-  // and WebCodecs decodes straight to VideoSamples the reconciler paints onto
-  // the canvas — a cut seam is "draw from a different queue", NO seeks, so it
-  // cannot stutter by construction. Sound comes from the SeamlessAudio engine
-  // (the elements stay paused). Mobile keeps the element path (single hardware
-  // decode pipeline), and ANY engine failure — including audio that won't start
-  // — flips wcOn off, handing back to the untouched element machinery below.
-  // ENGINE LADDER (desktop): WebCodecs first, native ffmpeg second, elements last.
+  // Native video elements are the DEFAULT presentation path. The browser/native
+  // decoder owns timing, hardware surfaces and GPU composition; the reconciler
+  // only chooses the current/buddy element at timeline boundaries. This avoids
+  // pushing every VideoSample through JS + Canvas2D on ordinary playback.
   //
-  // WcPlayer decodes through Chromium's WebCodecs, which on Windows is HARDWARE
-  // decode (D3D11VA/QuickSync) — the frames never cost CPU, which is what keeps
-  // playback smooth on modest machines. FfPlayer decodes with the bundled ffmpeg
-  // in the MAIN process and copies raw frames over a pipe: that is real CPU work
-  // plus a process spawn per seek, so on an older laptop it stutters, races
-  // through cut footage instead of jumping, and holds the picture at every seam.
-  // It therefore runs ONLY where WebCodecs cannot open the file at all (exotic
-  // HEVC/ProRes) — the one thing it is genuinely better at.
-  //
-  // `wcOn` = "a canvas engine is driving"; `engineKind` = which one. A decode
-  // failure DEMOTES one rung (wc → ff → elements) instead of dropping straight
-  // to the element path, so an unsupported codec still gets a picture.
+  // WebCodecs/FFmpeg remain a capability fallback for media the native element
+  // cannot decode. `wcOn` is intentionally false at startup and is promoted only
+  // by an actual native <video> error on desktop. Mobile stays on the native
+  // element path because it has one constrained hardware decoder.
   const [engineKind, setEngineKind] = useState<'wc' | 'ff'>(() => (wcSupported() ? 'wc' : 'ff'))
   const engineKindRef = useRef(engineKind)
   engineKindRef.current = engineKind
-  const [wcOn, setWcOn] = useState(() => !isMobile && (wcSupported() || ffSupported()))
+  const [wcOn, setWcOn] = useState(false)
   const wcOnRef = useRef(wcOn)
   wcOnRef.current = wcOn
   const wcRef = useRef<WcPlayer | FfPlayer | null>(null)
@@ -451,6 +496,15 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       return
     }
     setWcOn(false)
+  }
+  // A native decode error is the only reason to promote the heavier compositor.
+  // This keeps normal playback on the GPU-backed video surface while retaining
+  // support for codecs that Chromium cannot present natively.
+  const promoteRef = useRef<() => void>(() => undefined)
+  promoteRef.current = () => {
+    if (isMobile || wcOnRef.current || (!wcSupported() && !ffSupported())) return
+    console.warn('[preview] native video decode failed; promoting fallback compositor')
+    setWcOn(true)
   }
   // Fallback frees the decoders immediately (the element path never reads them).
   useEffect(() => {
@@ -641,12 +695,14 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     .map((s) => `${s.src}:${s.sourceStart}:${s.sourceEnd}:${s.start}:${s.len}:${s.gain}:${s.speed}:${s.muted ? 1 : 0}`)
     .join('|')
   useEffect(() => {
-    audioEngineRef.current?.setSegments(segs)
+    const eng = audioEngineRef.current
+    if (wcOn) eng?.setSegments(segs)
+    else eng?.pause()
     wcVideoReadyRef.current = false
     wcVideoWaitRef.current = 0
     // segs is rebuilt every render; audioSig captures its content.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioSig])
+  }, [audioSig, wcOn])
 
   // True while the audio engine was audible on the previous reconciler tick — the
   // reconciler uses the RISING edge to re-anchor a schedule that was built before
@@ -669,10 +725,12 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         wcVideoWaitRef.current = 0
         engActiveRef.current = false
       } else {
-        eng.play(tRef.current)
-        // Engine already audible at ▶ → the reconciler's first tick is NOT a rising
-        // edge (a re-anchor there would rebuild the just-built schedule for nothing).
-        engActiveRef.current = eng.active()
+        // Native <video> owns base A/V on the normal path. Do not decode and
+        // schedule a second copy of the base audio just to mute the video; that
+        // doubled the low-end machine's work and made the custom compositor's
+        // cost survive the renderer switch.
+        eng.pause()
+        engActiveRef.current = false
       }
     } else {
       eng.pause()
@@ -680,7 +738,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       wcVideoWaitRef.current = 0
       engActiveRef.current = false
     }
-  }, [playing])
+  }, [playing, wcOn])
 
   // Tear down the AudioContext on unmount.
   useEffect(() => () => audioEngineRef.current?.dispose(), [])
@@ -850,8 +908,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   /** Callback-ref sink: park each <video> in its STABLE [slot0, slot1] position. */
   function setSlot(src: string, slot: number, el: HTMLVideoElement | null): void {
     const pair = slotsRef.current.get(src) ?? [null, null]
+    const old = pair[slot]
+    if (old && !el) untrackPresentedFrames(old)
     pair[slot] = el
     if (el) {
+      trackPresentedFrames(el)
       slotsRef.current.set(src, pair)
     } else if (!pair[0] && !pair[1]) {
       slotsRef.current.delete(src)
@@ -1198,11 +1259,18 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         const pausedSeekAllowed = shouldIssuePausedSeek(now, pausedSeekAtRef.current)
         const di = displayIdxAt(t)
         const showSrc = di >= 0 ? ss[di].src : null
+        const nextSrc = di >= 0 ? ss[di + 1]?.src ?? null : null
         for (const [src, pair] of slotsRef.current) {
           const li = liveSlotRef.current.get(src) ?? 0
           for (let slot = 0; slot < pair.length; slot++) {
             const v = pair[slot]
             if (!v) continue
+            // Keep only current/next media in the browser's eager load set.
+            // A project with many clips should not ask the platform to fetch or
+            // initialize every source just because the React pool has elements
+            // for stable identity.
+            const desiredPreload = src === showSrc || src === nextSrc ? 'auto' : 'metadata'
+            if (v.preload !== desiredPreload) v.preload = desiredPreload
             if (!v.paused) v.pause()
             if (!wcOnRef.current && slot === li && src === showSrc && di >= 0 && !badRef.current.has(src)) {
               const seg = ss[di]
@@ -1323,14 +1391,18 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           im.style.visibility = 'hidden'
         }
       } else {
-        // ── MOBILE / no-canvas: the original element-visibility path (single decoder,
-        // no buddy). Same-source seams cold-seek the one element (a brief stall) — the
-        // canvas path above is desktop-only (iOS video→canvas is finicky).
+        // ── NATIVE VIDEO PATH: the browser owns decode + presentation. Desktop
+        // may have a buddy surface for same-source seams; mobile stays single-
+        // decoder. The reconciler only performs boundary seeks when a buddy is
+        // not ready, rather than drawing video frames itself.
+        const nextNativeSrc = di >= 0 ? ss[di + 1]?.src ?? null : null
         for (const [src, pair] of slotsRef.current) {
           const li = liveSlotRef.current.get(src) ?? 0
           for (let slot = 0; slot < pair.length; slot++) {
             const v = pair[slot]
             if (!v) continue
+            const desiredPreload = src === shown?.src || src === nextNativeSrc ? 'auto' : 'metadata'
+            if (v.preload !== desiredPreload) v.preload = desiredPreload
             if (slot !== li) {
               v.style.visibility = 'hidden'
               if (!v.muted) v.muted = true
@@ -1420,13 +1492,16 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                 <video
                   key={src + '#' + slot}
                   src={conditionedUrlRef.current.get(src) ?? urlOf.get(src)}
-                  preload="auto"
+                  preload="metadata"
                   playsInline
                   data-ec-base
                   // will-change keeps the element on its own GPU layer so the
                   // Ken Burns transform composites without a per-frame CPU repaint.
                   style={{ visibility: 'hidden', position: 'absolute', inset: 0, width: '100%', height: '100%', willChange: 'transform', backfaceVisibility: 'hidden' }}
-                  onError={() => badRef.current.add(src)}
+                  onError={() => {
+                    badRef.current.add(src)
+                    promoteRef.current()
+                  }}
                   ref={(el) => setSlot(src, slot, el)}
                 />
               ))
@@ -1440,9 +1515,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               style={{ visibility: 'hidden', position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', willChange: 'transform', backfaceVisibility: 'hidden' }}
             />
             {wcOn && frame.width > 0 && frame.height > 0 && (
-              // Desktop WebCodecs compositor. Sits ABOVE the (hidden, idle)
-              // <video>s and BELOW the overlays by DOM order. Backing store is frame×dpr
-              // for crispness; the reconciler paints decoded VideoSamples here each rAF.
+              // Fallback WebCodecs compositor. It is mounted only after native
+              // element playback reports a decode failure.
               <canvas
                 ref={canvasRef}
                 width={Math.round(frame.width * dpr)}
@@ -1488,6 +1562,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           max={Math.max(0.1, total)}
           step={0.05}
           value={Math.min(t, total)}
+          onPointerDown={() => setPlaying(false)}
           onChange={(e) => {
             setPlaying(false)
             setPlayhead(Number(e.target.value)) // doc mode: slider IS timeline time
