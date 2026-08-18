@@ -82,6 +82,7 @@ class _EditorScreenState extends State<EditorScreen> {
   StreamSubscription<dynamic>? _sizeSub;
 
   String? _clipName;
+  String? _preparedAudioPath;
   int? _textureId;
   double _aspect = 9 / 16;
   // Preview proxy: the flat pre-rendered file swapped in for smooth cross-cut playback.
@@ -94,6 +95,11 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _scrubbing = false;
   bool _loop = false; // transport loop toggle — replay from 0 when playback ends
   bool _previewExpanded = false; // fullscreen-preview mode (hides timeline + dock)
+  String? _preparedAudioPath;
+  bool _preparing = false;
+  double _preparingProgress = 0;
+  String _preparingMessage = 'Preparing video for editing…';
+  int _preparationGeneration = 0;
 
   double _stageFrac = 0.46;
   bool _selected = false;
@@ -134,7 +140,8 @@ class _EditorScreenState extends State<EditorScreen> {
       onProgress?.call(100, 'Using the saved transcript…');
       return cached;
     }
-    final words = await extractAndTranscribe(_exporter, path, onProgress: onProgress);
+    final words = await extractAndTranscribe(_exporter, path,
+        preparedAudioPath: _preparedAudioPath, onProgress: onProgress);
     // Say which provider actually ran — the setting is a preference, and a
     // silent fallback is exactly how "is Deepgram even working?" becomes
     // unanswerable.
@@ -177,11 +184,13 @@ class _EditorScreenState extends State<EditorScreen> {
     });
     _tick = Timer.periodic(const Duration(milliseconds: 16), (_) => _interpolate());
     if (widget.initialClipPath != null) {
+      _preparing = true;
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await _importPath(widget.initialClipPath!, widget.initialClipName);
         await _autoEnhanceOnImport();
       });
     } else if (widget.projectId != null) {
+      _preparing = true;
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadProject());
     }
   }
@@ -330,21 +339,28 @@ class _EditorScreenState extends State<EditorScreen> {
       if (doc != null) _projectDoc = doc;
       final m = doc?['mobile'];
       if (m is Map) await _restoreFrom(Map<String, dynamic>.from(m));
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) setState(() => _preparing = false);
+    }
   }
 
   Future<void> _restoreFrom(Map<String, dynamic> m) async {
     final src = m['sourcePath'] as String?;
     final clipsJson = (m['clips'] as List?) ?? [];
-    if (src == null || clipsJson.isEmpty) return;
+    if (src == null || clipsJson.isEmpty) {
+      if (mounted) setState(() => _preparing = false);
+      return;
+    }
     if (!await File(src).exists()) {
       _toast('Media not found on this device — re-import to continue');
+      if (mounted) setState(() => _preparing = false);
       return;
     }
     _previewProxy.reset(); // fresh project — drop any cached proxies
     _proxyActive = false;
     _proxyPath = null;
     _clipName = m['clipName'] as String?;
+    _preparedAudioPath = null;
     _sourceDurationMs = (m['durationMs'] as num?)?.toInt() ?? 0;
     _model.sourcePath = src;
     _model.sourceDurationMs = _sourceDurationMs;
@@ -379,10 +395,11 @@ class _EditorScreenState extends State<EditorScreen> {
       if (mounted) setState(() => _aspect = _player.aspectRatio);
     });
     await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
-    // Art for the base AND every appended clip / audio track in the restored doc.
-    _ensureMedia(src, knownDurMs: _sourceDurationMs);
+    // Prepare the base before revealing the editor; extra sources are warmed
+    // after the first frame so a large restored montage does not block forever.
+    await _prepareMedia(src, knownDurMs: _sourceDurationMs);
     _ensureAllMedia();
-    if (mounted) setState(() {});
+    if (mounted) setState(() => _preparing = false);
   }
 
   bool get _hasBase => _model.hasBase && _textureId != null;
@@ -392,10 +409,9 @@ class _EditorScreenState extends State<EditorScreen> {
   /// paths (clips store one, audio tracks the other) land on the same entry.
   static String _mediaKey(String p) => p.startsWith('file://') ? p.substring(7) : p;
 
-  /// Load this source's filmstrip + waveform ONCE, so the timeline can draw it.
-  /// Cheap to call on every import/restore: sources already loaded or in flight are
-  /// skipped, and each piece lands independently so a failed decode never blocks
-  /// the rest. [video] false skips the filmstrip (audio tracks have no frames).
+  /// Load this source's filmstrip + waveform in the background after the editor is
+  /// already usable. Initial base media uses [_prepareMedia] instead, which awaits
+  /// all required assets before the editor is revealed.
   Future<void> _ensureMedia(String path, {bool video = true, int knownDurMs = 0}) async {
     if (path.isEmpty) return;
     final key = _mediaKey(path);
@@ -419,6 +435,68 @@ class _EditorScreenState extends State<EditorScreen> {
         setState(() => _media[key] = (_media[key] ?? const MediaPeaks()).copyWith(thumbs: t));
       });
     }
+  }
+
+  /// Prepare the base media before entering the usable editor state. The native
+  /// calls are started together, but progress advances only as each real artifact
+  /// completes. The audio path is retained so Cut Lord never extracts it again.
+  Future<void> _prepareMedia(String path, {int knownDurMs = 0}) async {
+    final generation = ++_preparationGeneration;
+    final key = _mediaKey(path);
+    final uri = 'file://$key';
+    if (mounted) {
+      setState(() {
+        _preparing = true;
+        _preparingProgress = 2;
+        _preparingMessage = 'Preparing video for editing…';
+      });
+    }
+    var completed = 0;
+    const total = 4;
+    void step(String message) {
+      completed++;
+      if (!mounted || generation != _preparationGeneration) return;
+      setState(() {
+        _preparingProgress = completed / total * 100;
+        _preparingMessage = message;
+      });
+    }
+
+    final durationFuture = knownDurMs > 0 ? Future<int>.value(knownDurMs) : _exporter.duration(uri);
+    final waveformFuture = _exporter.waveform(uri, buckets: 600);
+    final thumbnailsFuture = _exporter.thumbnails(uri, 60);
+    final audioFuture = _exporter.extractAudio(uri);
+    final duration = await durationFuture;
+    if (!mounted || generation != _preparationGeneration) return;
+    _sourceDurationMs = duration;
+    _model.sourceDurationMs = duration;
+    step('Reading video metadata…');
+
+    final waveform = await waveformFuture;
+    if (!mounted || generation != _preparationGeneration) return;
+    setState(() => _media[key] = MediaPeaks(peaks: waveform, durMs: duration));
+    step('Building waveform…');
+
+    final thumbs = await thumbnailsFuture;
+    if (!mounted || generation != _preparationGeneration) return;
+    setState(() => _media[key] = (_media[key] ?? MediaPeaks(durMs: duration)).copyWith(thumbs: thumbs));
+    step('Building filmstrip…');
+
+    String? audio;
+    try {
+      audio = await audioFuture;
+    } catch (_) {
+      // The editor can still open with waveform/filmstrip; Cut Lord will retry
+      // extraction and surface the actual transcription error later.
+    }
+    if (!mounted || generation != _preparationGeneration) return;
+    _preparedAudioPath = audio;
+    step(audio == null ? 'Audio preparation unavailable — continuing…' : 'Preparing audio for transcription…');
+    setState(() {
+      _preparingProgress = 100;
+      _preparingMessage = 'Ready for editing';
+      _preparing = false;
+    });
   }
 
   /// Make sure every source currently on the timeline (base clips + audio tracks)
@@ -466,11 +544,15 @@ class _EditorScreenState extends State<EditorScreen> {
   Future<void> _importPath(String path, [String? name]) async {
     try {
       setState(() {
+        _preparing = true;
+        _preparingProgress = 0;
+        _preparingMessage = 'Preparing video for editing…';
         _clipName = name ?? path.split('/').last;
         _positionMs = 0;
         _sourceDurationMs = 0;
         _playing = false;
         _sttCache.clear(); // brand-new project — nothing transcribed yet
+        _preparedAudioPath = null;
         _texts.clear();
         _media.clear();
         _mediaPending.clear();
@@ -486,9 +568,10 @@ class _EditorScreenState extends State<EditorScreen> {
       _model.setBase(path, 0); // duration filled in when the player reports it
       await _player.load(_model.playerSegments(), audioTracks: _audioTrackMaps());
       if (mounted) setState(() {});
-      _ensureMedia(path); // filmstrip + waveform (async, non-blocking)
+      await _prepareMedia(path);
       _scheduleSave();
     } catch (e) {
+      if (mounted) setState(() => _preparing = false);
       _toast('Import failed: $e');
     }
   }
@@ -1446,7 +1529,18 @@ class _EditorScreenState extends State<EditorScreen> {
         onZoom: _autoZoom,
         onOverlays: _autoBroll,
         onVariations: _openVariations,
-      ));
+       ));
+
+  Future<List<Word>> _transcribePrepared({Progress? onProgress}) async {
+    final source = _model.sourcePath;
+    if (source == null || source.isEmpty) throw Exception('Import a clip first');
+    return extractAndTranscribe(
+      _exporter,
+      source,
+      preparedAudioPath: _preparedAudioPath,
+      onProgress: onProgress,
+    );
+  }
 
   /// Silence-only quick action: run JUST the Silero engine on the source and
   /// apply its cuts — no transcription, no judge, no review. The fastest way to
@@ -2238,6 +2332,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_preparing) return _preparationView();
     final screenH = MediaQuery.of(context).size.height;
     if (_previewExpanded) {
       // Fullscreen preview: just the top bar, the stage filling everything, and
@@ -2287,6 +2382,60 @@ class _EditorScreenState extends State<EditorScreen> {
       ),
     );
   }
+
+  Widget _preparationView() {
+    return Scaffold(
+      backgroundColor: Ec.bg,
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 34),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 42,
+                  height: 42,
+                  child: CircularProgressIndicator(strokeWidth: 3, color: Ec.indigo),
+                ),
+                const SizedBox(height: 22),
+                Text(
+                  _preparingMessage,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Ec.text, fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(5),
+                  child: LinearProgressIndicator(
+                    value: (_preparingProgress / 100).clamp(0.0, 1.0),
+                    minHeight: 7,
+                    backgroundColor: Ec.card2,
+                    color: Ec.indigo,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                Text(
+                  '${_preparingProgress.round()}% · Preparing your media for editing',
+                  style: const TextStyle(color: Ec.textMute, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _undoRedoBtn(IconData ic, bool enabled, VoidCallback onTap) => GestureDetector(
+        onTap: enabled ? onTap : null,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: 34,
+          height: 38,
+          child: Icon(ic, size: 20, color: enabled ? Ec.text : Ec.disabled),
+        ),
+      );
 
   /// The nearest common name for the source's aspect ratio (falls back to the
   /// rounded ratio, e.g. "1.85"), shown in the top-bar badge.

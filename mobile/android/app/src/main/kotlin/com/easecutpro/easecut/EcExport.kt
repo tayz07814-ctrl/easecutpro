@@ -60,6 +60,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
+import java.security.MessageDigest
 
 /** Length of the audio fade applied on each side of a cut seam (8 ms — inaudible on speech, kills the click). */
 private const val SEAM_FADE_US = 8_000L
@@ -185,11 +186,22 @@ class EcExport(
         }
         Thread {
             try {
+                val out = audioCacheFile(uri)
+                if (out.exists() && out.length() > 1024L) {
+                    main.post { result.success(mapOf("path" to out.absolutePath, "cached" to true)) }
+                    return@Thread
+                }
                 val (pcm, count) = SilenceEngine.decodeMono16k(context, uri)
                 if (count <= 0) throw IllegalStateException("decoder produced no audio samples")
-                val out = File(context.cacheDir, "ec_audio_${System.currentTimeMillis()}.wav")
-                writeWav(out, pcm, count, 16000)
-                main.post { result.success(mapOf("path" to out.absolutePath)) }
+                val part = File(out.parentFile, "${out.nameWithoutExtension}.part.wav")
+                part.delete()
+                writeWav(part, pcm, count, 16000)
+                if (!part.renameTo(out)) {
+                    part.delete()
+                    main.post { result.error("ec_export", "audio cache rename failed", null) }
+                } else {
+                    main.post { result.success(mapOf("path" to out.absolutePath, "cached" to false)) }
+                }
             } catch (t: Throwable) {
                 main.post { result.error("ec_export", "audio extract failed: ${t.message}", null) }
             }
@@ -225,6 +237,15 @@ class EcExport(
                 i += n
             }
         }
+    }
+
+    /** Stable cache identity: changing/replacing the source invalidates the WAV. */
+    private fun audioCacheFile(uri: String): File {
+        val source = File(Uri.parse(uri).path ?: uri)
+        val identity = "$uri|${source.length()}|${source.lastModified()}"
+        val digest = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray())
+        val key = digest.joinToString("") { "%02x".format(it) }.take(32)
+        return File(context.cacheDir, "ec_audio_$key.wav")
     }
 
     /** Evenly-spaced frames as small JPEGs (base64) for the timeline filmstrip. */

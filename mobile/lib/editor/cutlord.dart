@@ -26,10 +26,11 @@ const cutLordRetake = CutLordModel('Retake', 'ultracut-judge', 'openai/gpt-5.6-l
 Future<List<Word>> extractAndTranscribe(
   NativeExporter exporter,
   String videoPath, {
+  String? preparedAudioPath,
   Progress? onProgress,
 }) async {
   onProgress?.call(4, 'Getting your audio…');
-  final audio = await exporter.extractAudio('file://$videoPath');
+  final audio = preparedAudioPath ?? await exporter.extractAudio('file://$videoPath');
   return transcribe(audio, onProgress: onProgress);
 }
 
