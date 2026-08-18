@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { cpus } from 'os'
 import { randomUUID } from 'crypto'
 import { WHISPER_BIN, resolveWhisperModel, resolveWhisperModelByName } from './binaries'
-import { extractAudioWav } from './ffmpeg'
+import { prepareAudioWav } from './ffmpeg'
 import type { Transcript, Segment, Word } from '../shared/types'
 
 /**
@@ -25,7 +25,7 @@ export async function transcribe(
   }
 
   onProgress?.(5, 'Extracting audio')
-  const wav = await extractAudioWav(mediaPath)
+  const wav = await prepareAudioWav(mediaPath)
   const jsonOut = wav.replace(/\.wav$/, '')
 
   try {
@@ -37,7 +37,8 @@ export async function transcribe(
     await safeUnlink(jsonPath)
     return parseWhisperJson(raw)
   } finally {
-    await safeUnlink(wav)
+    // Prepared STT WAVs are persistent cache entries shared by project-open,
+    // Transcribe, and Find Cuts. Only whisper's JSON sidecar is temporary.
   }
 }
 

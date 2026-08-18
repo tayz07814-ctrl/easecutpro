@@ -7,7 +7,7 @@ import { Readable } from 'stream'
 import { randomUUID } from 'crypto'
 import { IPC } from '../shared/ipc'
 import { checkTools, listWhisperModels } from './binaries'
-import { probe, exportProject, extractWaveform, extractThumbnails, combineClips, extractAudioWav } from './ffmpeg'
+import { probe, exportProject, extractWaveform, extractThumbnails, combineClips, prepareAudioWav } from './ffmpeg'
 import { handleFrameStream, extractPreviewAudioWav, killAllFrameStreams } from './framestream'
 import { buildPreviewProxy, existingProxy } from './previewProxy'
 import { conditionForPreview } from './previewMedia'
@@ -472,7 +472,7 @@ app.whenReady().then(() => {
 
   // Cloud-hybrid STT: 16k mono WAV (same aresample=first_pts=0 alignment the
   // local engines use) for upload to the stt edge function.
-  ipcMain.handle(IPC.sttAudioWav, async (_e, path: string) => extractAudioWav(path))
+  ipcMain.handle(IPC.sttAudioWav, async (_e, path: string) => prepareAudioWav(path))
 
   // Preview proxy: flatten the current edit so playback has no seams to seek.
   ipcMain.handle(IPC.existingPreviewProxy, (_e, signature: string) => existingProxy(signature))

@@ -132,8 +132,8 @@ function remember<T>(cache: Map<string, T>, key: string, value: T): T {
 const DISK_CACHE_DIR = join(homedir(), '.easecutpro', 'cache', 'media')
 const DISK_CACHE_KEEP = 120
 
-function diskFile(key: string, kind: 'wf' | 'th'): string {
-  return join(DISK_CACHE_DIR, `${createHash('sha1').update(key).digest('hex')}.${kind}.json`)
+function diskFile(key: string, kind: 'wf' | 'th' | 'wav'): string {
+  return join(DISK_CACHE_DIR, `${createHash('sha1').update(key).digest('hex')}.${kind === 'wav' ? 'wav' : `${kind}.json`}`)
 }
 
 async function readDisk<T>(key: string, kind: 'wf' | 'th'): Promise<T | null> {
@@ -220,10 +220,9 @@ export async function probe(path: string): Promise<MediaInfo> {
   }
 }
 
-/** Extract a 16kHz mono WAV (what whisper.cpp expects) next to a temp path. */
-export async function extractAudioWav(path: string): Promise<string> {
+/** Extract a 16kHz mono WAV (what whisper.cpp expects) to `out`. */
+async function extractAudioWavTo(path: string, out: string): Promise<string> {
   return runGated(async () => {
-  const out = join(tmpdir(), `easecut-${randomUUID()}.wav`)
   await execFileP(FFMPEG, [
     '-y',
     '-i', path,
@@ -239,6 +238,44 @@ export async function extractAudioWav(path: string): Promise<string> {
     out
   ], { maxBuffer: 1024 * 1024 * 16 })
   return out
+  })
+}
+
+/** Extract a one-off WAV for callers that own its cleanup. */
+export async function extractAudioWav(path: string): Promise<string> {
+  return extractAudioWavTo(path, join(tmpdir(), `easecut-${randomUUID()}.wav`))
+}
+
+async function usableFile(path: string): Promise<boolean> {
+  try {
+    const st = await stat(path)
+    return st.size > 44
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Prepare the STT WAV in the persistent media cache. The cache key includes
+ * source size + mtime, so replacing a file at the same path automatically
+ * invalidates it. All transcription callers use this function, which means
+ * project-open preparation and a later Transcribe/Find Cuts action share the
+ * same extracted audio instead of spawning ffmpeg twice.
+ */
+export async function prepareAudioWav(path: string): Promise<string> {
+  if (/\.wav$/i.test(path)) return path
+  const key = await mediaKey(path, 'stt-wav-v1')
+  const out = diskFile(key, 'wav')
+  if (await usableFile(out)) return out
+  return share(`stt-wav:${key}`, async () => {
+    if (await usableFile(out)) return out
+    await mkdir(DISK_CACHE_DIR, { recursive: true })
+    try {
+      return await extractAudioWavTo(path, out)
+    } catch (e) {
+      await rm(out).catch(() => undefined)
+      throw e
+    }
   })
 }
 
@@ -815,8 +852,23 @@ export async function combineClips(
   const dir = outDir || join(homedir(), '.easecutpro', 'combined')
   await mkdir(dir, { recursive: true })
   if (audioOnly) {
-    const outA = join(dir, `combined-${randomUUID()}.wav`)
-    return concatAudioToFile(segs, onProgress, outA)
+    // Stable identity for the edited montage's audio. Opening a project warms
+    // this exact file, so Transcribe / Find Cuts can reuse it instead of
+    // rebuilding a random combined WAV on every button press.
+    const identity = await Promise.all(
+      clips.map((c) => mediaKey(c.sourcePath, `seq:${c.sourceIn}:${c.sourceOut}:${c.hasAudio ? 1 : 0}:${c.isImage ? 1 : 0}`))
+    )
+    const cacheKey = createHash('sha1').update(identity.join('|')).digest('hex')
+    const outA = join(dir, `combined-${cacheKey}.wav`)
+    return share(`combined-audio:${cacheKey}`, async () => {
+      if (await usableFile(outA)) return outA
+      try {
+        return await concatAudioToFile(segs, onProgress, outA)
+      } catch (e) {
+        await rm(outA).catch(() => undefined)
+        throw e
+      }
+    })
   }
   // Target canvas = the FIRST clip's REAL dimensions. The renderer's stored
   // srcW/srcH default to 1920x1080 when the browser couldn't probe the file —

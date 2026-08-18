@@ -2,9 +2,8 @@
 // full-screen backdrop captures every pointer/scroll event, so nothing can be
 // edited while it's up):
 //   • Finding cuts    — the retake job is running (cutJobActive).
-//   • Polishing cuts  — cuts are applied; the preview is decoding a landing
-//     frame for every cut (seam cache) so the first playback is glitch-free.
-//     Presented as "polishing" so the wait reads as finishing touches.
+//   • Seam-cache warming is deliberately NOT listed here. It is optional
+//     background preview work and must never lock the editor.
 //   • Exporting video — an on-device render. It belongs here rather than inside
 //     a tool panel: the editor must not be touched mid-render, and an export
 //     reported from the Speech-cleaner panel read as "Finding cuts…" because
@@ -22,7 +21,6 @@ export default function CutProgressOverlay(): JSX.Element | null {
   const jobKind = useStore((s) => s.job.kind)
   const jobPct = useStore((s) => s.job.percent)
   const jobMsg = useStore((s) => s.job.message)
-  const polishing = useStore((s) => s.polishing)
 
   // EVERY long job lands here, in the middle of the screen. Each tool used to
   // draw its own bar wherever it happened to live, which meant a Variations or
@@ -37,12 +35,14 @@ export default function CutProgressOverlay(): JSX.Element | null {
     broll: ['Placing b-roll…', 'Matching your overlay cards to what you talk about.'],
     probe: ['Importing…', 'Reading your media.']
   }
-  const busy = jobActive || cutJobActive || polishing.active
+  // Seam caching is an optional background preview optimization. It is not a
+  // blocking job and must never enter this full-screen overlay.
+  const busy = jobActive || cutJobActive
   // Hooks must run unconditionally — compute the smoothed value, then bail below.
-  const smoothPct = Math.round(useSmoothProgress(busy && !polishing.active, jobPct, jobKind))
+  const smoothPct = Math.round(useSmoothProgress(busy, jobPct, jobKind))
   if (!busy) return null
 
-  const pct = polishing.active && !jobActive ? Math.max(2, polishing.percent) : Math.max(2, smoothPct)
+  const pct = Math.max(2, smoothPct)
   // A cut run reports through the shared transcribe/silence job kinds. The
   // message emitted by the store supplies the active Ease Lord phase.
   const known = jobActive && jobKind ? TITLES[jobKind] : undefined
@@ -54,12 +54,8 @@ export default function CutProgressOverlay(): JSX.Element | null {
     ? known
     : cutJobActive
       ? ['Ease Lord is finding retakes…', 'Finding retakes, judging true silence, and preparing your review.']
-      : polishing.active
-        ? ['Ease Lord is polishing playback…', 'Preloading cut boundaries so playback starts smoothly.']
-        : ['Working…', ''])
-  const sub = polishing.active && !jobActive
-    ? subFallback
-    : easeLordPhase
+       : ['Working…', ''])
+  const sub = easeLordPhase
       ? subFallback
       : jobMsg || subFallback
 

@@ -532,19 +532,17 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     if (adopted) bumpConditionedVersion((v) => v + 1)
   }, [playing, wcOn, engineKind])
 
-  // POLISHING phase: executeCuts bumps polishReq. Decode every cut's landing
-  // frame ONCE (the seam cache), driving the % bar, then clear it so the editor
-  // unlocks — the first playback is then armed at every seam. Keyed on polishReq
-  // (not the boolean) so it re-fires on EVERY Apply even if a prior build got
-  // stuck active. Seams come from the AUTHORITATIVE post-cut doc (segsRef can lag
-  // a render behind an Apply). A minimum visible window makes a fast build
-  // perceptible; a hard timeout guarantees the lock always releases.
+  // BACKGROUND SEAM CACHE: executeCuts bumps polishReq and seamSig changes on
+  // manual edits. Decode landing frames once in the background so first playback
+  // is warm, but never make the editor wait for this optional optimization. The
+  // old implementation exposed the cache's initial 0/total callback as a
+  // blocking overlay (2%) and could lock the editor while one decoder operation
+  // was slow. Playback owns the decoder as soon as ▶ is pressed and cancels this
+  // work cleanly.
   const polishReq = useStore((s) => s.polishReq)
-  const setPolishing = useStore((s) => s.setPolishing)
-  // A signature of the CURRENT SEAM LIST — changes whenever clips are
-  // trimmed, split, moved, or AI-cut. Bumping polishReq alone missed manual
-  // edits, so the seam cache was stale and the first play through a manually
-  // trimmed clip froze at the cut. This fires the polish on ANY seam change.
+  // A signature of the CURRENT SEAM LIST — changes whenever clips are trimmed,
+  // split, moved, or AI-cut. Bumping polishReq alone missed manual edits, so
+  // the cache is refreshed on either signal without blocking the editor.
   const seamSig = useMemo(
     () => {
       const ss = docSegments(doc).segs
@@ -563,39 +561,15 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [doc]
   )
-  // Did THIS run come from an explicit Apply (executeCuts bumped polishReq)?
-  // Only those get the blocking "Polishing playback…" overlay. Manual edits
-  // (delete / trim / split / move) change seamSig too, and their landing frames
-  // still need decoding — but locking the editor with a progress bar after
-  // EVERY cut is the annoyance reported here. Manual edits build the same seam
-  // cache SILENTLY in the background; the decode is identical, only the UI
-  // differs. The first play stays smooth either way.
-  const polishReqSeenRef = useRef(polishReq)
   useEffect(() => {
-    // Playback owns the decoders. If ▶ arrives mid-polish (Apply cuts → scrub →
-    // play is the reported freeze), the cache build's decode jobs starve the
-    // pipes the reconciler is trying to prime — the picture holds for seconds
-    // and reads as a lock-up. Cancel the build, release the UI lock, and let
-    // the next pause resume whatever seams are still missing (cacheSeams is
-    // idempotent per (src,t), so no work is wasted twice).
+    // Playback owns the decoders. If ▶ arrives while a background cache build is
+    // active, cancel it before priming the live pipe; a partial cache is valid
+    // and live decoding remains the fallback.
     if (playing) {
       wcRef.current?.cancelCacheSeams()
-      setPolishing({ active: false, percent: 100 })
       return
     }
-    const explicit = polishReq !== polishReqSeenRef.current
-    polishReqSeenRef.current = polishReq
     if (!polishReq && !seamSig) return // initial mount — nothing applied yet
-    let cancelled = false
-    const MIN_MS = 900
-    const start = performance.now()
-    const finish = (): void => {
-      if (cancelled || !explicit) return
-      const wait = Math.max(0, MIN_MS - (performance.now() - start))
-      window.setTimeout(() => {
-        if (!cancelled) setPolishing({ active: false, percent: 100 })
-      }, wait)
-    }
     const wc = wcRef.current
     // Seams from the post-cut doc prop.
     const ss = docSegments(doc).segs
@@ -608,33 +582,12 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       const contiguous = a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.05
       if (!contiguous) seams.push({ src: b.src, t: b.sourceStart })
     }
-    console.info('[wc-preview] polishing:', { wcOn, hasPlayer: !!wc, seams: seams.length, explicit })
+    console.info('[wc-preview] background seam cache:', { wcOn, hasPlayer: !!wc, seams: seams.length })
     if (!wcOn || !wc || !seams.length) {
-      finish()
-      return () => { cancelled = true }
+      return undefined
     }
-    if (!explicit) {
-      // SILENT background build for a manual edit: decode the new landing
-      // frames without touching the polishing overlay at all. No minimum
-      // visible window, no safety timeout (there is no lock to release) — just
-      // the cache fill, superseded automatically if another edit lands first.
-      void wc.cacheSeams(seams).catch(() => undefined)
-      return () => { cancelled = true }
-    }
-    const safety = window.setTimeout(() => { if (!cancelled) setPolishing({ active: false, percent: 100 }) }, 30000)
-    void wc
-      .cacheSeams(seams, (d, total) => {
-        if (!cancelled) setPolishing({ active: true, percent: total ? Math.round((d / total) * 100) : 100 })
-      })
-      .finally(() => {
-        window.clearTimeout(safety)
-        console.info('[wc-preview] polishing done')
-        finish()
-      })
-    return () => {
-      cancelled = true
-      window.clearTimeout(safety)
-    }
+    void wc.cacheSeams(seams).catch((e) => console.warn('[wc-preview] background seam cache skipped:', e))
+    return () => wc.cancelCacheSeams()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polishReq, seamSig, wcOn, engineKind, playing])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)

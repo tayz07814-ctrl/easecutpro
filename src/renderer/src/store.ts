@@ -77,7 +77,7 @@ import { openSpaceProject, saveMyEdit, fmtBytes, type CoworkProject, type XferRe
 import { hydrateProjectMedia } from './webapi'
 import { cleanVideoCloud } from './cloud/batchCleanCloud'
 import { saveSilenceDebug } from './cloud/silenceDebug'
-import { getFile } from './webmedia'
+import { ensureAudioUploaded, getFile, isWebMediaId } from './webmedia'
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
@@ -428,6 +428,25 @@ function libraryFromProject(p: Project): LibraryItem[] {
     }
   }
   return out
+}
+
+/** Warm the exact audio artifact used by Transcribe / Find Cuts before the
+ * editor mounts. Desktop uses the persistent ffmpeg STT-WAV cache; browser
+ * projects upload their extracted WAV once into the existing webmedia cache.
+ * Failures are intentionally non-fatal: opening the project must still work,
+ * and the action can retry extraction with its normal error path. */
+async function prepareProjectAudio(project: Project): Promise<void> {
+  const prepared = project.timeline ? documentToProject(project.timeline, project) : project
+  if (IS_WEB) {
+    const path = prepared.media?.path
+    if (path && prepared.media?.hasAudio && isWebMediaId(path)) await ensureAudioUploaded(path)
+    return
+  }
+  if (prepared.baseSequence?.length && !prepared.media) {
+    if (prepared.baseSequence.some((c) => c.hasAudio)) await window.api.combineClips(prepared.baseSequence, true)
+    return
+  }
+  if (prepared.media?.path && prepared.media.hasAudio) await window.api.sttAudioWav(prepared.media.path)
 }
 
 /** First visual (video/image) source path in a project, for a dashboard thumbnail.
@@ -1501,7 +1520,11 @@ export const useStore = create<AppState>((set, get) => ({
       past: [],
       future: [],
       canUndo: false,
-      canRedo: false
+      canRedo: false,
+      // A previous editor session must never carry its blocking polish overlay
+      // into the newly opened project. The new project's cache build starts from
+      // its own document and is allowed to fail open.
+      polishing: { active: false, percent: 0 }
     })
     window.api.waveform(clip.sourcePath, 30).then((wf) => set({ waveform: wf })).catch(() => undefined)
     window.api.thumbnails(clip.sourcePath, 60).then((t) => set({ thumbnails: t })).catch(() => undefined)
@@ -2906,12 +2929,9 @@ export const useStore = create<AppState>((set, get) => ({
         percent: 100,
         message: `Executed: ${hadWords} word(s) cut, ${enabled.length} silence(s) cleaned`
       },
-      // Cuts are now on the timeline. Kick off the PROACTIVE seam-cache build
-      // ("Polishing cuts…"): the preview decodes every new cut's landing frame
-      // once while the editor is locked, so the first playback is glitch-free.
-      // DocPreview watches polishReq, does the decode, drives the %, and clears
-      // it. Desktop WebCodecs only — no-ops (self-clears) elsewhere.
-      polishing: { active: true, percent: 0 },
+      // Cuts are now on the timeline. DocPreview watches this request and warms
+      // seam landing frames in the background; it must never lock the editor for
+      // an optional decoder cache build.
       polishReq: st.polishReq + 1
     }))
     // Debug telemetry (best-effort): what was actually COMMITTED — the applied
@@ -4179,13 +4199,22 @@ export const useStore = create<AppState>((set, get) => ({
       set({ view: 'loading' })
       void hydrateProjectMedia(project)
         .catch(() => undefined)
+        .then(() => prepareProjectAudio(project).catch(() => undefined))
         .then(() => {
           open()
           kickBackground()
         })
     } else {
-      open()
-      kickBackground()
+      // Do the STT extraction while the project is still on the loading screen.
+      // Transcribe / Find Cuts then hit the same persistent cache and can start
+      // inference immediately after the editor opens.
+      set({ view: 'loading' })
+      void prepareProjectAudio(project)
+        .catch(() => undefined)
+        .then(() => {
+          open()
+          kickBackground()
+        })
     }
   },
 

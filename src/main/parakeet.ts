@@ -11,12 +11,11 @@
  * Runs on CPU (the prebuilt sherpa-onnx-win-x64 is CPU-only); Parakeet int8 is
  * efficient enough to be faster-than-realtime on a decent CPU.
  */
-import { unlink } from 'fs/promises'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { cpus } from 'os'
 import { randomUUID } from 'crypto'
-import { extractAudioWav } from './ffmpeg'
+import { prepareAudioWav } from './ffmpeg'
 import { resolveParakeetModel } from './binaries'
 import type { Transcript, Segment, Word } from '../shared/types'
 
@@ -77,25 +76,21 @@ export async function transcribeParakeet(
   const rec = await getRecognizer(modelDir)
 
   onProgress?.(18, 'Extracting audio')
-  const wav = await extractAudioWav(mediaPath)
-  try {
-    onProgress?.(35, 'Transcribing (Parakeet)')
-    // Decode the WAV ourselves into a V8-owned Float32Array. sherpa's readWave
-    // returns an EXTERNAL-memory buffer, which Electron's main process forbids
-    // ("External buffers are not allowed"); this avoids that entirely.
-    const wave = readWav16Mono(wav)
-    const stream = rec.createStream()
-    ;(stream as { acceptWaveform(o: { samples: Float32Array; sampleRate: number }): void }).acceptWaveform({
-      samples: wave.samples,
-      sampleRate: wave.sampleRate
-    })
-    rec.decode(stream)
-    const result = rec.getResult(stream)
-    onProgress?.(95, 'Building transcript')
-    return buildTranscript(result)
-  } finally {
-    await unlink(wav).catch(() => {})
-  }
+  const wav = await prepareAudioWav(mediaPath)
+  onProgress?.(35, 'Transcribing (Parakeet)')
+  // Decode the WAV ourselves into a V8-owned Float32Array. sherpa's readWave
+  // returns an EXTERNAL-memory buffer, which Electron's main process forbids
+  // ("External buffers are not allowed"); this avoids that entirely.
+  const wave = readWav16Mono(wav)
+  const stream = rec.createStream()
+  ;(stream as { acceptWaveform(o: { samples: Float32Array; sampleRate: number }): void }).acceptWaveform({
+    samples: wave.samples,
+    sampleRate: wave.sampleRate
+  })
+  rec.decode(stream)
+  const result = rec.getResult(stream)
+  onProgress?.(95, 'Building transcript')
+  return buildTranscript(result)
 }
 
 /** Read a PCM WAV into a V8-owned Float32Array (extractAudioWav gives 16k mono s16le). */

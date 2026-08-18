@@ -17,7 +17,7 @@ import type { RetakeAwareResult } from '../../shared/retakeaware/types'
 import { runRetakeAwareCut, type RetakeEngineDeps, type ProgressFn } from '../../shared/retakeaware/engine'
 import { transcribeVerbatim } from './providers'
 import { reviewRetakeGroups } from './llm'
-import { extractAudioWav } from '../ffmpeg'
+import { prepareAudioWav } from '../ffmpeg'
 
 export async function retakeAwareCut(
   mediaPath: string,
@@ -31,7 +31,7 @@ export async function retakeAwareCut(
   op(3, 'Retake β: extracting audio…')
   let audioPath = mediaPath
   try {
-    if (!/\.(wav|mp3|m4a|aac|flac|ogg)$/i.test(mediaPath)) audioPath = await extractAudioWav(mediaPath)
+    if (!/\.(wav|mp3|m4a|aac|flac|ogg)$/i.test(mediaPath)) audioPath = await prepareAudioWav(mediaPath)
   } catch (e) {
     warnings.push(`Audio extraction failed (${(e as Error).message}) — sending the original file to the provider.`)
   }
