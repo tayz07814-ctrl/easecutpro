@@ -119,6 +119,15 @@ export function useNativePreview(params: {
   // is never frozen. Tracked from the last FORWARD-progress sample.
   const lastReportedMs = useRef(-1)
   const lastProgressWall = useRef(0)
+  // Bridge seek hygiene. The interpolation tick writes the store playhead FROM
+  // native position reports (~11 Hz); `nativeDrivenMs` records the last such
+  // position so those echoes are never sent back across the bridge as seeks
+  // (that round-trip WAS a seek every 90 ms during playback — ExoPlayer
+  // rebuffering against itself). `pendingSeekMs`/`seekTimer` coalesce a rapid
+  // drag into ONE trailing seek to its final position.
+  const nativeDrivenMs = useRef(-1)
+  const pendingSeekMs = useRef<number | null>(null)
+  const seekTimer = useRef(0)
   // `live` = native is genuinely playing (its reported position has advanced). Until
   // then the clock HOLDS at the seek point instead of running ahead and snapping
   // back (that was the ~5 s vibrating-at-the-start bug).
@@ -194,6 +203,7 @@ export function useNativePreview(params: {
         anchorSec.current = st.timelineMs / 1000
         anchorWall.current = now
       }
+      nativeDrivenMs.current = st.timelineMs
       if (st.ended) setPlaying(false)
     }
     Promise.resolve(nativePlayer.onState(onState)).then((h) => {
@@ -224,6 +234,7 @@ export function useNativePreview(params: {
         playClock.t = t
         if (now - lastStoreWrite.current > 90) {
           lastStoreWrite.current = now
+          nativeDrivenMs.current = Math.round(t * 1000) // this write is an echo, not a scrub
           setPlayhead(t)
         }
         if (liveRef.current && t >= totalRef.current - 0.02 && playingRef.current) {
@@ -307,12 +318,28 @@ export function useNativePreview(params: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, signature])
 
-  // Scrub while the native player is active → seek the native player.
+  // Scrub while the native player is active → seek the native player. Latest
+  // wins under a ~90 ms trailing debounce: the bridge sees the drag's FINAL
+  // position, not every micro-move along the way (each micro-seek crosses into
+  // the native UI thread and restarts ExoPlayer's buffer — a fast drag was a
+  // seek storm). Echoes of the native clock's own playhead writes are dropped.
   useEffect(() => {
-    if (nativeActiveRef.current && readyRef.current) {
-      void nativePlayer.seek(Math.round(playhead * 1000))
-      anchorSec.current = playhead
-      anchorWall.current = performance.now()
+    if (!nativeActiveRef.current || !readyRef.current) return
+    const ms = Math.round(playhead * 1000)
+    if (nativeDrivenMs.current >= 0 && Math.abs(ms - nativeDrivenMs.current) < 300) return
+    pendingSeekMs.current = ms
+    if (!seekTimer.current) {
+      seekTimer.current = window.setTimeout(() => {
+        seekTimer.current = 0
+        const target = pendingSeekMs.current
+        pendingSeekMs.current = null
+        if (target === null || !nativeActiveRef.current) return
+        void nativePlayer.seek(target)
+        anchorSec.current = target / 1000
+        anchorWall.current = performance.now()
+        lastReportedMs.current = target
+        lastProgressWall.current = performance.now()
+      }, 90)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playhead])
@@ -321,6 +348,11 @@ export function useNativePreview(params: {
   useEffect(() => {
     return () => {
       nativeActiveRef.current = false
+      if (seekTimer.current) {
+        window.clearTimeout(seekTimer.current)
+        seekTimer.current = 0
+      }
+      pendingSeekMs.current = null
       document.body.classList.remove('ec-native-active')
       void nativePlayer.setActive(false)
       void nativePlayer.release()

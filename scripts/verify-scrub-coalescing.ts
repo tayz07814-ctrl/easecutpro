@@ -11,7 +11,13 @@
 // The fix is a timing rule, so this replays a drag against it and asserts on the
 // thing that actually matters: how many frames land while the finger is moving.
 
-import { shouldSupersedeScrub } from '../src/renderer/src/preview/scrubRule'
+import {
+  shouldSupersedeScrub,
+  shouldIssuePausedSeek,
+  scrubActive,
+  PAUSED_SEEK_MIN_MS,
+  SCRUB_IDLE_MS
+} from '../src/renderer/src/preview/scrubRule'
 
 let failures = 0
 function check(name: string, ok: boolean, detail?: string): void {
@@ -117,6 +123,42 @@ check(
 // A slow drag inside one decoded region must not thrash either.
 const slow = simulateDrag({ seconds: 2, pxPerSecond: 0.02, decodeMs: 55, rule: shouldSupersedeScrub })
 check('a slow drag barely restarts at all', slow.restarts <= 3, `${slow.restarts} restarts`)
+
+// ---- paused-scrub seek pacing (the element path's global budget) ----
+// The reported freeze: apply cuts, then a FAST swipe across the timeline, then
+// play(). The paused reconciler used to issue one cold element seek per newly
+// SHOWN source — a swipe across a dense timeline queued dozens of decoder
+// seeks in a second, and play() inherited a thrashed pipeline. The budget caps
+// the issue rate; the always-running reconciler makes the seek that does fire
+// carry the LATEST playhead position.
+check('paused seek: nothing issued yet -> allowed', shouldIssuePausedSeek(1000, 0))
+check('paused seek: inside the pacing window -> held', !shouldIssuePausedSeek(1000, 1000 - PAUSED_SEEK_MIN_MS + 10))
+check('paused seek: window elapsed -> allowed', shouldIssuePausedSeek(1000, 1000 - PAUSED_SEEK_MIN_MS))
+
+check('scrub counts as active right after a move', scrubActive(1000, 1000 - SCRUB_IDLE_MS + 10))
+check('no move recorded -> never active', !scrubActive(1000, 0))
+check('scrub goes idle after the window', !scrubActive(1000, 1000 - SCRUB_IDLE_MS))
+
+/** 1s of 60 Hz reconciler ticks during a drag: how many paused seeks fire. */
+function countPausedSeeks(): number {
+  let seeks = 0
+  let lastIssued = 0
+  for (let ms = 0; ms <= 1000; ms += 16.7) {
+    if (shouldIssuePausedSeek(ms, lastIssued)) {
+      seeks++
+      lastIssued = ms
+    }
+  }
+  return seeks
+}
+const paced = countPausedSeeks()
+const budgetedMax = Math.ceil(1000 / PAUSED_SEEK_MIN_MS) + 1
+check(
+  'paused scrub: a fast swipe issues a bounded number of seeks',
+  paced <= budgetedMax,
+  `${paced} seeks in 1s of dragging (was: one per newly-shown clip, unbounded)`
+)
+check('paused scrub: the budget still tracks the finger', paced >= 8, `${paced} seeks/s`)
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall checks passed')
 process.exit(failures ? 1 : 0)

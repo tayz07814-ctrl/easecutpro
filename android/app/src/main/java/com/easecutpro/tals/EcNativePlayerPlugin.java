@@ -50,6 +50,25 @@ public class EcNativePlayerPlugin extends Plugin {
     private final Handler pollHandler = new Handler(Looper.getMainLooper());
     private boolean polling = false;
 
+    // Latest-wins seek coalescing. A scrub can push dozens of seek() calls per
+    // second across the bridge; applying each one immediately thrashes the
+    // decoder and wedges the UI thread under a fast drag. Only the most recent
+    // target is applied, at most once per SEEK_COALESCE_MS — and play() flushes
+    // a pending target first so it never starts from a stale position.
+    private static final long SEEK_COALESCE_MS = 60;
+    private Long pendingSeekMs = null;
+    private boolean seekScheduled = false;
+
+    private final Runnable seekFlush = new Runnable() {
+        @Override
+        public void run() {
+            seekScheduled = false;
+            Long ms = pendingSeekMs;
+            pendingSeekMs = null;
+            if (ms != null) applySeek(ms);
+        }
+    };
+
     private final Runnable poller = new Runnable() {
         @Override
         public void run() {
@@ -135,7 +154,17 @@ public class EcNativePlayerPlugin extends Plugin {
         getActivity().runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                if (player != null) player.setPlayWhenReady(true);
+                // Flush any coalesced scrub target BEFORE starting playback so
+                // the first audible/visible frame is the seeked one, not 60 ms
+                // of the stale position.
+                Long pending = pendingSeekMs;
+                pendingSeekMs = null;
+                pollHandler.removeCallbacks(seekFlush);
+                seekScheduled = false;
+                if (player != null) {
+                    if (pending != null) applySeek(pending);
+                    player.setPlayWhenReady(true);
+                }
                 call.resolve();
             }
         });
@@ -152,25 +181,34 @@ public class EcNativePlayerPlugin extends Plugin {
         });
     }
 
-    /** Seek to a GLOBAL timeline position (ms). */
+    /** Seek to a GLOBAL timeline position (ms). Coalesced: only the latest
+     *  requested position is applied, at SEEK_COALESCE_MS cadence. */
     @PluginMethod
     public void seek(final PluginCall call) {
         final long ms = call.getLong("timelineMs", 0L);
         getActivity().runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                if (player != null) {
-                    int idx = 0;
-                    for (int i = 0; i < timelineStarts.length; i++) {
-                        if (ms >= timelineStarts[i] && ms < timelineEnds[i]) { idx = i; break; }
-                        if (i == timelineStarts.length - 1) idx = i;
-                    }
-                    long inClip = Math.max(0, ms - (idx < timelineStarts.length ? timelineStarts[idx] : 0));
-                    try { player.seekTo(idx, inClip); } catch (Exception ignore) {}
+                pendingSeekMs = ms;
+                if (!seekScheduled) {
+                    seekScheduled = true;
+                    pollHandler.postDelayed(seekFlush, SEEK_COALESCE_MS);
                 }
                 call.resolve();
             }
         });
+    }
+
+    /** Apply a global-timeline seek NOW. UI thread only. */
+    private void applySeek(long ms) {
+        if (player == null) return;
+        int idx = 0;
+        for (int i = 0; i < timelineStarts.length; i++) {
+            if (ms >= timelineStarts[i] && ms < timelineEnds[i]) { idx = i; break; }
+            if (i == timelineStarts.length - 1) idx = i;
+        }
+        long inClip = Math.max(0, ms - (idx < timelineStarts.length ? timelineStarts[idx] : 0));
+        try { player.seekTo(idx, inClip); } catch (Exception ignore) {}
     }
 
     /** Position the native surface (device px) under the HTML preview frame. */
@@ -236,6 +274,9 @@ public class EcNativePlayerPlugin extends Plugin {
             @Override
             public void run() {
                 stopPolling();
+                pollHandler.removeCallbacks(seekFlush);
+                pendingSeekMs = null;
+                seekScheduled = false;
                 try {
                     WebView web = getBridge().getWebView();
                     web.setBackgroundColor(Color.BLACK);

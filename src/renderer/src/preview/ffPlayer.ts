@@ -462,6 +462,13 @@ export class FfPlayer {
     onProgress?.(total, total)
   }
 
+  /** Abandon any in-flight seam-cache build (playback started, or a newer cut
+   *  list is starting one). Workers re-check the generation per frame and bail;
+   *  already-cached entries stay valid. Mirrors WcPlayer.cancelCacheSeams. */
+  cancelCacheSeams(): void {
+    this.cacheGen++
+  }
+
   private dropSeam(src: string): void {
     for (const e of this.seamCache.get(src) ?? []) e.bmp.close()
     this.seamCache.delete(src)

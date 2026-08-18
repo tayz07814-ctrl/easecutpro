@@ -31,3 +31,30 @@ export function shouldSupersedeScrub(
   if (restartAtMs !== 0 && nowMs - restartAtMs < SCRUB_GRACE_MS) return false // let it land
   return true
 }
+
+/** Minimum spacing between PAUSED-scrub element seeks. A fast swipe used to
+ *  issue one cold seek per newly-shown source per rAF tick (a 1s drag across a
+ *  30-clip timeline = ~60 seeks/second into one decoder). The reconciler
+ *  re-derives the target every frame, so pacing the ISSUE rate is enough —
+ *  the seek that does fire always carries the latest playhead position. */
+export const PAUSED_SEEK_MIN_MS = 90
+
+/** How long after the last external playhead move the timeline still counts as
+ *  "being scrubbed". Background decoder work (seam warm-up) must yield for this
+ *  window or it contends with the scrub's own seeks for the same decoder. */
+export const SCRUB_IDLE_MS = 240
+
+/** May a paused-scrub seek be issued now? Latest-target-wins pacing: the
+ *  reconciler targets the CURRENT playhead whenever this returns true, so a
+ *  held frame just means the next allowed seek lands exactly where the finger
+ *  is by then (the trailing edge is the always-running rAF loop itself). */
+export function shouldIssuePausedSeek(nowMs: number, lastIssuedAtMs: number): boolean {
+  return nowMs - lastIssuedAtMs >= PAUSED_SEEK_MIN_MS
+}
+
+/** True while a scrub is in progress (a playhead move landed within the idle
+ *  window). Decoder-heavy background jobs (seam warm-up walkers) poll this and
+ *  wait the scrub out instead of racing it. */
+export function scrubActive(nowMs: number, lastMoveAtMs: number): boolean {
+  return lastMoveAtMs !== 0 && nowMs - lastMoveAtMs < SCRUB_IDLE_MS
+}

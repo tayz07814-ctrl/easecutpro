@@ -41,6 +41,7 @@ import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
 import { mediaSrc } from '../platform'
 import { WcPlayer, wcSupported } from '../preview/wcPlayer'
 import { FfPlayer, ffSupported } from '../preview/ffPlayer'
+import { shouldIssuePausedSeek, scrubActive } from '../preview/scrubRule'
 import { useIsMobile } from '../useMobile'
 import { useNativePreview } from '../useNativePreview'
 import OverlayLayer from './OverlayLayer'
@@ -562,13 +563,34 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [doc]
   )
+  // Did THIS run come from an explicit Apply (executeCuts bumped polishReq)?
+  // Only those get the blocking "Polishing playback…" overlay. Manual edits
+  // (delete / trim / split / move) change seamSig too, and their landing frames
+  // still need decoding — but locking the editor with a progress bar after
+  // EVERY cut is the annoyance reported here. Manual edits build the same seam
+  // cache SILENTLY in the background; the decode is identical, only the UI
+  // differs. The first play stays smooth either way.
+  const polishReqSeenRef = useRef(polishReq)
   useEffect(() => {
+    // Playback owns the decoders. If ▶ arrives mid-polish (Apply cuts → scrub →
+    // play is the reported freeze), the cache build's decode jobs starve the
+    // pipes the reconciler is trying to prime — the picture holds for seconds
+    // and reads as a lock-up. Cancel the build, release the UI lock, and let
+    // the next pause resume whatever seams are still missing (cacheSeams is
+    // idempotent per (src,t), so no work is wasted twice).
+    if (playing) {
+      wcRef.current?.cancelCacheSeams()
+      setPolishing({ active: false, percent: 100 })
+      return
+    }
+    const explicit = polishReq !== polishReqSeenRef.current
+    polishReqSeenRef.current = polishReq
     if (!polishReq && !seamSig) return // initial mount — nothing applied yet
     let cancelled = false
     const MIN_MS = 900
     const start = performance.now()
     const finish = (): void => {
-      if (cancelled) return
+      if (cancelled || !explicit) return
       const wait = Math.max(0, MIN_MS - (performance.now() - start))
       window.setTimeout(() => {
         if (!cancelled) setPolishing({ active: false, percent: 100 })
@@ -586,9 +608,17 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       const contiguous = a.src === b.src && Math.abs(a.sourceEnd - b.sourceStart) < 0.05
       if (!contiguous) seams.push({ src: b.src, t: b.sourceStart })
     }
-    console.info('[wc-preview] polishing:', { wcOn, hasPlayer: !!wc, seams: seams.length })
+    console.info('[wc-preview] polishing:', { wcOn, hasPlayer: !!wc, seams: seams.length, explicit })
     if (!wcOn || !wc || !seams.length) {
       finish()
+      return () => { cancelled = true }
+    }
+    if (!explicit) {
+      // SILENT background build for a manual edit: decode the new landing
+      // frames without touching the polishing overlay at all. No minimum
+      // visible window, no safety timeout (there is no lock to release) — just
+      // the cache fill, superseded automatically if another edit lands first.
+      void wc.cacheSeams(seams).catch(() => undefined)
       return () => { cancelled = true }
     }
     const safety = window.setTimeout(() => { if (!cancelled) setPolishing({ active: false, percent: 100 }) }, 30000)
@@ -606,7 +636,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       window.clearTimeout(safety)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [polishReq, seamSig, wcOn, engineKind])
+  }, [polishReq, seamSig, wcOn, engineKind, playing])
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const dpr = Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)
   // Edge-detects play→pause so we can ADOPT the picture's real position into the
@@ -621,6 +651,13 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const tRef = useRef(playhead)
   const lastWroteRef = useRef(playhead)
   const lastStoreWriteAt = useRef(0)
+  // Paused-scrub pacing (preview/scrubRule.ts). `pausedSeekAt` backs the GLOBAL
+  // paused-seek budget — one outstanding seek across ALL source elements, not
+  // one per element — so a fast swipe across many clips can't queue a cold seek
+  // on every one of them into a single hardware decoder. `lastScrubAt` marks
+  // the scrub-activity window the seam warm-up walkers yield to.
+  const pausedSeekAtRef = useRef(0)
+  const lastScrubAtRef = useRef(0)
 
   // External playhead changes (scrub / word click / transcript double-click).
   useEffect(() => {
@@ -631,7 +668,13 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       // (especially rewind to 0 after editing at 3s) looked like an echoed
       // internal write and was ignored, leaving the private clock at 3s.
       lastWroteRef.current = playhead
-      audioEngineRef.current?.seek(playhead) // re-anchor the decoupled audio to the scrub
+      lastScrubAtRef.current = performance.now()
+      // The decoupled audio engine is deliberately NOT re-anchored here. While
+      // playing, the reconciler's >0.25s drift check re-anchors it on the next
+      // frame — coalescing a 60-event/s drag into at most one schedule rebuild
+      // per rAF (calling eng.seek() here rebuilt the entire Web Audio schedule
+      // on EVERY pointermove mid-drag — audible glitching + main-thread churn).
+      // While paused, seek() is a no-op by definition, so nothing is lost.
       if (!playingRef.current) {
         wcVideoReadyRef.current = false
         wcVideoWaitRef.current = 0
@@ -735,6 +778,14 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       const ordered = [...seams.filter((s) => s.at >= t), ...seams.filter((s) => s.at < t)]
       for (const s of ordered) {
         if (cancelled || playingRef.current || nativeActiveRef.current) return
+        // A scrub owns the decoder. Warm-up seeks issued DURING a drag contend
+        // with the scrub's own seeks (single hardware pipeline) and pile up
+        // behind it — then the play() right after the drag inherits a saturated
+        // decoder and wedges. Wait the drag out; the walker resumes after.
+        while (!cancelled && !playingRef.current && scrubActive(performance.now(), lastScrubAtRef.current)) {
+          await new Promise((r) => setTimeout(r, 100))
+        }
+        if (cancelled || playingRef.current || nativeActiveRef.current) return
         if (badRef.current.has(s.src)) continue
         const di = displayIdxAt(tRef.current)
         const shownSrc = di >= 0 ? segsRef.current[di].src : null
@@ -808,7 +859,9 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     const t = tRef.current
     const ordered = [...seams.filter((s) => s.at >= t), ...seams.filter((s) => s.at < t)]
     if (!ordered.length) return
-    wc.warmSeams(ordered, () => !playingRef.current)
+    // Same scrub-yield rule as the element walker: parking the warm pipe mid-drag
+    // restarts a decoder the scrub is actively using — the warm-up must wait.
+    wc.warmSeams(ordered, () => !playingRef.current && !scrubActive(performance.now(), lastScrubAtRef.current))
     return () => wc.cancelWarm()
     // buddySig captures the seam content; the refs are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1180,6 +1233,16 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       } else {
         // PAUSED: park every element; the LIVE one of the shown source on the exact
         // frame (element path only — the WC compositor fetches its own stills).
+        //
+        // GLOBAL paused-seek budget: per-element settled() alone let a fast swipe
+        // issue one cold seek on EVERY clip it crossed (each a new source = a new
+        // element with no in-flight seek) — a 1s drag across a dense timeline
+        // queued dozens of decoder seeks, and the play() that followed inherited
+        // a thrashed pipeline. One seek per PAUSED_SEEK_MIN_MS across all
+        // elements, latest-target-wins (this loop re-derives `want` from the live
+        // playhead every frame, so a skipped frame just means the next allowed
+        // seek lands exactly where the finger is by then).
+        const pausedSeekAllowed = shouldIssuePausedSeek(now, pausedSeekAtRef.current)
         const di = displayIdxAt(t)
         const showSrc = di >= 0 ? ss[di].src : null
         for (const [src, pair] of slotsRef.current) {
@@ -1191,7 +1254,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             if (!wcOnRef.current && slot === li && src === showSrc && di >= 0 && !badRef.current.has(src)) {
               const seg = ss[di]
               const want = seg.sourceStart + clamp(t - seg.start, 0, seg.len) * seg.speed
-              if (settled(v) && Math.abs(v.currentTime - want) > 0.03) seek(v, want)
+              if (pausedSeekAllowed && settled(v) && Math.abs(v.currentTime - want) > 0.03) {
+                pausedSeekAtRef.current = now
+                seek(v, want)
+              }
             }
           }
         }

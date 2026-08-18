@@ -458,6 +458,15 @@ export class WcPlayer {
     onProgress?.(total, total)
   }
 
+  /** Abandon any in-flight seam-cache build (playback started, or a newer cut
+   *  list is about to start one). The worker checks the generation on every
+   *  frame and bails immediately; entries already cached stay valid. Without
+   *  this, polish decode jobs kept the hardware decoder busy into the first
+   *  play() after Apply — the prime stall that read as a frozen engine. */
+  cancelCacheSeams(): void {
+    this.cacheGen++
+  }
+
   private dropSeam(src: string): void {
     for (const e of this.seamCache.get(src) ?? []) e.bmp.close()
     this.seamCache.delete(src)

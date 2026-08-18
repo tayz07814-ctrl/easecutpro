@@ -235,12 +235,28 @@ export default function Timeline({ mobile = false }: { mobile?: boolean }): JSX.
   const onRulerPointerDown = useCallback(
     (e: ReactPointerEvent) => {
       e.stopPropagation()
-      const seek = (cx: number): void => engine.setPlayhead(Math.max(0, frameFromClientX(cx)))
+      // rAF-coalesced, latest-position-wins. pointermove can fire faster than
+      // the frame rate, and every event used to become an engine setPlayhead →
+      // store write → preview adopt — i.e. the seek flood downstream. One write
+      // per frame is plenty; pointerup flushes the exact final position so the
+      // release frame is never left one rAF stale.
+      let latest = e.clientX
+      let raf = 0
+      const flush = (): void => {
+        raf = 0
+        engine.setPlayhead(Math.max(0, frameFromClientX(latest)))
+      }
+      const seek = (cx: number): void => {
+        latest = cx
+        if (!raf) raf = requestAnimationFrame(flush)
+      }
       seek(e.clientX)
       const move = (ev: PointerEvent): void => seek(ev.clientX)
       const up = (): void => {
         window.removeEventListener('pointermove', move)
         window.removeEventListener('pointerup', up)
+        if (raf) cancelAnimationFrame(raf)
+        flush() // trailing edge: land exactly where the finger was released
       }
       window.addEventListener('pointermove', move)
       window.addEventListener('pointerup', up)
