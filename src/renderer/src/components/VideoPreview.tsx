@@ -270,14 +270,14 @@ export default function VideoPreview(): JSX.Element {
     // returns to the live engine immediately.
     if (previewProxyMode && proxy.path) {
       return (
-        <div style={{ position: 'relative' }}>
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <ProxyPlayer path={proxy.path} total={proxy.duration} onFailed={proxy.reject} />
           <ProxyIndicator building={proxy.building} ready={!!proxy.path} />
         </div>
       )
     }
     return (
-      <div style={{ position: 'relative' }}>
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <DocPreview doc={docSnap.doc} />
         <ProxyIndicator building={proxy.building} ready={!!proxy.path} />
       </div>
