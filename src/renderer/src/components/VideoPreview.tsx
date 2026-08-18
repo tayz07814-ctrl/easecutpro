@@ -54,7 +54,7 @@ export default function VideoPreview(): JSX.Element {
   useEffect(() => {
     if (previewProxyMode && docSnap?.doc) proxy.buildNow()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewProxyMode])
+  }, [previewProxyMode, docSnap?.doc])
 
   // Keep ranges recomputed on edit changes; used to skip during playback.
   // The waveform makes cut edges snap to energy valleys (matches the export).
