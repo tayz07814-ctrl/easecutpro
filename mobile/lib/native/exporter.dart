@@ -208,10 +208,29 @@ class NativeExporter {
     }
   }
 
+  /// Cancel any in-progress background removal sequence.
+  Future<void> cancelBackground() async {
+    try {
+      await _m.invokeMethod('cancelBackground');
+    } catch (_) {}
+  }
+
   /// Segment a video at regular intervals. Returned times are local to [startMs]
   /// so the same mask sequence can be used by preview and export.
+  /// [onProgress] receives progress updates with (percent, currentFrame, totalFrames).
   Future<List<({int timeMs, String path})>> removeBackgroundSequence(
-      String uri, int startMs, int endMs, {int stepMs = 400}) async {
+      String uri, int startMs, int endMs, {int stepMs = 400,
+      void Function(double percent, int currentFrame, int totalFrames)? onProgress}) async {
+    StreamSubscription<dynamic>? sub;
+    if (onProgress != null) {
+      sub = _e.receiveBroadcastStream().listen((ev) {
+        final m = ev as Map;
+        final pct = (m['percent'] as num?)?.toDouble() ?? 0;
+        final cur = (m['currentFrame'] as num?)?.toInt() ?? 0;
+        final total = (m['totalFrames'] as num?)?.toInt() ?? 0;
+        onProgress(pct, cur, total);
+      });
+    }
     try {
       final r = await _m.invokeMethod<Map<dynamic, dynamic>>('removeBackgroundSequence', {
         'uri': uri,
@@ -227,6 +246,8 @@ class NativeExporter {
       ];
     } catch (_) {
       return const [];
+    } finally {
+      await sub?.cancel();
     }
   }
 

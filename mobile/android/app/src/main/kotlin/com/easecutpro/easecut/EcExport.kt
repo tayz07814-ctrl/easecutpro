@@ -46,11 +46,8 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.segmentation.SegmentationMask
-import com.google.mlkit.vision.segmentation.Segmentation
-import com.google.mlkit.vision.segmentation.Segmenter
-import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
+import com.easecutpro.easecut.background.BackgroundRemovalEngine
+import com.easecutpro.easecut.background.DeviceCapability
 import com.google.common.collect.ImmutableList
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -97,6 +94,10 @@ class EcExport(
     // Map a pass's 0–100 progress onto a slice of the overall bar (two-pass export).
     private var progBase = 0
     private var progScale = 1f
+
+    // Background removal engine — created lazily on first use.
+    private val bgEngine by lazy { BackgroundRemovalEngine(context) }
+    @Volatile private var bgCancelled = false
 
     private val poller = object : Runnable {
         override fun run() {
@@ -160,6 +161,7 @@ class EcExport(
             "frame" -> frame(call, result)
             "removeBackground" -> removeBackground(call, result)
             "removeBackgroundSequence" -> removeBackgroundSequence(call, result)
+            "cancelBackground" -> { bgCancelled = true; result.success(mapOf("ok" to true)) }
             "waveform" -> waveform(call, result)
             "duration" -> duration(call, result)
             else -> result.notImplemented()
@@ -321,7 +323,7 @@ class EcExport(
         }.start()
     }
 
-    /** Auto background removal via ML Kit Selfie Segmentation. */
+    /** Auto background removal via ONNX Runtime. */
     private fun removeBackground(call: MethodCall, result: MethodChannel.Result) {
         val uri = call.argument<String>("uri")
         val timeMs = (call.argument<Number>("timeMs"))?.toLong() ?: 0L
@@ -333,13 +335,14 @@ class EcExport(
             try {
                 val bitmap = loadBitmap(uri, timeMs)
                     ?: throw IllegalStateException("could not load frame")
-                val segmenter = newSegmenter()
-                val mask = segmentBitmap(bitmap, segmenter)
-                segmenter.close()
-                val out = saveMask(mask)
-                mask.recycle()
+                bgEngine.initialize()
+                val path = bgEngine.removeBackground(bitmap, isVideoFrame = false)
                 bitmap.recycle()
-                main.post { result.success(mapOf("path" to out.absolutePath)) }
+                if (path != null) {
+                    main.post { result.success(mapOf("path" to path)) }
+                } else {
+                    main.post { result.error("ec_export", "segmentation returned no mask", null) }
+                }
             } catch (t: Throwable) {
                 main.post { result.error("ec_export", "removeBackground failed: ${t.message}", null) }
             }
@@ -348,7 +351,7 @@ class EcExport(
 
     /** Segment sampled frames so a moving person gets a moving mask instead of a
      * single mask copied from the first frame. Times returned to Dart are local to
-     * [startMs]. */
+     * [startMs]. Reports progress via the EventChannel. */
     private fun removeBackgroundSequence(call: MethodCall, result: MethodChannel.Result) {
         val uri = call.argument<String>("uri")
         val startMs = (call.argument<Number>("startMs"))?.toLong() ?: 0L
@@ -358,84 +361,61 @@ class EcExport(
             result.error("ec_export", "invalid segmentation range", null)
             return
         }
+        bgCancelled = false
         Thread {
             try {
-                val segmenter = newSegmenter()
+                bgEngine.initialize()
+                bgEngine.resetTemporal()
                 val masks = ArrayList<Map<String, Any>>()
+                val totalFrames = ((endMs - startMs + stepMs - 1) / stepMs).toInt().coerceAtLeast(1)
+                var frameIdx = 0
                 var sourceMs = startMs
                 while (sourceMs < endMs) {
+                    if (bgCancelled) {
+                        main.post { result.error("ec_export", "cancelled", null) }
+                        return@Thread
+                    }
                     val bitmap = loadBitmap(uri, sourceMs)
                     if (bitmap != null) {
-                        val mask = segmentBitmap(bitmap, segmenter)
-                        val file = saveMask(mask)
-                        masks.add(mapOf("timeMs" to (sourceMs - startMs), "path" to file.absolutePath))
-                        mask.recycle()
+                        val path = bgEngine.removeBackground(bitmap, isVideoFrame = true)
                         bitmap.recycle()
+                        if (path != null) {
+                            masks.add(mapOf("timeMs" to (sourceMs - startMs), "path" to path))
+                        }
+                    }
+                    frameIdx++
+                    // Throttle progress updates: send at most every 3 frames
+                    if (frameIdx % 3 == 0 || frameIdx >= totalFrames) {
+                        val pct = (frameIdx * 100.0 / totalFrames).coerceIn(0.0, 100.0)
+                        main.post {
+                            events?.success(mapOf(
+                                "percent" to pct,
+                                "currentFrame" to frameIdx,
+                                "totalFrames" to totalFrames,
+                            ))
+                        }
                     }
                     sourceMs += stepMs
                 }
                 // Always include the final frame when the range is short or the
                 // last sample landed before the end.
                 if (masks.isEmpty() || sourceMs - stepMs < endMs - stepMs) {
-                    val bitmap = loadBitmap(uri, (endMs - 1L).coerceAtLeast(startMs))
-                    if (bitmap != null) {
-                        val mask = segmentBitmap(bitmap, segmenter)
-                        val file = saveMask(mask)
-                        masks.add(mapOf("timeMs" to (endMs - startMs - 1L).coerceAtLeast(0L), "path" to file.absolutePath))
-                        mask.recycle()
-                        bitmap.recycle()
+                    if (!bgCancelled) {
+                        val bitmap = loadBitmap(uri, (endMs - 1L).coerceAtLeast(startMs))
+                        if (bitmap != null) {
+                            val path = bgEngine.removeBackground(bitmap, isVideoFrame = true)
+                            bitmap.recycle()
+                            if (path != null) {
+                                masks.add(mapOf("timeMs" to (endMs - startMs - 1L).coerceAtLeast(0L), "path" to path))
+                            }
+                        }
                     }
                 }
-                segmenter.close()
                 main.post { result.success(mapOf("masks" to masks)) }
             } catch (t: Throwable) {
                 main.post { result.error("ec_export", "segmentation sequence failed: ${t.message}", null) }
             }
         }.start()
-    }
-
-    private fun newSegmenter(): Segmenter = Segmentation.getClient(
-        SelfieSegmenterOptions.Builder()
-            .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE)
-            .build()
-    )
-
-    private fun segmentBitmap(bitmap: Bitmap, segmenter: Segmenter): Bitmap {
-        val input = InputImage.fromBitmap(bitmap, 0)
-        val latch = java.util.concurrent.CountDownLatch(1)
-        var maskResult: SegmentationMask? = null
-        var maskError: Exception? = null
-        segmenter.process(input)
-            .addOnSuccessListener { m -> maskResult = m; latch.countDown() }
-            .addOnFailureListener { e -> maskError = e; latch.countDown() }
-        if (!latch.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
-            throw IllegalStateException("segmentation timed out")
-        }
-        if (maskError != null) throw maskError!!
-        val mask = maskResult ?: throw IllegalStateException("segmentation returned no mask")
-        val maskW = mask.width
-        val maskH = mask.height
-        val fb = mask.buffer.asFloatBuffer()
-        val small = Bitmap.createBitmap(maskW, maskH, Bitmap.Config.ARGB_8888)
-        val pixels = IntArray(maskW * maskH)
-        fb.rewind()
-        for (i in pixels.indices) {
-            val confidence = if (fb.hasRemaining()) fb.get() else 0f
-            val alpha = (confidence.coerceIn(0f, 1f) * 255f).toInt()
-            pixels[i] = (alpha shl 24) or 0x00FFFFFF
-        }
-        small.setPixels(pixels, 0, maskW, 0, 0, maskW, maskH)
-        return Bitmap.createScaledBitmap(small, bitmap.width, bitmap.height, true).also {
-            if (it !== small) small.recycle()
-        }
-    }
-
-    private fun saveMask(mask: Bitmap): File {
-        val dir = File(context.filesDir, "cutout_masks")
-        dir.mkdirs()
-        return File(dir, "mask_${System.currentTimeMillis()}_${kotlin.random.Random.nextInt(10000)}.png").also { file ->
-            FileOutputStream(file).use { mask.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        }
     }
 
     private fun loadBitmap(uri: String, timeMs: Long): Bitmap? {

@@ -101,13 +101,10 @@ dependencies {
     implementation("androidx.media3:media3-common:$media3")
     // ImmutableList for OverlayEffect / Effects.
     implementation("com.google.guava:guava:33.0.0-android")
-    // Silero VAD (Silence Mastery — the SAME engine the web app runs). The ONNX
-    // runtime lives in the crash-isolated :vadengine process, so a native fault
-    // there can never take the app down. 1.20 had known native crashes on some
-    // budget SoCs (and no 16KB-page support) — pin the current stable instead.
+    // ONNX Runtime for on-device ML inference (Silero VAD + background removal).
+    // R8 was renaming ai.onnxruntime.* — whose native code resolves those
+    // classes BY NAME — so every session.run() aborted the engine process
+    // with "JNI DETECTED ERROR: java_class == null" (SIGABRT). Belt and
+    // braces: shrinking off, plus keep rules in case it is turned back on.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.28.0")
-    // ML Kit Selfie Segmentation — on-device person/background separation for the
-    // Cutout (background-removal) tool. The model is downloaded once via Play
-    // Services and runs fully offline after that.
-    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
 }

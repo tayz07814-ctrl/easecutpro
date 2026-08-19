@@ -48,6 +48,11 @@ class _CutoutSheetState extends State<CutoutSheet> {
   List<({int timeMs, String path})> _autoMaskRows = const [];
   String? _error;
 
+  // Video sequence progress
+  double _progress = 0;
+  int _currentFrame = 0;
+  int _totalFrames = 0;
+
   // Manual brush state
   Uint8List? _frameBytes;
   ui.Image? _frameImage;
@@ -90,6 +95,9 @@ class _CutoutSheetState extends State<CutoutSheet> {
     setState(() {
       _processing = true;
       _error = null;
+      _progress = 0;
+      _currentFrame = 0;
+      _totalFrames = 0;
     });
     final o = widget.overlay;
     final uri = o.isVideo ? 'file://${o.videoPath}' : 'file://${_overlayImagePath(o)}';
@@ -100,7 +108,16 @@ class _CutoutSheetState extends State<CutoutSheet> {
           : widget.sourceStartMs + 1;
       rows = await widget.exporter.removeBackgroundSequence(
           uri, widget.sourceStartMs, end,
-          stepMs: 400);
+          stepMs: 400,
+          onProgress: (pct, cur, total) {
+            if (mounted) {
+              setState(() {
+                _progress = pct;
+                _currentFrame = cur;
+                _totalFrames = total;
+              });
+            }
+          });
     } else {
       final path = await widget.exporter.removeBackground(uri, 0);
       rows = path == null ? const [] : [(timeMs: 0, path: path)];
@@ -115,6 +132,16 @@ class _CutoutSheetState extends State<CutoutSheet> {
         _error = 'Could not remove background. Try manual brush mode.';
       }
     });
+  }
+
+  void _cancelAuto() {
+    widget.exporter.cancelBackground();
+    if (mounted) {
+      setState(() {
+        _processing = false;
+        _error = 'Cancelled.';
+      });
+    }
   }
 
   String _overlayImagePath(ImageOverlay o) {
@@ -233,12 +260,43 @@ class _CutoutSheetState extends State<CutoutSheet> {
 
   Widget _autoTab() {
     if (_processing) {
-      return const Center(child: Column(
+      return Center(child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           CircularProgressIndicator(color: Ec.indigo),
           SizedBox(height: 12),
-          Text('Detecting person…', style: TextStyle(color: Ec.textDim, fontSize: 13)),
+          Text(
+            _totalFrames > 0
+                ? 'Background removal  ${_progress.round()}%  ($_currentFrame / $_totalFrames frames)'
+                : 'Detecting person…',
+            style: const TextStyle(color: Ec.textDim, fontSize: 13),
+          ),
+          if (_totalFrames > 0) ...[
+            SizedBox(height: 8),
+            SizedBox(
+              width: 200,
+              child: LinearProgressIndicator(
+                value: _progress / 100.0,
+                backgroundColor: Ec.chip,
+                color: Ec.indigo,
+                minHeight: 4,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ],
+          SizedBox(height: 16),
+          GestureDetector(
+            onTap: _cancelAuto,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              decoration: BoxDecoration(
+                color: Ec.card,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Ec.border),
+              ),
+              child: const Text('Cancel', style: TextStyle(color: Ec.textDim, fontSize: 13)),
+            ),
+          ),
         ],
       ));
     }
