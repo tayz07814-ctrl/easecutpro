@@ -24,21 +24,23 @@ import kotlin.math.sqrt
  * the web app and on this phone.
  *
  * THE PIPELINE (store.ts runRetakeSilence, Silero-only default), in order:
- *   1. Silero VAD (silero_vad_legacy.onnx via vad-web's NonRealTimeVAD
+ *   1. Noise removal on the decoded 16 kHz mono PCM.
+ *   2. +40 dB gain on the cleaned PCM before model normalization.
+ *   3. Silero VAD (silero_vad_legacy.onnx via vad-web's NonRealTimeVAD
  *      semantics): 1536-sample frames @16 kHz (96 ms), speech threshold 0.55
  *      (negative 0.40), ONE redemption frame ends a segment, segments with
  *      < 250 ms of speech-positive frames are misfires. Speech segments invert
  *      to silence regions ≥ minSilenceS (redemption overshoot subtracted from
  *      each non-EOF segment end first).
- *   2. breathRefine (Flash / Cut Throat): walk each region's LEFT edge (the
+ *   4. breathRefine (Flash / Cut Throat): walk each region's LEFT edge (the
  *      sentence ENDING) backward over 20 ms RMS frames quieter than the clip's
  *      own voice cutoff — breaths score as speech to the VAD, so the cut lands
  *      where the VOICE stops. Endings only; onsets are never walked. Cap 1.5 s.
- *   3. padTrimRegions: padLeft/padRight KEEP silence at the region's edges;
+ *   5. padTrimRegions: padLeft/padRight KEEP silence at the region's edges;
  *      trimLeft/trimRight cut PAST the detected edge into the sentence ending /
  *      next sentence's onset. Regions touching the media's start/end stay
  *      flush with it.
- *   4. unionCutRegions: sort, join regions within 20 ms, drop slivers < 30 ms.
+ *   6. unionCutRegions: sort, join regions within 20 ms, drop slivers < 30 ms.
  * No transcript involvement — Silero's ear is the truth on this engine.
  *
  * THIS CODE RUNS IN ITS OWN OS PROCESS (see [VadProvider], android:process=
@@ -110,8 +112,12 @@ object SilenceEngine {
         breathRefine: Boolean
     ): Pair<List<DoubleArray>, String> {
         stage(context, "audio decode")
-        val (pcm, count) = decodeMono16k(context, uri)
+        val (decodedPcm, count) = decodeMono16k(context, uri)
         if (count <= 0) throw IllegalStateException("decoder produced no audio samples")
+        stage(context, "noise removal")
+        val denoisedPcm = NoiseRemovalProcessor.process(decodedPcm, count)
+        stage(context, "audio gain +40 dB")
+        val pcm = VadGainProcessor.process(denoisedPcm, count)
         val durationS = count.toDouble() / TARGET_RATE
 
         stage(context, "silero model load")
@@ -171,7 +177,7 @@ object SilenceEngine {
         }
     }
 
-    // --- stage 1: Silero speech → silence regions ----------------------------
+    // --- stage 3: Silero speech → silence regions ----------------------------
 
     /**
      * vad-web NonRealTimeVAD semantics over the decoded PCM: full 1536-sample
@@ -354,7 +360,7 @@ object SilenceEngine {
         return kept to stats
     }
 
-    // --- stage 2: breath cleanup (silenceMastery.ts refineRegionEdgesByRms) ---
+    // --- stage 4: breath cleanup (silenceMastery.ts refineRegionEdgesByRms) ---
 
     /** Per-frame RMS level in dBFS — NON-overlapping 20 ms frames, matching the
      *  web's frameRmsDb exactly. */
@@ -413,7 +419,7 @@ object SilenceEngine {
         return merged
     }
 
-    // --- stage 3+4: pads/trims + union (silenceMastery.ts) --------------------
+    // --- stages 5+6: pads/trims + union (silenceMastery.ts) -------------------
 
     /** Pads KEEP silence at the region's edges; trims cut PAST the detected edge
      *  into speech. Regions touching the media's start/end stay flush with it. */
