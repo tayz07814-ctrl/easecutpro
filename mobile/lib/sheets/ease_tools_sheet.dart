@@ -169,7 +169,7 @@ class _EaseToolsSheetState extends State<EaseToolsSheet> {
                         children: [
                           Icon(Icons.volume_off, size: 16, color: Color(0xFF4FD1C5)),
                           SizedBox(width: 7),
-                          Text('Clean Silence only (Silero)',
+                          Text('Remove silence only',
                               style: TextStyle(color: Color(0xFFCDEFEB), fontSize: 13, fontWeight: FontWeight.w600)),
                         ],
                       ),
