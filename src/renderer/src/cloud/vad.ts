@@ -65,12 +65,16 @@ function cachedModelFetcher(url: string): Promise<ArrayBuffer> {
   return modelPromise
 }
 
-function uuid(): string {
-  try {
-    return crypto.randomUUID()
-  } catch {
-    return `sil-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+/** Apply +20 dB gain to Float32Array audio samples before Silero VAD.
+ *  Silero expects normalized [-1, 1] input; 20 dB = 10x amplitude.
+ *  Clamp to [-1, 1] to avoid hard clipping artifacts. */
+function applyVadGain(float32: Float32Array, gainDb = 20): Float32Array {
+  const gain = Math.pow(10, gainDb / 20) // 20 dB = 10x
+  const out = new Float32Array(float32.length)
+  for (let i = 0; i < float32.length; i++) {
+    out[i] = Math.max(-1, Math.min(1, float32[i] * gain))
   }
+  return out
 }
 
 /** Sort + merge overlapping/touching intervals (the Node mergeRemoveRegions). */
@@ -112,8 +116,10 @@ export async function detectSilenceFloat32(
   })
 
   // 1. raw SPEECH segments (vad-web reports ms)
+  // Apply +20 dB gain before Silero VAD (matches Android native pipeline)
+  const boosted = applyVadGain(float32, 20)
   const speech: { start: number; end: number }[] = []
-  for await (const seg of vad.run(float32, sampleRate)) {
+  for await (const seg of vad.run(boosted, sampleRate)) {
     speech.push({ start: seg.start / 1000, end: seg.end / 1000 })
   }
 
