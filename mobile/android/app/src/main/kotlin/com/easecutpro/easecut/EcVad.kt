@@ -107,6 +107,7 @@ class EcVad(
         extras.putDouble("trimLeftMs", (call.argument<Number>("trimLeftMs"))?.toDouble() ?: 30.0)
         extras.putDouble("trimRightMs", (call.argument<Number>("trimRightMs"))?.toDouble() ?: 10.0)
         extras.putBoolean("breathRefine", call.argument<Boolean>("breathRefine") ?: true)
+        extras.putBoolean("noiseRemoval", call.argument<Boolean>("noiseRemoval") ?: true)
 
         // One run at a time — a second concurrent run would double the decode + ONNX
         // working set at exactly the moment memory is tightest.
