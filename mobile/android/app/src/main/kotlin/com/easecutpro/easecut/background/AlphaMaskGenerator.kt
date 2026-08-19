@@ -14,7 +14,7 @@ import kotlin.math.min
  *   1. Sigmoid activation on raw logits → [0, 1] confidence
  *   2. Configurable threshold / soft mapping
  *   3. Spatial smoothing (box blur) for cleaner edges
- *   4. Output: white/opaque PNG where alpha = person confidence
+ *   4. Output: ARGB_8888 bitmap where alpha = person confidence
  */
 object AlphaMaskGenerator {
 
@@ -39,10 +39,11 @@ object AlphaMaskGenerator {
     ): Bitmap {
         val total = modelSize * modelSize
 
-        // 1. Model already outputs probabilities [0..1] — apply threshold + soft mapping
+        // 1. Model outputs raw logits — apply sigmoid → [0, 1] confidence
         val alpha = FloatArray(total)
         for (i in 0 until total) {
-            val prob = logits[i].coerceIn(0f, 1f)
+            val logit = logits[i].coerceIn(-10f, 10f)
+            val prob = 1.0f / (1.0f + kotlin.math.exp(-logit))
             // Soft mapping: below threshold ramps down smoothly
             alpha[i] = if (prob >= threshold) {
                 // Remap [threshold..1] → [0..1] for better edge contrast

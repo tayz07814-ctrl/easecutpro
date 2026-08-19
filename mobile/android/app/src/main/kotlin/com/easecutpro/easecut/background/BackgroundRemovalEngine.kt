@@ -115,10 +115,11 @@ class BackgroundRemovalEngine(private val context: Context) {
         val effectiveThreshold = threshold ?: DeviceCapability.confidenceThreshold(currentTier)
         val logits = segmenter.segment(bitmap) ?: return null
         val stabilized = if (isVideoFrame) temporalStabilizer?.stabilize(logits, segmenter.modelSize) ?: logits else logits
-        // Model already outputs [0..1] — apply threshold directly
+        // Model outputs raw logits — apply sigmoid
         val total = segmenter.modelSize * segmenter.modelSize
         return FloatArray(total) { i ->
-            val prob = stabilized[i].coerceIn(0f, 1f)
+            val logit = stabilized[i].coerceIn(-10f, 10f)
+            val prob = 1.0f / (1.0f + kotlin.math.exp(-logit))
             if (prob >= effectiveThreshold) ((prob - effectiveThreshold) / (1f - effectiveThreshold)).coerceIn(0f, 1f) else 0f
         }
     }

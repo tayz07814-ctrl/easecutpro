@@ -121,7 +121,7 @@ private class MaskShaderProgram(
             varying vec2 vTex;
             void main() {
               vec4 video = texture2D(uVideoTexSampler, vTex);
-              float alpha = texture2D(uMaskTexSampler, vec2(vTex.x, 1.0 - vTex.y)).a;
+              float alpha = texture2D(uMaskTexSampler, vTex).a;
               gl_FragColor = vec4(video.rgb, video.a * alpha);
             }
         """

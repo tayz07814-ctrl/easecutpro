@@ -67,11 +67,12 @@ class TemporalMaskStabilizer(
         prevSize = 0
     }
 
-    /** Clamp model output to [0..1] alpha range. */
+    /** Convert logits to [0..1] via sigmoid for motion comparison. */
     private fun toAlpha(alphas: FloatArray, total: Int): FloatArray {
         val out = FloatArray(total)
         for (i in 0 until total) {
-            out[i] = alphas[i].coerceIn(0f, 1f)
+            val logit = alphas[i].coerceIn(-10f, 10f)
+            out[i] = 1.0f / (1.0f + kotlin.math.exp(-logit))
         }
         return out
     }
