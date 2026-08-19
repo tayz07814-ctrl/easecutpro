@@ -137,6 +137,11 @@ export default function SequencePreview(): JSX.Element {
   const setPlayhead = useStore((s) => s.setPlayhead)
   const waveform = useStore((s) => s.waveform) // valley-snapped cut edges (matches export)
   const ref = useRef<HTMLVideoElement>(null)
+  // Hidden preload element — warms the browser's media cache for the next source
+  // so the main video's remount + seek at a cut boundary is near-instant.
+  const preloadRef = useRef<HTMLVideoElement>(null)
+  const prewarmIdxRef = useRef(-1)
+  const PREWARM_LEAD_S = 0.5 // start preloading this far before the cut
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageSize, setStageSize] = useState({ w: 0, h: 0 })
 
@@ -438,6 +443,18 @@ export default function SequencePreview(): JSX.Element {
       // line + overlay progress glide (they read playClock at 60fps) instead of
       // freezing while the store playhead only ticks ~4Hz via onTimeUpdate.
       playClock.t = active.start + Math.min(active.len, Math.max(0, (ct - active.sourceStart) / (active.speed ?? 1)))
+      // Pre-warm the hidden preload element: when approaching the next cut,
+      // load the next source so the browser's media cache is hot when the
+      // main video remounts at the boundary. Idempotent per cut.
+      const nextIdx = idxRef.current + 1
+      const next = ss[nextIdx]
+      if (next && active.sourceEnd - ct < PREWARM_LEAD_S * (active.speed ?? 1)) {
+        const pw = preloadRef.current
+        if (pw && prewarmIdxRef.current !== nextIdx && next.src !== active.src) {
+          prewarmIdxRef.current = nextIdx
+          pw.src = mediaSrc(next.src)
+        }
+      }
       if (ct >= active.sourceEnd - 0.04) {
         const nextIdx = idxRef.current + 1
         const next = ss[nextIdx]
@@ -721,6 +738,10 @@ export default function SequencePreview(): JSX.Element {
             />
             {frame.width > 0 && <OverlayLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}
             {frame.width > 0 && <TextLayer frame={{ left: 0, top: 0, width: frame.width, height: frame.height }} />}
+            {/* Hidden preload element: warms the browser media cache for the next cut source */}
+            <video ref={preloadRef} preload="auto" muted playsInline
+              style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+            />
           </div>
         </div>
       </div>
