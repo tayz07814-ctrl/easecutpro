@@ -31,9 +31,6 @@ class SilenceSettings {
   /// Cut Lord's "also clean silence" toggle.
   static bool cutSilence = true;
 
-  /// Apply noise removal +40 dB gain before Silero VAD.
-  static bool noiseRemoval = true;
-
   /// Review-before-apply. FALSE (default) stages the cuts on the timeline for
   /// inspection; TRUE commits them the moment they are found.
   static bool autoApplyCuts = false;

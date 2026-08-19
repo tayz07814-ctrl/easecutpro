@@ -39,9 +39,6 @@ class NativeVad {
     /// Breath cleanup at sentence endings (RMS edge refinement) — walks each
     /// cut's left edge back over the exhale so it lands where the voice stops.
     bool breathRefine = true,
-
-    /// Apply noise removal +40 dB gain before Silero VAD. Default true.
-    bool noiseRemoval = true,
   }) async {
     try {
       final res = await _m.invokeMethod<Map<dynamic, dynamic>>('detectSilences', {
@@ -52,7 +49,6 @@ class NativeVad {
         'trimLeftMs': trimLeftMs,
         'trimRightMs': trimRightMs,
         'breathRefine': breathRefine,
-        'noiseRemoval': noiseRemoval,
       });
       if (res == null) return const SilenceResult([], '');
       final regions = [

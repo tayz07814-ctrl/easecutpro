@@ -1627,7 +1627,6 @@ class _EditorScreenState extends State<EditorScreen> {
         trimLeftMs: SilenceSettings.trimLeftMs.toDouble(),
         trimRightMs: SilenceSettings.trimRightMs.toDouble(),
         breathRefine: SilenceSettings.breathRefine,
-        noiseRemoval: SilenceSettings.noiseRemoval,
       ).timeout(const Duration(minutes: 4), onTimeout: () {
         timedOut = true;
         return const SilenceResult([], '');

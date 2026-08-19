@@ -176,20 +176,6 @@ class _EaseToolsSheetState extends State<EaseToolsSheet> {
                     ),
                   ),
                   const SizedBox(height: 6),
-                  // Noise removal toggle for Silero VAD.
-                  EcRow(
-                    label: 'Noise removal +40 dB gain',
-                    trailing: EcToggle(
-                      value: SilenceSettings.noiseRemoval,
-                      onChanged: (v) => setState(() => SilenceSettings.noiseRemoval = v),
-                    ),
-                  ),
-                  Text(
-                    'Removes stationary noise then boosts the signal before Silero VAD. '
-                    'Disable for raw VAD on the original audio.',
-                    style: const TextStyle(color: Ec.textFaint, fontSize: 11, height: 1.4),
-                  ),
-                  const SizedBox(height: 8),
                   // Review-before-apply. Default OFF = cuts are staged on the
                   // timeline for inspection instead of committing straight away.
                   EcRow(

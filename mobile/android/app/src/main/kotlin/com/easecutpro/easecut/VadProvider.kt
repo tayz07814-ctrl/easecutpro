@@ -41,8 +41,7 @@ class VadProvider : ContentProvider() {
                 extras?.getDouble("padRightMs", 0.0) ?: 0.0,
                 extras?.getDouble("trimLeftMs", 30.0) ?: 30.0,
                 extras?.getDouble("trimRightMs", 10.0) ?: 10.0,
-                extras?.getBoolean("breathRefine", true) ?: true,
-                extras?.getBoolean("noiseRemoval", true) ?: true
+                extras?.getBoolean("breathRefine", true) ?: true
             )
             val flat = DoubleArray(regions.size * 2)
             for (i in regions.indices) {

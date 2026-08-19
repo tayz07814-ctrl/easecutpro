@@ -52,9 +52,9 @@ object NoiseRemovalProcessor {
     }
 }
 
-/** Second Silero input processor: apply the requested +40 dB input boost. */
+/** Second Silero input processor: apply the requested +20 dB input boost. */
 object VadGainProcessor {
-    const val GAIN_DB = 40.0
+    const val GAIN_DB = 20.0
     private val gain = 10.0.pow(GAIN_DB / 20.0)
 
     fun process(input: ShortArray, count: Int): ShortArray {
