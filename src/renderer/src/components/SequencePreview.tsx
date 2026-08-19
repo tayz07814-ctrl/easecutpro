@@ -141,7 +141,7 @@ export default function SequencePreview(): JSX.Element {
   // so the main video's remount + seek at a cut boundary is near-instant.
   const preloadRef = useRef<HTMLVideoElement>(null)
   const prewarmIdxRef = useRef(-1)
-  const PREWARM_LEAD_S = 0.5 // start preloading this far before the cut
+  const PREWARM_LEAD_S = 2 // start preloading this far before the cut
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageSize, setStageSize] = useState({ w: 0, h: 0 })
 
