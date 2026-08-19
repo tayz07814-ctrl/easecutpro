@@ -115,14 +115,15 @@ object SilenceEngine {
 stage(context, "audio decode")
         val (decodedPcm, count) = decodeMono16k(context, uri)
         if (count <= 0) throw IllegalStateException("decoder produced no audio samples")
-        val pcm = if (noiseRemoval) {
+        val denoisedPcm = if (noiseRemoval) {
             stage(context, "noise removal")
-            val denoisedPcm = NoiseRemovalProcessor.process(decodedPcm, count)
-            stage(context, "audio gain +40 dB")
-            VadGainProcessor.process(denoisedPcm, count)
+            NoiseRemovalProcessor.process(decodedPcm, count)
         } else {
             decodedPcm
         }
+        // +40 dB gain is always applied before Silero VAD
+        stage(context, "audio gain +40 dB")
+        val pcm = VadGainProcessor.process(denoisedPcm, count)
         val durationS = count.toDouble() / TARGET_RATE
 
         stage(context, "silero model load")
