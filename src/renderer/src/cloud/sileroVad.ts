@@ -91,8 +91,14 @@ export async function detectSileroSilences(
   })
 
   // 1. raw SPEECH segments (vad-web reports ms)
+  // +20 dB gain preprocessing (matches Android native pipeline)
+  const gain = Math.pow(10, 20 / 20)
+  const boosted = new Float32Array(float32.length)
+  for (let i = 0; i < float32.length; i++) {
+    boosted[i] = Math.max(-1, Math.min(1, float32[i] * gain))
+  }
   const speech: { start: number; end: number }[] = []
-  for await (const seg of vad.run(float32, sampleRate)) {
+  for await (const seg of vad.run(boosted, sampleRate)) {
     speech.push({ start: seg.start / 1000, end: seg.end / 1000 })
   }
 
