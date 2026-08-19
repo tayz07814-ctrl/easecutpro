@@ -95,7 +95,6 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _scrubbing = false;
   bool _loop = false; // transport loop toggle — replay from 0 when playback ends
   bool _previewExpanded = false; // fullscreen-preview mode (hides timeline + dock)
-  String? _preparedAudioPath;
   bool _preparing = false;
   double _preparingProgress = 0;
   String _preparingMessage = 'Preparing video for editing…';

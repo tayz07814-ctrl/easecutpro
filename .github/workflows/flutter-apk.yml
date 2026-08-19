@@ -9,7 +9,7 @@ name: Flutter native APK (0.01)
 on:
   workflow_dispatch:
   push:
-    branches: [easecut0.01, claude/native-apk-build-status-7xxie2]
+    branches: [native/android-final]
     paths:
       - 'mobile/**'
       - '.github/workflows/flutter-apk.yml'
