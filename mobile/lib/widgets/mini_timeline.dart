@@ -1117,8 +1117,9 @@ class _MiniTimelineState extends State<MiniTimeline> {
                 final targetLane =
                     (_grabStartLane + (d.offsetFromOrigin.dy / (_laneH + 3)).round()).clamp(0, 99).toInt();
                 if (targetLane != o.lane) widget.onImageLaneChange?.call(o, targetLane);
-                if (!_trackTransferRequested && _grabStartLane == 0 &&
-                    d.offsetFromOrigin.dy < -(_laneH + 3)) {
+                final rowsAbove = _grabStartLane + 1;
+                if (!_trackTransferRequested &&
+                    d.offsetFromOrigin.dy < -rowsAbove * (_laneH + 3)) {
                   _trackTransferRequested = true;
                   if (o.isVideo) widget.onImagePromote?.call(o);
                 }

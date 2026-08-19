@@ -1016,17 +1016,23 @@ class _EditorScreenState extends State<EditorScreen> {
     final start = _model.clipStartMs(index);
     final clip = _model.takePrimaryClip(index);
     if (clip == null) return;
+    final end = start + clip.timelineLenMs;
     final overlay = ImageOverlay(
       videoPath: clip.sourcePath,
       startMs: start,
-      endMs: start + clip.timelineLenMs,
+      endMs: end,
       speed: clip.speed,
       volume: clip.volume,
       cropL: clip.cropL,
       cropT: clip.cropT,
       cropR: clip.cropR,
       cropB: clip.cropB,
-      lane: 0,
+      bgMode: clip.bgMode,
+      maskPath: clip.maskPath,
+      maskFrames: List<BackgroundMaskFrame>.from(clip.maskFrames),
+      // Demotion always creates a new visual track. This keeps the moved main
+      // clip separate from every existing overlay, regardless of timing.
+      lane: _nextImageLane(),
     );
     setState(() {
       _images.add(overlay);
@@ -1043,7 +1049,9 @@ class _EditorScreenState extends State<EditorScreen> {
     }
     _pushHistory();
     final sourceLen = ((overlay.endMs - overlay.startMs) * overlay.speed).round().clamp(100, 1 << 30).toInt();
-    final insertAt = _model.clipIndexAt(overlay.startMs).clamp(0, _model.clips.length).toInt();
+    // Primary clips are contiguous. Pick the nearest boundary, including the
+    // end of the sequence, rather than inserting inside/over a primary clip.
+    final insertAt = _model.primaryInsertIndexAt(overlay.startMs);
     _model.insertPrimaryClip(insertAt, EcClip(overlay.videoPath!, 0, sourceLen, mediaDurationMs: sourceLen,
         speed: overlay.speed, volume: overlay.volume));
     setState(() {
@@ -1177,8 +1185,25 @@ class _EditorScreenState extends State<EditorScreen> {
       [for (final t in _texts) if (t.isCaption == captions) [t.startMs, t.endMs, t.lane]];
 
   /// `[start, end, lane]` spans for the image / PiP track.
-  List<List<int>> _imageLaneSpans() =>
-      [for (final o in _images) [o.startMs, o.endMs, o.lane]];
+  List<List<int>> _imageLaneSpans({ImageOverlay? excluding}) => [
+        for (final o in _images)
+          if (!identical(o, excluding)) [o.startMs, o.endMs, o.lane]
+      ];
+
+  bool _imageLaneHasRoom(ImageOverlay o, int lane, int startMs, int endMs) {
+    for (final span in _imageLaneSpans(excluding: o)) {
+      if (span[2] == lane && startMs < span[1] && endMs > span[0]) return false;
+    }
+    return true;
+  }
+
+  int _nextImageLane() {
+    var highest = -1;
+    for (final o in _images) {
+      if (o.lane > highest) highest = o.lane;
+    }
+    return highest + 1;
+  }
 
   /// Hold-drag an overlay ANYWHERE on the time axis. The new start is bounded only
   /// by the timeline itself; when it lands on top of a neighbour the block HOPS to
@@ -3093,12 +3118,18 @@ class _EditorScreenState extends State<EditorScreen> {
             final start = (o.startMs + dMs).clamp(0, (_totalMs - len).clamp(0, 1 << 30)).toInt();
             o.startMs = start;
             o.endMs = start + len;
+            if (!_imageLaneHasRoom(o, o.lane, o.startMs, o.endMs)) {
+              o.lane = _freeLane(_imageLaneSpans(excluding: o), o.startMs, o.endMs);
+            }
           });
         },
         onImageLaneChange: (o, lane) {
           setState(() {
             _selectedImage = o;
-            o.lane = lane;
+            final safeLane = _imageLaneHasRoom(o, lane, o.startMs, o.endMs)
+                ? lane
+                : _freeLane(_imageLaneSpans(excluding: o), o.startMs, o.endMs);
+            o.lane = safeLane;
             // Remove empty visual lanes while preserving the relative order of
             // every remaining overlay track.
             final used = _images.map((x) => x.lane).toSet().toList()..sort();

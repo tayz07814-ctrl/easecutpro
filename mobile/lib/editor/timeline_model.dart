@@ -276,6 +276,26 @@ class TimelineModel extends ChangeNotifier {
     return start;
   }
 
+  /// Return the primary-track insertion boundary nearest [timelineMs].
+  ///
+  /// Primary clips are contiguous, so inserting at a boundary is the only way
+  /// to move a clip onto this track without creating overlap or a gap.
+  int primaryInsertIndexAt(int timelineMs) {
+    final at = timelineMs.clamp(0, totalMs).toInt();
+    var start = 0;
+    for (var i = 0; i < clips.length; i++) {
+      final end = start + clips[i].timelineLenMs;
+      if (at <= start) return i;
+      if (at < end) {
+        final before = at - start;
+        final after = end - at;
+        return before <= after ? i : i + 1;
+      }
+      start = end;
+    }
+    return clips.length;
+  }
+
   /// Map a SOURCE-time (ms) to the EDITED timeline position; null if it lies in a
   /// removed region (used to place captions correctly after Cut Lord).
   int? sourceToEdited(int sourceMs) {
