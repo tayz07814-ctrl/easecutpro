@@ -39,10 +39,10 @@ object AlphaMaskGenerator {
     ): Bitmap {
         val total = modelSize * modelSize
 
-        // 1. Sigmoid + threshold → soft alpha
+        // 1. Model already outputs probabilities [0..1] — apply threshold + soft mapping
         val alpha = FloatArray(total)
         for (i in 0 until total) {
-            val prob = sigmoid(logits[i])
+            val prob = logits[i].coerceIn(0f, 1f)
             // Soft mapping: below threshold ramps down smoothly
             alpha[i] = if (prob >= threshold) {
                 // Remap [threshold..1] → [0..1] for better edge contrast
@@ -81,12 +81,8 @@ object AlphaMaskGenerator {
         return output
     }
 
-    /** Sigmoid activation: logit → probability. */
-    private fun sigmoid(x: Float): Float {
-        // Clamp to avoid overflow
-        val clamped = max(-10f, min(10f, x))
-        return 1.0f / (1.0f + kotlin.math.exp(-clamped))
-    }
+    /** Clamp to safe range. */
+    private fun clamp(x: Float): Float = max(-10f, min(10f, x))
 
     /**
      * Simple 2-pass box blur for spatial smoothing.

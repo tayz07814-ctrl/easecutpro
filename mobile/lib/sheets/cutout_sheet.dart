@@ -488,6 +488,10 @@ class _CutoutPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_CutoutPainter old) =>
-      old.strokes != strokes || old.brushMode != brushMode || old.brushSize != brushSize;
+  bool shouldRepaint(_CutoutPainter old) {
+    // Compare total point count — changes every time a point is added
+    final oldCount = old.strokes.fold<int>(0, (s, st) => s + st.points.length);
+    final newCount = strokes.fold<int>(0, (s, st) => s + st.points.length);
+    return oldCount != newCount || old.brushMode != brushMode || old.brushSize != brushSize;
+  }
 }
