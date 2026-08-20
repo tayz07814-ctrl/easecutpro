@@ -172,7 +172,10 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
         height: H,
         bitrate: msg.bitrate,
         framerate: FPS,
-        latencyMode: 'realtime',
+        // NOTE: no latencyMode. 'realtime' is a STREAMING hint — it makes the
+        // encoder favor low-latency output over compression efficiency, which
+        // is the wrong trade for an offline export. Unset, browsers pick the
+        // VOD pipeline: better quality at the same bitrate, no speed lost.
         contentHint: 'motion'
       })
       if (msg.audio && !nomux) {

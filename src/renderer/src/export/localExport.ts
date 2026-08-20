@@ -540,8 +540,10 @@ export async function exportOnDevice(
   const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing your audio…'), seamFadeSeconds())
   dbg('renderAudio: done', !!audioBuf)
 
-  // 2) workers — N parallel encoders, main thread muxes
-  const NWORKERS = Math.min(4, Math.max(1, (navigator.hardwareConcurrency ?? 4) - 1))
+  // 2) workers — N parallel encoders, main thread muxes. Cap by machine class:
+  // weak machines get 2 (keep the browser responsive), strong get up to 4.
+  const cores = navigator.hardwareConcurrency ?? 4
+  const NWORKERS = cores >= 8 ? 4 : cores >= 5 ? 3 : 2
   const useMulti = NWORKERS > 1
   const workers: Worker[] = []
   for (let i = 0; i < NWORKERS; i++) {
@@ -586,6 +588,13 @@ export async function exportOnDevice(
   let lastQueue = 0
   let workerError: string | null = null
   let readyResolve: (() => void) | null = null
+  // Per-worker encode-queue depth (multi-worker mode): each worker acks with its
+  // own depth, and the dispatcher only stalls that worker's lane, never the rest.
+  const queueByWorker = new Map<Worker, number>()
+  // Per-worker ack waiters: when a lane is deep, the dispatcher registers a
+  // one-shot resolver keyed to THAT worker; its ack (ev.source is the worker)
+  // releases exactly that lane, so one busy encoder never stalls the others.
+  const ackWaiters = new Map<Worker, (() => void) | null>()
   const done = new Promise<ArrayBuffer>((resolve, reject) => {
     if (!useMulti) {
       // SINGLE WORKER: worker muxes itself and sends {type:'done', buffer}
@@ -609,8 +618,18 @@ export async function exportOnDevice(
           if (++readyCount === workers.length) readyResolve?.()
         } else if (m.type === 'ack') {
           lastQueue = m.queue
-          ackResolve?.()
-          ackResolve = null
+          const srcEv = ev.source
+          if (srcEv instanceof Worker) {
+            queueByWorker.set(srcEv, m.queue)
+            const w = ackWaiters.get(srcEv)
+            if (w) {
+              ackWaiters.set(srcEv, null)
+              w()
+            }
+          } else {
+            ackResolve?.()
+            ackResolve = null
+          }
         } else if (m.type === 'vchunk') {
           pendingChunks.set(m.ts, { chunk: m.chunk, meta: m.meta })
           while (pendingChunks.has(nextExpectedTs)) {
@@ -634,6 +653,7 @@ export async function exportOnDevice(
       for (const w of workers) {
         w.onmessage = onMsg
         w.onerror = (e) => reject(new Error(e.message))
+        queueByWorker.set(w, 0)
       }
     }
   })
@@ -712,6 +732,20 @@ export async function exportOnDevice(
   const decoders = new Map<string, DecodeSource | null>()
   /** Main-lane frame pull for the segment being written. */
   let segIter: AsyncGenerator<VideoFrame | null, void, unknown> | null = null
+  /** Per-segment demux iterators (parallel decode). Declared here so the
+   *  finally block can abandon them even when the loop never started. */
+  let gensBySeg = new Map<
+    Seg,
+    { gen: AsyncGenerator<VideoFrame | null, void, unknown>; started: boolean; pulled: VideoFrame | null }
+  >()
+  /** Return/abandon a held segment iterator (release its sample in flight).
+   *  TS narrows `segIter` down to never in some branches because the element
+   *  path only ever nulls it, so route the cleanup through this helper. */
+  const returnSegIter = (): void => {
+    const it = segIter as AsyncGenerator<VideoFrame | null, void, unknown> | null
+    if (it) void it.return(undefined)
+    segIter = null
+  }
   const openVideo = async (url: string): Promise<HTMLVideoElement> => {
     const v = document.createElement('video')
     v.src = url
@@ -990,6 +1024,36 @@ export async function exportOnDevice(
     dbg('pool ready', { sprites: spriteId, images: mainImages.size, videoOverlays: ovVideos.length })
     // Round-robin: distribute frames across workers (multi-worker) so compositing+encoding parallelizes
     const targetWorker = (n0: number): Worker => (useMulti ? workers[n0 % workers.length] : worker)
+
+    // PARALLEL DECODE (the real web bottleneck): the frame loop is decode-bound —
+    // each `framesAt()` iterator walks the source once, one segment at a time,
+    // which pins throughput to a single sequential decode no matter how many
+    // encode workers exist. Fix: start a different-source segment's iterator a
+    // little AHEAD of the playhead so its first keyframe is decoded while the
+    // current segment is still being read — a one-window decode-ahead, exactly
+    // what Media3/ffmpeg do with multi-source timelines. Same-source segments
+    // share one iterator (they walk the same file forward, cheaply).
+    gensBySeg = new Map<
+      Seg,
+      { gen: AsyncGenerator<VideoFrame | null, void, unknown>; started: boolean; pulled: VideoFrame | null }
+    >()
+    const startGen = (s: Seg): void => {
+      if (gensBySeg.has(s) || s.isImage) return
+      const dec = decoders.get(s.url)
+      if (!dec) return
+      gensBySeg.set(s, { gen: dec.framesAt(segWants.get(s) ?? []), started: false, pulled: null })
+    }
+    for (const s of segs) startGen(s)
+    // First DIFFERENT-source segment reachable from `i+1` (parallel-warm target).
+    const nextDiffSrc = (i: number): Seg | null => {
+      const url = segs[i]?.url
+      for (let j = i + 1; j < segs.length; j++) {
+        const s = segs[j]
+        if (!s.isImage && s.url !== url) return s
+      }
+      return null
+    }
+
     for (let n = 0; n < totalFrames; n++) {
       if (workerError) fail(workerError)
       const tw = targetWorker(n)
@@ -1047,8 +1111,7 @@ export async function exportOnDevice(
         if (seg !== curSeg) {
           harvest.stop?.()
           closeBuf()
-          void segIter?.return(undefined)
-          segIter = null
+          returnSegIter()
           curSeg = seg
           segHarvesting = false
         }
@@ -1058,23 +1121,49 @@ export async function exportOnDevice(
           ovT
         )
       } else if (decoders.get(seg.url)) {
-        // DEMUXED PATH: one decode pass per segment, running as fast as the
-        // machine can decode. No seeking, no realtime playback, and no dropped
-        // -frame tolerance check — `samplesAtTimestamps` returns the frame for
-        // each requested source time by construction.
+        // DEMUXED PATH: each segment has its OWN framesAt() iterator (built
+        // above, lazily), so decode runs as fast as the machine can decode. The
+        // parallel-decode window pulls the FIRST frame of the next DIFFERENT
+        // source ahead of the playhead: its costly first-keyframe decode runs
+        // while the current segment is still being read. Same-source segments
+        // share the same iterator (samplesAtTimestamps walks a source once).
         const dec = decoders.get(seg.url)!
-        if (seg !== curSeg) {
+if (seg !== curSeg) {
           harvest.stop?.()
           closeBuf()
-          void segIter?.return(undefined)
+          returnSegIter()
           curSeg = seg
           segHarvesting = false
-          segIter = dec.framesAt(segWants.get(seg) ?? [])
+          // PULL the segment's generator (may already have warmed a frame).
+          const g = gensBySeg.get(seg)
+          if (g) {
+            void g.gen.next().then((r) => {
+              if (!r.done) (g.pulled ??= r.value)
+            })
+          }
+          // KICK the next different source's decoder ahead (parallel window).
+          const nd = nextDiffSrc(segs.indexOf(seg))
+          if (nd) {
+            const ng = gensBySeg.get(nd)
+            if (ng && !ng.started) {
+              ng.started = true
+              void ng.gen.next().then((r) => {
+                if (!r.done && ng && !ng.pulled) ng.pulled = r.value ?? null
+              })
+            }
+          }
         }
+        const g0 = gensBySeg.get(curSeg)
         let frame: VideoFrame | null = null
-        if (segIter) {
-          const r = await segIter.next()
-          frame = (r.done ? null : r.value) ?? null
+        if (g0) {
+          const puff = g0.pulled
+          if (puff) {
+            frame = puff
+            g0.pulled = null
+          } else {
+            const r = await g0.gen.next()
+            frame = (r.done ? null : r.value) ?? null
+          }
         }
         const fit = fitFor(seg, dec.width || W, dec.height || H, t)
         if (frame) {
@@ -1092,8 +1181,7 @@ export async function exportOnDevice(
           // Segment switch: the ONE seek, then play-harvest from here.
           harvest.stop?.()
           closeBuf()
-          void segIter?.return(undefined)
-          segIter = null
+          returnSegIter()
           curSeg = seg
           minSpacing = 0
           prevPresentedT = -1
@@ -1187,8 +1275,17 @@ export async function exportOnDevice(
           [frame as unknown as Transferable, ...ovT]
         )
       }
-      // backpressure: never let the encoder queue run away
-      if (lastQueue > 20) await new Promise<void>((res) => (ackResolve = res))
+      // backpressure: never let the encoder queue run away. In multi-worker
+      // mode each worker acks its own depth; stall only the TARGET worker's lane
+      // (one busy encoder must not stall the others behind it).
+      const q = useMulti ? (queueByWorker.get(tw) ?? 0) : lastQueue
+      if (q > 20) {
+        if (useMulti) {
+          await new Promise<void>((res) => ackWaiters.set(tw, res))
+        } else {
+          await new Promise<void>((res) => (ackResolve = res))
+        }
+      }
       if (n % 15 === 0) onProgress(5 + Math.round((n / totalFrames) * 90), exportMsg(n / totalFrames))
     }
     dbg('frames done', `${Math.round(performance.now() - tExport0)}ms for ${totalFrames} frames (${rvfcOK ? 'play-harvest' : 'seek'})`)
@@ -1205,7 +1302,8 @@ export async function exportOnDevice(
     closeBuf()
     // Abandoning a decode iterator mid-segment has to run its finally block, or
     // the sample it is holding never gets released.
-    void segIter?.return(undefined)
+    returnSegIter()
+    for (const [, g] of gensBySeg) void g?.gen?.return(undefined)
     for (const o of ovVideos) {
       void o.iter?.return(undefined)
       o.dec?.close()
