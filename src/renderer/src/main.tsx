@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react'
 import ReactDOM from 'react-dom/client'
+import { createPortal } from 'react-dom'
 import AuthScreen from './components/AuthScreen'
 import LandingScreen from './landing/LandingScreen'
 import { EcPromptHost } from './ui/ecPrompt'
@@ -21,6 +22,7 @@ import MobileDashboard from './newui/screens/MobileDashboard'
 import AdminDashboard from './newui/screens/AdminDashboard'
 import Editor from './newui/screens/Editor'
 import MobileEditor from './newui/screens/MobileEditor'
+import CutProgressOverlay from './newui/screens/CutProgressOverlay'
 import { useIsMobile } from './useMobile'
 import './styles.css'
 // Design-system foundation (tokens + self-hosted fonts). Scoped under
@@ -407,7 +409,7 @@ function Root(): JSX.Element {
     }
   }, [])
 
-  if (view === 'loading') return <div className="auth"><div className="muted">Loading…</div></div>
+  if (view === 'loading') return <div className="auth"><div className="muted">Loading…</div>{createPortal(<CutProgressOverlay />, document.body)}</div>
   if (view === 'landing') return <LandingScreen onStartFree={() => navigate(APP_PATH)} onNavigate={navigate} />
   if (view === 'terms') return <LegalPage kind="terms" onNavigate={navigate} />
   if (view === 'privacy') return <LegalPage kind="privacy" onNavigate={navigate} />

@@ -46,6 +46,7 @@ import { useIsMobile } from '../useMobile'
 import { useNativePreview } from '../useNativePreview'
 import OverlayLayer from './OverlayLayer'
 import TextLayer from './TextLayer'
+import { snapshotPlayback, recordPlayback } from '../debugPlayback'
 
 function fmt(t: number): string {
   if (!isFinite(t)) t = 0
@@ -475,7 +476,13 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   const [engineKind, setEngineKind] = useState<'wc' | 'ff'>(() => (wcSupported() ? 'wc' : 'ff'))
   const engineKindRef = useRef(engineKind)
   engineKindRef.current = engineKind
-  const [wcOn, setWcOn] = useState(false)
+  // Desktop defaults to the WebCodecs/FFmpeg compositor — the only path that can
+  // play a cut seam as a queue swap (zero seeks), killing the element path's
+  // cold-seek stutter at different-source cuts. Mobile stays on native elements
+  // (one constrained hardware decoder). If WebCodecs can't decode a source it
+  // demotes a rung (→ ffmpeg player), and only strays to the native element path
+  // if the compositor wholly fails for the current media.
+  const [wcOn, setWcOn] = useState(() => !isMobile && (wcSupported() || ffSupported()))
   const wcOnRef = useRef(wcOn)
   wcOnRef.current = wcOn
   const wcRef = useRef<WcPlayer | FfPlayer | null>(null)
@@ -493,9 +500,27 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
       wcRef.current = null
       engineKindRef.current = 'ff'
       setEngineKind('ff')
+      forceRecord()
       return
     }
     setWcOn(false)
+    forceRecord()
+  }
+  // Record engine-flip events (demotion / promotion) immediately so the debug
+  // JSON holds why the engine changed, next to the stats that prove it.
+  const forceRecord = (): void => {
+    const engDbg = audioEngineRef.current
+    recordPlayback(
+      snapshotPlayback({
+        playing: playingRef.current,
+        engineKind: engineKindRef.current,
+        wcOn: wcOnRef.current,
+        isMobile,
+        audio: engDbg ? engDbg : null,
+        segments: { length: segs.length, seams: segs.filter((x) => !x.isImage).length }
+      }),
+      true
+    )
   }
   // A native decode error is the only reason to promote the heavier compositor.
   // This keeps normal playback on the GPU-backed video surface while retaining
@@ -665,6 +690,17 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // the scrub-activity window the seam warm-up walkers yield to.
   const pausedSeekAtRef = useRef(0)
   const lastScrubAtRef = useRef(0)
+  // VIDEO-PACED CLOCK (the CompositionPlayer property): the master clock may not
+  // run ahead of the decoded sink. `wcFreshFrameRef` records whether the LAST
+  // WC render painted a frame for its requested time; when it didn't (a seam is
+  // decoding, a cold landing hasn't arrived), the clock and the audio engine
+  // HOLD until a paint lands, instead of letting audio scurry ahead of a frozen
+  // picture. `wcLastPaintedTRef` is the timeline position of that last paint.
+  const wcFreshFrameRef = useRef(false)
+  const wcLastPaintedTRef = useRef(playhead)
+  /** True after the first actual frame paint (or poster) so the fallback button
+   *  holds the canvas instead of flashing the poster at every cold landing. */
+  const hasPaintedBeforeRef = useRef(false)
 
   // External playhead changes (scrub / word click / transcript double-click).
   useEffect(() => {
@@ -1045,7 +1081,10 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           } else {
             if (!wcVideoWaitRef.current) wcVideoWaitRef.current = now
             if (eng?.isPlaying()) eng.pause()
-            if (now - wcVideoWaitRef.current > 6000) setWcOn(false)
+            if (now - wcVideoWaitRef.current > 6000) {
+              setWcOn(false)
+              forceRecord()
+            }
           }
         }
 
@@ -1057,23 +1096,44 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             // the full buffering timeout; hand back to element A/V immediately.
             eng.pause()
             setWcOn(false)
-          } else if (eng?.ready() && !eng.isPlaying()) eng.play(t)
-          const engActive = !!(eng && eng.active())
-          if (engActive) {
-            wcAudioWaitRef.current = 0
-            const ex = eng!.expected()
-            // follow the audio clock, never backward, never a wild jump forward
-            t = Math.max(t, Math.min(ex, t + Math.max(0.25, dt * 3)))
-          } else {
-            // Audio can't sound yet (decoding / context resuming): HOLD the
-            // clock — a silent picture running ahead of its own sound is worse
-            // than a beat of buffering. If it still can't start, fall back to
-            // the element path (which has element audio).
-            if (!wcAudioWaitRef.current) wcAudioWaitRef.current = now
-            if (now - wcAudioWaitRef.current > 6000) {
-              console.warn('[wc-preview] audio engine never started — falling back to element path')
-              setWcOn(false)
+            forceRecord()
+          } else if (wcFreshFrameRef.current) {
+            // VIDEO-PACED: only let the audio clock advance while the decoded
+            // sink is actually painting fresh frames (native CompositionPlayer
+            // never lets the clock outrun the decoded graph). While the last
+            // render found no frame — a seam landing the decoder hasn't reached
+            // yet, or a cold keyframe — the picture would be frozen behind a
+            // keeper that, if the clock ran on, would leave us chasing it. Hold
+            // both clock AND audio instead; engines can't drift apart because
+            // neither is allowed ahead of the frames that exist.
+            if (eng?.ready() && !eng.isPlaying()) eng.play(t)
+            const engActive = !!(eng && eng.active())
+            if (engActive) {
+              wcAudioWaitRef.current = 0
+              const ex = eng!.expected()
+              // follow the audio clock, never backward, never a wild jump forward
+              t = Math.max(t, Math.min(ex, t + Math.max(0.25, dt * 3)))
+            } else {
+              // Audio can't sound yet (decoding / context resuming): HOLD the
+              // clock — a silent picture running ahead of its own sound is worse
+              // than a beat of buffering. If it still can't start, fall back to
+              // the element path (which has element audio).
+              if (!wcAudioWaitRef.current) wcAudioWaitRef.current = now
+              if (now - wcAudioWaitRef.current > 6000) {
+                console.warn('[wc-preview] audio engine never started — falling back to element path')
+                setWcOn(false)
+                forceRecord()
+              }
             }
+          } else {
+            // VIDEO-PACED HOLD: the sink didn't paint a frame this rAF (a cut
+            // landing is still decoding, or the pipe is between frames). Hold
+            // the master clock AT the last painted timeline position and pause
+            // the audio engine so neither the playhead nor the sound can run
+            // ahead of a frozen picture. The landing frame releases the hold.
+            t = wcLastPaintedTRef.current
+            if (eng?.isPlaying()) eng.pause()
+            wcAudioWaitRef.current = 0 // pacing hold is NOT an audio failure
           }
         } else {
           wcAudioWaitRef.current = 0
@@ -1155,8 +1215,12 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                   const jump = up.sourceStart - active.sourceEnd
                   const micro = jump >= 0 && jump <= 0.12
                   const wv = warmVideo(active.src)
-                  if (!micro && wv && settled(wv) && Math.abs(wv.currentTime - up.sourceStart) > 0.06) {
-                    seek(wv, up.sourceStart)
+                  if (!micro && wv) {
+                    const settledWv = settled(wv)
+                    const dist = Math.abs(wv.currentTime - up.sourceStart)
+                    if (!micro && wv && settledWv && dist > 0.06) {
+                      seek(wv, up.sourceStart)
+                    }
                   }
                 }
               }
@@ -1181,7 +1245,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
                   const microSameFile = next.src === active.src && jump >= 0 && jump <= 0.12
                   if (!microSameFile) {
                     if (next.src === active.src) {
-                      // SAME-SOURCE cut: swap to the pre-warmed buddy (already decoded at
+// SAME-SOURCE cut: swap to the pre-warmed buddy (already decoded at
                       // next.sourceStart) so the picture is seamless — no cold seek. If the
                       // buddy isn't ready (clip too short to warm in time), fall back to
                       // cold-seeking the live element, exactly the old single-decoder path.
@@ -1289,8 +1353,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
 
       // Keep the decoupled audio locked to the video clock. The AudioContext resume
       // is async (first play) and clocks can drift over long runs, so if the audio
-      // position diverges from the timeline by > ~0.25s, re-anchor it. The threshold
-      // keeps this a rare correction, not a per-frame reschedule (which would blip).
+      // position diverges from the timeline by > ~0.8s, re-anchor it. The raised
+      // threshold (was 0.25s) keeps this a rare correction, not a per-frame
+      // reschedule — the video-paced clock already prevents the two from running
+      // far apart, so the frequent seam-triggered rebuild (audible gap + churn)
+      // is gone.
       {
         const eng = audioEngineRef.current
         const engActive = !!(isPlaying && eng && eng.active())
@@ -1302,7 +1369,7 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           // preview goes SILENT (or keeps a permanent lip-sync offset). Rebuild
           // the schedule from the live timeline position.
           eng.seek(t)
-        } else if (eng && engActive && Math.abs(eng.expected() - t) > 0.25) {
+        } else if (eng && engActive && Math.abs(eng.expected() - t) > 0.8) {
           eng.seek(t)
         }
         engActiveRef.current = engActive
@@ -1339,11 +1406,26 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             if (shown && !shown.isImage) {
               const tSrc = shown.sourceStart + clamp(t - shown.start, 0, shown.len) * shown.speed
               const painted = wc.render(ctx, cw, ch, shown.src, Math.min(tSrc, shown.sourceEnd - 0.001), isPlaying)
-              // POSTER: nothing decoded yet (a freshly opened project, before the
-              // first keyframe lands). Paint the source's already-decoded library
-              // thumbnail so the preview opens on a picture instead of black —
-              // the real frame replaces it as soon as it arrives.
-              if (!painted) drawPoster(ctx, cw, ch, shown.src)
+              // VIDEO-PACED CLOCK: record whether THIS paint produced a frame.
+              // The clock block reads it next rAF — a miss pauses the master
+              // clock + audio until a frame lands (CompositionPlayer pacing).
+              wcFreshFrameRef.current = painted
+              if (painted) wcLastPaintedTRef.current = t
+              // POSTER (now a HOLD): nothing decoded yet (a freshly opened
+              // project, before the first keyframe lands). The old code flashed
+              // the library thumbnail here, which at a cut boundary read as a
+              // wrong-frame flash. Hold the PREVIOUS painted frame instead —
+              // the canvas retains it until the real frame arrives; only on
+              // the very first paint (no frame exists yet) use the poster so
+              // the preview doesn't open on pure black.
+              if (!painted) {
+                if (!hasPaintedBeforeRef.current) {
+                  drawPoster(ctx, cw, ch, shown.src)
+                  hasPaintedBeforeRef.current = true
+                }
+              } else {
+                hasPaintedBeforeRef.current = true
+              }
               // Decode-ahead: park the warm pipe on the upcoming seam's in-point.
               // For a same-source seam, pass where the live pipe will BE when it
               // hits the seam (the outgoing clip's sourceEnd) so prewarm can judge
@@ -1352,7 +1434,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               // walk-through limit and fired a park (= a seek on the shared
               // demuxer, = a picture stall) at every single seam.
               const up = ss[di + 1]
-              if (up && !up.isImage && t >= shown.start + shown.len - 1.0) {
+              // Adaptive prewarm lead (same policy as the element path): grow
+              // after a missed swap, shrink after clean ones — so very short
+              // clips still get their landing frames decoded in time.
+              const wcLead = Math.min(prewarmLeadRef.current, Math.max(0.35, shown.len / 2))
+              if (up && !up.isImage && t >= shown.start + shown.len - wcLead) {
                 wc.prewarm(up.src, up.sourceStart, up.src === shown.src ? shown.sourceEnd : undefined)
               }
               cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
@@ -1360,7 +1446,11 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             } else {
               // Gaps are intentionally black. For video segments render() keeps
               // the previous painted frame until its replacement is decoded,
-              // avoiding a black flash at cold cut landings.
+              // avoiding a black flash at cold cut landings. An image or a gap
+              // segment IS the picture — mark the sink fresh so the paced clock
+              // keeps running through it (only a MISSING video frame holds).
+              wcFreshFrameRef.current = true
+              wcLastPaintedTRef.current = t
               ctx.fillStyle = '#000'
               ctx.fillRect(0, 0, cw, ch)
               if (cv.style.transform !== '') cv.style.transform = ''
@@ -1439,6 +1529,20 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           im.style.visibility = 'hidden'
         }
       }
+      // Playback debug recorder (throttled to ~2s; forced on structural changes
+      // below). Paints wc/ff/element state + decoded-frame stats + proxy + audio
+      // into player-debug-latest.json for post-mortem.
+      const engDbg = audioEngineRef.current
+      recordPlayback(
+        snapshotPlayback({
+          playing: playingRef.current,
+          engineKind: engineKindRef.current,
+          wcOn: wcOnRef.current,
+          isMobile,
+          audio: engDbg ? engDbg : null,
+          segments: { length: ss.length, seams: ss.filter((x) => !x.isImage).length }
+        })
+      )
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)

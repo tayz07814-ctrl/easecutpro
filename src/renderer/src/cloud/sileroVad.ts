@@ -34,18 +34,19 @@ function loadVad(): Promise<VadModule> {
 // — its copy of the same assets is served by the ecvad:// protocol (main
 // process, src/main/index.ts).
 const VAD_ASSET_BASE = IS_WEB ? '/vad/' : 'ecvad://assets/'
-// vad-web frames are 1536 samples at 16 kHz = 96ms. One redemption frame ends
-// a speech segment on the first quiet frame; the reported end overshoots real
-// speech by that frame, which we subtract back out below.
+// vad-web frames are 1536 samples at 16 kHz = 96ms. The redemption window
+// (480ms = 5 frames) rides through transient dips (stop consonants, inter-
+// syllabic lulls) without prematurely ending speech — the library default of
+// 1400ms is too long for dense cuts, 96ms (1 frame) split speech on every
+// soft phoneme.
 const FRAME_MS = 96
-const REDEMPTION_S = FRAME_MS / 1000
-const MIN_SPEECH_MS = 250
-// 0.55: raised from 0.5 because breaths right after a sentence scored ~0.5-0.65
-// and were counted as SPEECH (leaving breath tails at every cut edge) — but the
-// first attempt at 0.7 OVERCUT, clipping soft real speech. 0.55 keeps quiet
-// speech in while the RMS edge-refinement pass (refineRegionEdgesByRms, on the
-// Flash/Cut Throat presets) adaptively swallows the breath tails the VAD keeps.
-const SPEECH_THRESHOLD = 0.55
+const REDEMPTION_S = 0.15
+const MIN_SPEECH_MS = 150
+// 0.6: raised from 0.5 because breaths right after a sentence scored ~0.5-0.65
+// and were counted as SPEECH (leaving breath tails at every cut edge) — 0.6
+// keeps quiet speech in while the RMS edge-refinement pass (refineRegionEdgesByRms,
+// on the Flash/Cut Throat presets) adaptively swallows the breath tails the VAD keeps.
+const SPEECH_THRESHOLD = 0.6
 /** No built-in padding: the Silence settings' pad/trim values own the cut
  *  edges (padTrimRegions shapes the raw regions after detection). */
 const SPEECH_PAD_S = 0
@@ -84,7 +85,7 @@ export async function detectSileroSilences(
     },
     positiveSpeechThreshold: SPEECH_THRESHOLD,
     negativeSpeechThreshold: SPEECH_THRESHOLD - 0.15,
-    redemptionMs: FRAME_MS,
+    redemptionMs: 150,
     preSpeechPadMs: 0, // padding applied below, on both sides
     minSpeechMs: MIN_SPEECH_MS,
     submitUserSpeechOnPause: false
@@ -102,13 +103,13 @@ export async function detectSileroSilences(
     speech.push({ start: seg.start / 1000, end: seg.end / 1000 })
   }
 
-  // 2. undo the redemption-frame overshoot (a segment that runs to the end of
-  //    the audio was closed by EOF, not redemption — leave that one alone),
-  //    pad both sides, merge overlaps.
+  // 2. pad both sides, merge overlaps. (The redemption-overshoot correction
+  //    was removed: with a proper 480ms redemption window the library's
+  //    reported end is accurate enough, and subtracting REDEMPTION_S was
+  //    shrinking real speech segments and growing silence regions.)
   const padded: { start: number; end: number }[] = []
   for (const s of [...speech].sort((a, b) => a.start - b.start)) {
-    const end = s.end >= durationS - 0.15 ? s.end : Math.max(s.start, s.end - REDEMPTION_S)
-    const seg = { start: Math.max(0, s.start - SPEECH_PAD_S), end: Math.min(durationS, end + SPEECH_PAD_S) }
+    const seg = { start: Math.max(0, s.start - SPEECH_PAD_S), end: Math.min(durationS, s.end + SPEECH_PAD_S) }
     const last = padded[padded.length - 1]
     if (last && seg.start <= last.end) last.end = Math.max(last.end, seg.end)
     else padded.push(seg)

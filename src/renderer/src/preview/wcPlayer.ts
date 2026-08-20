@@ -47,8 +47,13 @@ const JUMP_S = 0.15
  *  seeks/second, 3.9s of cumulative stall (39% of the time). Phone H.264 puts
  *  keyframes ~3s apart, so each seek re-decodes up to a full GOP anyway; just
  *  walking the decoder forward over the removed footage costs no more and
- *  keeps the picture live. Beyond roughly one GOP a seek starts to win. */
-const FORWARD_DECODE_S = 3.0
+ *  keeps the picture live. Native Android's CompositionPlayer never re-primes
+ *  a decoder for a forward seam at all — the removed span is stepped through
+ *  inside one continuous decode. Forward always walks; only BACKWARD seeks and
+ *  a missing iterator restart. (A huge backward jump is a scrub, where a seek
+ *  genuinely wins.)
+ */
+const FORWARD_DECODE_S = Number.POSITIVE_INFINITY
 /** Frame-skip policy. 'jump' (default) skips only across cuts; 'off' and 'all'
  *  exist so the packaged app can be A/B measured from DevTools without a
  *  rebuild (set window.__ecSkipMode). Read per sample, so it can be flipped
@@ -68,6 +73,7 @@ const STATS = {
   paintSeamCache: 0,
   paintStale: 0,
   paintNone: 0,
+  paintHold: 0,
   /** WHY each restart happened. A restart is the one thing that stalls the
    *  picture, so the mix here is what tells you which rule to change — reading
    *  only the total sends you fixing the wrong branch. */
@@ -250,14 +256,15 @@ class Pipe {
     } else if (!this.iter) {
       this.restart(t, 'follow:noIterator') // first play after a paused still: begin decoding
     } else if (this.score(t) > 1.5) {
-      // Jumped beyond the decoded window. A SHORT FORWARD jump is just a cut:
-      // decode through it (skipUntil, armed above, keeps those frames off the
-      // canvas) instead of seeking — see FORWARD_DECODE_S. Backward jumps and
-      // long skips still seek, which is genuinely cheaper there.
+      // Jumped beyond the decoded window. A FORWARD jump is just a cut (or a
+      // normal forward playback step): decode through it — skipUntil, armed
+      // above, keeps the removed frames off the canvas — instead of seeking.
+      // Native's CompositionPlayer does the same: a seam never re-primes the
+      // decoder. Only a BACKWARD jump (scrub back) restarts, where seeking is
+      // genuinely cheaper than decoding forward past the old spot.
       const ahead = this.cur ? t - this.cur.timestamp : Number.POSITIVE_INFINITY
       if (ahead > 0) STATS.seamJumpS.push(ahead)
-      if (!(ahead > 0 && ahead <= FORWARD_DECODE_S))
-        this.restart(t, ahead > 0 ? 'follow:forwardJumpTooFar' : 'follow:backwardJump')
+      if (ahead < 0) this.restart(t, 'follow:backwardJump')
     }
     let moved = false
     while (this.queue.length && this.queue[0].timestamp <= t) {
@@ -669,9 +676,23 @@ export class WcPlayer {
     }
     let s: VideoSample | null = good
     if (!s) {
+      // STALE-FRAME GUARD: when crossing a cut boundary, the "nearest" frame
+      // by timestamp is often the LAST frame of the PREVIOUS clip. Reject frames
+      // that are behind the nearest cached seam landing point for this source.
+      const seamEntries = this.seamCache.get(src) ?? []
+      const nextSeam = seamEntries.find((e) => e.t >= tSrc)
+      const cutBoundary = nextSeam ? nextSeam.t : null
       const c1 = own.cur
       const c2 = other.cur
-      s = !c1 ? c2 : !c2 ? c1 : Math.abs(c1.timestamp - tSrc) <= Math.abs(c2.timestamp - tSrc) ? c1 : c2
+      const candidates = [c1, c2].filter((f): f is VideoSample => !!f)
+      for (const f of candidates) {
+        // If we know a cut boundary ahead, discard frames from before it.
+        // Also discard if the frame is significantly BEHIND tSrc (pre-cut).
+        if (cutBoundary !== null && f.timestamp < cutBoundary - 0.05) continue
+        if (tSrc - f.timestamp > 0.25) continue // more than a frame behind = likely pre-cut
+        s = f
+        break
+      }
       if (s) STATS.paintStale++
     }
     if (!s) {

@@ -83,6 +83,33 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
 }
 
+/** Small, stable, order-sensitive hash (FNV-1a). Not security, just identity. */
+function hash(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16) + s.length.toString(16)
+}
+
+/** Fields that change how the timeline LOOKS but not what it RENDERS. Excluded
+ *  from the signature so that scrubbing or zooming doesn't invalidate a proxy. */
+const VIEW_ONLY = new Set([
+  'playhead',
+  'pxPerSec',
+  'trackHeight',
+  'showThumbnails',
+  'magnet',
+  'name',
+  'selectedWordIds'
+])
+
+function editSignature(folded: Project, doc: TimelineDocument): string {
+  const body = JSON.stringify({ p: folded, d: doc }, (k, v) => (VIEW_ONLY.has(k) ? undefined : v))
+  return hash(body)
+}
+
 /** Load an overlay image and return it as base64 + media type (for the vision pass).
  *  Uses fetch + FileReader (no canvas, so no cross-origin taint on any protocol);
  *  returns null on any problem so the vision pass degrades to name-only matching. */
@@ -650,6 +677,9 @@ interface AppState {
    *  When true, VideoPreview calls buildNow() and shows ProxyPlayer if the
    *  render succeeds; when false, the live DocPreview engine runs. */
   previewProxyMode: boolean
+  /** Build preview proxy during project load (before editor opens). */
+  buildProxyOnLoad: boolean
+  setBuildProxyOnLoad: (v: boolean) => void
   scrubbing: boolean
   selectedClipId: string | null
   selectedSeg: BaseSegment | null
@@ -2103,6 +2133,23 @@ export const useStore = create<AppState>((set, get) => ({
   },
   showSilenceMasterySettings: false,
   setShowSilenceMasterySettings: (v) => set({ showSilenceMasterySettings: v }),
+
+  // Build preview proxy during loading phase (before editor opens)
+  buildProxyOnLoad: ((): boolean => {
+    try {
+      return localStorage.getItem('ec.buildProxyOnLoad') === '1'
+    } catch {
+      return true // default ON
+    }
+  })(),
+  setBuildProxyOnLoad: (v) => {
+    try {
+      localStorage.setItem('ec.buildProxyOnLoad', v ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+    set({ buildProxyOnLoad: v })
+  },
 
   runSilenceMastery: async () => {
     // 1. A transcript is the engine's only input. Reuse the project's (no
@@ -4154,7 +4201,21 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => ({ project: { ...s.project, name }, currentProjectName: name })),
   freshProject: () => newProject(),
 
-  goHome: () => set({ view: 'home', coworkSession: null, selectedClipId: null, selectedSeg: null, selectedTextId: null, selectedWordIds: new Set() }),
+  goHome: () => {
+    // DEBUG: dump final proxy state before leaving editor
+    const s = get()
+    const debugClose = {
+      ts: new Date().toISOString(),
+      event: 'editor-close',
+      buildProxyOnLoad: s.buildProxyOnLoad,
+      mediaPath: s.project.media?.path ?? null,
+      hasTimeline: !!s.project.timeline,
+      proxyActive: s.job.active,
+      proxyMessage: s.job.message,
+    }
+    window.api.debugDump('close', debugClose).catch(() => undefined)
+    set({ view: 'home', coworkSession: null, selectedClipId: null, selectedSeg: null, selectedTextId: null, selectedWordIds: new Set() })
+  },
 
   openProjectRecord: (rec, extra) => {
     const project = rec.project ?? newProject()
@@ -4204,14 +4265,71 @@ export const useStore = create<AppState>((set, get) => ({
           open()
           kickBackground()
         })
-    } else {
+} else {
       // Do the STT extraction while the project is still on the loading screen.
       // Transcribe / Find Cuts then hit the same persistent cache and can start
       // inference immediately after the editor opens.
       set({ view: 'loading' })
+      
+      // Build preview proxy during loading if enabled
+      const shouldBuildProxy = get().buildProxyOnLoad && !IS_WEB && !!project.media?.path
+      let proxyPromise: Promise<string | null> | null = null
+
+      // DEBUG: dump all proxy-related state to JSON
+      const debugOpen = {
+        ts: new Date().toISOString(),
+        event: 'project-open',
+        buildProxyOnLoad: get().buildProxyOnLoad,
+        IS_WEB,
+        mediaPath: project.media?.path ?? null,
+        mediaHasVideo: project.media?.hasVideo ?? null,
+        mediaDuration: project.media?.duration ?? null,
+        hasTimeline: !!project.timeline,
+        timelineTracks: project.timeline?.tracks?.length ?? 0,
+        hasBaseSequence: !!project.baseSequence,
+        baseSequenceLen: project.baseSequence?.length ?? 0,
+        shouldBuildProxy,
+        projectKeys: Object.keys(project),
+      }
+      console.log('[proxy-debug] OPEN:', JSON.stringify(debugOpen))
+      window.api.debugDump('open', debugOpen).then((f) => console.log('[proxy-debug] saved to', f)).catch(() => undefined)
+
+      if (shouldBuildProxy) {
+        // Build from timeline if available, otherwise from legacy baseSequence.
+        let folded: Project
+        let sig: string
+        if (project.timeline) {
+          folded = documentToProject(project.timeline, project)
+          sig = editSignature(folded, project.timeline)
+        } else {
+          // Legacy format: project IS the folded project (has baseSequence).
+          folded = project
+          sig = hash(JSON.stringify({ baseSequence: project.baseSequence, media: project.media }))
+        }
+        console.log('[proxy-debug] building proxy, signature=', sig, 'hasTimeline=', !!project.timeline)
+        proxyPromise = window.api.buildPreviewProxy(folded, sig)
+          .then((p) => {
+            console.log('[proxy-debug] proxy result:', p)
+            window.api.debugDump('proxy-result', { ts: new Date().toISOString(), event: 'proxy-built', signature: sig, resultPath: p }).catch(() => undefined)
+            if (p) set({ job: { active: false, percent: 100, message: 'Preview proxy ready' } })
+            return p
+          })
+          .catch((err) => {
+            console.log('[proxy-debug] proxy error:', err)
+            window.api.debugDump('proxy-error', { ts: new Date().toISOString(), event: 'proxy-error', error: String(err) }).catch(() => undefined)
+            return null
+          })
+      } else {
+        window.api.debugDump('proxy-skipped', { ts: new Date().toISOString(), event: 'proxy-skipped', reason: !get().buildProxyOnLoad ? 'toggle-off' : IS_WEB ? 'is-web' : !project.media?.path ? 'no-media-path' : 'unknown' }).catch(() => undefined)
+      }
+      
+      // Do the STT extraction while the project is still on the loading screen.
+      // Transcribe / Find Cuts then hit the same persistent cache and can start
+      // inference immediately after the editor opens.
       void prepareProjectAudio(project)
         .catch(() => undefined)
-        .then(() => {
+        .then(async () => {
+          if (proxyPromise) await proxyPromise
           open()
           kickBackground()
         })

@@ -108,7 +108,7 @@ export async function buildPreviewProxy(
       await buildFastPreviewProxy(
         project,
         tmp,
-        { shortEdge, bitrateMbps: manualQuality ? 2 : 1.25 },
+        { shortEdge, bitrateMbps: manualQuality ? 2 : 4 },
         onProgress ?? (() => undefined),
         controller.signal
       )

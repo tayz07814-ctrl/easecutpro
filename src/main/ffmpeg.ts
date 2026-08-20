@@ -484,11 +484,16 @@ async function extractThumbnailsUncached(
             ...(toSec > fromSec ? ['-ss', fromSec.toFixed(3), '-to', toSec.toFixed(3)] : []),
             '-i', path,
             '-an',
-            '-vf', `fps=1/${intervalSec.toFixed(4)},scale=-1:${height}`,
+            // NOTE: use `-r` (output frame rate), NOT `-vf fps=1/N`. With
+            // -skip_frame nokey the sparse keyframe timestamps don't align to the
+            // fps filter's grid, so the `fps` filter emits ZERO frames (this gyan
+            // build). `-r` passes keyframes straight through and writes them.
+            '-vf', `scale=-1:${height}`,
+            '-r', `1/${intervalSec.toFixed(4)}`,
             // Bound the count explicitly. `-to` alone overshot with
-            // -skip_frame nokey (sparse decoded timestamps let the fps filter
-            // run past the window), which put stills outside the range they
-            // were asked for — measured 60-71.8s for a 60-70s request.
+            // -skip_frame nokey (sparse decoded timestamps let the frame rate run
+            // past the window), which put stills outside the range they were
+            // asked for — measured 60-71.8s for a 60-70s request.
             ...(toSec > fromSec
               ? ['-frames:v', String(Math.max(1, Math.ceil((toSec - fromSec) / intervalSec)))]
               : []),

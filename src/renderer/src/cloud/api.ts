@@ -203,6 +203,7 @@ const cloudApi: Window['api'] & {
   previewAudioWav: async () => desktopOnly('Native preview audio'),
   sttAudioWav: async () => desktopOnly('Native STT audio'),
   buildPreviewProxy: async () => '',
+  buildPreviewProxySilent: async () => '',
   buildPreviewProxyManual: async () => '', // web: no local ffmpeg
   existingPreviewProxy: async () => '',
   conditionPreviewMedia: async () => '', // web: no local ffmpeg to condition with
@@ -298,7 +299,9 @@ const cloudApi: Window['api'] & {
   createProject: (name, project) => cloudCreateProject(name, project),
   getProject: (id) => cloudGetProject(id),
   saveProjectRecord: (id, patch) => cloudSaveProject(id, patch),
-  deleteProjectRecord: (id) => cloudDeleteProject(id)
+  deleteProjectRecord: (id) => cloudDeleteProject(id),
+  debugDump: async () => '',
+  debugPlayerDump: async () => ''
 }
 
 export function installCloudApi(): void {

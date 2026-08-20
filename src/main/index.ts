@@ -482,6 +482,10 @@ app.whenReady().then(() => {
       emitProgress('probe', jobId, pct, 'Preparing smooth playback…')
     )
   })
+  // Silent auto-proxy: same build but no progress events (avoids blocking overlay).
+  ipcMain.handle(IPC.buildPreviewProxySilent, async (_e, project: Project, signature: string) =>
+    buildPreviewProxy(project, signature)
+  )
 
   // User-requested 720p proxy (manual trigger from the preview pane).
   ipcMain.handle(IPC.buildPreviewProxyManual, async (_e, project: Project, signature: string) => {
@@ -564,6 +568,25 @@ app.whenReady().then(() => {
       saveProjectRecord(id, patch)
   )
   ipcMain.handle(IPC.deleteProjectRecord, (_e, id: string) => deleteProjectRecord(id))
+
+  // Debug: write proxy state JSON to temp file for debugging
+  ipcMain.handle(IPC.debugDump, async (_e, tag: string, data: unknown) => {
+    const dir = join(app.getPath('temp'), 'easecut-debug')
+    await mkdir(dir, { recursive: true }).catch(() => undefined)
+    const file = join(dir, `proxy-debug-${tag}-${Date.now()}.json`)
+    await writeFile(file, JSON.stringify(data, null, 2))
+    return file
+  })
+
+  // Debug: playback recorder — OVERWRITES the same file each write so the
+  // latest playback/cut/proxy state is always a single easy-to-grab JSON.
+  ipcMain.handle(IPC.debugPlayerDump, async (_e, data: unknown) => {
+    const dir = join(app.getPath('temp'), 'easecut-debug')
+    await mkdir(dir, { recursive: true }).catch(() => undefined)
+    const file = join(dir, 'player-debug-latest.json')
+    await writeFile(file, JSON.stringify(data, null, 2))
+    return file
+  })
 
   createWindow()
 

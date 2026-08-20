@@ -90,6 +90,9 @@ const api = {
   /** Flat proxy of the current edit, for seamless preview playback. */
   buildPreviewProxy: (project: Project, signature: string): Promise<string> =>
     ipcRenderer.invoke(IPC.buildPreviewProxy, project, signature),
+  /** Silent auto-proxy: no progress events (avoids blocking overlay). */
+  buildPreviewProxySilent: (project: Project, signature: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.buildPreviewProxySilent, project, signature),
   /** User-requested 720p preview proxy (manual trigger). */
   buildPreviewProxyManual: (project: Project, signature: string): Promise<string> =>
     ipcRenderer.invoke(IPC.buildPreviewProxyManual, project, signature),
@@ -128,6 +131,10 @@ const api = {
   ): Promise<void> => ipcRenderer.invoke(IPC.saveProjectRecord, id, patch),
   deleteProjectRecord: (id: string): Promise<void> =>
     ipcRenderer.invoke(IPC.deleteProjectRecord, id),
+  debugDump: (tag: string, data: unknown): Promise<string> =>
+    ipcRenderer.invoke(IPC.debugDump, tag, data),
+  debugPlayerDump: (data: unknown): Promise<string> =>
+    ipcRenderer.invoke(IPC.debugPlayerDump, data),
   onProgress: (cb: (e: ProgressEvent) => void): (() => void) => {
     const listener = (_: unknown, payload: ProgressEvent): void => cb(payload)
     ipcRenderer.on(IPC.progress, listener)

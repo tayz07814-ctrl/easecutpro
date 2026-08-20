@@ -29,6 +29,8 @@ export default function AccountModal({
   reason?: AccountReason
 }): JSX.Element | null {
   const user = useStore((s) => s.user)
+  const buildProxyOnLoad = useStore((s) => s.buildProxyOnLoad)
+  const setBuildProxyOnLoad = useStore((s) => s.setBuildProxyOnLoad)
   const [billing, setBilling] = useState<Billing | null>(null)
   const [busy, setBusy] = useState<PlanId | null>(null)
   const [upgraded, setUpgraded] = useState(false)
@@ -382,6 +384,52 @@ export default function AccountModal({
               </div>
             </>
           )}
+          
+          {/* Preview Proxy setting */}
+          <div style={{ marginTop: '26px', paddingTop: '18px', borderTop: `1px solid ${HAIR}` }}>
+            <div style={{ fontSize: '12px', letterSpacing: '.12em', textTransform: 'uppercase', color: '#6E7280', fontWeight: 600, marginBottom: '12px' }}>
+              Preview
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '14px 16px', background: 'rgba(255,255,255,.03)', border: `1px solid ${HAIR}`, borderRadius: '12px' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '14px', fontWeight: 600 }}>Build preview proxy on load</div>
+                <div style={{ fontSize: '12px', color: '#9BA0AC', marginTop: '3px' }}>
+                  Render a 540p 4Mbps proxy during project load for seamless playback
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  const next = !buildProxyOnLoad
+                  setBuildProxyOnLoad(next)
+                }}
+                style={{
+                  flexShrink: 0,
+                  width: '48px',
+                  height: '28px',
+                  borderRadius: '14px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  position: 'relative',
+                  background: buildProxyOnLoad ? 'linear-gradient(180deg,#6366F1,#5457E5)' : 'rgba(255,255,255,.12)',
+                  transition: 'background .2s'
+                }}
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '2px',
+                    left: buildProxyOnLoad ? '24px' : '2px',
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    background: '#fff',
+                    boxShadow: '0 1px 3px rgba(0,0,0,.3)',
+                    transition: 'left .2s'
+                  }}
+                />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

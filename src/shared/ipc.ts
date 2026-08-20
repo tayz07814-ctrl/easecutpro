@@ -21,6 +21,7 @@ export const IPC = {
   previewAudioWav: 'media:previewAudioWav', // desktop-only: native PCM for the preview audio engine
   sttAudioWav: 'media:sttAudioWav', // desktop-only: 16k mono WAV for the cloud STT engines
   buildPreviewProxy: 'media:buildPreviewProxy', // flatten the current edit for seamless preview
+  buildPreviewProxySilent: 'media:buildPreviewProxySilent', // same as above but no progress events (auto-proxy)
   existingPreviewProxy: 'media:existingPreviewProxy', // is a proxy for this edit already on disk?
   buildPreviewProxyManual: 'media:buildPreviewProxyManual', // user-requested 720p proxy
   conditionPreviewMedia: 'media:conditionPreviewMedia', // import-time edit-friendly copy (dense keyframes)
@@ -35,7 +36,9 @@ export const IPC = {
   saveProjectRecord: 'projects:saveRecord',
   deleteProjectRecord: 'projects:deleteRecord',
   toolStatus: 'tools:status',
-  progress: 'job:progress' // main -> renderer event
+  progress: 'job:progress', // main -> renderer event
+  debugDump: 'debug:dump', // write proxy debug JSON to temp file
+  debugPlayerDump: 'debug:playerDump' // overwrite-lived playback debug JSON (latest wins)
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

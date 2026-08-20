@@ -355,10 +355,39 @@ export class FfPlayer {
   private sources = new Map<string, SourcePipes>()
   private seamCache = new Map<string, { t: number; bmp: ImageBitmap; aspect: number }[]>()
   private cacheGen = 0
+  /** Original source → conditioned edit-friendly copy (dense keyframes), set by
+   *  DocPreview when the IPC conditioning pass reports a file. */
+  private conditioned = new Map<string, string>()
 
   private fail(e: unknown): void {
     if (!this.failed) console.warn('[ff-preview] falling back to element path:', e)
     this.failed = true
+  }
+
+  /** Adopt a conditioned preview copy for `src`, recreating its pipes so they
+   *  spawn ffmpeg against the dense-keyframe file (every restart costs 1-3
+   *  frames of decode instead of a full long-GOP seek). Call while PAUSED —
+   *  recreating mid-playback would drop the picture for the spawn duration.
+   *  Mirrors WcPlayer.useConditioned. */
+  useConditioned(src: string, path: string): void {
+    if (!path || this.conditioned.get(src) === path) return
+    this.conditioned.set(src, path)
+    const sp = this.sources.get(src)
+    if (!sp) return
+    sp.pipes.forEach((p) => p.dispose())
+    this.sources.delete(src)
+    this.open(src)
+  }
+
+  private open(src: string): void {
+    const sp: SourcePipes = { pipes: null as unknown as [FfPipe, FfPipe], owner: 0, dead: false }
+    this.sources.set(src, sp)
+    const onErr = (e: unknown): void => {
+      sp.dead = true
+      this.fail(e)
+    }
+    const eff = this.conditioned.get(src) ?? src
+    sp.pipes = [new FfPipe(eff, onErr), new FfPipe(eff, onErr)]
   }
 
   /** Fetch exactly one frame at (src,t) and downscale it to a cache bitmap. */
@@ -498,17 +527,7 @@ export class FfPlayer {
         this.sources.delete(src)
       }
     }
-    for (const src of want) {
-      if (!this.sources.has(src)) {
-        const sp: SourcePipes = { pipes: null as unknown as [FfPipe, FfPipe], owner: 0, dead: false }
-        const onErr = (e: unknown): void => {
-          sp.dead = true
-          this.fail(e)
-        }
-        sp.pipes = [new FfPipe(src, onErr), new FfPipe(src, onErr)]
-        this.sources.set(src, sp)
-      }
-    }
+    for (const src of want) if (!this.sources.has(src)) this.open(src)
   }
 
   /** Park a source's non-owner pipe at an upcoming in-point (seam decode-ahead).
@@ -559,9 +578,23 @@ export class FfPlayer {
     }
     let f: FfFrame | null = good
     if (!f) {
+      // STALE-FRAME GUARD: when crossing a cut boundary, the "nearest" frame
+      // by timestamp is often the LAST frame of the PREVIOUS clip. Reject frames
+      // that are behind the nearest cached seam landing point for this source.
+      const seamEntries = this.seamCache.get(src) ?? []
+      const nextSeam = seamEntries.find((e) => e.t >= tSrc)
+      const cutBoundary = nextSeam ? nextSeam.t : null
       const c1 = own.cur
       const c2 = other.cur
-      f = !c1 ? c2 : !c2 ? c1 : Math.abs(c1.t - tSrc) <= Math.abs(c2.t - tSrc) ? c1 : c2
+      const candidates = [c1, c2].filter((f): f is FfFrame => !!f)
+      for (const candidate of candidates) {
+        // If we know a cut boundary ahead, discard frames from before it.
+        // Also discard if the frame is significantly BEHIND tSrc (pre-cut).
+        if (cutBoundary !== null && candidate.t < cutBoundary - 0.05) continue
+        if (tSrc - candidate.t > 0.25) continue // more than a frame behind = likely pre-cut
+        f = candidate
+        break
+      }
     }
     if (!f) return false
     const r = containRect(cw, ch, f.vf.displayWidth / f.vf.displayHeight)

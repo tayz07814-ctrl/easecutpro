@@ -26,6 +26,8 @@ interface InitMsg {
   videoCodec: string // e.g. 'avc1.640028'
   bitrate: number // bits/sec
   audio: { codec: string; sampleRate: number; channels: number; bitrate: number } | null
+  /** When true, the worker does NOT mux — it sends EncodedVideoChunks back to the main thread. */
+  nomux?: boolean
 }
 interface FrameMsg {
   type: 'frame'
@@ -140,14 +142,25 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
       W = msg.width
       H = msg.height
       FPS = msg.fps
-      muxer = new Muxer({
-        target: new ArrayBufferTarget(),
-        video: { codec: 'avc', width: W, height: H },
-        audio: msg.audio ? { codec: 'aac', sampleRate: msg.audio.sampleRate, numberOfChannels: msg.audio.channels } : undefined,
-        fastStart: 'in-memory'
-      })
+      const nomux = msg.nomux === true
+      if (!nomux) {
+        muxer = new Muxer({
+          target: new ArrayBufferTarget(),
+          video: { codec: 'avc', width: W, height: H },
+          audio: msg.audio ? { codec: 'aac', sampleRate: msg.audio.sampleRate, numberOfChannels: msg.audio.channels } : undefined,
+          fastStart: 'in-memory'
+        })
+      }
       videoEncoder = new VideoEncoder({
-        output: (chunk, meta) => muxer!.addVideoChunk(chunk, meta),
+        output: (chunk, meta) => {
+          if (nomux) {
+            // Send the encoded chunk back to the main thread for muxing there.
+            const ts = chunk.timestamp
+            ;(self as unknown as Worker).postMessage({ type: 'vchunk', chunk, meta, ts })
+          } else {
+            muxer!.addVideoChunk(chunk, meta)
+          }
+        },
         error: (e) => die(`video encoder: ${e.message}`)
       })
       // Raise the AVC level to fit the real resolution — the probe only picks the
@@ -158,9 +171,11 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
         width: W,
         height: H,
         bitrate: msg.bitrate,
-        framerate: FPS
+        framerate: FPS,
+        latencyMode: 'realtime',
+        contentHint: 'motion'
       })
-      if (msg.audio) {
+      if (msg.audio && !nomux) {
         audioEncoder = new AudioEncoder({
           output: (chunk, meta) => muxer!.addAudioChunk(chunk, meta),
           error: (e) => die(`audio encoder: ${e.message}`)
@@ -256,9 +271,13 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
       assets.clear()
       await videoEncoder?.flush()
       await audioEncoder?.flush()
-      muxer!.finalize()
-      const { buffer } = muxer!.target
-      ;(self as unknown as Worker).postMessage({ type: 'done', buffer }, [buffer])
+      if (muxer) {
+        muxer.finalize()
+        const { buffer } = muxer.target
+        ;(self as unknown as Worker).postMessage({ type: 'done', buffer }, [buffer])
+      } else {
+        ;(self as unknown as Worker).postMessage({ type: 'done' })
+      }
       return
     }
   } catch (e) {

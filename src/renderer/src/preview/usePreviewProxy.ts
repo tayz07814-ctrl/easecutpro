@@ -43,12 +43,12 @@ import { IS_WEB } from '../platform'
  * 720p render via `buildNow()` (exported below). A button in the preview pane
  * calls it; the proxy plays until the edit changes, then falls back to live.
  */
-const PROXY_ENABLED = false
+const PROXY_ENABLED = true
 
 /** Below this many cuts the live engine copes fine; a render would be waste. */
-const MIN_CLIPS = 8
+const MIN_CLIPS = 2
 /** Let editing settle before spending a render on a moving target. */
-const SETTLE_MS = 1500
+const SETTLE_MS = 500
 
 export interface PreviewProxy {
   /** path to play, or '' to use the live engine */
@@ -113,7 +113,7 @@ export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
 
   const clips = useMemo(() => (doc ? mainClipCount(doc) : 0), [doc])
   const eligible =
-    PROXY_ENABLED && !IS_WEB && !!doc && clips >= MIN_CLIPS && typeof window.api?.buildPreviewProxy === 'function'
+    PROXY_ENABLED && !IS_WEB && !!doc && clips >= MIN_CLIPS && typeof window.api?.buildPreviewProxySilent === 'function'
 
   // Signatures already handed to the main process this session. The build effect
   // legitimately re-runs (play/pause flips `playing`), and without this each
@@ -194,7 +194,7 @@ export function usePreviewProxy(doc: TimelineDocument | null): PreviewProxy {
             if (requested.current.has(sig)) return // already rendering for us
             requested.current.add(sig)
             setBuilding(true)
-            return window.api.buildPreviewProxy(folded, sig).then(adopt)
+            return window.api.buildPreviewProxySilent(folded, sig).then(adopt)
           })
           .catch(() => {
             // A newer edit aborts this disposable build. Allow the signature to

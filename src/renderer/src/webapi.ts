@@ -247,6 +247,7 @@ const webApi: Window['api'] = {
   },
   // Proxy rendering needs local ffmpeg; the browser keeps the live engine.
   buildPreviewProxy: async () => '',
+  buildPreviewProxySilent: async () => '',
   buildPreviewProxyManual: async () => '', // web: no local ffmpeg
   existingPreviewProxy: async () => '',
   conditionPreviewMedia: async () => '', // web: no local ffmpeg to condition with
@@ -329,7 +330,9 @@ const webApi: Window['api'] = {
   createProject: (name, project) => httpCreateProject(name, project),
   getProject: (id) => httpGetProject(id),
   saveProjectRecord: (id, patch) => httpSaveProject(id, patch),
-  deleteProjectRecord: (id) => httpDeleteProject(id)
+  deleteProjectRecord: (id) => httpDeleteProject(id),
+  debugDump: async () => '',
+  debugPlayerDump: async () => ''
 }
 
 export function installWebApi(): void {

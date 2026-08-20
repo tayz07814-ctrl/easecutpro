@@ -70,6 +70,7 @@ export function planSchedule(segs: AudioSeg[], t0: number): ScheduledSource[] {
 
 const LEAD_S = 0.04 // tiny scheduling lead so the first start isn't in the past
 const EDGE_RAMP = 0.006 // 6ms click-guard ramp at each scheduled source edge
+const CROSSFADE_RAMP = 0.01 // 10ms crossfade between adjacent sources at seams
 
 /**
  * Build an AudioBuffer straight from a PCM WAV we produced ourselves (the
@@ -252,19 +253,41 @@ export class SeamlessAudio {
     const anchor = ctx.currentTime + LEAD_S
     this.startCtx = anchor
     this.startTl = t0
-    for (const p of planSchedule(this.segs, t0)) {
+    const schedule = planSchedule(this.segs, t0)
+    // Apply crossfades between adjacent sources at seams
+    for (let i = 0; i < schedule.length; i++) {
+      const p = schedule[i]
+      const prev = i > 0 ? schedule[i - 1] : null
+      const next = i + 1 < schedule.length ? schedule[i + 1] : null
       const buf = this.buffers.get(p.src)
       if (!buf) continue
       const when = anchor + p.when
       const g = ctx.createGain()
-      // Click-guard: 0→gain over 6ms at the source edge, gain→0 over 6ms at its end.
+      // Base click-guard ramps at source edges
       const outEnd = when + p.outDur
       const rampInEnd = Math.min(when + EDGE_RAMP, outEnd)
       const rampOutStart = Math.max(rampInEnd, outEnd - EDGE_RAMP)
-      g.gain.setValueAtTime(0, when)
-      g.gain.linearRampToValueAtTime(p.gain, rampInEnd)
-      g.gain.setValueAtTime(p.gain, rampOutStart)
-      g.gain.linearRampToValueAtTime(0, outEnd)
+      // If adjacent to another source in OUTPUT time, apply crossfade
+      // Crossfade window: 10ms overlap centered on the seam
+      const hasPrev = prev && Math.abs((anchor + prev.when + prev.outDur) - when) < 0.001
+      const hasNext = next && Math.abs((anchor + next.when) - outEnd) < 0.001
+      if (hasPrev) {
+        // Overlap with previous source: start this source's gain ramp EARLIER
+        // and let previous source's ramp extend into this one
+        g.gain.setValueAtTime(0, when - CROSSFADE_RAMP)
+        g.gain.linearRampToValueAtTime(p.gain, when)
+      } else {
+        g.gain.setValueAtTime(0, when)
+        g.gain.linearRampToValueAtTime(p.gain, rampInEnd)
+      }
+      if (hasNext) {
+        // Extend this source's gain ramp to overlap with next source
+        g.gain.setValueAtTime(p.gain, outEnd)
+        g.gain.linearRampToValueAtTime(0, outEnd + CROSSFADE_RAMP)
+      } else {
+        g.gain.setValueAtTime(p.gain, rampOutStart)
+        g.gain.linearRampToValueAtTime(0, outEnd)
+      }
       const node = ctx.createBufferSource()
       node.buffer = buf
       node.playbackRate.value = p.playbackRate
