@@ -1097,15 +1097,18 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
             eng.pause()
             setWcOn(false)
             forceRecord()
-          } else if (wcFreshFrameRef.current) {
-            // VIDEO-PACED: only let the audio clock advance while the decoded
-            // sink is actually painting fresh frames (native CompositionPlayer
-            // never lets the clock outrun the decoded graph). While the last
-            // render found no frame — a seam landing the decoder hasn't reached
-            // yet, or a cold keyframe — the picture would be frozen behind a
-            // keeper that, if the clock ran on, would leave us chasing it. Hold
-            // both clock AND audio instead; engines can't drift apart because
-            // neither is allowed ahead of the frames that exist.
+          } else {
+            // AUDIO IS THE MASTER CLOCK — NEVER pause it to "wait for a frame".
+            // Pausing + re-anchoring audio at a seam is exactly what read as
+            // "the playhead vibrates and audio stutters": the frame landed a
+            // beat late, the engine stopped and restarted, and the clock double-
+            // nudged. Native CompositionPlayer keeps one continuous clock and
+            // draws whatever frame is nearest; the video is allowed to lag the
+            // audio by a frame if the decoder stalls, but the AUDIO never stops.
+            // The display section already holds the last painted frame when a
+            // seam frame isn't ready, so the only visible effect of a late
+            // landing is a frame held for one beat — no audio glitch, no
+            // playhead oscillation.
             if (eng?.ready() && !eng.isPlaying()) eng.play(t)
             const engActive = !!(eng && eng.active())
             if (engActive) {
@@ -1114,26 +1117,19 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               // follow the audio clock, never backward, never a wild jump forward
               t = Math.max(t, Math.min(ex, t + Math.max(0.25, dt * 3)))
             } else {
-              // Audio can't sound yet (decoding / context resuming): HOLD the
-              // clock — a silent picture running ahead of its own sound is worse
-              // than a beat of buffering. If it still can't start, fall back to
-              // the element path (which has element audio).
+              // Audio CAN'T sound yet (decoding / context resuming): let the
+              // clock run at wall-time so the video isn't frozen behind a silent
+              // engine. This is buffering, not a playhead stall. If it never
+              // starts within a generous window, fall back to the element path
+              // (which has its own element audio).
+              t += dt
               if (!wcAudioWaitRef.current) wcAudioWaitRef.current = now
-              if (now - wcAudioWaitRef.current > 6000) {
+              if (now - wcAudioWaitRef.current > 8000) {
                 console.warn('[wc-preview] audio engine never started — falling back to element path')
                 setWcOn(false)
                 forceRecord()
               }
             }
-          } else {
-            // VIDEO-PACED HOLD: the sink didn't paint a frame this rAF (a cut
-            // landing is still decoding, or the pipe is between frames). Hold
-            // the master clock AT the last painted timeline position and pause
-            // the audio engine so neither the playhead nor the sound can run
-            // ahead of a frozen picture. The landing frame releases the hold.
-            t = wcLastPaintedTRef.current
-            if (eng?.isPlaying()) eng.pause()
-            wcAudioWaitRef.current = 0 // pacing hold is NOT an audio failure
           }
         } else {
           wcAudioWaitRef.current = 0
@@ -1435,11 +1431,23 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               // demuxer, = a picture stall) at every single seam.
               const up = ss[di + 1]
               // Adaptive prewarm lead (same policy as the element path): grow
-              // after a missed swap, shrink after clean ones — so very short
-              // clips still get their landing frames decoded in time.
-              const wcLead = Math.min(prewarmLeadRef.current, Math.max(0.35, shown.len / 2))
-              if (up && !up.isImage && t >= shown.start + shown.len - wcLead) {
-                wc.prewarm(up.src, up.sourceStart, up.src === shown.src ? shown.sourceEnd : undefined)
+              // after a missed swap, shrink after clean ones — with a FLOOR of
+              // ~1.0s so a same-source landing's keyframe is decoding WELL
+              // before the playhead reaches it (web's HTTP-range demuxer pays
+              // more per landing than desktop's local file). Fire up to three
+              // segments ahead on dense timelines so a 0.3s clip still hands
+              // the next one a warm pipe.
+              const wcLead = Math.max(1.0, Math.min(prewarmLeadRef.current, Math.max(0.35, shown.len / 2)))
+              if (t >= shown.start + shown.len - wcLead) {
+                for (let k = di + 1; k <= Math.min(di + 3, ss.length - 1); k++) {
+                  const u = ss[k]
+                  if (!u || u.isImage) continue
+                  if (u.src === shown.src) {
+                    wc.prewarm(u.src, u.sourceStart, shown.sourceEnd)
+                  } else {
+                    wc.prewarm(u.src, u.sourceStart, undefined)
+                  }
+                }
               }
               cv.style.transformOrigin = kenBurnsOrigin(shown.ovX, shown.ovY)
               cv.style.transform = kbTransform(shown)
