@@ -732,12 +732,6 @@ export async function exportOnDevice(
   const decoders = new Map<string, DecodeSource | null>()
   /** Main-lane frame pull for the segment being written. */
   let segIter: AsyncGenerator<VideoFrame | null, void, unknown> | null = null
-  /** Per-segment demux iterators (parallel decode). Declared here so the
-   *  finally block can abandon them even when the loop never started. */
-  let gensBySeg = new Map<
-    Seg,
-    { gen: AsyncGenerator<VideoFrame | null, void, unknown>; started: boolean; pulled: VideoFrame | null }
-  >()
   /** Return/abandon a held segment iterator (release its sample in flight).
    *  TS narrows `segIter` down to never in some branches because the element
    *  path only ever nulls it, so route the cleanup through this helper. */
@@ -1025,35 +1019,6 @@ export async function exportOnDevice(
     // Round-robin: distribute frames across workers (multi-worker) so compositing+encoding parallelizes
     const targetWorker = (n0: number): Worker => (useMulti ? workers[n0 % workers.length] : worker)
 
-    // PARALLEL DECODE (the real web bottleneck): the frame loop is decode-bound —
-    // each `framesAt()` iterator walks the source once, one segment at a time,
-    // which pins throughput to a single sequential decode no matter how many
-    // encode workers exist. Fix: start a different-source segment's iterator a
-    // little AHEAD of the playhead so its first keyframe is decoded while the
-    // current segment is still being read — a one-window decode-ahead, exactly
-    // what Media3/ffmpeg do with multi-source timelines. Same-source segments
-    // share one iterator (they walk the same file forward, cheaply).
-    gensBySeg = new Map<
-      Seg,
-      { gen: AsyncGenerator<VideoFrame | null, void, unknown>; started: boolean; pulled: VideoFrame | null }
-    >()
-    const startGen = (s: Seg): void => {
-      if (gensBySeg.has(s) || s.isImage) return
-      const dec = decoders.get(s.url)
-      if (!dec) return
-      gensBySeg.set(s, { gen: dec.framesAt(segWants.get(s) ?? []), started: false, pulled: null })
-    }
-    for (const s of segs) startGen(s)
-    // First DIFFERENT-source segment reachable from `i+1` (parallel-warm target).
-    const nextDiffSrc = (i: number): Seg | null => {
-      const url = segs[i]?.url
-      for (let j = i + 1; j < segs.length; j++) {
-        const s = segs[j]
-        if (!s.isImage && s.url !== url) return s
-      }
-      return null
-    }
-
     for (let n = 0; n < totalFrames; n++) {
       if (workerError) fail(workerError)
       const tw = targetWorker(n)
@@ -1121,53 +1086,29 @@ export async function exportOnDevice(
           ovT
         )
       } else if (decoders.get(seg.url)) {
-        // DEMUXED PATH: each segment has its OWN framesAt() iterator (built
-        // above, lazily), so decode runs as fast as the machine can decode. The
-        // parallel-decode window pulls the FIRST frame of the next DIFFERENT
-        // source ahead of the playhead: its costly first-keyframe decode runs
-        // while the current segment is still being read. Same-source segments
-        // share the same iterator (samplesAtTimestamps walks a source once).
+        // DEMUXED PATH: one decode pass per segment, running as fast as the
+        // machine can decode. `samplesAtTimestamps` walks the source packets
+        // once, decoding each at most once, so this stays sequential and
+        // exact — a parallel multi-iterator version was trialled but exposed
+        // same-source segments' decoders to concurrent next() calls, which
+        // interleaved and produced black frames.
         const dec = decoders.get(seg.url)!
-if (seg !== curSeg) {
+        if (seg !== curSeg) {
           harvest.stop?.()
           closeBuf()
           returnSegIter()
           curSeg = seg
           segHarvesting = false
-          // PULL the segment's generator (may already have warmed a frame).
-          const g = gensBySeg.get(seg)
-          if (g) {
-            void g.gen.next().then((r) => {
-              if (!r.done) (g.pulled ??= r.value)
-            })
-          }
-          // KICK the next different source's decoder ahead (parallel window).
-          const nd = nextDiffSrc(segs.indexOf(seg))
-          if (nd) {
-            const ng = gensBySeg.get(nd)
-            if (ng && !ng.started) {
-              ng.started = true
-              void ng.gen.next().then((r) => {
-                if (!r.done && ng && !ng.pulled) ng.pulled = r.value ?? null
-              })
-            }
-          }
+          segIter = dec.framesAt(segWants.get(seg) ?? [])
         }
-        const g0 = gensBySeg.get(curSeg)
         let frame: VideoFrame | null = null
-        if (g0) {
-          const puff = g0.pulled
-          if (puff) {
-            frame = puff
-            g0.pulled = null
-          } else {
-            const r = await g0.gen.next()
-            frame = (r.done ? null : r.value) ?? null
-          }
+        if (segIter) {
+          const r = await segIter.next()
+          frame = (r.done ? null : r.value) ?? null
         }
-        const fit = fitFor(seg, dec.width || W, dec.height || H, t)
+        const fitD = fitFor(seg, dec.width || W, dec.height || H, t)
         if (frame) {
-          tw.postMessage({ type: 'frame', n, frame, fit, ovs }, [frame as unknown as Transferable, ...ovT])
+          tw.postMessage({ type: 'frame', n, frame, fit: fitD, ovs }, [frame as unknown as Transferable, ...ovT])
         } else {
           // Only happens for a timestamp before the track's first frame; leave
           // the base black for that frame rather than failing the export.
@@ -1303,7 +1244,6 @@ if (seg !== curSeg) {
     // Abandoning a decode iterator mid-segment has to run its finally block, or
     // the sample it is holding never gets released.
     returnSegIter()
-    for (const [, g] of gensBySeg) void g?.gen?.return(undefined)
     for (const o of ovVideos) {
       void o.iter?.return(undefined)
       o.dec?.close()
