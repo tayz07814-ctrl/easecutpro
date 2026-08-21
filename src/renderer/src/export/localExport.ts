@@ -1085,7 +1085,7 @@ export async function exportOnDevice(
           { type: 'frame', n, frame: null, imageId: a.id, fit: fitFor(seg, a.w || W, a.h || H, t), ovs },
           ovT
         )
-      } else if (decoders.get(seg.url)) {
+} else if (decoders.get(seg.url)) {
         // DEMUXED PATH: one decode pass per segment, running as fast as the
         // machine can decode. `samplesAtTimestamps` walks the source packets
         // once, decoding each at most once, so this stays sequential and
@@ -1105,6 +1105,52 @@ export async function exportOnDevice(
         if (segIter) {
           const r = await segIter.next()
           frame = (r.done ? null : r.value) ?? null
+        }
+        // Fallback: if the fast decoder returns no frame (unexpected EOF, seek
+        // failure, etc.), fall back to the element path so we never send a
+        // null frame that would produce a black picture.
+        if (!frame) {
+          const v = pool.get(seg.url)!
+          const want = Math.min(seg.sourceEnd - 0.001, seg.sourceStart + (t - seg.start) * seg.speed)
+          if (seg !== curSeg) {
+            harvest.stop?.()
+            closeBuf()
+            returnSegIter()
+            curSeg = seg
+            minSpacing = 0
+            prevPresentedT = -1
+            fallbacks = 0
+            segHarvesting = rvfcOK
+            try {
+              v.pause()
+            } catch { /* ignore */ }
+            if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
+            if (segHarvesting) {
+              try { v.playbackRate = harvestRate(seg.speed) } catch { /* ignore */ }
+              startHarvest(v)
+              try { await v.play() } catch { segHarvesting = false }
+            }
+          }
+          if (segHarvesting && !document.hidden) {
+            await waitPresented(v, want)
+            const g = pickGrab(want)
+            if (g) frame = g.frame.clone()
+            if (!frame) {
+              try {
+                v.pause()
+                if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
+                if (v.readyState < 2) {
+                  await new Promise<void>((res) => {
+                    const to = setTimeout(res, 2000)
+                    v.onloadeddata = () => { clearTimeout(to); res() }
+                  })
+                }
+                await new Promise((r) => setTimeout(r, 50))
+                const g2 = pickGrab(want)
+                if (g2) frame = g2.frame.clone()
+              } catch { /* fallback failed — frame stays null, worker will hold previous frame */ }
+            }
+          }
         }
         const fitD = fitFor(seg, dec.width || W, dec.height || H, t)
         if (frame) {
@@ -1152,62 +1198,27 @@ export async function exportOnDevice(
         if (segHarvesting && !document.hidden) {
           await waitPresented(v, want)
           const g = pickGrab(want)
-          if (g) frame = g.frame.clone() // buf keeps the original: the next output frame may reuse it
-        }
-        if (!frame) {
-          // SEEK for this frame: the presented stream skipped it (dropped
-          // frame), the harvest stalled, rVFC is unavailable, or the tab is
-          // hidden. Exactness beats speed.
-          try {
-            v.pause()
-          } catch {
-            /* ignore */
-          }
-          if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
-          if (v.readyState < 2) {
-            await new Promise<void>((res) => {
-              const to = setTimeout(res, 2000)
-              v.onloadeddata = () => {
-                clearTimeout(to)
-                res()
-              }
-            })
-          }
-          frame = new VideoFrame(v, { timestamp: 0 })
-          if (segHarvesting) {
-            // Dropping this often means the harvest is outrunning the device.
-            // Drop a gear first — only a device that still can't keep up at 1x
-            // gains nothing from the harvest, and THAT one falls back to seeking
-            // for the rest of the segment.
-            if (++fallbacks > 10) {
-              if (rateIdx < HARVEST_RATES.length - 1) {
-                rateIdx++
-                fallbacks = 0
-                try {
-                  v.playbackRate = harvestRate(seg.speed)
-                } catch {
-                  /* rate unsupported — the next drop batch retires the harvest */
-                }
-                dbg('harvest rate down', { rate: HARVEST_RATES[rateIdx] })
-                if (!document.hidden) {
-                  try {
-                    await v.play()
-                  } catch {
-                    segHarvesting = false
+          if (g) {
+            frame = g.frame.clone()
+          } else {
+            // Fallback: seek to exact time and try once more with a brief extra wait
+            try {
+              v.pause()
+              if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
+              if (v.readyState < 2) {
+                await new Promise<void>((res) => {
+                  const to = setTimeout(res, 2000)
+                  v.onloadeddata = () => {
+                    clearTimeout(to)
+                    res()
                   }
-                }
-              } else {
-                harvest.stop?.()
-                closeBuf()
-                segHarvesting = false
-                dbg('harvest off for segment (frame drops)', { fallbacks })
+                })
               }
-            } else if (!document.hidden) {
-              try {
-                await v.play() // resume the harvest for the next frames
-              } catch {
-                segHarvesting = false
-              }
+              await new Promise((r) => setTimeout(r, 50))
+              const g2 = pickGrab(want)
+              if (g2) frame = g2.frame.clone()
+            } catch {
+              /* fallback failed — frame stays null, worker will hold previous frame */
             }
           }
         }

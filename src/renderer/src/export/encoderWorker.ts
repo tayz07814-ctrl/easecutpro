@@ -216,10 +216,10 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
       const ts = Math.round((msg.n * 1e6) / FPS) // µs — INDEX-based, never wall clock
       const dur = Math.round(1e6 / FPS)
       const t = (msg.n + 0.0001) / FPS // sprite windows use the sender's frame clock
-      ctx!.fillStyle = '#000'
-      ctx!.fillRect(0, 0, W, H)
       const base = msg.frame ?? (msg.imageId !== undefined ? assets.get(msg.imageId) : undefined)
       if (base && msg.fit) {
+        ctx!.fillStyle = '#000'
+        ctx!.fillRect(0, 0, W, H)
         const f = msg.fit
         ctx!.save()
         if (Math.abs(f.scale - 1) > 0.001) {
@@ -229,6 +229,13 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
         }
         ctx!.drawImage(base, f.dx, f.dy, f.dw, f.dh)
         ctx!.restore()
+      } else if (!base) {
+        // No frame available (e.g., element path grab failed) — keep previous frame
+        // by not clearing the canvas. The previous frame content remains.
+      } else {
+        // No base and no fit — clear to black (should not happen normally)
+        ctx!.fillStyle = '#000'
+        ctx!.fillRect(0, 0, W, H)
       }
       msg.frame?.close()
       // Overlays above the base, baked text above overlays (its z is offset
