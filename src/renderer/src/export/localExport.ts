@@ -540,25 +540,19 @@ export async function exportOnDevice(
   const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing your audio…'), seamFadeSeconds())
   dbg('renderAudio: done', !!audioBuf)
 
-  // 2) workers — N parallel encoders, main thread muxes. Cap by machine class:
-  // weak machines get 2 (keep the browser responsive), strong get up to 4.
-  const cores = navigator.hardwareConcurrency ?? 4
-  const NWORKERS = cores >= 8 ? 4 : cores >= 5 ? 3 : 2
-  const useMulti = NWORKERS > 1
-  const workers: Worker[] = []
-  for (let i = 0; i < NWORKERS; i++) {
-    workers.push(new Worker(new URL('./encoderWorker.ts', import.meta.url), { type: 'module' }))
-  }
-  const worker = workers[0] // primary worker (compatibility for error handling)
+  // 2) ONE worker — the worker muxes locally (no EncodedVideoChunk transfer
+  // across thread boundaries, which corrupts the data in some browsers).
+  // The worker still uses play-harvest at 8x/4x/2x speed for fast encoding.
+  const workers: Worker[] = [new Worker(new URL('./encoderWorker.ts', import.meta.url), { type: 'module' })]
+  const worker = workers[0]
+  const useMulti = false
   let doneReject: ((e: Error) => void) | null = null
   /** Signal a fatal export error. Terminates workers and rejects the `done`
    *  promise. When called from a synchronous callback (encoder .error), the
    *  throw is suppressed — doneReject already propagates the error through the
    *  promise chain; an unhandled throw in a callback context crashes the page. */
   const fail = (m: string): void => {
-    for (const w of workers) {
-      try { w.terminate() } catch { /* gone */ }
-    }
+    try { worker.terminate() } catch { /* gone */ }
     const err = new Error(m)
     if (doneReject) {
       doneReject(err)
@@ -568,132 +562,41 @@ export async function exportOnDevice(
     }
   }
 
-  // Multi-worker: collect encoded chunks in timestamp order and mux on main thread
-  let muxer: import('mp4-muxer').Muxer<import('mp4-muxer').ArrayBufferTarget> | null = null
-  if (useMulti) {
-    const { Muxer, ArrayBufferTarget } = await import('mp4-muxer')
-    muxer = new Muxer({
-      target: new ArrayBufferTarget(),
-      video: { codec: 'avc', width: W, height: H },
-      audio: audioBuf ? { codec: 'aac', sampleRate: AUDIO_RATE, numberOfChannels: 2 } : undefined,
-      fastStart: 'in-memory'
-    })
-  }
-
-  // Audio encoder on main thread (for multi-worker mode)
-  let mainAudioEncoder: AudioEncoder | null = null
-  if (useMulti && audioBuf) {
-    mainAudioEncoder = new AudioEncoder({
-      output: (chunk, meta) => muxer!.addAudioChunk(chunk, meta),
-      error: (e) => fail(`audio encoder: ${e.message}`)
-    })
-    mainAudioEncoder.configure({ codec: 'mp4a.40.2', sampleRate: AUDIO_RATE, numberOfChannels: 2, bitrate: 192_000 })
-  }
-
-  // Reorder buffer: collect out-of-order chunks and release in timestamp order.
-  // The worker stamps each frame with Math.round(n * 1e6 / FPS) (per-frame
-  // exact). We MUST use the same formula to match — accumulating
-  // `Math.round(1e6 / FPS)` compounds rounding error and diverges at n≥2 for
-  // non-divisor frame rates (e.g. 30: 66666 vs 66667), permanently stalling
-  // the drain loop and producing a ~2-frame export.
-  const pendingChunks = new Map<number, { chunk: EncodedVideoChunk; meta: EncodedVideoChunkMetadata }>()
-  let nextDrainN = 0
-  let nextExpectedTs = 0
-
   let ackResolve: (() => void) | null = null
   let lastQueue = 0
   let workerError: string | null = null
   let readyResolve: (() => void) | null = null
-  // Per-worker encode-queue depth (multi-worker mode): each worker acks with its
-  // own depth, and the dispatcher only stalls that worker's lane, never the rest.
-  const queueByWorker = new Map<Worker, number>()
-  // Per-worker ack waiters: when a lane is deep, the dispatcher registers a
-  // one-shot resolver keyed to THAT worker; its ack (ev.source is the worker)
-  // releases exactly that lane, so one busy encoder never stalls the others.
-  const ackWaiters = new Map<Worker, (() => void) | null>()
   const done = new Promise<ArrayBuffer>((resolve, reject) => {
     doneReject = reject
-    if (!useMulti) {
-      // SINGLE WORKER: worker muxes itself and sends {type:'done', buffer}
-      const orig = workers[0].onmessage
-      workers[0].onmessage = (ev: MessageEvent) => {
-        const m = ev.data
-        if (m.type === 'ready') { readyResolve?.(); if (orig) (orig as (e: MessageEvent) => void)(ev); return }
-        if (m.type === 'ack') { lastQueue = m.queue; ackResolve?.(); ackResolve = null; return }
-        if (m.type === 'done') { if (m.buffer) resolve(m.buffer); else if (orig) (orig as (e: MessageEvent) => void)(ev); return }
-        if (m.type === 'error') { workerError = m.error; reject(new Error(m.error)); return }
-        if (orig) (orig as (e: MessageEvent) => void)(ev)
-      }
-      workers[0].onerror = (e) => reject(new Error(e.message))
-    } else {
-      // MULTI WORKER: main thread collects encoded chunks and muxes
-      let readyCount = 0
-      let doneCount = 0
-      const onMsg = (ev: MessageEvent) => {
-        const m = ev.data
-        if (m.type === 'ready') {
-          if (++readyCount === workers.length) readyResolve?.()
-        } else if (m.type === 'ack') {
-          lastQueue = m.queue
-          const srcEv = ev.source
-          if (srcEv instanceof Worker) {
-            queueByWorker.set(srcEv, m.queue)
-            const w = ackWaiters.get(srcEv)
-            if (w) {
-              ackWaiters.set(srcEv, null)
-              w()
-            }
-          } else {
-            ackResolve?.()
-            ackResolve = null
-          }
-        } else if (m.type === 'vchunk') {
-          pendingChunks.set(m.ts, { chunk: m.chunk, meta: m.meta })
-          while (pendingChunks.has(nextExpectedTs)) {
-            const { chunk, meta } = pendingChunks.get(nextExpectedTs)!
-            pendingChunks.delete(nextExpectedTs)
-            if (muxer) muxer.addVideoChunk(chunk, meta ?? undefined)
-            nextDrainN++
-            nextExpectedTs = Math.round((nextDrainN * 1e6) / FPS)
-          }
-        } else if (m.type === 'done') {
-          if (++doneCount === workers.length) {
-            if (muxer) {
-              muxer.finalize()
-              resolve(muxer.target.buffer)
-            }
-          }
-        } else if (m.type === 'error') {
-          workerError = m.error
-          reject(new Error(m.error))
-        }
-      }
-      for (const w of workers) {
-        w.onmessage = onMsg
-        w.onerror = (e) => reject(new Error(e.message))
-        queueByWorker.set(w, 0)
-      }
+    // Worker muxes locally and sends {type:'done', buffer}
+    const orig = workers[0].onmessage
+    workers[0].onmessage = (ev: MessageEvent) => {
+      const m = ev.data
+      if (m.type === 'ready') { readyResolve?.(); if (orig) (orig as (e: MessageEvent) => void)(ev); return }
+      if (m.type === 'ack') { lastQueue = m.queue; ackResolve?.(); ackResolve = null; return }
+      if (m.type === 'done') { if (m.buffer) resolve(m.buffer); else if (orig) (orig as (e: MessageEvent) => void)(ev); return }
+      if (m.type === 'error') { workerError = m.error; reject(new Error(m.error)); return }
+      if (orig) (orig as (e: MessageEvent) => void)(ev)
     }
+    workers[0].onerror = (e) => reject(new Error(e.message))
   })
 
   const ready = new Promise<void>((resolve) => {
     readyResolve = resolve
   })
 
-  // Init all workers
-  for (let i = 0; i < workers.length; i++) {
-    workers[i].postMessage({
-      type: 'init',
-      width: W,
-      height: H,
-      fps: FPS,
-      videoCodec: caps.videoCodec,
-      bitrate: Math.round(opts.bitrateMbps * 1_000_000),
-      audio: !useMulti && audioBuf ? { codec: 'mp4a.40.2', sampleRate: AUDIO_RATE, channels: 2, bitrate: 192_000 } : null,
-      nomux: useMulti
-    })
-  }
-  dbg('worker init sent', { workers: workers.length, multi: useMulti })
+  // Init worker
+  workers[0].postMessage({
+    type: 'init',
+    width: W,
+    height: H,
+    fps: FPS,
+    videoCodec: caps.videoCodec,
+    bitrate: Math.round(opts.bitrateMbps * 1_000_000),
+    audio: audioBuf ? { codec: 'mp4a.40.2', sampleRate: AUDIO_RATE, channels: 2, bitrate: 192_000 } : null,
+    nomux: false
+  })
+  dbg('worker init sent')
   await ready
   dbg('worker ready')
 
@@ -716,20 +619,12 @@ export async function exportOnDevice(
         timestamp: Math.round((o / AUDIO_RATE) * 1e6),
         data: planar
       })
-      if (useMulti && mainAudioEncoder) {
-        mainAudioEncoder.encode(data)
-        data.close()
-      } else {
-        worker.postMessage({ type: 'audio', data }, [data as unknown as Transferable])
-      }
+      worker.postMessage({ type: 'audio', data }, [data as unknown as Transferable])
     }
   }
 
   dbg('audio streamed')
-  // Flush the main-thread audio encoder and WAIT for it — all AAC chunks must
-  // land in the muxer before workers finalize. The old `void` fire-and-forget
-  // raced with the finish message, dropping trailing audio.
-  if (useMulti && mainAudioEncoder) await mainAudioEncoder.flush()
+  // Audio is encoded inside the worker — no main-thread flush needed.
   // 4) compositing plan + source pools. Baked bitmaps (text, image overlays,
   //    main-lane images) are TRANSFERRED to the worker once and drawn there on
   //    every frame of their window; the worker closes each when its window
@@ -1037,12 +932,9 @@ export async function exportOnDevice(
       }
     }
     dbg('pool ready', { sprites: spriteId, images: mainImages.size, videoOverlays: ovVideos.length })
-    // Round-robin: distribute frames across workers (multi-worker) so compositing+encoding parallelizes
-    const targetWorker = (n0: number): Worker => (useMulti ? workers[n0 % workers.length] : worker)
 
     for (let n = 0; n < totalFrames; n++) {
       if (workerError) fail(workerError)
-      const tw = targetWorker(n)
       const t = (n + 0.0001) / FPS
       // video-overlay harvests for THIS output frame — plain per-frame seek
       // (b-roll windows are short; the main lane's play-harvest speed machinery
@@ -1090,7 +982,7 @@ export async function exportOnDevice(
       const ovT = ovs.map((g) => g.frame as unknown as Transferable)
       const seg = segs.find((s) => t >= s.start && t < s.start + s.len)
       if (!seg) {
-        tw.postMessage({ type: 'frame', n, frame: null, ovs }, ovT)
+        worker.postMessage({ type: 'frame', n, frame: null, ovs }, ovT)
       } else if (seg.isImage) {
         // main-lane image: the decoded asset stands in for the video frame —
         // no harvest machinery, the worker draws it by id with the same fit.
@@ -1102,7 +994,7 @@ export async function exportOnDevice(
           segHarvesting = false
         }
         const a = mainImages.get(seg.url)!
-        tw.postMessage(
+        worker.postMessage(
           { type: 'frame', n, frame: null, imageId: a.id, fit: fitFor(seg, a.w || W, a.h || H, t), ovs },
           ovT
         )
@@ -1140,11 +1032,11 @@ export async function exportOnDevice(
         }
         const fitD = fitFor(seg, dec.width || W, dec.height || H, t)
         if (frame) {
-          tw.postMessage({ type: 'frame', n, frame, fit: fitD, ovs }, [frame as unknown as Transferable, ...ovT])
+          worker.postMessage({ type: 'frame', n, frame, fit: fitD, ovs }, [frame as unknown as Transferable, ...ovT])
         } else {
           // Only happens for a timestamp before the track's first frame; leave
           // the base black for that frame rather than failing the export.
-          tw.postMessage({ type: 'frame', n, frame: null, ovs }, ovT)
+          worker.postMessage({ type: 'frame', n, frame: null, ovs }, ovT)
         }
       } else {
         const v = pool.get(seg.url)!
@@ -1211,26 +1103,15 @@ export async function exportOnDevice(
         // Only include frame in the transfer list when it's a real VideoFrame —
         // null in a transfer list throws DataCloneError.
         const vTransfer = frame ? [frame as unknown as Transferable, ...ovT] : ovT
-        tw.postMessage(
+        worker.postMessage(
           { type: 'frame', n, frame, fit: fitFor(seg, v.videoWidth || W, v.videoHeight || H, t), ovs },
           vTransfer
         )
       }
-      // backpressure: never let the encoder queue run away. In multi-worker
-      // mode each worker acks its own depth; stall only the TARGET worker's lane
-      // (one busy encoder must not stall the others behind it).
-      const q = useMulti ? (queueByWorker.get(tw) ?? 0) : lastQueue
-      if (q > 20) {
-        if (useMulti) {
-          // Resolve any stale waiter before overwriting — the old promise would
-          // never settle, leaking memory and potentially confusing the dispatcher.
-          const old = ackWaiters.get(tw)
-          if (old) old()
-          await new Promise<void>((res) => ackWaiters.set(tw, res))
-        } else {
-          ackResolve?.()
-          await new Promise<void>((res) => (ackResolve = res))
-        }
+      // backpressure: never let the encoder queue run away.
+      if (lastQueue > 20) {
+        ackResolve?.()
+        await new Promise<void>((res) => (ackResolve = res))
       }
       if (n % 15 === 0) onProgress(5 + Math.round((n / totalFrames) * 90), exportMsg(n / totalFrames))
     }
@@ -1266,10 +1147,7 @@ export async function exportOnDevice(
       v.remove()
     }
     setTimeout(() => {
-      for (const w of workers) {
-        try { w.terminate() } catch { /* gone */ }
-      }
-      mainAudioEncoder?.close()
+      try { worker.terminate() } catch { /* gone */ }
     }, 1000)
   }
 }

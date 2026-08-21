@@ -38,7 +38,7 @@ import { framesToSeconds } from '@shared/timeline/time'
 import { mainTrackId, documentDuration } from '@shared/timeline/model'
 import type { TimelineDocument, Clip as DocClip } from '@shared/timeline/types'
 import { resolveMedia, MISSING_MEDIA_MESSAGE } from '../media/resolver'
-import { mediaSrc } from '../platform'
+import { IS_WEB, mediaSrc } from '../platform'
 import { WcPlayer, wcSupported } from '../preview/wcPlayer'
 import { FfPlayer, ffSupported } from '../preview/ffPlayer'
 import { shouldIssuePausedSeek, scrubActive } from '../preview/scrubRule'
@@ -58,16 +58,9 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v))
 }
 // Warm the NEXT source's decoder this many seconds before a clip/cut seam so
-// crossing it doesn't stall on a cold seek (the "slider sticks + video pauses at
-// the seam" bug — a seek issued AT the boundary freezes the clock while it lands).
-// Warm the next seam this many seconds ahead. MUST stay small: on a heavily-cut
-// video the kept segments are shorter than the lead, so a large value makes the
-// decode-ahead buddy re-seek on essentially EVERY segment — on mobile that starves
-// the hardware decoder and WEDGES the picture (frozen frame while the clock keeps
-// advancing). 1.2 caused exactly that; 0.6 is the known-good value (buddy warms
-// once, just before the seam). Do NOT raise this to chase seam flicker — that
-// needs a smarter, device-profiled approach, not a bigger lead.
-const PREWARM_LEAD_S = 0.6
+// crossing it doesn't stall on a cold seek. Web uses HTTP range requests which
+// are slower than local file access, so the lead is larger on web.
+const PREWARM_LEAD_S = IS_WEB ? 1.2 : 0.6
 function containRect(w: number, h: number, aspect: number): { left: number; top: number; width: number; height: number } {
   if (w <= 0 || h <= 0) return { left: 0, top: 0, width: 0, height: 0 }
   if (w / h > aspect) {
@@ -1081,7 +1074,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           } else {
             if (!wcVideoWaitRef.current) wcVideoWaitRef.current = now
             if (eng?.isPlaying()) eng.pause()
-            if (now - wcVideoWaitRef.current > 6000) {
+            const videoTimeout = IS_WEB ? 12000 : 6000
+            if (now - wcVideoWaitRef.current > videoTimeout) {
               setWcOn(false)
               forceRecord()
             }
@@ -1124,7 +1118,8 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
               // (which has its own element audio).
               t += dt
               if (!wcAudioWaitRef.current) wcAudioWaitRef.current = now
-              if (now - wcAudioWaitRef.current > 8000) {
+              const audioTimeout = IS_WEB ? 15000 : 8000
+              if (now - wcAudioWaitRef.current > audioTimeout) {
                 console.warn('[wc-preview] audio engine never started — falling back to element path')
                 setWcOn(false)
                 forceRecord()

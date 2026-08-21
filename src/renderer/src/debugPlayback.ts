@@ -98,8 +98,14 @@ export function snapshotPlayback(ctx: {
 
 /** Write the snapshot (throttled unless `force`). */
 export function recordPlayback(snap: PlaybackSnapshot, force = false): void {
-  if (IS_WEB) return
   if (!force && performance.now() - lastWrite < 2000) return
   lastWrite = performance.now()
+  if (IS_WEB) {
+    // Web has no filesystem access — persist on the window for DevTools inspection.
+    try {
+      ;(window as unknown as { __ecDebug?: PlaybackSnapshot }).__ecDebug = snap
+    } catch { /* ignore */ }
+    return
+  }
   window.api?.debugPlayerDump?.(snap).catch(() => undefined)
 }
