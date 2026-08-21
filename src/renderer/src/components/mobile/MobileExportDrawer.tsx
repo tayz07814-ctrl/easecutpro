@@ -97,8 +97,14 @@ export default function MobileExportDrawer(): JSX.Element | null {
   const gate = IS_WEB && deviceOk ? whyNotLocal(project) : ''
   const canExport = (IS_WEB ? deviceOk && !gate : true) && !exporting
 
-  if (!show) return null
+  // Keep mounted while an export is in-flight or just finished (store flips showExportModal false at start)
+  const shouldShow = show || exporting || !!done || job.kind === 'export' && job.active
+  if (!shouldShow) return null
   const filename = (project.name || 'export').trim()
+  const handleClose = (): void => {
+    if (exporting) return // don't dismiss mid-export — progress lives here
+    setDone(null); setError(null); close(false)
+  }
 
   const run = (): void => {
     if (!canExport) return
@@ -110,12 +116,12 @@ export default function MobileExportDrawer(): JSX.Element | null {
   }
 
   return (
-    <div onClick={() => close(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(8,8,10,.6)', zIndex: 1000, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+    <div onClick={handleClose} style={{ position: 'fixed', inset: 0, background: 'rgba(8,8,10,.6)', zIndex: 1000, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: '#141418', borderTop: '1px solid rgba(255,255,255,.09)', borderRadius: '18px 18px 0 0', boxShadow: '0 -14px 44px rgba(0,0,0,.55)', display: 'flex', flexDirection: 'column', maxHeight: '92vh', height: '78vh' }}>
         <div style={{ display: 'grid', placeItems: 'center', padding: '10px 0 0' }}><div style={{ width: 38, height: 4, borderRadius: 2, background: 'rgba(255,255,255,.18)' }} /></div>
         <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 18px 6px' }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: '#E7E7EA' }}>Export</div>
-          <span onClick={() => close(false)} style={{ fontSize: 18, color: '#8F8F96', cursor: 'pointer', padding: '4px 6px' }}>✕</span>
+          <span onClick={handleClose} style={{ fontSize: 18, color: '#8F8F96', cursor: 'pointer', padding: '4px 6px' }}>✕</span>
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: '4px 18px 18px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Segment label="Aspect ratio" options={['Source', '16:9', '9:16', '1:1', '4:5', '4:3']} value={aspect} onPick={setAspect} />
