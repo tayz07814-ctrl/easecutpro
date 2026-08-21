@@ -85,6 +85,46 @@ export function requestPersistentStorage(): void {
   }
 }
 
+// ---- Picked-file readability ----
+// Android/iOS hand out transient grants for picked files (revoked after a
+// reload/tab restore), and cloud-gallery items can exist only online. Reads
+// then fail with NotReadableError — "the requested file could not be read".
+
+const READ_FAILURE_RE = /NotReadableError|could not be read|NotFoundException/i
+
+/** Guidance text when an error is a file-read revocation, else null. */
+function readFailureGuidance(name: string, msg: string): string | null {
+  return READ_FAILURE_RE.test(`${name} ${msg}`)
+    ? 'This browser can no longer read the imported file. Phones revoke access to picked files after a page reload or tab restore, and cloud-gallery items can be unavailable offline. Re-import the video from device storage (Camera/Downloads), then run the step again.'
+    : null
+}
+
+/** Rewrite file-read revocations into actionable errors; pass others through. */
+export function friendlyError(e: unknown): Error {
+  const name = e instanceof DOMException ? e.name : e instanceof Error ? e.name : ''
+  const msg = e instanceof Error ? e.message : String(e)
+  const g = readFailureGuidance(name, msg)
+  return g ? new Error(g) : e instanceof Error ? e : new Error(msg)
+}
+
+/** Show an error modal, upgrading read-revocation failures to actionable text. */
+export function reportReadError(label: string, e: unknown): void {
+  ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.(label, friendlyError(e))
+}
+
+/** Can the file actually be read RIGHT NOW? Android picks can be dead on
+ *  arrival (cloud-only gallery items, revoked grants) — probing 64 KB at
+ *  import lets the user re-import immediately instead of hitting a cryptic
+ *  decoder error halfway through transcription. */
+export async function assertReadable(file: File): Promise<boolean> {
+  try {
+    await file.slice(0, 64 * 1024).arrayBuffer()
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Re-register webmedia ids from this device's IndexedDB (project reopened
  *  after a reload). Returns the ids that could be restored. */
 export async function hydrateLocalMedia(ids: string[]): Promise<string[]> {
@@ -371,7 +411,17 @@ export async function localWaveform(id: string, peaksPerSec = 60): Promise<Wavef
     return { peaksPerSec, peaks }
   } catch (e) {
     // Surface WHY the waveform is missing (iOS audio-decode failures are silent otherwise).
-    ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Waveform decode failed', e)
+    // If the full video already reached the PC, its ffmpeg waveform still works even
+    // when the phone-side file reference went stale.
+    const sp = rec.serverPath
+    if (sp) {
+      try {
+        return await serverPost<Waveform>('/api/waveform', { path: sp })
+      } catch {
+        /* fall through to the error report */
+      }
+    }
+    reportReadError('Waveform decode failed', e)
     return { peaksPerSec, peaks: [] }
   }
 }
@@ -664,7 +714,11 @@ export async function ensureUploaded(id: string, onProgress?: (pct: number) => v
   const rec = registry.get(id)
   if (!rec) throw new Error('media not found in browser')
   if (rec.serverPath) return rec.serverPath
-  rec.serverPath = await uploadBlob(rec.file.name, rec.file, onProgress)
+  try {
+    rec.serverPath = await uploadBlob(rec.file.name, rec.file, onProgress)
+  } catch (e) {
+    throw friendlyError(e) // read revocations become actionable here too
+  }
   return rec.serverPath
 }
 
@@ -746,7 +800,7 @@ export async function extractAudioWavBlob(id: string, onProgress?: (pct: number)
     return wav
   } catch (e) {
     // Surface the REAL decode error (Cut Lord's "Could not decode…" hides the cause).
-    ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Audio decode failed (Cut Lord)', e)
+    reportReadError('Audio decode failed (Cut Lord)', e)
     return null // unsupported container/codec, or decode OOM
   }
 }

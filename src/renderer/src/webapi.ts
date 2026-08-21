@@ -15,6 +15,8 @@ import {
   hydrateLocalMedia,
   serverPathOf,
   requestPersistentStorage,
+  assertReadable,
+  reportReadError,
   serverPost
 } from './webmedia'
 
@@ -209,19 +211,49 @@ function triggerDownload(url: string, name: string): void {
 const webApi: Window['api'] = {
   toolStatus: () => call('/api/toolStatus'),
   // Local-first: keep the file in the browser; no upload until the PC needs it.
+  // Every pick is probed FIRST: Android can hand out picks that are already
+  // unreadable (cloud-only gallery items, revoked content:// grants) — failing
+  // at import with a clear message beats a cryptic decoder error mid-transcribe.
   openMediaDialog: async () => {
     const f = await pickFile('video/*,audio/*,image/*')
-    return f ? registerLocalFile(f) : null
+    if (!f) return null
+    if (!(await assertReadable(f))) {
+      reportReadError('Import failed', new Error('The picked file could not be read'))
+      return null
+    }
+    return registerLocalFile(f)
   },
   openMediaDialogMulti: async () => {
     const files = await pickFiles('video/*,audio/*,image/*')
-    return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
+    const out: { path: string; name: string }[] = []
+    let bad = 0
+    for (const f of files) {
+      if (await assertReadable(f)) out.push({ path: registerLocalFile(f), name: f.name })
+      else bad++
+    }
+    if (bad)
+      reportReadError(
+        'Import problem',
+        new Error(`${bad} of ${files.length} picked file(s) could not be read and were skipped`)
+      )
+    return out
   },
   importFolder: async () => {
     const MEDIA_RE = /\.(mp4|mov|mkv|webm|avi|m4v|mp3|wav|m4a|aac|png|jpe?g|webp|gif|bmp)$/i
     const files = (await pickFolder()).filter((f) => MEDIA_RE.test(f.name))
     files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
-    return files.map((f) => ({ path: registerLocalFile(f), name: f.name }))
+    const out: { path: string; name: string }[] = []
+    let bad = 0
+    for (const f of files) {
+      if (await assertReadable(f)) out.push({ path: registerLocalFile(f), name: f.name })
+      else bad++
+    }
+    if (bad)
+      reportReadError(
+        'Import problem',
+        new Error(`${bad} of ${files.length} file(s) could not be read and were skipped`)
+      )
+    return out
   },
   combineClips: async (clips, audioOnly) => {
     // Upload any browser-local clips to the PC first, then combine there.
