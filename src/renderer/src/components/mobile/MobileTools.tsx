@@ -100,8 +100,6 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
 
   // ---- nothing selected: the MAIN toolbar ----
   if (kind === 'none' || !clip) {
-    // "Edit" reveals a clip's editing toolbar by selecting the base clip; with no
-    // media yet it falls back to importing.
     const mainClip = snap?.doc.tracks.find((t) => t.isMain)?.clips[0] ?? null
     return (
       <div className="mt-dock">
@@ -110,7 +108,7 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
           <Tool icon="edit" label="Edit" onClick={() => (mainClip ? engine?.select([mainClip.id]) : onImport())} />
           <Tool icon="music" label="Music" onClick={() => (onAddAudio ? onAddAudio() : soon('Music'))} />
           <Tool icon="text" label="Text" onClick={() => (onAddText ? onAddText() : onEditText())} />
-          <Tool icon="scriptcut" label="Cut Lord" onClick={onCutlord} tint="accent" />
+          <Tool icon="scriptcut" label="EaseTools" onClick={onCutlord} tint="accent" />
           <Tool icon="captions" label="Captions" onClick={() => (onCaptions ? onCaptions() : soon('Captions'))} />
         </div>
       </div>

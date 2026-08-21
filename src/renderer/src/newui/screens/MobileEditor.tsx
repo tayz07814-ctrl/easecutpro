@@ -8,7 +8,7 @@ import TimelinePanel from '../timeline/TimelinePanel'
 import { MobileTools } from '../../components/mobile/MobileTools'
 import { Icon } from '../../components/mobile/Icon'
 import MobileTextPanel from '../../components/mobile/MobileTextPanel'
-import RetakeCleanerPanel from './RetakeCleanerPanel'
+import MobileEaseTools from './MobileEaseTools'
 import SilenceMasterySettingsModal from './SilenceMasterySettingsModal'
 import MobileExportDrawer from '../../components/mobile/MobileExportDrawer'
 import SettingsModal from '../../components/SettingsModal'
@@ -216,7 +216,7 @@ export default function MobileEditor(): JSX.Element {
         />
       </div>
 
-      {sheet === 'cut' && <Sheet onClose={() => setSheet(null)}><RetakeCleanerPanel /></Sheet>}
+      {sheet === 'cut' && <Sheet onClose={() => setSheet(null)}><MobileEaseTools onClose={() => setSheet(null)} /></Sheet>}
       {sheet === 'media' && <MediaSheet onClose={() => setSheet(null)} />}
       {sheet === 'music' && <MusicSheet onClose={() => setSheet(null)} />}
       {sheet === 'captions' && <CaptionsSheet onClose={() => setSheet(null)} />}
