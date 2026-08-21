@@ -1,10 +1,10 @@
 // On-device export — orchestrator (main thread).
 //
-// Renders the timeline document WITHOUT uploading anything: a hidden <video>
-// pool seeks each source to the exact frame time (frame N ↔ N / fps — index
-// math, never the wall clock), transfers the decoded frame to the encoder
-// worker (composite + H.264 + MP4 mux), and mixes the audio offline through an
-// OfflineAudioContext (cuts, per-clip speed/gain, audio lanes, music) into AAC.
+// Renders the timeline document WITHOUT uploading anything: video sources are
+// demuxed and decoded sequentially through Mediabunny/WebCodecs, output frame N
+// is always N / fps, and the worker handles compositing + H.264 + MP4 mux.
+// Audio is mixed offline through an OfflineAudioContext into AAC. There is no
+// realtime playback clock and no per-output-frame HTMLVideoElement seeking.
 // A slow or hanging device makes the export take longer; it cannot change the
 // output — duration and frame count are exact by construction.
 //
@@ -515,639 +515,330 @@ export async function exportOnDevice(
   if (!doc) throw new Error('timeline not ready')
   const gate = whyNotLocal(project)
   if (gate) throw new Error(gate)
+
   const caps = await probeEncodeCaps()
   if (!caps.video) throw new Error('this browser can’t encode video on-device')
-  // iOS/iPadOS Safari < 26 ships WebCodecs video-only (no AudioEncoder). Route to
-  // the Mediabunny exporter, which polyfills AAC with a WASM encoder so the export
-  // keeps its audio. Everything below stays the proven mp4-muxer path used by every
-  // other browser (Android/desktop/iOS 26+), unchanged.
   if (!caps.audio) {
     const { exportOnDeviceMB } = await import('./localExportMB')
     return exportOnDeviceMB(project, opts, onProgress)
   }
+
   const { segs, audio, total } = planFromDoc(doc, project)
   if (!segs.length || total <= 0) throw new Error('nothing to export')
 
   const W = Math.max(16, Math.round(opts.width / 2) * 2)
   const H = Math.max(16, Math.round(opts.height / 2) * 2)
   const totalFrames = Math.max(1, Math.round(total * FPS))
+  const frameDur = 1 / FPS
 
   onProgress(1, 'Getting ready to export…')
   dbg('plan', { segs: segs.length, audio: audio.length, total, W, H, totalFrames })
 
-  // 1) audio first (fast, and the encoder drains it while frames trickle in)
-  dbg('renderAudio: start')
-  const audioBuf = await renderAudio(segs, audio, total, (p) => onProgress(p, 'Mixing your audio…'), seamFadeSeconds())
-  dbg('renderAudio: done', !!audioBuf)
+  // Render audio while the browser is opening/demuxing the video sources. This
+  // does not make OfflineAudioContext concurrent with itself, but it removes the
+  // old hard serialization between source discovery and audio preparation.
+  const audioPromise = renderAudio(
+    segs,
+    audio,
+    total,
+    (p) => onProgress(p, 'Mixing your audio…'),
+    seamFadeSeconds()
+  )
 
-  // 2) ONE worker — the worker muxes locally (no EncodedVideoChunk transfer
-  // across thread boundaries, which corrupts the data in some browsers).
-  // The worker still uses play-harvest at 8x/4x/2x speed for fast encoding.
-  const workers: Worker[] = [new Worker(new URL('./encoderWorker.ts', import.meta.url), { type: 'module' })]
-  const worker = workers[0]
-  const useMulti = false
-  let doneReject: ((e: Error) => void) | null = null
-  /** Signal a fatal export error. Terminates workers and rejects the `done`
-   *  promise. When called from a synchronous callback (encoder .error), the
-   *  throw is suppressed — doneReject already propagates the error through the
-   *  promise chain; an unhandled throw in a callback context crashes the page. */
-  const fail = (m: string): void => {
-    try { worker.terminate() } catch { /* gone */ }
-    const err = new Error(m)
-    if (doneReject) {
-      doneReject(err)
-      doneReject = null
-    } else {
-      console.error('[ondevice] fail after doneReject null:', m)
-    }
-  }
-
-  let ackResolve: (() => void) | null = null
-  let lastQueue = 0
+  const worker = new Worker(new URL('./encoderWorker.ts', import.meta.url), { type: 'module' })
   let workerError: string | null = null
-  let readyResolve: (() => void) | null = null
-  const done = new Promise<ArrayBuffer>((resolve, reject) => {
-    doneReject = reject
-    // Worker muxes locally and sends {type:'done', buffer}
-    const orig = workers[0].onmessage
-    workers[0].onmessage = (ev: MessageEvent) => {
-      const m = ev.data
-      if (m.type === 'ready') { readyResolve?.(); if (orig) (orig as (e: MessageEvent) => void)(ev); return }
-      if (m.type === 'ack') { lastQueue = m.queue; ackResolve?.(); ackResolve = null; return }
-      if (m.type === 'done') { if (m.buffer) resolve(m.buffer); else if (orig) (orig as (e: MessageEvent) => void)(ev); return }
-      if (m.type === 'error') { workerError = m.error; reject(new Error(m.error)); return }
-      if (orig) (orig as (e: MessageEvent) => void)(ev)
-    }
-    workers[0].onerror = (e) => reject(new Error(e.message))
-  })
-
-  const ready = new Promise<void>((resolve) => {
-    readyResolve = resolve
-  })
-
-  // Init worker
-  workers[0].postMessage({
-    type: 'init',
-    width: W,
-    height: H,
-    fps: FPS,
-    videoCodec: caps.videoCodec,
-    bitrate: Math.round(opts.bitrateMbps * 1_000_000),
-    audio: audioBuf ? { codec: 'mp4a.40.2', sampleRate: AUDIO_RATE, channels: 2, bitrate: 192_000 } : null,
-    nomux: false
-  })
-  dbg('worker init sent')
-  await ready
-  dbg('worker ready')
-
-  // 3) stream the audio (planar f32 chunks; index-based timestamps)
-  if (audioBuf) {
-    const CH = 2
-    const CHUNK = 4096
-    const ch0 = audioBuf.getChannelData(0)
-    const ch1 = audioBuf.numberOfChannels > 1 ? audioBuf.getChannelData(1) : ch0
-    for (let o = 0; o < audioBuf.length; o += CHUNK) {
-      const n = Math.min(CHUNK, audioBuf.length - o)
-      const planar = new Float32Array(n * CH)
-      planar.set(ch0.subarray(o, o + n), 0)
-      planar.set(ch1.subarray(o, o + n), n)
-      const data = new AudioData({
-        format: 'f32-planar',
-        sampleRate: AUDIO_RATE,
-        numberOfFrames: n,
-        numberOfChannels: CH,
-        timestamp: Math.round((o / AUDIO_RATE) * 1e6),
-        data: planar
-      })
-      worker.postMessage({ type: 'audio', data }, [data as unknown as Transferable])
-    }
+  let readyResolve!: () => void
+  let readyReject!: (e: Error) => void
+  let doneResolve!: (b: ArrayBuffer) => void
+  let doneReject!: (e: Error) => void
+  const ready = new Promise<void>((res, rej) => { readyResolve = res; readyReject = rej })
+  const done = new Promise<ArrayBuffer>((res, rej) => { doneResolve = res; doneReject = rej })
+  let lastQueue = 0
+  const ackWaiters = new Map<number, () => void>()
+  const fail = (message: string): void => {
+    if (workerError) return
+    workerError = message
+    const err = new Error(message)
+    readyReject(err)
+    doneReject(err)
+    for (const it of segIters.values()) void it.return(undefined)
+    for (const o of ovVideos) void o.iter?.return(undefined)
+    for (const d of decoders.values()) d.close()
+    try { worker.terminate() } catch { /* gone */ }
   }
 
-  dbg('audio streamed')
-  // Audio is encoded inside the worker — no main-thread flush needed.
-  // 4) compositing plan + source pools. Baked bitmaps (text, image overlays,
-  //    main-lane images) are TRANSFERRED to the worker once and drawn there on
-  //    every frame of their window; the worker closes each when its window
-  //    ends. Video overlays keep a hidden element here and ship one VideoFrame
-  //    per output frame instead. (Pools fill inside the try so a source that
-  //    refuses to open still tears everything down.)
-  const texts = planTexts(doc)
-  const overlays = planOverlays(doc)
-  const ovVideos: Array<{
-    spec: OverlayClipSpec
-    /** null once this overlay decodes through WebCodecs instead of an element. */
-    v: HTMLVideoElement | null
-    rect: OverlayRect
-    dec: DecodeSource | null
-    iter: AsyncGenerator<VideoFrame | null, void, unknown> | null
-  }> = []
-  const mainImages = new Map<string, { id: number; w: number; h: number }>()
-  const pool = new Map<string, HTMLVideoElement>()
-  /** Demuxed WebCodecs sources by url; a null entry = this one needs an element. */
-  const decoders = new Map<string, DecodeSource | null>()
-  /** Main-lane frame pull for the segment being written. */
-  let segIter: AsyncGenerator<VideoFrame | null, void, unknown> | null = null
-  /** Return/abandon a held segment iterator (release its sample in flight).
-   *  TS narrows `segIter` down to never in some branches because the element
-   *  path only ever nulls it, so route the cleanup through this helper. */
-  const returnSegIter = (): void => {
-    const it = segIter as AsyncGenerator<VideoFrame | null, void, unknown> | null
-    if (it) void it.return(undefined)
-    segIter = null
+  worker.onmessage = (ev: MessageEvent) => {
+    const m = ev.data
+    if (m.type === 'ready') {
+      readyResolve()
+      return
+    }
+    if (m.type === 'ack') {
+      lastQueue = m.queue
+      ackWaiters.get(m.n)?.()
+      ackWaiters.delete(m.n)
+      return
+    }
+    if (m.type === 'done') {
+      if (m.buffer) doneResolve(m.buffer)
+      else doneReject(new Error('export worker returned no buffer'))
+      return
+    }
+    if (m.type === 'error') {
+      fail(m.error || 'export worker failed')
+    }
   }
-  const openVideo = async (url: string): Promise<HTMLVideoElement> => {
-    const v = document.createElement('video')
-    v.src = url
-    v.muted = true
-    v.preload = 'auto'
-    ;(v as unknown as { playsInline: boolean }).playsInline = true
-    v.style.display = 'none'
-    document.body.appendChild(v)
-    await new Promise<void>((res, rej) => {
-      // wait for a DECODED frame (readyState >= 2) — VideoFrame(video) throws
-      // InvalidStateError on a metadata-only element.
-      const to = setTimeout(() => rej(new Error('source timed out opening')), 10_000)
-      v.onloadeddata = () => { clearTimeout(to); res() }
-      v.onerror = () => { clearTimeout(to); rej(new Error('cannot open a source in this browser')) }
-      if (v.readyState >= 2) { clearTimeout(to); res() }
-    })
-    return v
-  }
-  const seekTo = (v: HTMLVideoElement, t: number): Promise<void> => seekPresented(v, t, FPS)
+  worker.onerror = (e) => fail(e.message || 'export worker crashed')
 
-  // 5) frame loop — offline, sequential, index-timestamped. Source frames come
-  //    from PLAY-HARVEST by default: each segment plays ONCE (muted, at the
-  //    clip's speed) while requestVideoFrameCallback captures presented frames
-  //    — one seek per SEGMENT. The old per-FRAME seeking cost 100-300ms per
-  //    output frame on weak phones (3-9x slower than realtime); it remains only
-  //    as the fallback when rVFC is unavailable, the tab is hidden (rVFC stops
-  //    firing), or the harvest stalls. Exactness is unchanged either way:
-  //    output frame N carries timestamp N/fps and shows the presented source
-  //    frame nearest its mapped time — the same frame a seek would land on.
-  const rvfcOK =
-    typeof (HTMLVideoElement.prototype as { requestVideoFrameCallback?: unknown }).requestVideoFrameCallback === 'function'
-  const frameDur = 1 / FPS
-  interface Grab {
-    frame: VideoFrame
-    t: number
-  }
-  let buf: Grab[] = []
-  const harvest: { stop: null | (() => void) } = { stop: null }
-  let curSeg: Seg | null = null
-  let lastWant = 0
-  // TRUE source frame spacing (min observed gap between presented frames): weak
-  // devices DROP presented frames under load, so the average presented spacing
-  // lies — the minimum doesn't. Any harvested frame further than ~1.3 true
-  // spacings from its exact time is rejected and that ONE frame is seeked
-  // instead, so a struggling device degrades to slow-but-correct, never to
-  // frozen/wrong frames (the failure mode of realtime capture). 0 = unmeasured.
-  let minSpacing = 0
-  let prevPresentedT = -1
-  const grabTolerance = (): number => Math.max(frameDur, minSpacing || frameDur) * 1.3
-  let fallbacks = 0 // per-segment; too many → step the rate down, then pure seek
-  let segHarvesting = false
-  // HARVEST RATE. Segments used to stream at exactly the clip's own speed, so a
-  // 10-minute timeline spent 10 minutes of wall clock just playing the source
-  // past the capture — the export was pinned to realtime no matter how fast the
-  // machine could decode. Nothing requires that: `want` is derived from the
-  // OUTPUT frame index, so playbackRate only controls how fast frames arrive,
-  // never which frame a given output lands on. The harvest is already
-  // self-regulating (it pauses once it runs 0.5 s ahead of the consumer and the
-  // buffer holds 5 frames), so running it fast just moves the bottleneck to the
-  // encoder, where it belongs. Elements are muted, so browsers allow the rate.
-  // Devices that can't keep up DROP presented frames, so step down a gear at a
-  // time — a slow machine ends up back at realtime instead of thrashing between
-  // a too-fast harvest and per-frame seeking. The ladder persists across
-  // segments: a device that struggled once will struggle again.
-  const HARVEST_RATES = [8, 4, 2, 1]
-  let rateIdx = 0
-  const harvestRate = (speed: number): number => Math.min(16, Math.max(0.25, speed * HARVEST_RATES[rateIdx]))
-  // Lookahead depth. Held VideoFrames are full uncompressed surfaces (~3 MB at
-  // 1080p, ~12 MB at 4K), so the window shrinks as the frame gets bigger — and
-  // the buffer always holds MORE frames than the lookahead can produce, or the
-  // safety valve would start evicting frames that are still wanted.
-  const MAX_BUF = W * H > 2_500_000 ? 16 : 40
-  const LOOKAHEAD_S = (MAX_BUF * 0.6) / FPS
-  const closeBuf = (): void => {
-    for (const g of buf) g.frame.close()
-    buf = []
-  }
-  const startHarvest = (v: HTMLVideoElement): void => {
-    let live = true
-    const rvfc = (cb: (now: number, meta: { mediaTime: number }) => void): void =>
-      (v as unknown as { requestVideoFrameCallback: (cb: unknown) => void }).requestVideoFrameCallback(cb)
-    const tick = (_now: number, meta: { mediaTime: number }): void => {
-      if (!live) return
-      try {
-        buf.push({ frame: new VideoFrame(v, { timestamp: 0 }), t: meta.mediaTime })
-        const gap = prevPresentedT >= 0 ? meta.mediaTime - prevPresentedT : 0
-        if (gap > 0.0005) {
-          const clamped = Math.max(1 / 120, gap)
-          minSpacing = minSpacing === 0 ? clamped : Math.min(minSpacing, clamped)
-        }
-        prevPresentedT = meta.mediaTime
-      } catch {
-        /* decoder hiccup — the consumer's seek fallback covers it */
-      }
-      // Evict by TIME, not by count. A fixed 5-deep buffer was fine only while
-      // the harvest ran at 1x and the consumer kept pace with it; the moment the
-      // harvest is allowed to run ahead, a count cap throws away frames the
-      // consumer has NOT reached yet — every one of those becomes a seek, which
-      // is exactly the cost the harvest exists to avoid. Frames behind the
-      // consumer are dead; frames ahead of it are the whole point of a lookahead.
-      while (buf.length && buf[0].t < lastWant - grabTolerance()) buf.shift()!.frame.close()
-      while (buf.length > MAX_BUF) buf.shift()!.frame.close() // safety valve
-      // Don't decode ahead of consumption (the encoder may be the slow side);
-      // the consumer resumes playback when it needs more.
-      if (meta.mediaTime > lastWant + LOOKAHEAD_S) {
-        try {
-          v.pause()
-        } catch {
-          /* ignore */
-        }
-      }
-      rvfc(tick)
-    }
-    rvfc(tick)
-    harvest.stop = () => {
-      live = false
-      harvest.stop = null
-    }
-  }
-  const waitPresented = async (v: HTMLVideoElement, want: number): Promise<void> => {
-    const deadline = performance.now() + 1500
-    while (performance.now() < deadline) {
-      const latest = buf[buf.length - 1]
-      if (latest && latest.t >= want - frameDur / 4) return
-      if (v.ended) return
-      if (v.paused) {
-        try {
-          await v.play()
-        } catch {
-          return // playback refused — seek fallback takes over
-        }
-      }
-      await new Promise((r) => setTimeout(r, 12))
-    }
-  }
-  // ONLY a frame within tolerance of the exact source time counts — a presented
-  // stream that skipped `want` (dropped frame) returns null and the caller
-  // seeks. Never "nearest available": that is where freezes come from.
-  const pickGrab = (want: number): Grab | null => {
-    const tol = grabTolerance()
-    let best: Grab | null = null
-    for (const g of buf) {
-      if (g.t > want + frameDur / 4) continue
-      if (want - g.t > tol) continue
-      if (!best || g.t > best.t) best = g
-    }
-    return best
-  }
-  // contain-fit + eased Ken Burns (same math as the preview + PC export);
-  // vw/vh = the source's natural size (video element or decoded image bitmap).
-  const fitFor = (
-    seg: Seg,
-    vw: number,
-    vh: number,
-    t: number
-  ): { dx: number; dy: number; dw: number; dh: number; scale: number; ox: number; oy: number } => {
-    const s = Math.min(W / vw, H / vh)
-    const dw = vw * s
-    const dh = vh * s
-    const prog = seg.len > 0 ? Math.min(1, Math.max(0, (t - seg.start) / seg.len)) : 0
-    return {
-      dx: (W - dw) / 2,
-      dy: (H - dh) / 2,
-      dw,
-      dh,
-      scale: seg.size * (seg.zs + (seg.ze - seg.zs) * kenBurnsEase(prog)),
-      ox: W * (0.5 + seg.ox),
-      oy: H * (0.5 + seg.oy)
-    }
-  }
-  const tExport0 = performance.now()
   try {
-    // sprites: image overlays first (z = plan order) …
+    const audioBuf = await audioPromise
+
+    worker.postMessage({
+      type: 'init',
+      width: W,
+      height: H,
+      fps: FPS,
+      videoCodec: caps.videoCodec,
+      bitrate: Math.round(opts.bitrateMbps * 1_000_000),
+      audio: audioBuf ? { codec: 'mp4a.40.2', sampleRate: AUDIO_RATE, channels: 2, bitrate: 192_000 } : null,
+      nomux: false
+    })
+    await ready
+    if (workerError) throw new Error(workerError)
+
+    // Audio is chunked and sent immediately after worker initialization. The
+    // worker encodes it while the main thread prepares the video decode graph.
+    if (audioBuf) {
+      const CH = 2
+      const CHUNK = 4096
+      const ch0 = audioBuf.getChannelData(0)
+      const ch1 = audioBuf.numberOfChannels > 1 ? audioBuf.getChannelData(1) : ch0
+      for (let o = 0; o < audioBuf.length; o += CHUNK) {
+        const n = Math.min(CHUNK, audioBuf.length - o)
+        const planar = new Float32Array(n * CH)
+        planar.set(ch0.subarray(o, o + n), 0)
+        planar.set(ch1.subarray(o, o + n), n)
+        const data = new AudioData({
+          format: 'f32-planar',
+          sampleRate: AUDIO_RATE,
+          numberOfFrames: n,
+          numberOfChannels: CH,
+          timestamp: Math.round((o / AUDIO_RATE) * 1e6),
+          data: planar
+        })
+        worker.postMessage({ type: 'audio', data }, [data as unknown as Transferable])
+      }
+    }
+
+    const texts = planTexts(doc)
+    const overlays = planOverlays(doc)
+    const mainImages = new Map<string, { id: number; w: number; h: number }>()
+    const decoders = new Map<string, DecodeSource>()
+    const ovVideos: Array<{
+      spec: OverlayClipSpec
+      dec: DecodeSource
+      rect: OverlayRect
+      iter: AsyncGenerator<VideoFrame | null, void, unknown> | null
+    }> = []
+
+    // Pre-bake resident sprites once.
     let spriteId = 0
     for (const o of overlays) {
       if (!o.isImage) continue
-      let bmp: ImageBitmap
+      const bmp = await loadImageBitmap(o.url)
       try {
-        bmp = await loadImageBitmap(o.url)
-      } catch {
-        throw new Error('cannot open an overlay image in this browser')
-      }
-      const zoom =
-        Math.abs(o.zs - 1) > 0.001 || Math.abs(o.ze - 1) > 0.001
+        const c = await createImageBitmap(bmp)
+        const zoom = Math.abs(o.zs - 1) > 0.001 || Math.abs(o.ze - 1) > 0.001
           ? { zs: o.zs, ze: o.ze, start: o.start, len: o.rampLen }
           : null
-      // Send sprite to all workers (each needs its own copy for multi-worker)
-      for (const w of workers) {
-        const c = await createImageBitmap(bmp)
-        w.postMessage(
-          { type: 'sprite', id: spriteId, bitmap: c, z: o.z, start: o.start, end: o.end, rect: overlayRect(W, H, o), clip: true, zoom },
+        worker.postMessage(
+          { type: 'sprite', id: spriteId++, bitmap: c, z: o.z, start: o.start, end: o.end, rect: overlayRect(W, H, o), clip: true, zoom },
           [c]
         )
+      } finally {
+        bmp.close()
       }
-      spriteId++
-      bmp.close()
     }
-    // … then text bakes, stacked ABOVE every overlay (preview order: TextLayer
-    // renders after OverlayLayer) via a large z offset.
     for (const tc of texts) {
       const bmp = await bakeTextBitmap(tc, W, H)
-      for (const w of workers) {
+      try {
         const c = await createImageBitmap(bmp)
-        w.postMessage(
-          { type: 'sprite', id: spriteId, bitmap: c, z: 1e6 + spriteId, start: tc.start, end: tc.end, rect: fullFrameRect(W, H), clip: false, zoom: null },
+        worker.postMessage(
+          { type: 'sprite', id: spriteId++, bitmap: c, z: 1e6 + spriteId, start: tc.start, end: tc.end, rect: fullFrameRect(W, H), clip: false, zoom: null },
           [c]
         )
+      } finally {
+        bmp.close()
       }
-      spriteId++
-      bmp.close()
     }
-    // main-lane image clips: a <video> can't open them — decode once per unique
-    // source; the frame loop draws the asset with the same contain-fit + Ken
-    // Burns a video frame gets.
+
     let assetId = 0
     for (const url of new Set(segs.filter((s) => s.isImage).map((s) => s.url))) {
-      let bmp: ImageBitmap
+      const bmp = await loadImageBitmap(url)
       try {
-        bmp = await loadImageBitmap(url)
-      } catch {
-        throw new Error('cannot open an image in this browser')
-      }
-      const rec = { id: assetId++, w: bmp.width, h: bmp.height } // size read BEFORE the transfer detaches it
-      mainImages.set(url, rec)
-      for (const w of workers) {
+        const rec = { id: assetId++, w: bmp.width || W, h: bmp.height || H }
+        mainImages.set(url, rec)
         const c = await createImageBitmap(bmp)
-        w.postMessage({ type: 'asset', id: rec.id, bitmap: c }, [c])
+        worker.postMessage({ type: 'asset', id: rec.id, bitmap: c }, [c])
+      } finally {
+        bmp.close()
       }
-      bmp.close()
     }
-    // Decoders first: a demuxed WebCodecs source runs as fast as the machine
-    // can decode, so we only fall back to a hidden <video> (realtime playback or
-    // seek-per-frame) for sources Mediabunny can't open or the browser can't
-    // decode. One <video> per unique main-lane source; one per VIDEO overlay
-    // CLIP (an overlay can reuse a main source at a different time, so overlay
-    // elements are never shared by URL).
+
+    // Every video source must use deterministic demux + WebCodecs. There is NO
+    // hidden <video> seek/play fallback anymore: a fallback could silently reuse
+    // a stale frame and corrupt a cut seam, and it behaves especially badly on
+    // Safari/iPhone. A source that cannot be decoded gets an explicit error.
     for (const s of segs) {
-      if (s.isImage || decoders.has(s.url)) continue
-      decoders.set(s.url, await openDecodeSource(s.src, s.url))
-    }
-    for (const url of new Set(segs.filter((s) => !s.isImage).map((s) => s.url))) {
-      if (!decoders.get(url)) pool.set(url, await openVideo(url))
+      if (s.isImage || decoders.has(s.src)) continue
+      const dec = await openDecodeSource(s.src, s.url)
+      if (!dec) throw new Error(`video source cannot be decoded by WebCodecs: ${s.src}`)
+      decoders.set(s.src, dec)
     }
     for (const o of overlays) {
       if (o.isImage) continue
-      // Each overlay clip opens its OWN decode source, never the main lane's
-      // entry for the same file: an overlay that reuses a base source would
-      // otherwise run its iterator concurrently with the main lane's off a
-      // single sink, and they'd fight over one decoder.
       const dec = await openDecodeSource(o.src, o.url)
-      ovVideos.push({ spec: o, v: dec ? null : await openVideo(o.url), rect: overlayRect(W, H, o), dec, iter: null })
+      if (!dec) throw new Error(`overlay video cannot be decoded by WebCodecs: ${o.src}`)
+      ovVideos.push({ spec: o, dec, rect: overlayRect(W, H, o), iter: null })
     }
-    dbg('decode sources', {
-      demuxed: [...decoders.values()].filter(Boolean).length + ovVideos.filter((o) => o.dec).length,
-      elements: pool.size + ovVideos.filter((o) => o.v).length
-    })
 
-    // Source timestamps for every output frame, per segment / per overlay clip.
-    // `samplesAtTimestamps` walks the packets ONCE for a monotonic list, so the
-    // whole segment costs one decode pass instead of a seek (or a realtime play)
-    // per frame. These MUST be generated by the same formula the frame loop
-    // uses below, or the pulled frame would drift out of step with its output.
+    // Frame wants are generated once with an O(number-of-clips + number-of-frames)
+    // cursor instead of a .find() through every clip for every frame.
     const segWants = new Map<Seg, number[]>()
-    for (const s of segs) segWants.set(s, [])
-    const ovWants = new Map<OverlayClipSpec, number[]>()
-    for (const o of ovVideos) ovWants.set(o.spec, [])
+    for (const s of segs) if (!s.isImage) segWants.set(s, [])
+    let segCursor = 0
+    const sortedSegs = [...segs].sort((a, b) => a.start - b.start)
     for (let n = 0; n < totalFrames; n++) {
       const t = (n + 0.0001) / FPS
-      const s = segs.find((x) => t >= x.start && t < x.start + x.len)
-      if (s && !s.isImage) segWants.get(s)!.push(Math.min(s.sourceEnd - 0.001, s.sourceStart + (t - s.start) * s.speed))
-      for (const o of ovVideos) {
-        const sp = o.spec
-        if (t < sp.start || t >= sp.end) continue
-        ovWants.get(sp)!.push(Math.min(sp.sourceIn + sp.rampLen - 0.001, sp.sourceIn + (t - sp.start)))
+      while (segCursor < sortedSegs.length && t >= sortedSegs[segCursor].start + sortedSegs[segCursor].len - 1e-9) segCursor++
+      const s = sortedSegs[segCursor]
+      if (s && t >= s.start && t < s.start + s.len && !s.isImage) {
+        const want = Math.min(Math.max(s.sourceStart, s.sourceEnd - 1e-4), s.sourceStart + Math.max(0, t - s.start) * s.speed)
+        segWants.get(s)!.push(want)
       }
     }
-    dbg('pool ready', { sprites: spriteId, images: mainImages.size, videoOverlays: ovVideos.length })
 
+    const ovWants = new Map<OverlayClipSpec, number[]>()
+    for (const o of ovVideos) ovWants.set(o.spec, [])
+    for (const o of ovVideos) {
+      const sp = o.spec
+      const arr = ovWants.get(sp)!
+      const first = Math.max(0, Math.ceil(sp.start * FPS))
+      const last = Math.min(totalFrames - 1, Math.ceil(sp.end * FPS) - 1)
+      for (let n = first; n <= last; n++) {
+        const t = (n + 0.0001) / FPS
+        const want = Math.min(sp.sourceIn + Math.max(0, sp.rampLen) - 1e-4, sp.sourceIn + Math.max(0, t - sp.start))
+        arr.push(want)
+      }
+    }
+
+    // Create exactly one iterator per segment/overlay clip. The active timeline
+    // order makes each iterator monotonic, and every output frame consumes exactly
+    // one element from it. No browser playback clock participates in export.
+    const segIters = new Map<Seg, AsyncGenerator<VideoFrame | null, void, unknown>>()
+    for (const s of sortedSegs) {
+      if (!s.isImage) segIters.set(s, decoders.get(s.src)!.framesAt(segWants.get(s) ?? []))
+    }
+    for (const o of ovVideos) o.iter = o.dec.framesAt(ovWants.get(o.spec) ?? [])
+
+    const waitForAck = (n: number): Promise<void> => new Promise((resolve) => ackWaiters.set(n, resolve))
+    const fitFor = (
+      seg: Seg,
+      vw: number,
+      vh: number,
+      t: number
+    ): { dx: number; dy: number; dw: number; dh: number; scale: number; ox: number; oy: number } => {
+      const s = Math.min(W / Math.max(1, vw), H / Math.max(1, vh))
+      const dw = vw * s
+      const dh = vh * s
+      const prog = seg.len > 0 ? Math.min(1, Math.max(0, (t - seg.start) / seg.len)) : 0
+      return {
+        dx: (W - dw) / 2,
+        dy: (H - dh) / 2,
+        dw,
+        dh,
+        scale: seg.size * (seg.zs + (seg.ze - seg.zs) * kenBurnsEase(prog)),
+        ox: W * (0.5 + seg.ox),
+        oy: H * (0.5 + seg.oy)
+      }
+    }
+
+    const tExport0 = performance.now()
+    let cursor = 0
+    let activeSeg: Seg | null = null
+    let activeSegIter: AsyncGenerator<VideoFrame | null, void, unknown> | null = null
     for (let n = 0; n < totalFrames; n++) {
-      if (workerError) fail(workerError)
+      if (workerError) throw new Error(workerError)
       const t = (n + 0.0001) / FPS
-      // video-overlay harvests for THIS output frame — plain per-frame seek
-      // (b-roll windows are short; the main lane's play-harvest speed machinery
-      // isn't worth its complexity here, and exactness is identical).
+      while (cursor < sortedSegs.length && t >= sortedSegs[cursor].start + sortedSegs[cursor].len - 1e-9) cursor++
+      const seg = sortedSegs[cursor]
+      if (seg !== activeSeg) {
+        if (activeSegIter) void activeSegIter.return(undefined)
+        activeSeg = seg ?? null
+        activeSegIter = seg ? (segIters.get(seg) ?? null) : null
+      }
+
       const ovs: Array<{ frame: VideoFrame; z: number; rect: OverlayRect; scale: number }> = []
       for (const o of ovVideos) {
         const sp = o.spec
         if (t < sp.start || t >= sp.end) continue
-        const owant = Math.min(sp.sourceIn + sp.rampLen - 0.001, sp.sourceIn + (t - sp.start))
-        let ovFrame: VideoFrame | null = null
-        if (o.dec) {
-          // One decode pass across the whole b-roll window. The element path
-          // seeked once per OUTPUT frame here — the single most expensive thing
-          // in an export with overlays, at tens of ms each.
-          o.iter ??= o.dec.framesAt(ovWants.get(sp) ?? [])
-          const r = await o.iter.next()
-          ovFrame = (r.done ? null : r.value) ?? null
-          if (!ovFrame) continue
-        } else if (o.v) {
-          if (Math.abs(o.v.currentTime - owant) > 1 / (FPS * 2)) await seekTo(o.v, owant)
-          if (o.v.readyState < 2) {
-            await new Promise<void>((res) => {
-              const to = setTimeout(res, 2000)
-              o.v!.onloadeddata = () => {
-                clearTimeout(to)
-                res()
-              }
-            })
-          }
-        } else {
-          continue
-        }
-        try {
-          ovs.push({
-            frame: ovFrame ?? new VideoFrame(o.v!, { timestamp: 0 }),
-            z: sp.z,
-            rect: o.rect,
-            // eased Ken Burns for this frame (preview twin: OverlayBox zoomFromProg)
-            scale: sp.zs + (sp.ze - sp.zs) * kenBurnsEase((t - sp.start) / sp.rampLen)
-          })
-        } catch {
-          /* decoder hiccup — drop this overlay for one frame, not the export */
-        }
+        const r = await o.iter!.next()
+        const frame = (r.done ? null : r.value) ?? null
+        if (!frame) throw new Error(`overlay decoder returned no frame at ${t.toFixed(3)}s: ${sp.src}`)
+        ovs.push({
+          frame,
+          z: sp.z,
+          rect: o.rect,
+          scale: sp.zs + (sp.ze - sp.zs) * kenBurnsEase((t - sp.start) / sp.rampLen)
+        })
       }
-      const ovT = ovs.map((g) => g.frame as unknown as Transferable)
-      const seg = segs.find((s) => t >= s.start && t < s.start + s.len)
+      const ovTransfer = ovs.map((o) => o.frame as unknown as Transferable)
+
+      const ackPromise = waitForAck(n)
       if (!seg) {
-        worker.postMessage({ type: 'frame', n, frame: null, ovs }, ovT)
+        worker.postMessage({ type: 'frame', n, frame: null, ovs }, ovTransfer)
       } else if (seg.isImage) {
-        // main-lane image: the decoded asset stands in for the video frame —
-        // no harvest machinery, the worker draws it by id with the same fit.
-        if (seg !== curSeg) {
-          harvest.stop?.()
-          closeBuf()
-          returnSegIter()
-          curSeg = seg
-          segHarvesting = false
-        }
-        const a = mainImages.get(seg.url)!
+        const img = mainImages.get(seg.url)
+        if (!img) throw new Error(`image source is unavailable: ${seg.src}`)
         worker.postMessage(
-          { type: 'frame', n, frame: null, imageId: a.id, fit: fitFor(seg, a.w || W, a.h || H, t), ovs },
-          ovT
+          { type: 'frame', n, frame: null, imageId: img.id, fit: fitFor(seg, img.w, img.h, t), ovs },
+          ovTransfer
         )
-} else if (decoders.get(seg.url)) {
-        // DEMUXED PATH: one decode pass per segment, running as fast as the
-        // machine can decode. `samplesAtTimestamps` walks the source packets
-        // once, decoding each at most once, so this stays sequential and
-        // exact — a parallel multi-iterator version was trialled but exposed
-        // same-source segments' decoders to concurrent next() calls, which
-        // interleaved and produced black frames.
-        const dec = decoders.get(seg.url)!
-        if (seg !== curSeg) {
-          harvest.stop?.()
-          closeBuf()
-          returnSegIter()
-          curSeg = seg
-          segHarvesting = false
-          segIter = dec.framesAt(segWants.get(seg) ?? [])
-        }
-        let frame: VideoFrame | null = null
-        if (segIter) {
-          const r = await segIter.next()
-          frame = (r.done ? null : r.value) ?? null
-        }
-        // Fallback: if the fast decoder returns no frame (unexpected EOF, seek
-        // failure, etc.), mark this source as demux-failed so subsequent frames
-        // go directly to the pure element path (else block) — avoids re-entering
-        // the demuxed path and re-creating the failed iterator every frame.
-        if (!frame) {
-          decoders.set(seg.url, null)
-          // Open a <video> element on the fly if one doesn't exist yet.
-          if (!pool.has(seg.url)) pool.set(seg.url, await openVideo(seg.url))
-          // Let curSeg stand — the next frame sees decoders.get(seg.url) ===
-          // null, skips this block, and enters the element else branch.
-        }
-        const fitD = fitFor(seg, dec.width || W, dec.height || H, t)
-        if (frame) {
-          worker.postMessage({ type: 'frame', n, frame, fit: fitD, ovs }, [frame as unknown as Transferable, ...ovT])
-        } else {
-          // Only happens for a timestamp before the track's first frame; leave
-          // the base black for that frame rather than failing the export.
-          worker.postMessage({ type: 'frame', n, frame: null, ovs }, ovT)
-        }
       } else {
-        const v = pool.get(seg.url)!
-        const want = Math.min(seg.sourceEnd - 0.001, seg.sourceStart + (t - seg.start) * seg.speed)
-        lastWant = want
-        if (seg !== curSeg) {
-          // Segment switch: the ONE seek, then play-harvest from here.
-          harvest.stop?.()
-          closeBuf()
-          returnSegIter()
-          curSeg = seg
-          minSpacing = 0
-          prevPresentedT = -1
-          fallbacks = 0
-          segHarvesting = rvfcOK
-          try {
-            v.pause()
-          } catch {
-            /* ignore */
-          }
-          if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
-          if (segHarvesting) {
-            try {
-              v.playbackRate = harvestRate(seg.speed)
-            } catch {
-              /* rate unsupported — plays at 1x; exactness check still holds */
-            }
-            startHarvest(v)
-            try {
-              await v.play()
-            } catch {
-              segHarvesting = false // refused — pure seek for this segment
-            }
-          }
-        }
-        let frame: VideoFrame | null = null
-        if (segHarvesting && !document.hidden) {
-          await waitPresented(v, want)
-          const g = pickGrab(want)
-          if (g) {
-            frame = g.frame.clone()
-          } else {
-            // Fallback: seek to exact time and try once more with a brief extra wait
-            try {
-              v.pause()
-              if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
-              if (v.readyState < 2) {
-                await new Promise<void>((res) => {
-                  const to = setTimeout(res, 2000)
-                  v.onloadeddata = () => {
-                    clearTimeout(to)
-                    res()
-                  }
-                })
-              }
-              await new Promise((r) => setTimeout(r, 50))
-              const g2 = pickGrab(want)
-              if (g2) frame = g2.frame.clone()
-            } catch {
-              /* fallback failed — frame stays null, worker will hold previous frame */
-            }
-          }
-        }
-        // Only include frame in the transfer list when it's a real VideoFrame —
-        // null in a transfer list throws DataCloneError.
-        const vTransfer = frame ? [frame as unknown as Transferable, ...ovT] : ovT
+        const iter = activeSegIter
+        if (!iter) throw new Error(`decoder iterator missing for: ${seg.src}`)
+        const r = await iter.next()
+        const frame = (r.done ? null : r.value) ?? null
+        if (!frame) throw new Error(`video decoder returned no frame at ${t.toFixed(3)}s: ${seg.src}`)
         worker.postMessage(
-          { type: 'frame', n, frame, fit: fitFor(seg, v.videoWidth || W, v.videoHeight || H, t), ovs },
-          vTransfer
+          { type: 'frame', n, frame, fit: fitFor(seg, decoders.get(seg.src)!.width, decoders.get(seg.src)!.height, t), ovs },
+          [frame as unknown as Transferable, ...ovTransfer]
         )
       }
-      // backpressure: never let the encoder queue run away.
-      if (lastQueue > 20) {
-        ackResolve?.()
-        await new Promise<void>((res) => (ackResolve = res))
-      }
+
+      // Keep only a very small number of encoded frames in flight. The old 20-
+      // frame ceiling could hold hundreds of MB at 4K; 4 is enough to keep the
+      // encoder busy without turning export into a memory balloon.
+      if (lastQueue >= 4) await ackPromise
+      else ackWaiters.delete(n)
+
       if (n % 15 === 0) onProgress(5 + Math.round((n / totalFrames) * 90), exportMsg(n / totalFrames))
     }
-    dbg('frames done', `${Math.round(performance.now() - tExport0)}ms for ${totalFrames} frames (${rvfcOK ? 'play-harvest' : 'seek'})`)
-    for (const w of workers) w.postMessage({ type: 'finish' })
+
+    if (activeSegIter) { void activeSegIter.return(undefined); activeSegIter = null }
+    worker.postMessage({ type: 'finish' })
     onProgress(96, 'Polishing video…')
     const buffer = await done
     const name = `${(project.name || 'export').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '')}-ondevice.mp4`
+    dbg('done', `${Math.round(performance.now() - tExport0)}ms`, buffer.byteLength)
     return { blob: new Blob([buffer], { type: 'video/mp4' }), name }
   } catch (e) {
-    dbg('FAILED', (e as Error).message)
+    dbg('FAILED', (e as Error)?.message ?? e)
     throw e
   } finally {
-    harvest.stop?.()
-    closeBuf()
-    // Abandoning a decode iterator mid-segment has to run its finally block, or
-    // the sample it is holding never gets released.
-    returnSegIter()
-    for (const o of ovVideos) {
-      void o.iter?.return(undefined)
-      o.dec?.close()
-    }
-    for (const d of decoders.values()) d?.close()
-    for (const v of [...pool.values(), ...ovVideos.map((o) => o.v)]) {
-      if (!v) continue
-      try {
-        v.pause()
-      } catch {
-        /* already gone */
-      }
-      v.removeAttribute('src')
-      v.load()
-      v.remove()
-    }
-    setTimeout(() => {
-      try { worker.terminate() } catch { /* gone */ }
-    }, 1000)
+    for (const it of segIters.values()) void it.return(undefined)
+    for (const o of ovVideos) void o.iter?.return(undefined)
+    for (const d of decoders.values()) d.close()
+    try { worker.terminate() } catch { /* gone */ }
   }
 }

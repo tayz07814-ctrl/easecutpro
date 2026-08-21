@@ -236,8 +236,12 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
         ctx!.drawImage(base, f.dx, f.dy, f.dw, f.dh)
         ctx!.restore()
       } else if (!base) {
-        // No frame available (e.g., element path grab failed) — keep previous frame
-        // by not clearing the canvas. The previous frame content remains.
+        // A null frame is an intentional timeline gap. Never retain the previous
+        // frame: doing so silently freezes the last decoded frame across a cut or
+        // decoder failure. The sender now treats missing decoded video frames as
+        // fatal, so null here means an actual transparent/empty timeline span.
+        ctx!.fillStyle = '#000'
+        ctx!.fillRect(0, 0, W, H)
       } else {
         // No base and no fit — clear to black (should not happen normally)
         ctx!.fillStyle = '#000'
