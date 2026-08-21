@@ -285,49 +285,49 @@ export default function MobileTimeline(): JSX.Element {
   const px = useStore((s) => s.project.pxPerSec)
 
   return (
-    <div className="ec-mtl">
+    <div className="ec-mtl" style={{ display: 'flex', flexDirection: 'column' }}>
       <MobileTimecode playing={playing} staticFrame={session.playhead} tb={tb} />
-      <div
-        className="ec-mtl-scroll"
-        ref={scrollRef}
-        onScroll={onScroll}
-        // Tapping empty space (a click that didn't hit a clip — clips stopPropagation)
-        // drops the selection, so the dock falls back to Import + Cut Lord.
-        onClick={() => engine.clearSelection()}
-      >
-        <div className="ec-mtl-content" style={{ width: contentWidth }}>
-          {mobileLanes(activeDoc.tracks).map((t) => (
-            <div className="ec-mtl-lane" key={t.id} style={{ height: mLaneHeight(t), marginLeft: pad, width: laneWidth }}>
-              {!t.clips.length && (t.kind === 'text' || t.kind === 'audio') && (
-                <button
-                  className="ec-mtl-addlane"
-                  style={{ marginLeft: -pad }}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    window.dispatchEvent(new CustomEvent('ec:sheet', { detail: t.kind === 'text' ? 'text' : 'music' }))
-                  }}
-                >
-                  ＋ {t.kind === 'text' ? 'Add text' : 'Add music'}
-                </button>
-              )}
-              {t.clips.map((c) => (
-                <MobileClip
-                  key={c.id}
-                  clip={c}
-                  zoom={zoom}
-                  tb={tb}
-                  color={mTrackColor(t.kind)}
-                  selected={interaction.selection.includes(c.id)}
-                  onSelect={(id) => engine.select([id])}
-                  onTrim={beginTrim}
-                  media={media}
-                />
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
+        {/* Left side tiles — Mute + Add overlay/text/audio — as in APK */}
+        <div style={{ width: 64, flex: 'none', background: '#0B0B0D', borderRight: '1px solid rgba(255,255,255,.06)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '8px 6px' }}>
+          <button style={{ width: 48, height: 48, borderRadius: 10, background: '#141418', border: '1px solid rgba(255,255,255,.06)', color: '#C6C9D2', display: 'grid', placeItems: 'center', fontSize: 10, flex: 'none' }}>
+            <span style={{ fontSize: 16 }}>🔊</span><span style={{ fontSize: 9, marginTop: 1 }}>Mute</span>
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('ec:sheet', { detail: 'text' })) }} style={{ width: 52, padding: '6px 4px', borderRadius: 8, background: '#1E1E26', border: '1px solid rgba(255,255,255,.06)', color: '#9a9aae', fontSize: 9, lineHeight: 1.1 }}>＋ Add overlay</button>
+          <button onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('ec:sheet', { detail: 'text' })) }} style={{ width: 52, padding: '6px 4px', borderRadius: 8, background: '#1E1E26', border: '1px solid rgba(255,255,255,.06)', color: '#9a9aae', fontSize: 9, lineHeight: 1.1 }}>＋ Add text</button>
+          <button onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('ec:sheet', { detail: 'music' })) }} style={{ width: 52, padding: '6px 4px', borderRadius: 8, background: '#1E1E26', border: '1px solid rgba(255,255,255,.06)', color: '#9a9aae', fontSize: 9, lineHeight: 1.1 }}>＋ Add audio</button>
+        </div>
+        <div style={{ flex: 1, minWidth: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+          <div
+            className="ec-mtl-scroll"
+            ref={scrollRef}
+            onScroll={onScroll}
+            onClick={() => engine.clearSelection()}
+            style={{ flex: 1 }}
+          >
+            <div className="ec-mtl-content" style={{ width: contentWidth }}>
+              {mobileLanes(activeDoc.tracks).map((t) => (
+                <div className="ec-mtl-lane" key={t.id} style={{ height: mLaneHeight(t), marginLeft: pad, width: laneWidth }}>
+                  {t.clips.map((c) => (
+                    <MobileClip
+                      key={c.id}
+                      clip={c}
+                      zoom={zoom}
+                      tb={tb}
+                      color={mTrackColor(t.kind)}
+                      selected={interaction.selection.includes(c.id)}
+                      onSelect={(id) => engine.select([id])}
+                      onTrim={beginTrim}
+                      media={media}
+                    />
+                  ))}
+                </div>
               ))}
             </div>
-          ))}
+          </div>
+          <div className="ec-mtl-centerline" />
         </div>
       </div>
-      <div className="ec-mtl-centerline" />
     </div>
   )
 }
