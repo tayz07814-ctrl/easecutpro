@@ -551,20 +551,21 @@ export async function exportOnDevice(
   }
   const worker = workers[0] // primary worker (compatibility for error handling)
   let doneReject: ((e: Error) => void) | null = null
+  /** Signal a fatal export error. Terminates workers and rejects the `done`
+   *  promise. When called from a synchronous callback (encoder .error), the
+   *  throw is suppressed — doneReject already propagates the error through the
+   *  promise chain; an unhandled throw in a callback context crashes the page. */
   const fail = (m: string): void => {
     for (const w of workers) {
       try { w.terminate() } catch { /* gone */ }
     }
     const err = new Error(m)
-    // When fail() is called from an encoder error callback (synchronous context),
-    // throw() would be unhandled — the done promise never rejects and the export
-    // hangs forever. Store the reject hook and use it; the throw is still needed
-    // for the await-path so the try/catch picks it up.
     if (doneReject) {
       doneReject(err)
       doneReject = null
+    } else {
+      throw err
     }
-    throw err
   }
 
   // Multi-worker: collect encoded chunks in timestamp order and mux on main thread
