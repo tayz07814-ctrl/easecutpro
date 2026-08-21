@@ -38,7 +38,8 @@ export const IPC = {
   toolStatus: 'tools:status',
   progress: 'job:progress', // main -> renderer event
   debugDump: 'debug:dump', // write proxy debug JSON to temp file
-  debugPlayerDump: 'debug:playerDump' // overwrite-lived playback debug JSON (latest wins)
+  debugPlayerDump: 'debug:playerDump', // overwrite-lived playback debug JSON (latest wins)
+  saveFileAs: 'dialog:saveFileAs' // Electron native save-file dialog (replaces showSaveFilePicker)
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

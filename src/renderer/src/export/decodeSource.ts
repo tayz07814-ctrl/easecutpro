@@ -87,9 +87,6 @@ export async function openDecodeSource(src: string, url: string): Promise<Decode
         if (!timestamps.length) return
         for await (const sample of sink.samplesAtTimestamps(timestamps)) {
           if (!sample) {
-            // A missing sample is not a harmless placeholder for export. It means
-            // the requested timestamp could not be resolved from the decoded
-            // stream, and the caller must fail rather than duplicate a stale frame.
             yield null
             continue
           }

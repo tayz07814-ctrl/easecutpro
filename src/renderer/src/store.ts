@@ -4075,6 +4075,17 @@ export const useStore = create<AppState>((set, get) => ({
       // Ask WHERE to save now that the file actually exists. Deliberately after
       // the render, not before: a picker up front would prompt even for an
       // export that later fails, and the handle can go stale across a long one.
+      if (!IS_WEB && window.api?.saveFileAs) {
+        // Electron: native save dialog via IPC (showSaveFilePicker is unavailable here).
+        const buf = await blob.arrayBuffer()
+        const saved = await window.api.saveFileAs(dl, buf)
+        if (saved) {
+          set({ job: { active: false, kind: 'export', percent: 100, message: `Saved ${dl}` } })
+        } else {
+          set({ job: { active: false, kind: 'export', percent: 100, message: 'Export finished — save cancelled' } })
+        }
+        return
+      }
       const picker = (
         window as unknown as {
           showSaveFilePicker?: (o: unknown) => Promise<{ createWritable: () => Promise<{ write: (b: Blob) => Promise<void>; close: () => Promise<void> }> }>

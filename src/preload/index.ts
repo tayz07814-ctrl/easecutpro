@@ -135,6 +135,9 @@ const api = {
     ipcRenderer.invoke(IPC.debugDump, tag, data),
   debugPlayerDump: (data: unknown): Promise<string> =>
     ipcRenderer.invoke(IPC.debugPlayerDump, data),
+  /** Native save-file dialog (Electron only — replaces browser showSaveFilePicker). */
+  saveFileAs: (suggestedName: string, data: ArrayBuffer): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.saveFileAs, suggestedName, data),
   onProgress: (cb: (e: ProgressEvent) => void): (() => void) => {
     const listener = (_: unknown, payload: ProgressEvent): void => cb(payload)
     ipcRenderer.on(IPC.progress, listener)

@@ -534,6 +534,22 @@ app.whenReady().then(() => {
     }
   })
 
+  // Native save-file dialog — replaces the browser-only showSaveFilePicker in
+  // the on-device export path. Returns the chosen path or null if cancelled.
+  ipcMain.handle(
+    IPC.saveFileAs,
+    async (_e, suggestedName: string, data: ArrayBuffer) => {
+      const res = await dialog.showSaveDialog(mainWindow!, {
+        title: 'Save export',
+        defaultPath: suggestedName,
+        filters: [{ name: 'MP4 video', extensions: ['mp4'] }]
+      })
+      if (res.canceled || !res.filePath) return null
+      await writeFile(res.filePath, Buffer.from(data))
+      return res.filePath
+    }
+  )
+
   // ---- Save / Load project ----
   ipcMain.handle(IPC.saveProject, async (_e, project: Project) => {
     const res = await dialog.showSaveDialog(mainWindow!, {
