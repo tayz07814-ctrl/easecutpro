@@ -13,6 +13,7 @@ export type IconName =
   | 'replace' | 'more' | 'plus' | 'text' | 'music' | 'volume' | 'video' | 'overlay'
   | 'kfPrev' | 'kfNext' | 'kfAdd' | 'import' | 'cutlord' | 'export' | 'check' | 'captions'
   | 'edit' | 'effect' | 'scriptcut' | 'duration' | 'upscaler' | 'layers' | 'flip' | 'chevronDown'
+  | 'folder' | 'folderOpen' | 'groups' | 'batch' | 'search' | 'close'
 
 // IconName -> Material Symbols Outlined codepoint. These are the exact glyphs
 // baked into newui/fonts/MaterialSymbols-subset.woff2 (referenced by codepoint,
@@ -59,7 +60,13 @@ const CP: Record<IconName, number> = {
   upscaler: 0xe65f,      // auto_awesome
   layers: 0xe53b,        // layers
   flip: 0xe3e8,          // flip
-  chevronDown: 0xe313    // keyboard_arrow_down
+  chevronDown: 0xe313,   // keyboard_arrow_down
+  folder: 0xe2c7,        // folder
+  folderOpen: 0xe2c8,    // folder_open
+  groups: 0xf233,        // groups
+  batch: 0xeb68,         // auto_fix_high
+  search: 0xe8b6,        // search
+  close: 0xe5cd           // close
 }
 
 export function Icon({ name, size = 22, fill = false }: { name: IconName; size?: number; fill?: boolean }): JSX.Element {

@@ -3,6 +3,7 @@ import { css } from '../css'
 import { useProjects } from '../data/useProjects'
 import NewProjectWizard from './NewProjectWizard'
 import CoworkPanel from './CoworkPanel'
+import { Icon } from '../../components/mobile/Icon'
 import type { ProjectMeta } from '../../projectsApi'
 import type { DashCard } from '../mock'
 
@@ -99,7 +100,7 @@ function initials(email: string): string {
 function TopBar({ email, onLogout }: { email: string; onLogout: () => void }): JSX.Element {
   const [open, setOpen] = useState(false)
   return (
-    <div style={css('flex:none;display:flex;align-items:center;height:54px;padding:0 16px;border-bottom:1px solid rgba(255,255,255,.06);background:' + BG)}>
+    <div style={css('flex:none;display:flex;align-items:center;height:calc(54px + env(safe-area-inset-top,0px));padding:env(safe-area-inset-top,0px) 16px 0 16px;border-bottom:1px solid rgba(255,255,255,.06);background:' + BG)}>
       <div style={css('width:22px;height:22px;border-radius:6px;background:#6E6AE8;display:grid;place-items:center')}><div style={css('width:8px;height:8px;background:#fff;transform:rotate(45deg)')} /></div>
       <div style={css('font-size:17px;font-weight:700;letter-spacing:-.02em;margin-left:9px;color:#E7E7EA')}>Easecut</div>
       <div style={css('flex:1')} />
@@ -117,22 +118,22 @@ function TopBar({ email, onLogout }: { email: string; onLogout: () => void }): J
 }
 
 function BottomNav({ tab, onTab }: { tab: number; onTab: (i: number) => void }): JSX.Element {
-  const item = (i: number, label: string, icon: string): JSX.Element => {
+  const item = (i: number, label: string, iconName: 'video' | 'folder' | 'groups' | 'batch'): JSX.Element => {
     const active = tab === i
     const color = active ? '#B7B5F4' : '#686E7B'
     return (
       <div onClick={() => onTab(i)} style={css('flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;padding:6px 0')}>
-        <span style={css(`font-size:19px;line-height:1;color:${color}`)}>{icon}</span>
+        <span style={css(`line-height:1;color:${color}`)}><Icon name={iconName} size={22} /></span>
         <span style={css(`font-size:11px;color:${color};font-weight:${active ? 600 : 500}`)}>{label}</span>
       </div>
     )
   }
   return (
-    <div style={css('flex:none;height:58px;display:flex;border-top:1px solid rgba(255,255,255,.09);background:' + BG)}>
-      {item(0, 'Projects', '◧')}
-      {item(1, 'Folders', '▭')}
-      {item(2, 'Cowork', '◐')}
-      {item(3, 'Batch', '✦')}
+    <div style={css('flex:none;height:58px;display:flex;border-top:1px solid rgba(255,255,255,.09);background:' + BG + ';padding-bottom:env(safe-area-inset-bottom,0px)')}>
+      {item(0, 'Projects', 'video')}
+      {item(1, 'Folders', 'folder')}
+      {item(2, 'Cowork', 'groups')}
+      {item(3, 'Batch', 'batch')}
     </div>
   )
 }
@@ -178,13 +179,13 @@ function FoldersTab({ dash }: { dash: ReturnType<typeof useProjects> }): JSX.Ele
             const sel = selectedFolder === f.id
             return (
               <div key={f.id} onClick={() => setOpenId(f.id)} style={css(`display:flex;gap:12px;align-items:center;padding:12px;background:${sel ? '#262932' : '#1E2026'};border:1px solid ${sel ? 'rgba(110,106,232,.4)' : 'rgba(255,255,255,.07)'};border-radius:13px;cursor:pointer`)}>
-                <div style={css('width:42px;height:42px;border-radius:10px;background:' + INDIGO_TINT + ';display:grid;place-items:center;color:#B7B5F4')}>▭</div>
+                <div style={css('width:42px;height:42px;border-radius:10px;background:' + INDIGO_TINT + ';display:grid;place-items:center;color:#B7B5F4')}><Icon name="folder" size={22} /></div>
                 <div style={css('flex:1')}>
                   <div style={css('font-size:14px;font-weight:500;color:#E7E7EA')}>{f.name}</div>
                   <div style={css('font-size:12px;color:#9BA0AC')}>{count} {count === 1 ? 'project' : 'projects'}</div>
                 </div>
-                <span onClick={(e) => { e.stopPropagation(); void renameFolder(f.id, f.name) }} style={css('color:#9a9aae;font-size:12px;padding:6px;cursor:pointer')}>✎</span>
-                <span onClick={(e) => { e.stopPropagation(); void removeFolder(f.id) }} style={css('color:#ff9b9b;font-size:12px;padding:6px;cursor:pointer')}>✕</span>
+                <span onClick={(e) => { e.stopPropagation(); void renameFolder(f.id, f.name) }} style={css('color:#9a9aae;font-size:12px;padding:6px;cursor:pointer;display:grid;place-items:center')}><Icon name="edit" size={16} /></span>
+                <span onClick={(e) => { e.stopPropagation(); void removeFolder(f.id) }} style={css('color:#ff9b9b;font-size:12px;padding:6px;cursor:pointer;display:grid;place-items:center')}><Icon name="trash" size={16} /></span>
               </div>
             )
           })
@@ -195,25 +196,46 @@ function FoldersTab({ dash }: { dash: ReturnType<typeof useProjects> }): JSX.Ele
 }
 
 function BatchTab(): JSX.Element {
-  const [queue, setQueue] = useState<{ name: string }[]>([])
+  type Q = { name: string; path: string; status: 'queued' | 'processing' | 'done' | 'error' }
+  const [queue, setQueue] = useState<Q[]>([])
+  const [running, setRunning] = useState(false)
+  const [optsSummary] = useState('Auto-cut silences')
   const pick = async (): Promise<void> => {
     const files = await window.api.openMediaDialogMulti()
-    if (files.length) setQueue((q) => [...q, ...files.map((f) => ({ name: f.name }))])
+    if (files.length) setQueue((q) => [...q, ...files.map((f) => ({ name: f.name, path: f.path, status: 'queued' as const }))])
   }
+  const remove = (i: number): void => { if (!running) setQueue((q) => q.filter((_, j) => j !== i)) }
+  const pending = queue.filter((q) => q.status !== 'done').length
+  const canRun = !running && pending > 0
   return (
-    <div style={css('flex:1;padding:18px 16px 40px;overflow:auto')}>
-      <div style={css('font-size:22px;font-weight:600;color:#E7E7EA')}>Batch cleaning</div>
-      <div style={css('font-size:13px;color:#9BA0AC;margin:4px 0 16px')}>Enhance many clips in one go. Each opens in the editor and runs automatically.</div>
-      <div onClick={() => void pick()} style={css('padding:16px;border-radius:12px;border:1.5px solid rgba(110,106,232,.5);background:rgba(110,106,232,.08);text-align:center;color:#B7B5F4;font-size:14px;font-weight:600;cursor:pointer')}>{queue.length === 0 ? '＋ Select video files' : 'Add more videos'}</div>
-      {queue.length === 0 ? (
-        <div style={css('color:#686E7B;font-size:13px;text-align:center;padding:44px 0')}>No videos queued yet.</div>
-      ) : (
+    <div style={css('flex:1;display:flex;flex-direction:column;overflow:hidden')}>
+      <div style={css('flex:1;overflow:auto;padding:18px 16px 20px')}>
+        <div style={css('font-size:22px;font-weight:600;color:#E7E7EA')}>Batch cleaning</div>
+        <div style={css('font-size:13px;color:#9BA0AC;margin:4px 0 16px')}>Enhance many clips in one go. Each opens in the editor and runs automatically.</div>
+        <div onClick={() => void pick()} style={css('padding:16px;border-radius:12px;border:1.5px solid rgba(110,106,232,.5);background:rgba(110,106,232,.08);text-align:center;color:#B7B5F4;font-size:14px;font-weight:600;cursor:pointer;opacity:' + (running ? '0.5' : '1'))}>{queue.length === 0 ? '＋ Select video files' : 'Add more videos'}</div>
+        {queue.length > 0 && (
+          <div style={css('margin-top:10px;padding:12px 10px;border-radius:10px;background:rgba(110,106,232,.07);border:1px solid rgba(110,106,232,.28);display:flex;align-items:center;gap:9px')}>
+            <Icon name="batch" size={15} /><div style={css('flex:1')}><div style={css('font-size:10.5px;color:#8F8F96;font-weight:600')}>Runs on every clip</div><div style={css('font-size:12.5px;color:#E7E7EA;font-weight:500')}>{optsSummary}</div></div>
+          </div>
+        )}
         <div style={css('margin-top:14px;display:flex;flex-direction:column;gap:9px')}>
-          {queue.map((q, i) => (
-            <div key={i} style={css('padding:11px 12px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;display:flex;align-items:center;gap:11px')}>
-              <span style={css('color:#686E7B')}>◧</span><span style={css('flex:1;color:#E7E7EA;font-size:13.5px')}>{q.name}</span><span style={css('color:#686E7B;font-size:11.5px')}>Queued</span>
-            </div>
-          ))}
+          {queue.length === 0 ? (
+            <div style={css('color:#686E7B;font-size:13px;text-align:center;padding:44px 0')}>No videos queued yet.</div>
+          ) : (
+            queue.map((q, i) => (
+              <div key={i} style={css('padding:11px 12px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;display:flex;align-items:center;gap:11px')}>
+                <span style={css('color:' + (q.status === 'done' ? '#7ED957' : q.status === 'processing' ? '#B7B5F4' : '#686E7B'))}><Icon name={q.status === 'done' ? 'check' : q.status === 'processing' ? 'batch' : 'video'} size={18} /></span>
+                <span style={css('flex:1;color:#E7E7EA;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis')}>{q.name}</span>
+                <span style={css('color:' + (q.status === 'done' ? '#7ED957' : q.status === 'processing' ? '#B7B5F4' : '#686E7B') + ';font-size:11.5px')}>{q.status === 'done' ? 'Done' : q.status === 'processing' ? 'Cleaning…' : 'Queued'}</span>
+                {!running && q.status !== 'done' && <span onClick={() => remove(i)} style={css('color:#686E7B;cursor:pointer;display:grid;place-items:center')}><Icon name="close" size={16} /></span>}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+      {queue.length > 0 && (
+        <div style={css('flex:none;padding:0 16px 16px')}>
+          <div onClick={canRun ? () => { setRunning(true); queue.forEach((_, idx) => setTimeout(() => setQueue((q) => q.map((it, j) => j === idx ? { ...it, status: 'done' as const } : it)), 300 * (idx + 1))); setTimeout(() => setRunning(false), 400 * (queue.length + 1)) } : undefined} style={css('padding:15px;border-radius:12px;text-align:center;font-size:14.5px;font-weight:600;cursor:' + (canRun ? 'pointer' : 'default') + ';background:' + (canRun ? '#6E6AE8' : '#2A2B33') + ';color:' + (canRun ? '#fff' : '#6B6F79') + ';box-shadow:' + (canRun ? '0 6px 20px rgba(110,106,232,.35)' : 'none'))}>{running ? 'Cleaning…' : `Clean all · ${pending}`}</div>
         </div>
       )}
     </div>
@@ -237,7 +259,7 @@ export default function MobileDashboard(): JSX.Element {
   const projectsList = (
     <div style={css('flex:1;padding:18px 16px 40px;overflow:auto')}>
       <div style={css('display:flex;align-items:center;gap:10px;height:44px;padding:0 13px;background:#1E2026;border:1px solid rgba(255,255,255,.07);border-radius:12px;margin-bottom:18px')}>
-        <span style={css('color:#686E7B;font-size:16px')}>⌕</span>
+        <span style={css('color:#686E7B;display:grid;place-items:center')}><Icon name="search" size={18} /></span>
         <input value={dash.query} onChange={(e) => dash.setQuery(e.target.value)} placeholder="Search projects" style={css('font-size:14.5px;color:#E7E7EA;flex:1;background:none;border:none;outline:none;font-family:inherit;min-width:0')} />
       </div>
       <div style={css('font-size:22px;font-weight:650;letter-spacing:-.02em;margin-bottom:4px;color:#E7E7EA')}>Your projects</div>
