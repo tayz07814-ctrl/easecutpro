@@ -301,7 +301,8 @@ const cloudApi: Window['api'] & {
   saveProjectRecord: (id, patch) => cloudSaveProject(id, patch),
   deleteProjectRecord: (id) => cloudDeleteProject(id),
   debugDump: async () => '',
-  debugPlayerDump: async () => ''
+  debugPlayerDump: async () => '',
+  saveFileAs: async () => null
 }
 
 export function installCloudApi(): void {

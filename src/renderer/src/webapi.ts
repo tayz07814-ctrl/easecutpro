@@ -332,7 +332,8 @@ const webApi: Window['api'] = {
   saveProjectRecord: (id, patch) => httpSaveProject(id, patch),
   deleteProjectRecord: (id) => httpDeleteProject(id),
   debugDump: async () => '',
-  debugPlayerDump: async () => ''
+  debugPlayerDump: async () => '',
+  saveFileAs: async () => null
 }
 
 export function installWebApi(): void {

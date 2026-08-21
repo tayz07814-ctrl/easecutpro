@@ -135,7 +135,7 @@ function paint(img: ImageBitmap | VideoFrame, r: OverlayRect, clip: boolean, sca
   ctx!.restore()
 }
 
-self.onerror = (e) => die(`worker error: ${e.message}`)
+self.onerror = (e: string | Event) => die(`worker error: ${typeof e === 'string' ? e : (e as ErrorEvent).message ?? String(e)}`)
 self.addEventListener('unhandledrejection', (e) => { e.preventDefault(); die(`unhandled: ${e.reason}`) })
 
 self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetMsg | AudioMsg | FinishMsg>) => {

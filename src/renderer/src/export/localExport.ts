@@ -1167,8 +1167,8 @@ export async function exportOnDevice(
       }
       // backpressure: never let the encoder queue run away.
       if (lastQueue > 20) {
-        ackResolve?.()
-        await new Promise<void>((res) => (ackResolve = res))
+        if (ackResolve) { const cb = ackResolve; ackResolve = null; cb() }
+        await new Promise<void>((res) => { ackResolve = res })
       }
       if (n % 15 === 0) onProgress(5 + Math.round((n / totalFrames) * 90), exportMsg(n / totalFrames))
     }
