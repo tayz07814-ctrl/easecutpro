@@ -66,16 +66,19 @@ async function prune(): Promise<void> {
 /**
  * Return the conditioned preview copy for `src`, rendering it if needed.
  * Resolves '' when the source has no video or conditioning fails — callers
- * fall back to the original file.
+ * fall back to the original file. `outDir` overrides the cache directory
+ * (the web server passes a per-user dir so /media's path allow-list can
+ * serve the copy back to the browser).
  */
-export async function conditionForPreview(src: string, onProgress?: (pct: number) => void): Promise<string> {
+export async function conditionForPreview(src: string, onProgress?: (pct: number) => void, outDir?: string): Promise<string> {
+  const dir = outDir ?? DIR
   let out: string
   try {
     if (!existsSync(src)) {
       console.warn('[pvmedia] source missing:', src)
       return ''
     }
-    out = join(DIR, `${await cacheKey(src)}.mp4`)
+    out = join(dir, `${await cacheKey(src)}.mp4`)
   } catch (e) {
     console.warn('[pvmedia] cache key failed:', src, e instanceof Error ? e.message : e)
     return ''
@@ -89,7 +92,7 @@ export async function conditionForPreview(src: string, onProgress?: (pct: number
   if (running) return running
 
   const job = (async () => {
-    await mkdir(DIR, { recursive: true })
+    await mkdir(dir, { recursive: true })
     const info = await probe(src)
     if (!info.hasVideo || !info.width || !info.height) return ''
     // Never upscale; cap the SHORT edge so portrait and landscape both shrink.
@@ -132,7 +135,7 @@ export async function conditionForPreview(src: string, onProgress?: (pct: number
     )
     await rename(tmp, out)
     onProgress?.(100)
-    void prune()
+    if (dir === DIR) void prune()
     return out
   })().catch((e) => {
     // '' = caller falls back to the original file; log why, or failures are

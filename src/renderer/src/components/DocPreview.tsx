@@ -474,6 +474,9 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
   // so swapping the src is a drop-in change — no other logic differs. The
   // WebCodecs/FfPlayer paths use the conditioned copy through their own pipes.
   const conditionedUrlRef = useRef(new Map<string, string>())
+  // Bumped when a conditioned copy lands so paused/mobile previews re-render
+  // and their <video> elements adopt the copy's URL.
+  const [, setConditionedTick] = useState(0)
   useEffect(() => {
     if (!wcOn) return
     // engineKind is a dep: a demotion builds a NEW player that owns no sources.
@@ -499,6 +502,9 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
           if (!p) return
           // Store the ecmedia:// URL for the HTML <video> element path.
           conditionedUrlRef.current.set(src, mediaSrc(p))
+          // Re-render so the element path's <video> src adopts the copy — on
+          // mobile (paused, no 8 Hz playhead writes) nothing else would.
+          setConditionedTick((t) => t + 1)
           // Feed the WebCodecs/FfPlayer path. Adopt IMMEDIATELY, even mid-playback:
           // one brief reopen freeze is far better than freezing at EVERY cut on the
           // long-GOP original. The conditioned file has identical timestamps, so
@@ -629,6 +635,13 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
     .map((s) => `${s.src}:${s.sourceStart}:${s.sourceEnd}:${s.start}:${s.len}:${s.gain}:${s.speed}:${s.muted ? 1 : 0}`)
     .join('|')
   useEffect(() => {
+    // MOBILE SKIP: the engine decodes every source's ENTIRE audio into RAM
+    // (decodeAudioData) — on iOS that is a multi-hundred-MB decode burst at
+    // every edit plus permanently-held buffers: the main-thread jank and OOM
+    // kills behind "laggy preview / crashed on iPhone". Elements keep their
+    // own audio there (the reconciler only mutes them while the engine is
+    // active); desktop keeps the gapless engine.
+    if (isMobile) return
     audioEngineRef.current?.setSegments(segs)
     wcVideoReadyRef.current = false
     wcVideoWaitRef.current = 0
@@ -657,7 +670,12 @@ export default function DocPreview({ doc }: { doc: TimelineDocument }): JSX.Elem
         wcVideoWaitRef.current = 0
         engActiveRef.current = false
       } else {
-        eng.play(tRef.current)
+        eng.pause()
+        wcVideoReadyRef.current = false
+        wcVideoWaitRef.current = 0
+        engActiveRef.current = false
+        // Mobile: never start the RAM-heavy engine — element audio only.
+        if (!isMobile) eng.play(tRef.current)
         // Engine already audible at ▶ → the reconciler's first tick is NOT a rising
         // edge (a re-anchor there would rebuild the just-built schedule for nothing).
         engActiveRef.current = eng.active()

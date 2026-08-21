@@ -7,6 +7,7 @@
 import type { MediaInfo, Waveform } from '@shared/types'
 // Type-only — erased at build; the runtime import is dynamic (fast thumbnail path).
 import type { Input as MBInput } from 'mediabunny'
+import { streamPeaks, streamWav16kMono } from './streamAudio'
 
 interface MediaRec {
   file: File
@@ -329,7 +330,16 @@ async function decodeAudioAtRate(buf: ArrayBuffer, _targetRate: number): Promise
 /** Compute a waveform in the browser via WebAudio (best effort; skipped if huge). */
 export async function localWaveform(id: string, peaksPerSec = 60): Promise<Waveform> {
   const rec = registry.get(id)
-  if (!rec || rec.file.size > 700 * 1024 * 1024) return { peaksPerSec, peaks: [] }
+  if (!rec) return { peaksPerSec, peaks: [] }
+  // Streaming scan first: bounded memory, so phone-length camera files no
+  // longer GC-thrash or OOM during import on iOS.
+  try {
+    const streamed = await streamPeaks(rec.file, peaksPerSec)
+    if (streamed) return streamed
+  } catch {
+    /* fall through to the legacy decode */
+  }
+  if (rec.file.size > 700 * 1024 * 1024) return { peaksPerSec, peaks: [] }
   try {
     const buf = await rec.file.arrayBuffer()
     const leadPeaks = Math.round(mp4AudioStartOffset(buf) * peaksPerSec) // parse BEFORE decode (it detaches buf)
@@ -572,6 +582,11 @@ async function jpost(pathname: string, body: unknown): Promise<any> {
   return r.json()
 }
 
+/** JSON POST for sibling modules (webapi) — same auth/error semantics as jpost. */
+export function serverPost<T = any>(pathname: string, body: unknown): Promise<T> {
+  return jpost(pathname, body) as Promise<T>
+}
+
 /** Chunk-upload a Blob to the PC; returns its server path.
  *
  *  RESUMABLE: every chunk carries its byte offset; on any mismatch (a dropped
@@ -668,12 +683,9 @@ export async function ensureAudioUploaded(id: string, onProgress?: (pct: number)
   // used to stall for minutes: the browser was re-decoding a whole video that
   // the server already had.
   if (rec.serverPath) return rec.serverPath
-  // Big files: decodeAudioData buffers the ENTIRE file in RAM — on phones a
-  // multi-hundred-MB video takes minutes or dies. The resumable full upload +
-  // server-side ffmpeg is strictly faster and more reliable there.
-  if (rec.file.size > 250 * 1024 * 1024) {
-    return ensureUploaded(id, onProgress)
-  }
+  // Streaming extraction is memory-bounded and uploads ~15x less data than the
+  // video, so phones extract ANY length locally; a full upload is only the
+  // fallback when even that fails (no WebCodecs / undecodable container).
   const wav = await extractAudioWavBlob(id, (p) => onProgress?.(Math.round(p * 0.35)))
   if (!wav) {
     // Couldn't decode in this browser — fall back to uploading the whole file.
@@ -684,10 +696,42 @@ export async function ensureAudioUploaded(id: string, onProgress?: (pct: number)
   return rec.audioServerPath
 }
 
+/** Leading audio offset without loading the whole file: phone recordings put
+ *  `moov` at the head OR the tail, so head+tail slices cover both layouts while
+ *  keeping big videos out of RAM (the whole point of the streaming paths). */
+async function mp4AudioStartOffsetLazy(file: Blob): Promise<number> {
+  try {
+    const SLICE = 4 * 1024 * 1024
+    if (file.size <= SLICE * 2) return mp4AudioStartOffset(await file.arrayBuffer())
+    const head = new Uint8Array(await file.slice(0, SLICE).arrayBuffer())
+    const tail = new Uint8Array(await file.slice(file.size - SLICE).arrayBuffer())
+    const both = new Uint8Array(head.length + tail.length)
+    both.set(head, 0)
+    both.set(tail, head.length)
+    return mp4AudioStartOffset(both.buffer)
+  } catch {
+    return 0
+  }
+}
+
 /** Decode a media file's audio in the browser → 16 kHz mono WAV Blob (null if it can't). */
 export async function extractAudioWavBlob(id: string, onProgress?: (pct: number) => void): Promise<Blob | null> {
   const rec = registry.get(id)
   if (!rec) return null
+  // STREAMING FIRST — decodeAudioData buffers the whole file AND a full-rate
+  // AudioBuffer, which OOM-kills iPhone Safari tabs mid-transcribe on
+  // phone-length videos. The streaming path's peak memory is the tiny output.
+  try {
+    onProgress?.(5)
+    const lead = await mp4AudioStartOffsetLazy(rec.file)
+    const wav = await streamWav16kMono(rec.file, lead, (p) => onProgress?.(5 + Math.round(p * 0.65)))
+    if (wav) {
+      onProgress?.(100)
+      return wav
+    }
+  } catch {
+    /* fall through to the legacy decode */
+  }
   // Very large files risk OOM on decode; let the caller fall back to full upload.
   if (rec.file.size > 800 * 1024 * 1024) return null
   try {

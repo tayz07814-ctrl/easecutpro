@@ -14,7 +14,8 @@ import {
   ensureAudioUploaded,
   hydrateLocalMedia,
   serverPathOf,
-  requestPersistentStorage
+  requestPersistentStorage,
+  serverPost
 } from './webmedia'
 
 // ---- WebSocket (progress + job results) ----
@@ -246,7 +247,22 @@ const webApi: Window['api'] = {
   buildPreviewProxy: async () => '',
   buildPreviewProxyManual: async () => '', // web: no local ffmpeg
   existingPreviewProxy: async () => '',
-  conditionPreviewMedia: async () => '', // web: no local ffmpeg to condition with
+  // PHONES: playing camera originals (4K long-GOP HEVC/H.264) is why mobile
+  // preview lags. Ask the server for its conditioned ≤720p dense-keyframe copy
+  // (the same cache desktop uses) — needs the source uploaded once. Desktop-
+  // class pointers keep playing local originals (the WebCodecs engine is
+  // smooth there and no upload is wasted).
+  conditionPreviewMedia: async (src) => {
+    if (!isWebMediaId(src)) return ''
+    try {
+      if (typeof matchMedia === 'undefined' || !matchMedia('(pointer: coarse)').matches) return ''
+      const sp = await ensureUploaded(src)
+      const r = await serverPost<{ path?: string }>('/api/condition', { path: sp })
+      return r?.path ?? ''
+    } catch {
+      return '' // preview keeps playing the original — never worse than before
+    }
+  },
   // No file manager in a browser — the download already went to the user.
   revealPath: async () => undefined,
   thumbnails: (path, intervalSec, onPartial) =>

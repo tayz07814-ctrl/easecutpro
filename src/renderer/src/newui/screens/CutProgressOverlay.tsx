@@ -13,8 +13,134 @@
 import { useStore } from '../../store'
 import { css } from '../css'
 import { useSmoothProgress } from '../../useSmoothProgress'
+import { useEffect, useRef } from 'react'
 
 const ACCENT = '#7c6bff'
+const ACCENT_DIM = 'rgba(124,107,255,.35)'
+const ACCENT_GLOW = 'rgba(124,107,255,.55)'
+
+// Professional ring progress component with multiple animated rings
+export function RingProgress({ pct, size = 88, strokeWidth = 4 }:
+  { pct: number; size?: number; strokeWidth?: number }) {
+  const radius = (size - strokeWidth) / 2
+  const circumference = 2 * Math.PI * radius
+  const offset = circumference * (1 - pct / 100)
+
+  return (
+    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+      {/* Ambient glow ring */}
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke={ACCENT_DIM}
+        strokeWidth={strokeWidth * 1.8}
+        strokeLinecap="round"
+        filter="url(#glow)"
+      />
+      {/* Track ring */}
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke="rgba(255,255,255,.06)"
+        strokeWidth={strokeWidth}
+      />
+      {/* Progress ring with animated dash */}
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke={ACCENT}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        style={{ transition: 'stroke-dashoffset 0.35s cubic-bezier(0.22, 1, 0.36, 1)' }}
+      />
+      {/* Leading dot on progress ring */}
+      <defs>
+        <filter id="glow">
+          <feGaussianBlur stdDeviation="3" result="coloredBlur" />
+          <feMerge>
+            <feMergeNode in="coloredBlur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+      {pct > 0 && pct < 100 && (
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={ACCENT_GLOW}
+          strokeWidth={strokeWidth + 1}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          style={
+            {
+              filter: 'url(#glow)',
+              animation: 'pulseGlow 1.8s ease-in-out infinite'
+            } as React.CSSProperties
+          }
+        />
+      )}
+    </svg>
+  )
+}
+
+// Subtle floating particles in the background
+export function ParticleField(): JSX.Element {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const frameRef = useRef<number>(0)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const particles = Array.from({ length: 18 }, () => ({
+      x: Math.random(),
+      y: Math.random(),
+      r: Math.random() * 1.2 + 0.4,
+      vx: (Math.random() - 0.5) * 0.08,
+      vy: (Math.random() - 0.5) * 0.08,
+      opacity: Math.random() * 0.35 + 0.1
+    }))
+    let raf = 0
+    const tick = () => {
+      const dpr = window.devicePixelRatio || 1
+      canvas.width = canvas.clientWidth * dpr
+      canvas.height = canvas.clientHeight * dpr
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      for (const p of particles) {
+        p.x += p.vx
+        p.y += p.vy
+        if (p.x < 0) p.x = 1
+        if (p.x > 1) p.x = 0
+        if (p.y < 0) p.y = 1
+        if (p.y > 1) p.y = 0
+        ctx.beginPath()
+        ctx.arc(p.x * canvas.width, p.y * canvas.height, p.r * dpr, 0, Math.PI * 2)
+        ctx.fillStyle = `rgba(124,107,255,${p.opacity * 0.6})`
+        ctx.fill()
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    tick()
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  return <canvas ref={canvasRef} style={css('position:absolute;inset:0;pointer-events:none')} />
+}
+
+// Scoped keyframes for pulse glow animation
+const KEYFRAMES = `@keyframes pulseGlow{0%,100%{opacity:.15;stroke-width:inherit}50%{opacity:.5;stroke-width:calc(inherit + 1px)}}@keyframes ec-fade-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}@keyframes ec-slide-up{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}`
 
 export default function CutProgressOverlay(): JSX.Element | null {
   const cutJobActive = useStore((s) => s.cutJobActive)
@@ -30,9 +156,9 @@ export default function CutProgressOverlay(): JSX.Element | null {
   // place it had nothing to do with. One overlay, one bar, titled per tool.
   const TITLES: Record<string, [string, string]> = {
     export: ['Exporting video…', 'Rendering your edit. Keep this tab open until it finishes.'],
-    transcribe: ['Transcribing…', 'Reading the speech in your video.'],
-    silence: ['Finding silences…', 'Listening for dead air and long pauses.'],
-    variations: ['Casting variations…', 'Rebuilding your edit into alternate cuts.'],
+    transcribe: ['Ease Lord is transcribing…', 'Reading the speech in your video.'],
+    silence: ['Ease Lord is judging silence…', 'Analyzing speech cadence and dead air.'],
+    variations: ['Ease Lord is casting variations…', 'Rebuilding your edit into alternate cuts.'],
     zoom: ['Planning Auto Zoom…', 'Picking the moments worth punching in on.'],
     broll: ['Placing b-roll…', 'Matching your overlay cards to what you talk about.'],
     probe: ['Importing…', 'Reading your media.']
@@ -48,7 +174,7 @@ export default function CutProgressOverlay(): JSX.Element | null {
   const [title, subFallback] = known
     ? known
     : cutJobActive
-      ? ['Finding cuts…', 'Analyzing your speech for retakes and dead air.']
+      ? ['Ease Lord is finding cuts…', 'Analyzing your speech for retakes and dead air.']
       : polishing.active
         ? ['Polishing cuts…', 'Adding the finishing touches so playback stays perfectly smooth.']
         : ['Working…', '']

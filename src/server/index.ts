@@ -24,6 +24,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 
 import { checkTools, listWhisperModels } from '../main/binaries'
 import { probe, extractWaveform, extractThumbnails, exportProject, combineClips, extractAudioM4a } from '../main/ffmpeg'
+import { conditionForPreview } from '../main/previewMedia'
 import { transcribe } from '../main/whisper'
 import { transcribeOpenAI } from '../main/openai-transcribe'
 import { transcribeParakeet } from '../main/parakeet'
@@ -362,6 +363,18 @@ app.post('/api/upload-complete', (req, res) => {
 app.post('/api/probe', async (req, res) => {
   try {
     res.json(await probe(assertAllowed(uid(req), req.body?.path)))
+  } catch (e) {
+    res.status(400).json({ error: String((e as Error).message) })
+  }
+})
+// Conditioned preview copy (≤720p, keyframe every 15 frames) — what makes mobile
+// preview smooth: phones otherwise play 4K long-GOP camera originals. The copy
+// is written into the USER's dir so /media's allow-list can serve it back.
+app.post('/api/condition', async (req, res) => {
+  try {
+    const p = assertAllowed(uid(req), req.body?.path)
+    const out = await conditionForPreview(p, undefined, path.join(userDir(uid(req)), 'cache', 'pvmedia'))
+    res.json({ path: out })
   } catch (e) {
     res.status(400).json({ error: String((e as Error).message) })
   }

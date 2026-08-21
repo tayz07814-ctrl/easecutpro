@@ -1426,7 +1426,7 @@ export const useStore = create<AppState>((set, get) => ({
   combineSequence: async () => {
     const clips = get().project.baseSequence ?? []
     if (!clips.length) return
-    set({ job: { active: true, kind: 'export', percent: 0, message: 'Cut Lord is compiling your clips…' } })
+    set({ job: { active: true, kind: 'export', percent: 0, message: 'Ease Lord is compiling your clips…' } })
     try {
       const info = await window.api.combineClips(clips)
       set((s) => ({
@@ -1794,10 +1794,10 @@ export const useStore = create<AppState>((set, get) => ({
       const clips = p0.baseSequence!
       const { transcribeBackend, openaiAvailable, whisperModel } = get()
       const backend: TranscribeBackend = transcribeBackend === 'openai' && openaiAvailable ? 'openai' : 'local'
-      set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Cut Lord is working…' } })
+      set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Ease Lord is working…' } })
       try {
         const combined = await window.api.combineClips(clips, true) // audio-only = fast
-        set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Cut Lord is listening…' } })
+        set({ job: { active: true, kind: 'transcribe', percent: 45, message: 'Ease Lord is transcribing…' } })
         const transcript: Transcript = await aiApi().transcribe(
           combined.path,
           backend,
@@ -1819,7 +1819,7 @@ export const useStore = create<AppState>((set, get) => ({
     const { project, transcribeBackend, openaiAvailable, whisperModel } = get()
     if (!project.media) return
     const backend: TranscribeBackend = transcribeBackend === 'openai' && openaiAvailable ? 'openai' : 'local'
-    const label = 'Cut Lord is listening…'
+    const label = 'Ease Lord is transcribing…'
     set({ job: { active: true, kind: 'transcribe', percent: 0, message: label } })
     try {
       const transcript: Transcript = await aiApi().transcribe(
@@ -1962,7 +1962,7 @@ export const useStore = create<AppState>((set, get) => ({
       })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Cut Lord is thinking…' } })
+    set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Ease Lord is thinking…' } })
     try {
       const res = await window.api.suggestCuts(t)
       // Union the AI judgment with the deterministic heuristic repeat-finder, so
@@ -2145,10 +2145,10 @@ export const useStore = create<AppState>((set, get) => ({
     const needAudio = (settings.sileroPass || settings.rmsPass) && IS_CLOUD_BACKEND
     if (needAudio) {
       try {
-        set({ job: { active: true, kind: 'silence', percent: 4, message: 'Listening to your audio…' } })
+        set({ job: { active: true, kind: 'silence', percent: 4, message: 'Ease Lord is judging silence (1/3)…' } })
         const path = isMultiBase(p0) ? (await window.api.combineClips(p0.baseSequence!, true)).path : p0.media!.path
         audio = await extractSttAudio(path, (pct) =>
-          set({ job: { active: true, kind: 'silence', percent: 4 + Math.round(pct * 0.5), message: 'Listening to your audio…' } })
+          set({ job: { active: true, kind: 'silence', percent: 4 + Math.round(pct * 0.5), message: 'Ease Lord is judging silence (1/3)…' } })
         )
       } catch (e) {
         console.warn('[silence-mastery] audio decode failed:', (e as Error).message)
@@ -2161,7 +2161,7 @@ export const useStore = create<AppState>((set, get) => ({
     let sileroOk = false
     if (settings.sileroPass && audio) {
       try {
-        set({ job: { active: true, kind: 'silence', percent: 58, message: 'Silero is listening for speech…' } })
+        set({ job: { active: true, kind: 'silence', percent: 58, message: 'Ease Lord is judging silence (1/3)…' } })
         const raw = await detectSileroSilences(audio.float32, audio.sampleRate, durationS, settings.minSilenceS)
         // Breath cleanup (Flash/Cut Throat presets): walk each region's LEFT
         // edge back over low-energy breath frames so the cut lands where the
@@ -2182,7 +2182,7 @@ export const useStore = create<AppState>((set, get) => ({
     let rms: RmsPassResult | null = null
     if (settings.rmsPass && audio) {
       try {
-        set({ job: { active: true, kind: 'silence', percent: 90, message: 'Measuring energy…' } })
+        set({ job: { active: true, kind: 'silence', percent: 88, message: 'Ease Lord is judging silence (3/3)…' } })
         rms = planRmsSilence(frameRmsDb(audio.float32, audio.sampleRate), RMS_FRAME_MS / 1000, effWords, durationS, settings.minSilenceS)
       } catch (e) {
         console.warn('[silence-mastery] RMS pass skipped:', (e as Error).message)
@@ -2279,7 +2279,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Import a video first' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Cut Lord is working (1/4)…' } })
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Ease Lord is working (1/4)…' } })
     try {
       let path: string
       if (isMultiBase(p0)) {
@@ -2335,7 +2335,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Import a video first' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up Cut Lord…' }, cutJobActive: true })
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Warming up EaseLord…' }, cutJobActive: true })
     try {
       let path: string
       if (isMultiBase(p0)) {
@@ -2393,7 +2393,7 @@ export const useStore = create<AppState>((set, get) => ({
       // step itself — web AND desktop hybrid (native audio via extractSttAudio).
       if (IS_CLOUD_BACKEND) {
         try {
-          set({ job: { active: true, kind: 'silence', percent: 88, message: 'Silero is listening for silence…' } })
+          set({ job: { active: true, kind: 'silence', percent: 88, message: 'Ease Lord is judging silence (3/3)…' } })
           const smSettings = get().silenceMasterySettings
           const tw = res.transcript.words
           const durationS = p0.media?.duration || baseTimelineDuration(p0) || (tw.length ? tw[tw.length - 1].end : 0)
@@ -2473,7 +2473,7 @@ export const useStore = create<AppState>((set, get) => ({
       })
     } catch (e) {
       // Show the REAL error on-screen (the vanishing job message hid it on mobile).
-      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Retake β) failed', e)
+      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Ease Lord (Retake β) failed', e)
       set({
         cutJobActive: false,
         job: {
@@ -2497,7 +2497,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Import a video first' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Cut Lord is listening…' } })
+    set({ job: { active: true, kind: 'transcribe', percent: 1, message: 'Ease Lord is transcribing…' } })
     try {
       let path: string
       if (isMultiBase(p0)) {
@@ -2753,7 +2753,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
       })
     } catch (e) {
-      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Ultracut) failed', e)
+      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Ease Lord (Ultracut) failed', e)
       set({
         job: {
           active: false,
@@ -2824,7 +2824,7 @@ export const useStore = create<AppState>((set, get) => ({
         }
       })
     } catch (e) {
-      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Cut Lord (Premium) failed', e)
+      ;(window as unknown as { __ecError?: (l: string, e: unknown) => void }).__ecError?.('Ease Lord (Premium) failed', e)
       set({
         job: {
           active: false,
@@ -2935,7 +2935,7 @@ export const useStore = create<AppState>((set, get) => ({
       set({ job: { active: false, percent: 0, message: 'Transcribe first to run Fast Cut' } })
       return
     }
-    set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Cut Lord is thinking…' } })
+    set({ job: { active: true, kind: 'transcribe', percent: 0, message: 'Ease Lord is thinking…' } })
     try {
       // ML tiers are OFF (heuristic-only mode) — don't resolve or upload audio;
       // the acoustic tier is the only consumer and skipping it makes web runs
