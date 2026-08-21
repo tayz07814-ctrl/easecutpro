@@ -193,26 +193,41 @@ export default function MobileTimeline(): JSX.Element {
     [engine, pad]
   )
 
-  // scroll -> playhead. No scrollLeft write-back here (avoids the vibration loop);
-  // during PLAYBACK the auto-scroll below drives the scroll, so a scroll event then
-  // must NOT feed back into the playhead.
+  const playing = useStore((s) => s.playing)
+
+  // scroll -> playhead — rAF-throttled so a fast swipe (100+ scroll events/s)
+  // doesn't hammer the engine/store/DocPreview with a seek per pixel. The
+  // latest scrollLeft is latched and flushed once per frame; pause is coalesced.
+  const scrubRaf = useRef(0)
+  const pendingScroll = useRef<number | null>(null)
+  const didPauseForScrub = useRef(false)
+  const flushScrub = useCallback((): void => {
+    scrubRaf.current = 0
+    const left = pendingScroll.current
+    pendingScroll.current = null
+    if (left == null) return
+    if (!didPauseForScrub.current && useStore.getState().playing) {
+      useStore.getState().setPlaying(false)
+      didPauseForScrub.current = true
+    }
+    engine.setPlayhead(Math.max(0, pxToFrame(left, engine.sessionState.zoom, engine.document.timebase)))
+  }, [engine])
   const onScroll = useCallback((): void => {
     if (programmatic.current) {
       programmatic.current = false
       return
     }
-    // A user scroll DURING playback = scrubbing intent. Pause so the finger takes
-    // over — otherwise the playback auto-scroll keeps yanking it back (the "can't
-    // drag the timeline while playing, it resists" bug), then scrub normally.
-    if (useStore.getState().playing) useStore.getState().setPlaying(false)
     const el = scrollRef.current
     if (!el) return
-    engine.setPlayhead(Math.max(0, pxToFrame(el.scrollLeft, engine.sessionState.zoom, engine.document.timebase)))
-  }, [engine])
+    pendingScroll.current = el.scrollLeft
+    if (scrubRaf.current) return
+    scrubRaf.current = requestAnimationFrame(flushScrub)
+  }, [flushScrub])
+  // reset pause-coalesce when playback resumes via button
+  useEffect(() => { if (playing) didPauseForScrub.current = false }, [playing])
+  useEffect(() => () => { if (scrubRaf.current) cancelAnimationFrame(scrubRaf.current) }, [])
 
   // During PLAYBACK, scroll the timeline so the centre line tracks the playing
-  // frame (CapCut-style). Driven off the shared 60fps play clock for smoothness.
-  const playing = useStore((s) => s.playing)
   useEffect(() => {
     if (!playing) return
     const el = scrollRef.current

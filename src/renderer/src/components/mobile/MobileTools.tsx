@@ -257,7 +257,7 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
     )
   }
 
-  // ---- video / image clip toolbar (mockup order first, extra real tools appended) ----
+  // ---- video / image clip toolbar — APK order: Split · Crop · Cutout · Zoom · Speed · Volume · Adjust · Animation · Extract · Overlay · Delete ----
   const canDetach = clip.hasAudio && !clip.audioDetached
   return (
     <div className="mt-dock">
@@ -267,16 +267,15 @@ export function MobileTools({ onImport, onCutlord, onEditText, onAddText, onAddA
       <div className="mt-row">
         {collapse}
         <Tool icon="split" label="Split" onClick={() => engine?.splitAtPlayhead()} />
-        <Tool icon="animation" label="Animation" onClick={() => setPanel('animation')} />
-        <Tool icon="upscaler" label="AI Upscaler" badge="OFF" onClick={() => soon('AI Upscaler')} tint="ai" />
         <Tool icon="crop" label="Crop" onClick={() => setCropOpen(true)} />
-        <Tool icon="speed" label="Speed" onClick={() => setPanel('speed')} />
+        <Tool icon="cutout" label="Cutout" onClick={() => soon('Cutout')} />
         <Tool icon="zoom" label="Zoom" onClick={() => setPanel('zoom')} />
-        <Tool icon="adjust" label="Adjust" onClick={() => setPanel('adjust')} />
+        <Tool icon="speed" label="Speed" onClick={() => setPanel('speed')} />
         <Tool icon="volume" label="Volume" onClick={() => setPanel('volume')} />
+        <Tool icon="adjust" label="Adjust" onClick={() => setPanel('adjust')} />
+        <Tool icon="animation" label="Animation" onClick={() => setPanel('animation')} />
         <Tool icon="audioExtract" label="Extract" onClick={() => (canDetach ? engine?.dispatch(C.detachAudio(clip.id)) : soon('Audio already on a lane'))} />
         <Tool icon="overlay" label="Overlay" onClick={() => void useStore.getState().importOverlayFromDevice()} />
-        <Tool icon="removeBg" label="Remove BG" onClick={() => soon('Remove BG')} />
         <Tool icon="trash" label="Delete" onClick={() => engine?.deleteSelection(true)} />
       </div>
     </div>
