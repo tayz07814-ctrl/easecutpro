@@ -155,8 +155,10 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
         output: (chunk, meta) => {
           if (nomux) {
             // Send the encoded chunk back to the main thread for muxing there.
+            // Transfer the chunk (zero-copy) instead of cloning — each frame's
+            // encoded data is tens of KB; cloning adds measurable overhead.
             const ts = chunk.timestamp
-            ;(self as unknown as Worker).postMessage({ type: 'vchunk', chunk, meta, ts })
+            ;(self as unknown as Worker).postMessage({ type: 'vchunk', chunk, meta, ts }, [chunk as unknown as Transferable])
           } else {
             muxer!.addVideoChunk(chunk, meta)
           }

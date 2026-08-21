@@ -550,11 +550,21 @@ export async function exportOnDevice(
     workers.push(new Worker(new URL('./encoderWorker.ts', import.meta.url), { type: 'module' }))
   }
   const worker = workers[0] // primary worker (compatibility for error handling)
+  let doneReject: ((e: Error) => void) | null = null
   const fail = (m: string): void => {
     for (const w of workers) {
       try { w.terminate() } catch { /* gone */ }
     }
-    throw new Error(m)
+    const err = new Error(m)
+    // When fail() is called from an encoder error callback (synchronous context),
+    // throw() would be unhandled — the done promise never rejects and the export
+    // hangs forever. Store the reject hook and use it; the throw is still needed
+    // for the await-path so the try/catch picks it up.
+    if (doneReject) {
+      doneReject(err)
+      doneReject = null
+    }
+    throw err
   }
 
   // Multi-worker: collect encoded chunks in timestamp order and mux on main thread
@@ -579,10 +589,15 @@ export async function exportOnDevice(
     mainAudioEncoder.configure({ codec: 'mp4a.40.2', sampleRate: AUDIO_RATE, numberOfChannels: 2, bitrate: 192_000 })
   }
 
-  // Reorder buffer: collect out-of-order chunks and release in timestamp order
+  // Reorder buffer: collect out-of-order chunks and release in timestamp order.
+  // The worker stamps each frame with Math.round(n * 1e6 / FPS) (per-frame
+  // exact). We MUST use the same formula to match — accumulating
+  // `Math.round(1e6 / FPS)` compounds rounding error and diverges at n≥2 for
+  // non-divisor frame rates (e.g. 30: 66666 vs 66667), permanently stalling
+  // the drain loop and producing a ~2-frame export.
   const pendingChunks = new Map<number, { chunk: EncodedVideoChunk; meta: EncodedVideoChunkMetadata }>()
+  let nextDrainN = 0
   let nextExpectedTs = 0
-  let allDone = false
 
   let ackResolve: (() => void) | null = null
   let lastQueue = 0
@@ -596,6 +611,7 @@ export async function exportOnDevice(
   // releases exactly that lane, so one busy encoder never stalls the others.
   const ackWaiters = new Map<Worker, (() => void) | null>()
   const done = new Promise<ArrayBuffer>((resolve, reject) => {
+    doneReject = reject
     if (!useMulti) {
       // SINGLE WORKER: worker muxes itself and sends {type:'done', buffer}
       const orig = workers[0].onmessage
@@ -636,7 +652,8 @@ export async function exportOnDevice(
             const { chunk, meta } = pendingChunks.get(nextExpectedTs)!
             pendingChunks.delete(nextExpectedTs)
             if (muxer) muxer.addVideoChunk(chunk, meta ?? undefined)
-            nextExpectedTs += Math.round(1e6 / FPS)
+            nextDrainN++
+            nextExpectedTs = Math.round((nextDrainN * 1e6) / FPS)
           }
         } else if (m.type === 'done') {
           if (++doneCount === workers.length) {
@@ -708,8 +725,10 @@ export async function exportOnDevice(
   }
 
   dbg('audio streamed')
-  // Flush the main-thread audio encoder so all AAC leaves before video finalizes
-  if (useMulti && mainAudioEncoder) void mainAudioEncoder.flush()
+  // Flush the main-thread audio encoder and WAIT for it — all AAC chunks must
+  // land in the muxer before workers finalize. The old `void` fire-and-forget
+  // raced with the finish message, dropping trailing audio.
+  if (useMulti && mainAudioEncoder) await mainAudioEncoder.flush()
   // 4) compositing plan + source pools. Baked bitmaps (text, image overlays,
   //    main-lane images) are TRANSFERRED to the worker once and drawn there on
   //    every frame of their window; the worker closes each when its window
@@ -751,9 +770,10 @@ export async function exportOnDevice(
     await new Promise<void>((res, rej) => {
       // wait for a DECODED frame (readyState >= 2) — VideoFrame(video) throws
       // InvalidStateError on a metadata-only element.
-      v.onloadeddata = () => res()
-      v.onerror = () => rej(new Error('cannot open a source in this browser'))
-      if (v.readyState >= 2) res()
+      const to = setTimeout(() => rej(new Error('source timed out opening')), 10_000)
+      v.onloadeddata = () => { clearTimeout(to); res() }
+      v.onerror = () => { clearTimeout(to); rej(new Error('cannot open a source in this browser')) }
+      if (v.readyState >= 2) { clearTimeout(to); res() }
     })
     return v
   }
@@ -1107,50 +1127,15 @@ export async function exportOnDevice(
           frame = (r.done ? null : r.value) ?? null
         }
         // Fallback: if the fast decoder returns no frame (unexpected EOF, seek
-        // failure, etc.), fall back to the element path so we never send a
-        // null frame that would produce a black picture.
+        // failure, etc.), mark this source as demux-failed so subsequent frames
+        // go directly to the pure element path (else block) — avoids re-entering
+        // the demuxed path and re-creating the failed iterator every frame.
         if (!frame) {
-          const v = pool.get(seg.url)!
-          const want = Math.min(seg.sourceEnd - 0.001, seg.sourceStart + (t - seg.start) * seg.speed)
-          if (seg !== curSeg) {
-            harvest.stop?.()
-            closeBuf()
-            returnSegIter()
-            curSeg = seg
-            minSpacing = 0
-            prevPresentedT = -1
-            fallbacks = 0
-            segHarvesting = rvfcOK
-            try {
-              v.pause()
-            } catch { /* ignore */ }
-            if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
-            if (segHarvesting) {
-              try { v.playbackRate = harvestRate(seg.speed) } catch { /* ignore */ }
-              startHarvest(v)
-              try { await v.play() } catch { segHarvesting = false }
-            }
-          }
-          if (segHarvesting && !document.hidden) {
-            await waitPresented(v, want)
-            const g = pickGrab(want)
-            if (g) frame = g.frame.clone()
-            if (!frame) {
-              try {
-                v.pause()
-                if (Math.abs(v.currentTime - want) > 1 / (FPS * 2)) await seekTo(v, want)
-                if (v.readyState < 2) {
-                  await new Promise<void>((res) => {
-                    const to = setTimeout(res, 2000)
-                    v.onloadeddata = () => { clearTimeout(to); res() }
-                  })
-                }
-                await new Promise((r) => setTimeout(r, 50))
-                const g2 = pickGrab(want)
-                if (g2) frame = g2.frame.clone()
-              } catch { /* fallback failed — frame stays null, worker will hold previous frame */ }
-            }
-          }
+          decoders.set(seg.url, null)
+          // Open a <video> element on the fly if one doesn't exist yet.
+          if (!pool.has(seg.url)) pool.set(seg.url, await openVideo(seg.url))
+          // Let curSeg stand — the next frame sees decoders.get(seg.url) ===
+          // null, skips this block, and enters the element else branch.
         }
         const fitD = fitFor(seg, dec.width || W, dec.height || H, t)
         if (frame) {
@@ -1222,9 +1207,12 @@ export async function exportOnDevice(
             }
           }
         }
+        // Only include frame in the transfer list when it's a real VideoFrame —
+        // null in a transfer list throws DataCloneError.
+        const vTransfer = frame ? [frame as unknown as Transferable, ...ovT] : ovT
         tw.postMessage(
           { type: 'frame', n, frame, fit: fitFor(seg, v.videoWidth || W, v.videoHeight || H, t), ovs },
-          [frame as unknown as Transferable, ...ovT]
+          vTransfer
         )
       }
       // backpressure: never let the encoder queue run away. In multi-worker
@@ -1233,8 +1221,13 @@ export async function exportOnDevice(
       const q = useMulti ? (queueByWorker.get(tw) ?? 0) : lastQueue
       if (q > 20) {
         if (useMulti) {
+          // Resolve any stale waiter before overwriting — the old promise would
+          // never settle, leaking memory and potentially confusing the dispatcher.
+          const old = ackWaiters.get(tw)
+          if (old) old()
           await new Promise<void>((res) => ackWaiters.set(tw, res))
         } else {
+          ackResolve?.()
           await new Promise<void>((res) => (ackResolve = res))
         }
       }
