@@ -135,6 +135,9 @@ function paint(img: ImageBitmap | VideoFrame, r: OverlayRect, clip: boolean, sca
   ctx!.restore()
 }
 
+self.onerror = (e) => die(`worker error: ${e.message}`)
+self.addEventListener('unhandledrejection', (e) => { e.preventDefault(); die(`unhandled: ${e.reason}`) })
+
 self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetMsg | AudioMsg | FinishMsg>) => {
   const msg = ev.data
   try {
@@ -153,15 +156,15 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
       }
       videoEncoder = new VideoEncoder({
         output: (chunk, meta) => {
-          if (nomux) {
-            // Send the encoded chunk back to the main thread for muxing there.
-            // Do NOT transfer the chunk — its backing buffer may be shared with
-            // meta.decoderConfig.description; detaching it corrupts the metadata
-            // on the receiving side, crashing the muxer.
-            const ts = chunk.timestamp
-            ;(self as unknown as Worker).postMessage({ type: 'vchunk', chunk, meta, ts })
-          } else {
-            muxer!.addVideoChunk(chunk, meta)
+          try {
+            if (nomux) {
+              const ts = chunk.timestamp
+              ;(self as unknown as Worker).postMessage({ type: 'vchunk', chunk, meta, ts })
+            } else {
+              muxer!.addVideoChunk(chunk, meta)
+            }
+          } catch (e) {
+            die(`video mux: ${(e as Error).message}`)
           }
         },
         error: (e) => die(`video encoder: ${e.message}`)
@@ -183,7 +186,7 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
       })
       if (msg.audio && !nomux) {
         audioEncoder = new AudioEncoder({
-          output: (chunk, meta) => muxer!.addAudioChunk(chunk, meta),
+          output: (chunk, meta) => { try { muxer!.addAudioChunk(chunk, meta) } catch (e) { die(`audio mux: ${(e as Error).message}`) } },
           error: (e) => die(`audio encoder: ${e.message}`)
         })
         audioEncoder.configure({
@@ -265,14 +268,24 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
       const keyFrame = framesSinceKey === 0 || framesSinceKey >= FPS * 2
       if (keyFrame) framesSinceKey = 0
       framesSinceKey++
-      videoEncoder!.encode(out, { keyFrame })
+      try {
+        videoEncoder!.encode(out, { keyFrame })
+      } catch (e) {
+        out.close()
+        die(`video encode frame: ${(e as Error).message}`)
+        return
+      }
       out.close()
       ;(self as unknown as Worker).postMessage({ type: 'ack', n: msg.n, queue: videoEncoder!.encodeQueueSize })
       return
     }
 
     if (msg.type === 'audio') {
-      audioEncoder?.encode(msg.data)
+      try {
+        audioEncoder?.encode(msg.data)
+      } catch (e) {
+        die(`audio encode: ${(e as Error).message}`)
+      }
       msg.data.close()
       return
     }
@@ -282,14 +295,18 @@ self.onmessage = async (ev: MessageEvent<InitMsg | FrameMsg | SpriteMsg | AssetM
       sprites = []
       for (const b of assets.values()) b.close()
       assets.clear()
-      await videoEncoder?.flush()
-      await audioEncoder?.flush()
-      if (muxer) {
-        muxer.finalize()
-        const { buffer } = muxer.target
-        ;(self as unknown as Worker).postMessage({ type: 'done', buffer }, [buffer])
-      } else {
-        ;(self as unknown as Worker).postMessage({ type: 'done' })
+      try {
+        await videoEncoder?.flush()
+        await audioEncoder?.flush()
+        if (muxer) {
+          muxer.finalize()
+          const { buffer } = muxer.target
+          ;(self as unknown as Worker).postMessage({ type: 'done', buffer }, [buffer])
+        } else {
+          ;(self as unknown as Worker).postMessage({ type: 'done' })
+        }
+      } catch (e) {
+        die(`finalize: ${(e as Error).message}`)
       }
       return
     }

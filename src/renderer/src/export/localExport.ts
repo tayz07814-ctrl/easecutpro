@@ -558,7 +558,7 @@ export async function exportOnDevice(
       doneReject(err)
       doneReject = null
     } else {
-      throw err
+      console.error('[ondevice] fail after doneReject null:', m)
     }
   }
 
